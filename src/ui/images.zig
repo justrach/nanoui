@@ -60,6 +60,8 @@ pub const Images = struct {
     shelf_h: u32 = 0,
     /// Changes whenever the pixels do, for the GPU's copy.
     generation: u64 = 0,
+    /// Bumped when it starts over: a picture may now be where another was.
+    resets: u64 = 0,
     /// Emptied during a frame: its earlier pictures must be painted again.
     reset_during_frame: bool = false,
 
@@ -158,6 +160,7 @@ pub const Images = struct {
         im.shelf_x = 0;
         im.shelf_y = 0;
         im.shelf_h = 0;
+        im.resets +%= 1;
     }
 };
 

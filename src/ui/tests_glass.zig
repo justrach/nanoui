@@ -107,3 +107,20 @@ test "glass frosts what's under it with whichever renderer draws" {
     // Under the bar, the red stripe is lighter than beside it.
     try testing.expect(lightness(at(p, t.scale, 120, 46)) > lightness(at(p, t.scale, 340, 34)));
 }
+
+test "drawn on many threads, glass and all, the pixels are those of one" {
+    const gpa = testing.allocator;
+    var s: Scene = .{};
+    var t: ui.Tester = undefined;
+    try t.init(gpa, .init(&s, Scene.view), .{ .width = 360, .height = 290 });
+    defer t.deinit();
+    t.settle(1);
+    const many = try t.render(gpa);
+    defer many.deinit(gpa);
+    const before = raster.threads;
+    defer raster.threads = before;
+    raster.threads = 1;
+    const one = try t.render(gpa);
+    defer one.deinit(gpa);
+    try testing.expectEqualSlices(u8, one.bytes, many.bytes);
+}

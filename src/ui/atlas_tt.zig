@@ -51,6 +51,8 @@ pub const Atlas = struct {
     reset_during_frame: bool = false,
     /// Bumped whenever texels change, for renderers that upload them.
     generation: u64 = 0,
+    /// Bumped when it starts over: a glyph may now be where another was.
+    resets: u64 = 0,
     scratch: std.ArrayList(u8) = .empty,
 
     pub fn init(gpa: std.mem.Allocator) Atlas {
@@ -90,6 +92,7 @@ pub const Atlas = struct {
         a.shelf_h = 0;
         @memset(a.pixels, 0);
         a.generation += 1;
+        a.resets += 1;
     }
 
     fn makeRoom(a: *Atlas) void {

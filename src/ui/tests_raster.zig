@@ -169,3 +169,49 @@ test "pictures written straight to the GPU draw as the CPU atlas's copy does" {
     try testing.expectEqual(@as(usize, 0), kept_cpu);
     try testing.expectEqualSlices(u8, frames[0].bytes, frames[1].bytes);
 }
+
+test "drawing only what a frame changed makes the pixels drawing it all does" {
+    // The CPU renderer's own atlas: where nanoui shapes text itself.
+    if (!@import("text.zig").portable) return error.SkipZigTest else try partial();
+}
+
+fn partial() !void {
+    const gpa = testing.allocator;
+    const Instance = @import("gpu.zig").Instance;
+    var s: Scene = .{};
+    var t: ui.Tester = undefined;
+    try t.init(gpa, .init(&s, Scene.view), .{ .width = 360, .height = 300 });
+    defer t.deinit();
+    t.settle(1);
+    const pixels = try t.render(gpa);
+    defer pixels.deinit(gpa);
+    const w = pixels.width;
+    const h = pixels.height;
+    const before = try gpa.dupe(Instance, t.instances.items);
+    defer gpa.free(before);
+    try testing.expectEqual(@as(?[4]usize, null), raster.damage(w, h, before, before, t.scale));
+
+    // The same number of instances: a hovered button and a toggle turned off.
+    const save = t.findText("Save") orelse return error.TextNotFound;
+    t.moveTo(save.x + save.w / 2, save.y + save.h / 2);
+    s.on = false;
+    t.settle(1);
+    const d = raster.damage(w, h, before, t.instances.items, t.scale) orelse return error.NoDamage;
+    try testing.expect((d[2] - d[0]) * (d[3] - d[1]) < w * h / 2);
+    raster.drawRegion(pixels, t.instances.items, t.text.atlas.mask(), t.text.images.pictures(), t.scale, t.theme.background, d);
+    const whole = try t.render(gpa);
+    defer whole.deinit(gpa);
+    try testing.expectEqualSlices(u8, whole.bytes, pixels.bytes);
+
+    // One fewer instance: a glyph past the middle gone.
+    var fewer: std.ArrayList(Instance) = .empty;
+    defer fewer.deinit(gpa);
+    try fewer.appendSlice(gpa, t.instances.items);
+    var k = fewer.items.len / 2;
+    while (fewer.items[k].kind != @import("gpu.zig").Kind.text) k += 1;
+    _ = fewer.orderedRemove(k);
+    const e = raster.damage(w, h, t.instances.items, fewer.items, t.scale) orelse return error.NoDamage;
+    raster.drawRegion(pixels, fewer.items, t.text.atlas.mask(), t.text.images.pictures(), t.scale, t.theme.background, e);
+    raster.draw(whole, fewer.items, t.text.atlas.mask(), t.text.images.pictures(), t.scale, t.theme.background);
+    try testing.expectEqualSlices(u8, whole.bytes, pixels.bytes);
+}

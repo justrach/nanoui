@@ -23,10 +23,118 @@ pub const Pictures = struct {
 /// Draws `instances` over `clear` into `out` (sized `out.width` ×
 /// `out.height` pixels, `scale` pixels a point).
 pub fn draw(out: gpu.Pixels, instances: []const gpu.Instance, mask: Mask, pictures: Pictures, scale: f32, clear: types.Color) void {
+    drawRegion(out, instances, mask, pictures, scale, clear, .{ 0, 0, out.width, out.height });
+}
+
+/// `draw`, only within `region` (pixels: x0, y0, x1, y1); the rest of
+/// `out` is kept. Over the pixels of an earlier frame, with the `damage`
+/// between the two, it makes the same pixels as drawing it all.
+pub fn drawRegion(out: gpu.Pixels, instances: []const gpu.Instance, mask: Mask, pictures: Pictures, scale: f32, clear: types.Color, region: [4]usize) void {
     const px: [4]u8 = .{ unit(clear.b), unit(clear.g), unit(clear.r), 255 };
-    const words: []u32 = @alignCast(std.mem.bytesAsSlice(u32, out.bytes[0 .. out.width * out.height * 4]));
-    @memset(words, @bitCast(px));
-    for (instances) |*i| drawOne(out, i, mask, pictures, scale);
+    var job: Band = .{ .out = out, .instances = instances, .mask = mask, .pictures = pictures, .scale = scale, .clear = @bitCast(px), .region = region };
+    // Glass reads what's drawn beyond its band: the bands meet before each
+    // pane, which one thread draws.
+    var start: usize = 0;
+    while (true) {
+        var end = start;
+        while (end < instances.len and instances[end].kind != gpu.Kind.glass) end += 1;
+        job.instances = instances[start..end];
+        job.share();
+        job.clear = null;
+        if (end == instances.len) break;
+        drawOne(out, &instances[end], mask, pictures, scale, region);
+        start = end + 1;
+    }
+}
+
+/// The most threads a region is drawn on; 1 draws it on the caller's
+/// alone (tests compare the two).
+pub var threads: usize = Band.thread_limit;
+
+/// Instances drawn into some of a region's rows. A pixel's color depends
+/// only on the instances over it, so bands of rows drawn on threads of
+/// their own make the pixels one thread would.
+const Band = struct {
+    out: gpu.Pixels,
+    instances: []const gpu.Instance,
+    mask: Mask,
+    pictures: Pictures,
+    scale: f32,
+    /// The pixel the rows are cleared to first, if they are.
+    clear: ?u32,
+    region: [4]usize,
+
+    const thread_limit = 16;
+    /// Fewer pixels than this a thread: not worth starting one.
+    const min_pixels = 1 << 17;
+
+    fn rows(job: Band, y0: usize, y1: usize) void {
+        const r: [4]usize = .{ job.region[0], y0, job.region[2], y1 };
+        if (job.clear) |px| {
+            const words: []u32 = @alignCast(std.mem.bytesAsSlice(u32, job.out.bytes[0 .. job.out.width * job.out.height * 4]));
+            for (y0..y1) |y| @memset(words[y * job.out.width + r[0] .. y * job.out.width + r[2]], px);
+        }
+        for (job.instances) |*i| drawOne(job.out, i, job.mask, job.pictures, job.scale, r);
+    }
+
+    /// Draws the region's rows, shared among threads when there are many.
+    fn share(job: Band) void {
+        const height = job.region[3] - job.region[1];
+        const cpus = std.Thread.getCpuCount() catch 1;
+        const n = @max(1, @min(threads, thread_limit, cpus, height * (job.region[2] - job.region[0]) / min_pixels));
+        var started: [thread_limit]?std.Thread = @splat(null);
+        for (1..n) |k| {
+            const y0 = job.region[1] + height * k / n;
+            const y1 = job.region[1] + height * (k + 1) / n;
+            started[k] = std.Thread.spawn(.{}, Band.rows, .{ job, y0, y1 }) catch blk: {
+                job.rows(y0, y1);
+                break :blk null;
+            };
+        }
+        job.rows(job.region[1], job.region[1] + height / n);
+        for (started[1..n]) |t| if (t) |th| th.join();
+    }
+};
+
+/// The pixels (x0, y0, x1, y1) in which a frame of `new` instances differs
+/// from one of `old`, both drawn `width` × `height` with the same atlases;
+/// null when none do. The instances both frames start and end with are
+/// the same; between them, those that changed cover what changed. Glass
+/// reads what's behind it from beyond its bounds: with glass, all of it.
+pub fn damage(width: usize, height: usize, old: []const gpu.Instance, new: []const gpu.Instance, scale: f32) ?[4]usize {
+    const out: gpu.Pixels = .{ .bytes = &.{}, .width = width, .height = height };
+    for (new) |*i| if (i.kind == gpu.Kind.glass) return .{ 0, 0, width, height };
+    var start: usize = 0;
+    while (start < old.len and start < new.len and same(&old[start], &new[start])) start += 1;
+    var old_end = old.len;
+    var new_end = new.len;
+    while (old_end > start and new_end > start and same(&old[old_end - 1], &new[new_end - 1])) {
+        old_end -= 1;
+        new_end -= 1;
+    }
+    const before = old[start..old_end];
+    const after = new[start..new_end];
+    var region: ?[4]usize = null;
+    if (before.len == after.len) {
+        // The same number in between: only the pairs that differ.
+        for (before, after) |*a, *b| if (!same(a, b)) {
+            cover(&region, bounds(out, a, scale));
+            cover(&region, bounds(out, b, scale));
+        };
+    } else {
+        for (before) |*a| cover(&region, bounds(out, a, scale));
+        for (after) |*b| cover(&region, bounds(out, b, scale));
+    }
+    return region;
+}
+
+fn same(a: *const gpu.Instance, b: *const gpu.Instance) bool {
+    return std.mem.eql(u8, std.mem.asBytes(a), std.mem.asBytes(b));
+}
+
+fn cover(region: *?[4]usize, b: ?[4]usize) void {
+    const add = b orelse return;
+    region.* = if (region.*) |r| .{ @min(r[0], add[0]), @min(r[1], add[1]), @max(r[2], add[2]), @max(r[3], add[3]) } else add;
 }
 
 fn unit(v: f32) u8 {
@@ -53,8 +161,10 @@ fn bounds(out: gpu.Pixels, i: *const gpu.Instance, scale: f32) ?[4]usize {
     return .{ @intFromFloat(px0), @intFromFloat(py0), @intFromFloat(px1), @intFromFloat(py1) };
 }
 
-fn drawOne(out: gpu.Pixels, i: *const gpu.Instance, mask: Mask, pictures: Pictures, scale: f32) void {
-    const b = bounds(out, i, scale) orelse return;
+fn drawOne(out: gpu.Pixels, i: *const gpu.Instance, mask: Mask, pictures: Pictures, scale: f32, region: [4]usize) void {
+    const all = bounds(out, i, scale) orelse return;
+    const b: [4]usize = .{ @max(all[0], region[0]), @max(all[1], region[1]), @min(all[2], region[2]), @min(all[3], region[3]) };
+    if (b[2] <= b[0] or b[3] <= b[1]) return;
     if (i.kind == gpu.Kind.text) return glyph(out, i, mask, scale, b);
     if (i.kind == gpu.Kind.image) return picture(out, i, pictures, scale, b);
     if (i.kind == gpu.Kind.shadow) return shadow(out, i, scale, b);

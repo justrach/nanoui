@@ -52,7 +52,7 @@ pub const Api = struct {
     gtk_widget_show_all: *const fn (w: *Widget) callconv(.c) void,
     gtk_widget_hide: *const fn (w: *Widget) callconv(.c) void,
     gtk_widget_destroy: *const fn (w: *Widget) callconv(.c) void,
-    gtk_widget_queue_draw: *const fn (w: *Widget) callconv(.c) void,
+    gtk_widget_queue_draw_area: *const fn (w: *Widget, x: c_int, y: c_int, width: c_int, height: c_int) callconv(.c) void,
     gtk_widget_get_allocated_width: *const fn (w: *Widget) callconv(.c) c_int,
     gtk_widget_get_allocated_height: *const fn (w: *Widget) callconv(.c) c_int,
     gtk_widget_get_scale_factor: *const fn (w: *Widget) callconv(.c) c_int,

@@ -8,7 +8,7 @@ const w = @import("win32.zig");
 const ui = @import("../ui/ui.zig");
 const types = @import("../ui/types.zig");
 const gpu = @import("../ui/gpu.zig");
-const raster = @import("../ui/raster.zig");
+const canvas = @import("../ui/canvas.zig");
 const text = @import("../ui/text.zig");
 const frame_mod = @import("../ui/frame.zig");
 const ctx_mod = @import("../ui/context.zig");
@@ -30,10 +30,7 @@ pub const Surface = struct {
     ctx: Context,
     view: ui.View,
     instances: std.ArrayList(gpu.Instance) = .empty,
-    pixels: []u8 = &.{},
-    pixel_w: usize = 0,
-    pixel_h: usize = 0,
-    stale: bool = true,
+    pixels: canvas.Canvas = .{},
     size: types.Size = .{},
     scale: f32 = 1,
     last_frame_time: f64 = 0,
@@ -57,7 +54,7 @@ pub const Surface = struct {
 
     pub fn destroy(self: *Surface) void {
         self.instances.deinit(self.gpa);
-        self.gpa.free(self.pixels);
+        self.pixels.deinit(self.gpa);
         self.ctx.deinit();
         self.text.deinit();
         self.gpa.destroy(self);
@@ -78,8 +75,11 @@ pub const Surface = struct {
         const dt: f32 = if (self.last_frame_time > 0) @floatCast(@min(now - self.last_frame_time, 0.1)) else 1.0 / 60.0;
         self.last_frame_time = now;
         const r = frame_mod.run(c, self.view, &self.text, &self.instances, self.size, self.scale, self.theme(), dt, now - self.start_time);
-        self.stale = true;
-        if (self.hwnd()) |h| _ = w.InvalidateRect(h, null, 0);
+        // The client area is in pixels, as the damage is.
+        if (self.pixels.damage(self.shown())) |d| if (self.hwnd()) |h| {
+            const rect: w.RECT = .{ .left = @intCast(d[0]), .top = @intCast(d[1]), .right = @intCast(d[2]), .bottom = @intCast(d[3]) };
+            _ = w.InvalidateRect(h, &rect, 0);
+        };
         self.updateCursor();
         const more = c.animating or r.hot_changed;
         if (more and !self.ticking) if (self.hwnd()) |h| {
@@ -100,29 +100,21 @@ pub const Surface = struct {
         _ = w.PostMessageW(h, WM_FRAME, 0, 0);
     }
 
-    fn render(self: *Surface) void {
-        const pw: usize = @intFromFloat(@max(1, @round(self.size.w * self.scale)));
-        const ph: usize = @intFromFloat(@max(1, @round(self.size.h * self.scale)));
-        if (pw != self.pixel_w or ph != self.pixel_h) {
-            const px = self.gpa.alloc(u8, pw * ph * 4) catch return;
-            self.gpa.free(self.pixels);
-            self.pixels = px;
-            self.pixel_w = pw;
-            self.pixel_h = ph;
-        }
-        raster.draw(.{ .bytes = self.pixels, .width = pw, .height = ph }, self.instances.items, self.text.atlas.mask(), self.text.images.pictures(), self.scale, self.ctx.theme.background);
-        self.stale = false;
+    fn shown(self: *Surface) canvas.Frame {
+        return .{ .instances = self.instances.items, .text = &self.text, .clear = self.ctx.theme.background, .size = self.size, .scale = self.scale };
     }
 
     fn paint(self: *Surface, h: w.HWND) void {
         var ps: w.PAINTSTRUCT = undefined;
         const dc = w.BeginPaint(h, &ps) orelse return;
         defer _ = w.EndPaint(h, &ps);
-        if (self.stale or self.pixels.len == 0) self.render();
-        if (self.pixels.len == 0) return;
+        self.pixels.draw(self.gpa, self.shown());
+        const px = &self.pixels;
+        if (px.bytes.len == 0) return;
         // A negative height: rows from the top, as the renderer writes them.
-        const info: w.BITMAPINFOHEADER = .{ .biWidth = @intCast(self.pixel_w), .biHeight = -@as(i32, @intCast(self.pixel_h)) };
-        _ = w.SetDIBitsToDevice(dc, 0, 0, @intCast(self.pixel_w), @intCast(self.pixel_h), 0, 0, 0, @intCast(self.pixel_h), self.pixels.ptr, &info, 0);
+        // GDI copies only what was invalidated.
+        const info: w.BITMAPINFOHEADER = .{ .biWidth = @intCast(px.width), .biHeight = -@as(i32, @intCast(px.height)) };
+        _ = w.SetDIBitsToDevice(dc, 0, 0, @intCast(px.width), @intCast(px.height), 0, 0, 0, @intCast(px.height), px.bytes.ptr, &info, 0);
     }
 
     fn updateCursor(self: *Surface) void {

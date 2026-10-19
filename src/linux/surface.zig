@@ -7,7 +7,7 @@ const gtk = @import("gtk.zig");
 const ui = @import("../ui/ui.zig");
 const types = @import("../ui/types.zig");
 const gpu = @import("../ui/gpu.zig");
-const raster = @import("../ui/raster.zig");
+const canvas = @import("../ui/canvas.zig");
 const text = @import("../ui/text.zig");
 const frame_mod = @import("../ui/frame.zig");
 const ctx_mod = @import("../ui/context.zig");
@@ -25,11 +25,7 @@ pub const Surface = struct {
     ctx: Context,
     view: ui.View,
     instances: std.ArrayList(gpu.Instance) = .empty,
-    pixels: []u8 = &.{},
-    pixel_w: usize = 0,
-    pixel_h: usize = 0,
-    /// Instances changed since the pixels were drawn.
-    stale: bool = true,
+    pixels: canvas.Canvas = .{},
     size: types.Size = .{},
     scale: f32 = 1,
     last_frame_time: f64 = 0,
@@ -89,7 +85,7 @@ pub const Surface = struct {
         g.g_object_unref(self.im);
         self.instances.deinit(self.gpa);
         self.committed.deinit(self.gpa);
-        self.gpa.free(self.pixels);
+        self.pixels.deinit(self.gpa);
         self.ctx.deinit();
         self.text.deinit();
         self.gpa.destroy(self);
@@ -100,7 +96,8 @@ pub const Surface = struct {
         return if (@import("desktop.zig").isDark()) Theme.dark_theme else Theme.light;
     }
 
-    /// Builds, lays out and paints a frame; it is drawn when GTK draws.
+    /// Builds, lays out and paints a frame; what it changed is drawn when
+    /// GTK draws.
     pub fn frame(self: *Surface) void {
         if (self.size.w <= 0 or self.size.h <= 0) return;
         const c = &self.ctx;
@@ -108,8 +105,14 @@ pub const Surface = struct {
         const dt: f32 = if (self.last_frame_time > 0) @floatCast(@min(now - self.last_frame_time, 0.1)) else 1.0 / 60.0;
         self.last_frame_time = now;
         const r = frame_mod.run(c, self.view, &self.text, &self.instances, self.size, self.scale, self.theme(), dt, now - self.start_time);
-        self.stale = true;
-        gtk.api.gtk_widget_queue_draw(self.area);
+        if (self.pixels.damage(self.shown())) |d| {
+            // The points around those pixels.
+            const x0 = @floor(@as(f32, @floatFromInt(d[0])) / self.scale);
+            const y0 = @floor(@as(f32, @floatFromInt(d[1])) / self.scale);
+            const x1 = @ceil(@as(f32, @floatFromInt(d[2])) / self.scale);
+            const y1 = @ceil(@as(f32, @floatFromInt(d[3])) / self.scale);
+            gtk.api.gtk_widget_queue_draw_area(self.area, @intFromFloat(x0), @intFromFloat(y0), @intFromFloat(x1 - x0), @intFromFloat(y1 - y0));
+        }
         self.updateCursor();
         const more = c.animating or r.hot_changed;
         if (more and self.tick == 0) {
@@ -148,19 +151,8 @@ pub const Surface = struct {
         return 0;
     }
 
-    /// Draws the instances into the pixels, sized to the widget.
-    fn render(self: *Surface) void {
-        const w: usize = @intFromFloat(@max(1, @round(self.size.w * self.scale)));
-        const h: usize = @intFromFloat(@max(1, @round(self.size.h * self.scale)));
-        if (w != self.pixel_w or h != self.pixel_h) {
-            const px = self.gpa.alloc(u8, w * h * 4) catch return;
-            self.gpa.free(self.pixels);
-            self.pixels = px;
-            self.pixel_w = w;
-            self.pixel_h = h;
-        }
-        raster.draw(.{ .bytes = self.pixels, .width = w, .height = h }, self.instances.items, self.text.atlas.mask(), self.text.images.pictures(), self.scale, self.ctx.theme.background);
-        self.stale = false;
+    fn shown(self: *Surface) canvas.Frame {
+        return .{ .instances = self.instances.items, .text = &self.text, .clear = self.ctx.theme.background, .size = self.size, .scale = self.scale };
     }
 
     fn updateCursor(self: *Surface) void {
@@ -205,10 +197,11 @@ fn onRealize(_: *gtk.Widget, data: ?*anyopaque) callconv(.c) void {
 fn onDraw(_: *gtk.Widget, cr: *anyopaque, data: ?*anyopaque) callconv(.c) c_int {
     const s = of(data);
     const g = &gtk.api;
-    if (s.stale or s.pixels.len == 0) s.render();
-    if (s.pixels.len == 0) return 0;
+    s.pixels.draw(s.gpa, s.shown());
+    const px = &s.pixels;
+    if (px.bytes.len == 0) return 0;
     // ARGB32 on a little-endian machine is BGRA: the renderer's order.
-    const surf = g.cairo_image_surface_create_for_data(s.pixels.ptr, 0, @intCast(s.pixel_w), @intCast(s.pixel_h), @intCast(s.pixel_w * 4));
+    const surf = g.cairo_image_surface_create_for_data(px.bytes.ptr, 0, @intCast(px.width), @intCast(px.height), @intCast(px.width * 4));
     defer g.cairo_surface_destroy(surf);
     g.cairo_surface_set_device_scale(surf, s.scale, s.scale);
     g.cairo_set_source_surface(cr, surf, 0, 0);
