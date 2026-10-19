@@ -111,6 +111,9 @@ pub const Context = struct {
     theme: Theme = .light,
     size: types.Size = .{},
     scale: f32 = 2,
+    /// What draws the frames: Metal, OpenGL (Linux, where there is a GPU),
+    /// or nanoui's own CPU renderer.
+    renderer: []const u8 = if (@import("text.zig").portable) "CPU" else "Metal",
     /// Seconds since the previous frame, for animations.
     dt: f32 = 1.0 / 60.0,
     /// Seconds since the first frame: the clock of animations a view drives itself.

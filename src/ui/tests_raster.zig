@@ -6,11 +6,11 @@ const testing = std.testing;
 const ui = @import("ui.zig");
 const raster = @import("raster.zig");
 
-const Scene = struct {
+pub const Scene = struct {
     on: bool = true,
     value: f32 = 0.4,
     picture: []const u8 = "",
-    fn view(s: *Scene, c: *ui.Context) void {
+    pub fn view(s: *Scene, c: *ui.Context) void {
         ui.column(c, .{ .padding = .all(20), .gap = 14, .width = .fill, .height = .fill });
         defer ui.end(c);
         ui.text(c, "Settings", .{ .size = 22, .weight = .bold });

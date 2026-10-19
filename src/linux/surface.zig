@@ -1,13 +1,17 @@
-//! Native UI on Linux: a GtkDrawingArea that shows frames the CPU renderer
-//! draws (cairo puts them on screen, at the monitor's scale), fed the
-//! pointer, the wheel, keys and an input method's text. Frames run on
-//! input and while something animates (a tick callback); idle, nothing runs.
+//! Native UI on Linux: a GtkGLArea that the OpenGL renderer draws
+//! (`glarea.zig`), or, without OpenGL 3.3, a GtkDrawingArea showing frames
+//! the CPU renderer draws (cairo puts them on screen, at the monitor's
+//! scale); fed the pointer, the wheel, keys and an input method's text.
+//! Frames run on input and while something animates (a tick callback);
+//! idle, nothing runs.
 const std = @import("std");
 const gtk = @import("gtk.zig");
 const ui = @import("../ui/ui.zig");
 const types = @import("../ui/types.zig");
 const gpu = @import("../ui/gpu.zig");
 const canvas = @import("../ui/canvas.zig");
+const glarea = @import("glarea.zig");
+const opengl = @import("../ui/opengl.zig");
 const text = @import("../ui/text.zig");
 const frame_mod = @import("../ui/frame.zig");
 const ctx_mod = @import("../ui/context.zig");
@@ -26,6 +30,11 @@ pub const Surface = struct {
     view: ui.View,
     instances: std.ArrayList(gpu.Instance) = .empty,
     pixels: canvas.Canvas = .{},
+    /// The area is a GL area: OpenGL draws it, once it is realized.
+    gl: bool,
+    renderer: ?opengl.Renderer = null,
+    /// OpenGL failed: the drawing area replaces the GL area soon.
+    fallback: c_uint = 0,
     size: types.Size = .{},
     scale: f32 = 1,
     last_frame_time: f64 = 0,
@@ -46,11 +55,13 @@ pub const Surface = struct {
         const self = try gpa.create(Surface);
         errdefer gpa.destroy(self);
         const g = &gtk.api;
-        const area = g.gtk_drawing_area_new();
+        const gl_area = if (window.app.cpu_only) null else glarea.new();
+        const area = gl_area orelse g.gtk_drawing_area_new();
         self.* = .{
             .gpa = gpa,
             .window = window,
             .area = area,
+            .gl = gl_area != null,
             .im = g.gtk_im_multicontext_new(),
             .text = .init(gpa),
             .ctx = undefined,
@@ -59,9 +70,20 @@ pub const Surface = struct {
             .start_time = clock.now(),
         };
         self.ctx = .init(gpa, &self.text);
+        self.attach(area);
+        gtk.connect(self.im, "commit", @ptrCast(&onCommit), self);
+        g.gtk_container_add(window.gtkwindow.?, area);
+        return self;
+    }
+
+    /// Feeds `area`'s events to the surface, and draws it.
+    fn attach(self: *Surface, area: *gtk.Widget) void {
+        const g = &gtk.api;
         g.gtk_widget_set_can_focus(area, 1);
         g.gtk_widget_add_events(area, gtk.pointer_motion_mask | gtk.button_press_mask | gtk.button_release_mask | gtk.key_press_mask | gtk.leave_notify_mask | gtk.focus_change_mask | gtk.scroll_mask | gtk.smooth_scroll_mask);
-        gtk.connect(area, "draw", @ptrCast(&onDraw), self);
+        if (self.gl) {
+            gtk.connect(area, "render", @ptrCast(&onRender), self);
+        } else gtk.connect(area, "draw", @ptrCast(&onDraw), self);
         gtk.connect(area, "size-allocate", @ptrCast(&onSize), self);
         gtk.connect(area, "button-press-event", @ptrCast(&onPress), self);
         gtk.connect(area, "button-release-event", @ptrCast(&onRelease), self);
@@ -72,9 +94,6 @@ pub const Surface = struct {
         gtk.connect(area, "focus-in-event", @ptrCast(&onFocusIn), self);
         gtk.connect(area, "focus-out-event", @ptrCast(&onFocusOut), self);
         gtk.connect(area, "realize", @ptrCast(&onRealize), self);
-        gtk.connect(self.im, "commit", @ptrCast(&onCommit), self);
-        g.gtk_container_add(window.gtkwindow.?, area);
-        return self;
     }
 
     pub fn destroy(self: *Surface) void {
@@ -82,6 +101,12 @@ pub const Surface = struct {
         if (self.tick != 0) g.gtk_widget_remove_tick_callback(self.area, self.tick);
         if (self.idle != 0) _ = g.g_source_remove(self.idle);
         if (self.later != 0) _ = g.g_source_remove(self.later);
+        if (self.fallback != 0) _ = g.g_source_remove(self.fallback);
+        // While the area is still realized: its context frees the renderer's.
+        if (self.renderer) |*r| {
+            glarea.api.gtk_gl_area_make_current(self.area);
+            r.deinit();
+        }
         g.g_object_unref(self.im);
         self.instances.deinit(self.gpa);
         self.committed.deinit(self.gpa);
@@ -105,7 +130,9 @@ pub const Surface = struct {
         const dt: f32 = if (self.last_frame_time > 0) @floatCast(@min(now - self.last_frame_time, 0.1)) else 1.0 / 60.0;
         self.last_frame_time = now;
         const r = frame_mod.run(c, self.view, &self.text, &self.instances, self.size, self.scale, self.theme(), dt, now - self.start_time);
-        if (self.pixels.damage(self.shown())) |d| {
+        if (self.gl) {
+            glarea.api.gtk_gl_area_queue_render(self.area);
+        } else if (self.pixels.damage(self.shown())) |d| {
             // The points around those pixels.
             const x0 = @floor(@as(f32, @floatFromInt(d[0])) / self.scale);
             const y0 = @floor(@as(f32, @floatFromInt(d[1])) / self.scale);
@@ -192,6 +219,44 @@ fn of(data: ?*anyopaque) *Surface {
 fn onRealize(_: *gtk.Widget, data: ?*anyopaque) callconv(.c) void {
     const s = of(data);
     gtk.api.gtk_im_context_set_client_window(s.im, gtk.api.gtk_widget_get_window(s.area));
+    if (!s.gl) return;
+    s.renderer = glarea.start(s.area);
+    if (s.renderer != null) {
+        s.ctx.renderer = "OpenGL";
+        s.requestFrame();
+        if (s.window.app.debug) std.debug.print("nanoui: window {x} draws with OpenGL on {s}\n", .{ @intFromPtr(s.window), glarea.gpuName() });
+    } else if (s.fallback == 0) {
+        // Not from inside the area's own signal: the area is replaced soon.
+        s.fallback = gtk.api.g_idle_add(useCpu, s);
+    }
+}
+
+/// OpenGL failed: a drawing area, which the CPU renderer draws, replaces
+/// the GL area.
+fn useCpu(data: ?*anyopaque) callconv(.c) c_int {
+    const s = of(data);
+    const g = &gtk.api;
+    s.fallback = 0;
+    if (s.tick != 0) g.gtk_widget_remove_tick_callback(s.area, s.tick);
+    s.tick = 0;
+    g.gtk_widget_destroy(s.area);
+    s.gl = false;
+    s.area = g.gtk_drawing_area_new();
+    s.attach(s.area);
+    g.gtk_container_add(s.window.gtkwindow.?, s.area);
+    glarea.api.gtk_widget_show(s.area);
+    g.gtk_widget_grab_focus(s.area);
+    return 0;
+}
+
+fn onRender(_: *gtk.Widget, _: *anyopaque, data: ?*anyopaque) callconv(.c) c_int {
+    const s = of(data);
+    if (s.renderer) |*r| {
+        r.sync(s.text.atlas.mask(), s.text.atlas.generation, s.text.images.pictures(), s.text.images.generation);
+        r.draw(s.instances.items, s.size, s.scale, s.ctx.theme.background, glarea.target());
+        return 1;
+    }
+    return 0;
 }
 
 fn onDraw(_: *gtk.Widget, cr: *anyopaque, data: ?*anyopaque) callconv(.c) c_int {

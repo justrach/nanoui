@@ -223,13 +223,14 @@ builds from any machine. On a Mac, `zig build -Dtarget=x86_64-linux-gnu` or
 |---|---|---|---|
 | windows, input, timers | AppKit | GTK 3 (loaded with `dlopen`) | Win32 |
 | text | CoreText | nanoui's TrueType reader (`src/ui/tt/`) | the same |
-| rendering | Metal | CPU (`src/ui/raster.zig`), shown with cairo | CPU, shown with GDI |
+| rendering | Metal | OpenGL 3.3 in a GtkGLArea; CPU (`src/ui/raster.zig`) without one | CPU, shown with GDI |
 | icons | SF Symbols | line icons drawn by nanoui (`src/ui/icons.zig`) | the same |
 | pages (webview) | WKWebView | not yet | not yet |
 | menus | the menu bar | accelerators | accelerators |
 
 The CPU renderer matches the Metal one pixel for pixel, and a test compares
-them. `zig build test -Dportable=true` runs the Linux and Windows text and
+them; another compares the OpenGL renderer with the CPU one, in a context
+without a window. `NANOUI_RENDERER=cpu` draws on the CPU where OpenGL is. `zig build test -Dportable=true` runs the Linux and Windows text and
 renderer on a Mac. Linux is also tested in a container
 (`tools/linux.Dockerfile`: GTK, fonts and a virtual display).
 

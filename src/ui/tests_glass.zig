@@ -7,8 +7,8 @@ const ui = @import("ui.zig");
 const raster = @import("raster.zig");
 const gpu = @import("gpu.zig");
 
-const Scene = struct {
-    fn view(_: *Scene, c: *ui.Context) void {
+pub const Scene = struct {
+    pub fn view(_: *Scene, c: *ui.Context) void {
         const root = ui.div(c).column().sizeFull();
         defer root.end();
         // Stripes and text for the glass to show through.

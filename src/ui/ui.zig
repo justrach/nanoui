@@ -107,10 +107,6 @@ pub const View = struct {
     }
 };
 
-/// What draws native UI: Metal, or nanoui's own CPU renderer (Linux,
-/// Windows, `-Dportable=true`).
-pub const renderer: []const u8 = if (@import("text.zig").portable) "CPU" else "Metal";
-
 test {
     _ = types;
     _ = @import("layout.zig");
@@ -124,6 +120,7 @@ test {
     _ = @import("tests_raster.zig");
     _ = @import("glass.zig");
     _ = @import("tests_glass.zig");
+    if (@import("builtin").os.tag == .linux) _ = @import("tests_opengl.zig");
     _ = @import("tt/raster.zig");
     _ = @import("tt/tests.zig");
     _ = @import("png.zig");

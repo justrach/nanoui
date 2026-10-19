@@ -27,6 +27,8 @@ pub const App = struct {
     running: bool = false,
     stopping: bool = false,
     debug: bool = false,
+    /// `NANOUI_RENDERER=cpu`: draw native UI on the CPU even where OpenGL is.
+    cpu_only: bool = false,
 
     pub fn create(init: std.process.Init, options: Options) !*App {
         const gpa = init.gpa;
@@ -39,6 +41,7 @@ pub const App = struct {
             .options = options,
             .flags = flags,
             .debug = init.environ_map.get("NANOUI_DEBUG") != null,
+            .cpu_only = std.mem.eql(u8, init.environ_map.get("NANOUI_RENDERER") orelse "", "cpu"),
         };
         const headless = flags.snapshot != null or flags.generate_dir != null;
         if (!headless) {
