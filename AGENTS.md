@@ -92,7 +92,8 @@ src/ui/glass.zig      Liquid Glass: the material, backdrop and optics (CPU too)
 src/ui/glass.metal    the glass's backdrop kernels and fragment function
 src/ui/metal_glass.zig  panes of glass in the Metal renderer
 src/ui/surface.zig    the NSView: events, display link, occlusion, resize
-src/ui/motion/        ui.motion: springs, tweens, presence, keyframes, layout animation
+src/ui/motion/        ui.motion: springs, tweens, presence, keyframes, layout,
+                      drag/snap, scroll-linked values, shared elements, text
 src/ui/tester.zig     views without a window: input, time, PNG snapshots
 src/ui/tests.zig      widget tests through the Tester
 src/ui/text_tt.zig    text where nanoui shapes it itself (Linux, Windows)

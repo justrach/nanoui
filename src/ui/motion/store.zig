@@ -26,6 +26,15 @@ pub const State = struct {
     rect: ?[4]f32 = null,
     layout: [2]Channel = @splat(.{}),
     layout_transition: Transition = .default,
+    /// Drag: the pointer is moving it, and where the grab and the last
+    /// sample were, so a release can keep its speed and snap.
+    dragging: bool = false,
+    drag_moved: bool = false,
+    drag_origin: [2]f32 = .{ 0, 0 },
+    pointer_origin: [2]f32 = .{ 0, 0 },
+    pointer_last: [2]f32 = .{ 0, 0 },
+    pointer_time: f64 = 0,
+    pointer_vel: [2]f32 = .{ 0, 0 },
 };
 
 pub const Store = struct {

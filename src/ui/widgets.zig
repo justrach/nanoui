@@ -15,6 +15,11 @@ pub fn key(c: *Context, k: []const u8) void {
     c.next_key = k;
 }
 
+/// The same, for a list of numbered items: no formatted string.
+pub fn keyInt(c: *Context, n: u64) void {
+    c.next_key_int = n;
+}
+
 pub fn column(c: *Context, style: Style) void {
     var s = style;
     s.direction = .column;

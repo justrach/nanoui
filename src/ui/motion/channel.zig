@@ -59,9 +59,11 @@ pub const Channel = struct {
     pub fn sample(ch: *Channel, now: f64) void {
         if (!ch.moving) return;
         const t = now - ch.since - ch.delay;
-        if (t < 0) {
+        if (t <= 0) {
+            // t == 0 is the sample `retarget` takes right after it starts:
+            // there already, with the speed it kept. Skip the spring matrix.
             ch.value = ch.from;
-            ch.velocity = 0;
+            ch.velocity = if (t < 0) 0 else ch.velocity0;
             return;
         }
         switch (ch.transition) {
@@ -113,6 +115,17 @@ test "a spring retargeted mid-flight keeps its position and velocity" {
     try std.testing.expectApproxEqAbs(vel, ch.velocity, 1e-9);
     ch.sample(5);
     try std.testing.expect(!ch.moving and ch.value == 0);
+}
+
+test "a sample at the instant of a retarget is where it was, with its speed" {
+    var ch: Channel = .at(0);
+    ch.retarget(100, .default, 0, 0);
+    ch.sample(0.05);
+    const pos = ch.value;
+    const vel = ch.velocity;
+    ch.retarget(80, .default, 0, 0.05);
+    try std.testing.expectApproxEqAbs(pos, ch.value, 1e-9);
+    try std.testing.expectApproxEqAbs(vel, ch.velocity, 1e-9);
 }
 
 test "a delay holds the value where it was" {

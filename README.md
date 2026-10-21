@@ -192,6 +192,10 @@ where a box should be, and motion takes it there.
 - **Gestures:** `hover` and `press` are targets too.
 - **Lists:** items can be staggered.
 - **Layout animation:** boxes the layout moves glide to their new place.
+- **Shared elements:** boxes that share a key glide across parents (`share`).
+- **Drag and snap:** a box follows the pointer, then springs to a point.
+- **Scroll-linked values:** a scroller's progress drives another number.
+- **Animated text:** letters or words enter, staggered.
 - **Keyframes:** they loop, or play there and back.
 
 Motion keeps its state in the frame's context, by box, so there are no

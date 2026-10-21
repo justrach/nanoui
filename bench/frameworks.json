@@ -1,0 +1,158 @@
+{
+  "updated": "2026-10-21",
+  "host": {
+    "os": "linux",
+    "arch": "x86_64",
+    "renderer": "cpu",
+    "gpu": "none",
+    "note": "No discrete GPU. nanoui draws with src/ui/raster.zig through ui.Tester (offscreen, 900×640 at 2×). rustc 1.99.1 via rustup. Mesa lavapipe (llvmpipe LLVM 20.1.2) is the Vulkan ICD under xvfb-run. GPUI Blade present hung on that path; GPUI numbers are Window::draw on the real X11/Blade window."
+  },
+  "method": {
+    "warmup": 30,
+    "frames": 20,
+    "repeat": 1,
+    "window": false
+  },
+  "runs": [
+    {
+      "id": "nanoui-baseline",
+      "label": "linux-cpu-baseline",
+      "framework": "nanoui",
+      "renderer": "cpu",
+      "scenes": {
+        "boxes": { "frame_ms_p50": 0.075, "frame_ms_p95": 0.084, "encode_ms": 26.137, "cpu_ms": 93.118, "ops": 1201, "build_ms": 0.030, "layout_ms": 0.020, "paint_ms": 0.024 },
+        "text": { "frame_ms_p50": 0.201, "frame_ms_p95": 0.241, "encode_ms": 3.862, "cpu_ms": 11.597, "ops": 1150 },
+        "scroll": { "frame_ms_p50": 0.520, "frame_ms_p95": 0.581, "encode_ms": 2.391, "cpu_ms": 8.897, "ops": 573 },
+        "list": { "frame_ms_p50": 0.053, "frame_ms_p95": 0.061, "encode_ms": 2.094, "cpu_ms": 7.836, "ops": 576 },
+        "dashboard": { "frame_ms_p50": 0.043, "frame_ms_p95": 0.054, "encode_ms": 23.512, "cpu_ms": 60.971, "ops": 323 },
+        "springs": { "frame_ms_p50": 0.807, "frame_ms_p95": 0.844, "encode_ms": 4.912, "cpu_ms": 19.576, "ops": 2001, "build_ms": 0.682 },
+        "letters": { "frame_ms_p50": 0.101, "frame_ms_p95": 0.177, "encode_ms": 2.015, "cpu_ms": 6.616, "ops": 16 }
+      }
+    },
+    {
+      "id": "nanoui-after-climb",
+      "label": "keyInt + canvas reuse + channel t=0 + spring matrix cache",
+      "framework": "nanoui",
+      "renderer": "cpu",
+      "scenes": {
+        "boxes": { "frame_ms_p50": 0.074, "frame_ms_p95": 0.092, "encode_ms": 24.045, "cpu_ms": 91.212, "ops": 1201 },
+        "text": { "frame_ms_p50": 0.205, "frame_ms_p95": 0.209, "encode_ms": 2.066, "cpu_ms": 7.408, "ops": 1150 },
+        "scroll": { "frame_ms_p50": 0.510, "frame_ms_p95": 0.533, "encode_ms": 2.026, "cpu_ms": 8.094, "ops": 573 },
+        "list": { "frame_ms_p50": 0.057, "frame_ms_p95": 0.065, "encode_ms": 2.036, "cpu_ms": 7.660, "ops": 576 },
+        "dashboard": { "frame_ms_p50": 0.044, "frame_ms_p95": 0.053, "encode_ms": 12.803, "cpu_ms": 46.142, "ops": 323 },
+        "springs": { "frame_ms_p50": 0.571, "frame_ms_p95": 0.630, "encode_ms": 4.706, "cpu_ms": 18.656, "ops": 2001, "build_ms": 0.452 },
+        "letters": { "frame_ms_p50": 0.081, "frame_ms_p95": 0.187, "encode_ms": 0.713, "cpu_ms": 0.680, "ops": 16 }
+      }
+    },
+    {
+      "id": "nanoui-cheap-shadow",
+      "label": "hillclimb --cheap-shadow (1 Y-sample CPU shadows; does not match Metal)",
+      "framework": "nanoui",
+      "renderer": "cpu-cheap-shadow",
+      "scenes": {
+        "boxes": { "encode_ms": 13.541, "frame_ms_p50": 0.081, "ops": 1201 },
+        "dashboard": { "encode_ms": 7.388, "frame_ms_p50": 0.042, "ops": 323 }
+      }
+    },
+    {
+      "id": "gpui-0.2.2-linux",
+      "label": "GPUI 0.2.2 X11 + Blade under xvfb-run; lavapipe ICD. Window::draw (layout+prepaint+paint+scene). GPU present hung on lavapipe vsync so it is not in these times.",
+      "framework": "gpui",
+      "renderer": "blade-x11",
+      "present": "xvfb/x11 + lavapipe (llvmpipe LLVM 20.1.2); present not included",
+      "scenes": {
+        "boxes": { "frame_ms_p50": 1.4437, "frame_ms_p95": 1.5659, "ops": 600 },
+        "text": { "frame_ms_p50": 2.2845, "frame_ms_p95": 2.4133, "ops": 300 },
+        "scroll": { "frame_ms_p50": 14.6005, "frame_ms_p95": 16.2790, "ops": 1000 },
+        "list": { "frame_ms_p50": 0.3798, "frame_ms_p95": 0.4301, "ops": 40 },
+        "dashboard": { "frame_ms_p50": 0.3403, "frame_ms_p95": 0.4294, "ops": 12 },
+        "springs": { "frame_ms_p50": 5.5623, "frame_ms_p95": 5.6900, "ops": 2000, "note": "closed-form spring, same k=240 c=26 as nanoui" },
+        "letters": { "frame_ms_p50": 1.4743, "frame_ms_p95": 1.6166, "ops": 16 }
+      }
+    },
+    {
+      "id": "gpui-0.2.2-test",
+      "label": "GPUI 0.2.2 TestAppContext + Window::draw; TestWindow discards GPU present",
+      "framework": "gpui",
+      "renderer": "gpui-test",
+      "present": "discarded (TestWindow::draw is empty)",
+      "scenes": {
+        "boxes": { "frame_ms_p50": 1.4455, "frame_ms_p95": 1.5603, "ops": 600 },
+        "text": { "frame_ms_p50": 1.7953, "frame_ms_p95": 2.7511, "ops": 300 },
+        "scroll": { "frame_ms_p50": 14.0560, "frame_ms_p95": 14.4600, "ops": 1000 },
+        "list": { "frame_ms_p50": 0.2720, "frame_ms_p95": 0.3517, "ops": 40 },
+        "dashboard": { "frame_ms_p50": 0.2412, "frame_ms_p95": 0.2757, "ops": 12 },
+        "springs": { "frame_ms_p50": 5.8532, "frame_ms_p95": 5.9045, "ops": 2000 },
+        "letters": { "frame_ms_p50": 1.2180, "frame_ms_p95": 1.2792, "ops": 16 }
+      }
+    },
+    {
+      "id": "egui-0.29",
+      "label": "egui 0.29 headless Context::run (tessellation only, no pixels)",
+      "framework": "egui",
+      "renderer": "cpu",
+      "scenes": {
+        "boxes": { "frame_ms_p50": 0.107, "ops": 601 },
+        "springs": { "frame_ms_p50": 0.334, "ops": 2001, "note": "sin() offsets, not spring physics" },
+        "text": { "frame_ms_p50": 0.315, "ops": 301 },
+        "scroll": { "frame_ms_p50": 1.431, "ops": 955 }
+      }
+    },
+    {
+      "id": "iced-0.13",
+      "label": "iced 0.13 tiny-skia under Xvfb; times are widget-tree build only (no layout/present hook)",
+      "framework": "iced",
+      "renderer": "tiny-skia",
+      "scenes": {
+        "boxes": { "frame_ms_p50": 0.0722, "ops": 600, "note": "widget tree only" },
+        "text": { "frame_ms_p50": 0.0327, "ops": 300, "note": "widget tree only" },
+        "springs": { "frame_ms_p50": 0.2814, "ops": 2000, "note": "sin() offsets, widget tree only" },
+        "scroll": { "frame_ms_p50": 0.3769, "ops": 1000, "note": "widget tree only" }
+      }
+    },
+    {
+      "id": "slint-1.18-software",
+      "label": "Slint 1.18 software renderer + winit-x11 under xvfb-run. 1 ms timer floor except text.",
+      "framework": "slint",
+      "renderer": "software",
+      "present": "xvfb + slint software renderer",
+      "scenes": {
+        "boxes": { "frame_ms_p50": 1.0547, "ops": 600, "note": "timer floor ~1ms" },
+        "text": { "frame_ms_p50": 17.3748, "ops": 300 },
+        "springs": { "frame_ms_p50": 1.0364, "ops": 2000, "note": "sin() offsets; timer floor ~1ms" },
+        "scroll": { "frame_ms_p50": 1.1396, "ops": 1000, "note": "timer floor ~1ms" }
+      }
+    },
+    {
+      "id": "clay-0.14",
+      "label": "Clay layout + render commands (no pixels)",
+      "framework": "clay",
+      "renderer": "none",
+      "scenes": {
+        "boxes": { "frame_ms_p50": 0.064, "ops": 600 }
+      }
+    }
+  ],
+  "skips": [
+    { "framework": "dioxus", "reason": "not retried this pass; previously tokio 1.54 needed Rust 1.85 (now available) but no bench was written" },
+    { "framework": "flutter", "reason": "flutter SDK not installed" },
+    { "framework": "qt-quick", "reason": "qmake/qmlscene not installed" },
+    { "framework": "gtk4", "reason": "libgtk-4.so is present but gtk-4.pc / headers are not; skipped a C/Zig GTK widget bench" },
+    { "framework": "tauri", "reason": "not installed; web baseline not built" },
+    { "framework": "electron", "reason": "not installed; web baseline not built" },
+    { "framework": "mygo", "reason": "twin uses Metal (macOS only)" }
+  ],
+  "other": {
+    "startup": "Tester first frame is included in warmup; not isolated. Idle CPU is 0 by design (no poll).",
+    "binary_bytes": { "gallery_ReleaseFast": 8123936, "counter_ReleaseFast": 6908584, "nui_ReleaseFast": 4374992 },
+    "dropped_frames": "CPU raster of the boxes scene is ~24 ms encode (Gaussian shadows, 4 Y-samples matching Metal) so a 60 Hz CPU window would drop. --cheap-shadow (1 Y-sample) is ~13.5 ms. Frame CPU stays under 1 ms. GPUI Blade present was not timed (hung on lavapipe).",
+    "toolchain": "rustc 1.99.1 (rustup stable), zig 0.17.0, mesa 25.2.8 lavapipe"
+  },
+  "wins": [
+    { "label": "ui.keyInt + springs scene integer keys", "scene": "springs", "metric": "frame_ms_p50", "gain_pct": 9.3 },
+    { "label": "reuse ui.Canvas instead of alloc+draw+free each frame", "scene": "letters", "metric": "encode_ms", "gain_pct": 64.6 },
+    { "label": "Channel.sample skips the spring matrix at t<=0 (retarget's second sample)", "scene": "springs", "metric": "frame_ms_p50", "gain_pct": 11.5 },
+    { "label": "Spring.matrix last-value cache for shared clock and spring", "scene": "springs", "metric": "frame_ms_p50", "gain_pct": 11.9 },
+    { "label": "hillclimb --cheap-shadow (1 Y-sample; behind a flag, does not match Metal)", "scene": "boxes", "metric": "encode_ms", "gain_pct": 43.7 }
+  ]
+}

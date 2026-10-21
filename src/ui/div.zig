@@ -238,6 +238,11 @@ pub const Div = struct {
     pub fn end(d: Div) void {
         d.c.end();
     }
+
+    /// The box's id: scroll-linked motion and tests name it this way.
+    pub fn id(d: Div) u64 {
+        return d.c.node(d.index).id;
+    }
 };
 
 /// Opens a box; style it with the chain, add children, then `end`.

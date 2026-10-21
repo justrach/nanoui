@@ -1,7 +1,8 @@
 //! The gallery's Motion page: `ui.motion` at work. A card that grows on a
 //! click and gives on a press, a toast that comes and goes, a list that
 //! staggers in and glides when shuffled, a counter that counts, a dot that
-//! breathes forever, and the easing curves side by side.
+//! breathes forever, the easing curves side by side, a drag that snaps, a
+//! shared chip, staggered letters, and a scroll-linked bar.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
@@ -17,6 +18,10 @@ pub const Demo = struct {
     /// The easings run to the right when on.
     played: bool = false,
     seed: u64 = 7,
+    /// The shared chip sits on the right.
+    chip_right: bool = false,
+    /// Replay the letters' entrance.
+    letters: u32 = 0,
 
     pub fn page(d: *Demo, c: *ui.Context) void {
         const th = c.theme;
@@ -39,6 +44,8 @@ pub const Demo = struct {
     fn content(d: *Demo, c: *ui.Context) void {
         const sc = ui.div(c).column().sizeFull().scrollY().p(28).gap(20);
         defer sc.end();
+        const bar = motion.scroll.value(c, "read", sc.id(), .{ 8, @max(24, c.size.w - 56) }, .instant);
+        _ = c.leaf(.{ .width = .{ .px = bar }, .height = .{ .px = 3 }, .radius = 2, .background = c.theme.accent }, .none, null);
         ui.heading(c, "Motion");
         ui.label(c, "Springs and tweens, interruptible: click twice quickly and watch it turn.");
         {
@@ -48,6 +55,9 @@ pub const Demo = struct {
             d.counter(c);
         }
         d.list(c);
+        d.dragSnap(c);
+        d.shared(c);
+        d.typeIn(c);
         d.easings(c);
     }
 
@@ -116,6 +126,75 @@ pub const Demo = struct {
             _ = c.leaf(.{ .width = .{ .px = 8 }, .height = .{ .px = 8 }, .radius = 4, .background = .hex(hues[n]) }, .none, null);
             ui.text(c, names[n], .{});
         }
+    }
+
+    fn dragSnap(d: *Demo, c: *ui.Context) void {
+        _ = d;
+        const th = c.theme;
+        const box = ui.div(c).column().wFull().gap(10);
+        defer box.end();
+        ui.text(c, "Drag and snap", .{ .weight = .semibold });
+        ui.label(c, "Pull the knob; it keeps its speed and settles on a point.");
+        const track = ui.div(c).wFull().h(48).rounded(12).bg(th.surface).border(th.border);
+        defer track.end();
+        const dnd = motion.drag(c, .{
+            .min = .{ 8, 8 },
+            .max = .{ 280, 8 },
+            .axis = .x,
+            .snap = &.{ .{ 8, 8 }, .{ 144, 8 }, .{ 280, 8 } },
+            .elasticity = 0.18,
+            .transition = .{ .spring = motion.Spring.snappy },
+        });
+        const knob = ui.div(c).absolute().w(32).h(32).roundedFull().bg(th.accent).control().motion(dnd.frame());
+        defer knob.end();
+    }
+
+    fn shared(d: *Demo, c: *ui.Context) void {
+        const th = c.theme;
+        const box = ui.div(c).column().wFull().gap(10);
+        defer box.end();
+        {
+            const r = ui.div(c).row().gap(8).itemsCenter();
+            defer r.end();
+            ui.text(c, "Shared element", .{ .weight = .semibold });
+            ui.spacer(c);
+            if (ui.button(c, "Move", .{}).clicked) d.chip_right = !d.chip_right;
+        }
+        const row = ui.div(c).row().wFull().gap(48);
+        defer row.end();
+        for ([2]bool{ false, true }) |right| {
+            const slot = ui.div(c).w(72).h(72).rounded(16).bg(th.surface).border(th.border);
+            defer slot.end();
+            if (motion.share(c, "chip", d.chip_right == right, .{
+                .initial = .{ .scale = 0.8, .opacity = 0 },
+                .transition = .{ .spring = motion.Spring.snappy },
+            })) |f| {
+                const chip = ui.div(c).sizeFull().rounded(14).bg(th.accent).motion(f);
+                defer chip.end();
+            }
+        }
+    }
+
+    fn typeIn(d: *Demo, c: *ui.Context) void {
+        const th = c.theme;
+        const box = ui.div(c).column().wFull().gap(10);
+        defer box.end();
+        {
+            const r = ui.div(c).row().gap(8).itemsCenter();
+            defer r.end();
+            ui.text(c, "Animated text", .{ .weight = .semibold });
+            ui.spacer(c);
+            if (ui.button(c, "Replay", .{ .variant = .ghost }).clicked) d.letters += 1;
+        }
+        ui.key(c, c.print("letters-{d}", .{d.letters}));
+        const wrap = ui.div(c);
+        defer wrap.end();
+        motion.letters(c, "nanoui in motion", .{ .size = 22, .weight = .semibold, .color = th.text }, .{
+            .unit = .letters,
+            .enter = .{ .y = 12, .opacity = 0 },
+            .stagger_each = 0.028,
+            .transition = .{ .spring = motion.Spring.snappy },
+        });
     }
 
     fn shuffle(d: *Demo) void {

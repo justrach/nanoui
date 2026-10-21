@@ -154,8 +154,8 @@ pub const Context = struct {
     /// The textures this frame shows (`ui.texture`), by slot.
     textures: std.ArrayList(@import("gpu.zig").Texture) = .empty,
     edits: std.AutoHashMapUnmanaged(u64, EditState) = .empty,
-    /// The largest scroll offset of each scrolling box in the last layout,
-    /// for boxes that follow their end.
+    /// The largest scroll offset of each scrolling box in the last layout
+    /// (follow_end and scroll-linked motion both read it).
     scroll_max: std.AutoHashMapUnmanaged(u64, f32) = .empty,
     /// Whether each of those follows its end, and the offset layout last
     /// left it at (a different one was moved by the reader or the app).

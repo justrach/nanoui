@@ -7,14 +7,15 @@
 //!   zig build run -- --label "glyph atlas" name this run in the history
 //!   zig build run -- --scene text --frames 600 --only nanoui
 const std = @import("std");
+const builtin = @import("builtin");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const scenes = @import("scenes.zig");
 const report = @import("report.zig");
 const mygo = @import("mygo.zig");
 const clay = @import("clay.zig");
-
-extern "c" fn CACurrentMediaTime() f64;
+const cpu = @import("cpu.zig");
+const nanoui_run = if (builtin.os.tag == .macos) @import("metal_run.zig") else cpu;
 
 pub const width = 900;
 pub const height = 640;
@@ -28,6 +29,7 @@ pub const Result = struct {
     /// Median CPU time of building, laying out and painting a frame.
     frame_ms: f64,
     frame_p95: f64,
+    frame_p99: f64 = 0,
     /// Median CPU time of encoding it for the GPU.
     encode_ms: f64,
     /// Median GPU time of drawing it.
@@ -41,6 +43,8 @@ pub const Result = struct {
     build_ms: f64 = 0,
     layout_ms: f64 = 0,
     paint_ms: f64 = 0,
+    /// Who drew it: "metal", "cpu", "opengl", "llvmpipe".
+    renderer: []const u8 = "",
 };
 
 const Options = struct {
@@ -51,6 +55,8 @@ const Options = struct {
     only: ?[]const u8 = null,
     scenes: []const scenes.Scene = std.enums.values(scenes.Scene),
     label: []const u8 = "",
+    /// 1 Y-sample CPU shadows (faster encode; does not match Metal).
+    cheap_shadow: bool = false,
 };
 
 pub fn cpuSeconds() f64 {
@@ -73,60 +79,14 @@ pub fn p95Of(xs: []f64) f64 {
     return xs[xs.len * 95 / 100];
 }
 
-/// Runs `scene` with nanoui: the view, layout and paint of a frame as a
-/// window runs them, then the Metal renderer drawing it into a texture.
-fn runNanoui(gpa: std.mem.Allocator, scene: scenes.Scene, frames: usize) !Result {
-    var state: scenes.State = .{ .scene = scene };
-    var t: ui.Tester = undefined;
-    try t.init(gpa, .init(&state, scenes.State.view), .{ .width = width, .height = height, .scale = scale });
-    defer t.deinit();
-    t.dt = 1.0 / 120.0;
-    const target = t.renderer.newTarget(t.size, t.scale);
-    defer nanoui.objc.release(target);
+pub fn p99Of(xs: []f64) f64 {
+    if (xs.len == 0) return 0;
+    std.mem.sort(f64, xs, {}, std.sort.asc(f64));
+    return xs[@min(xs.len - 1, xs.len * 99 / 100)];
+}
 
-    const frame_ms = try gpa.alloc(f64, frames);
-    defer gpa.free(frame_ms);
-    const encode_ms = try gpa.alloc(f64, frames);
-    defer gpa.free(encode_ms);
-    const gpu_ms = try gpa.alloc(f64, frames);
-    defer gpa.free(gpu_ms);
-    var phases: [3][]f64 = undefined;
-    for (&phases) |*ph| ph.* = try gpa.alloc(f64, frames);
-    defer for (phases) |ph| gpa.free(ph);
-    var cpu0: f64 = 0;
-    for (0..warmup + frames) |i| {
-        if (i == warmup) cpu0 = cpuSeconds();
-        state.frame = i;
-        state.time = @as(f32, @floatFromInt(i)) / 120;
-        t.time = state.time;
-        const t0 = CACurrentMediaTime();
-        t.frame();
-        const ft = (CACurrentMediaTime() - t0) * 1000;
-        const timing = t.renderer.drawTimed(target, t.instances.items, t.text.texture(), t.size, t.theme.background);
-        if (i >= warmup) {
-            frame_ms[i - warmup] = ft;
-            encode_ms[i - warmup] = timing.encode_ms;
-            gpu_ms[i - warmup] = timing.gpu_ms;
-            phases[0][i - warmup] = t.ctx.stats.build_ms;
-            phases[1][i - warmup] = t.ctx.stats.layout_ms;
-            phases[2][i - warmup] = t.ctx.stats.paint_ms;
-        }
-    }
-    const cpu = (cpuSeconds() - cpu0) * 1000 / @as(f64, @floatFromInt(frames));
-    return .{
-        .fw = "nanoui",
-        .scene = @tagName(scene),
-        .frames = frames,
-        .frame_ms = medianOf(frame_ms),
-        .frame_p95 = p95Of(frame_ms),
-        .encode_ms = medianOf(encode_ms),
-        .gpu_ms = medianOf(gpu_ms),
-        .cpu_ms = cpu,
-        .ops = t.instances.items.len,
-        .build_ms = medianOf(phases[0]),
-        .layout_ms = medianOf(phases[1]),
-        .paint_ms = medianOf(phases[2]),
-    };
+fn runNanoui(gpa: std.mem.Allocator, scene: scenes.Scene, frames: usize) !Result {
+    return nanoui_run.run(gpa, scene, frames);
 }
 
 fn better(a: ?Result, b: Result) Result {
@@ -159,8 +119,10 @@ fn parseArgs(init: std.process.Init) !Options {
             while (it.next()) |name| try list.append(arena, std.meta.stringToEnum(scenes.Scene, name) orelse return error.UnknownScene);
             o.scenes = list.items;
             i += 1;
+        } else if (std.mem.eql(u8, a, "--cheap-shadow")) {
+            o.cheap_shadow = true;
         } else if (std.mem.eql(u8, a, "--help") or std.mem.eql(u8, a, "-h")) {
-            std.debug.print("usage: hillclimb [--scene boxes,text,scroll,dashboard] [--frames N] [--only nanoui|mygo|clay] [--label NAME]\n", .{});
+            std.debug.print("usage: hillclimb [--scene boxes,text,scroll,list,dashboard,springs,letters] [--frames N] [--only nanoui|mygo|clay] [--label NAME] [--cheap-shadow]\n", .{});
             std.process.exit(0);
         } else return error.UnknownArgument;
     }
@@ -171,6 +133,7 @@ pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;
     const arena = init.arena.allocator();
     const opts = try parseArgs(init);
+    if (opts.cheap_shadow) ui.raster.shadows.samples = 1;
     const want = struct {
         fn f(o: Options, fw: []const u8) bool {
             return o.only == null or std.mem.eql(u8, o.only.?, fw);

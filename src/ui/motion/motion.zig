@@ -27,6 +27,16 @@ pub const Keyframes = @import("keyframes.zig").Keyframes;
 pub const keyframes = @import("keyframes.zig").keyframes;
 pub const layoutShift = @import("layout.zig").shift;
 pub const Store = store.Store;
+pub const scroll = @import("scroll.zig");
+pub const drag = @import("drag.zig").drag;
+pub const Drag = @import("drag.zig").Drag;
+pub const DragOptions = @import("drag.zig").Options;
+pub const Axis = @import("drag.zig").Axis;
+pub const share = @import("share.zig").share;
+pub const shareId = @import("share.zig").idOf;
+pub const letters = @import("text.zig").text;
+pub const TextUnit = @import("text.zig").Unit;
+pub const TextOptions = @import("text.zig").Options;
 const Color = types.Color;
 
 /// Where a box is headed; what's left null is left alone.
@@ -268,4 +278,8 @@ test {
     _ = @import("easing.zig");
     _ = @import("spring.zig");
     _ = @import("channel.zig");
+    _ = @import("scroll.zig");
+    _ = @import("drag.zig");
+    _ = @import("share.zig");
+    _ = @import("text.zig");
 }

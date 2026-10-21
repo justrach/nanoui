@@ -173,8 +173,9 @@ pub fn arrange(c: *Context, index: u32, rect_in: types.Rect) void {
                 }
                 c.scroll_follow.put(c.gpa, n.id, follow) catch {};
             }
-            c.scroll_max.put(c.gpa, n.id, max_scroll) catch {};
         }
+        // Every scroller, not only follow_end: scroll-linked motion reads it.
+        c.scroll_max.put(c.gpa, n.id, max_scroll) catch {};
         if (c.scroll.getPtr(n.id)) |s| {
             s.* = @min(s.*, max_scroll);
             scroll_y = s.*;

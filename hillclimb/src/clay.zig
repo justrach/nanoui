@@ -13,7 +13,6 @@ const c = @import("clay");
 const main = @import("main.zig");
 const scenes = @import("scenes.zig");
 
-extern "c" fn CACurrentMediaTime() f64;
 
 /// What Clay's measure function reads: nanoui's text system.
 const TextSystem = @FieldType(ui.Tester, "text");
@@ -110,6 +109,7 @@ fn declare(arena: std.mem.Allocator, scene: scenes.Scene, frame: usize, t: f32) 
             for (first..first + main.height / 28 + 1) |i| row(arena, i);
             close();
         },
+        .springs, .letters => {},
         .dashboard => {
             open(.{ .layout = .{ .sizing = .{ .width = grow(), .height = grow() }, .padding = pad(16, 16), .childGap = 12, .layoutDirection = c.CLAY_TOP_TO_BOTTOM } });
             for (0..3) |r| {
@@ -172,12 +172,12 @@ pub fn run(gpa: std.mem.Allocator, scene: scenes.Scene, frames: usize) !main.Res
         _ = arena_state.reset(.retain_capacity);
         t.text.beginFrame();
         const time = @as(f32, @floatFromInt(i)) / 120;
-        const t0 = CACurrentMediaTime();
+        const t0 = ui.clock.now();
         c.Clay_SetLayoutDimensions(.{ .width = main.width, .height = main.height });
         c.Clay_BeginLayout();
         declare(arena_state.allocator(), scene, i, time);
         const cmds = c.Clay_EndLayout();
-        const ft = (CACurrentMediaTime() - t0) * 1000;
+        const ft = (ui.clock.now() - t0) * 1000;
         commands = @intCast(cmds.length);
         if (i >= main.warmup) frame_ms[i - main.warmup] = ft;
     }
