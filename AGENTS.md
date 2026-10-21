@@ -118,6 +118,7 @@ examples/             hello (webview), counter and gallery (native UI)
 hillclimb/            headless benchmarks against mygo (its own package)
 apps/nanoterm/        the first app: a Warp-like terminal with ACP agents
 apps/nanomon/         a small activity monitor (libproc, Mach, /proc)
+apps/nanomail/        a JMAP mail client for macOS and iOS
 tools/lines.zig       the 600-line check
 tools/version.sh      set or check the version (build.zig.zon) for a release
 .github/workflows/    CI (tests on macOS and Linux) and releases from v* tags

@@ -404,7 +404,10 @@ Chinese), keys repeating while held, and more than one window on an iPad.
       <a href="https://github.com/justrach/nanostudio"><img src="docs/images/nanostudio-dark.png" alt="nanostudio: the editor with a zoom on the timeline"></a>
       <p><a href="https://github.com/justrach/nanostudio"><strong>nanostudio</strong></a>: a screen recorder and editor. It records a display or a window with its sound, then zooms where you clicked. You can trim, speed up and dress the take, and export it. Every frame, preview and export alike, is a nanoui view.</p>
     </td>
-    <td width="50%" valign="top"></td>
+    <td width="50%" valign="top">
+      <a href="https://github.com/gstohl/nanomail"><img src="docs/images/nanomail-dark.png" alt="nanomail: a message with links and a picture, shared mailboxes in the sidebar"></a>
+      <p><a href="https://github.com/gstohl/nanomail"><strong>nanomail</strong></a>: a JMAP mail client for macOS and iOS. It shows rich mail with links and pictures, loading pictures from the web only when you ask. New mail arrives by push, and mailboxes others share with you appear with what you may do in them. It signs in with a password, a token, or OAuth in the browser.</p>
+    </td>
   </tr>
 </table>
 
@@ -412,6 +415,7 @@ Download them for macOS:
 [nanoterm](https://github.com/justrach/nanoterm/releases/latest/download/nanoterm-macos-arm64.dmg) ·
 [nanomon](https://github.com/justrach/nanomon/releases/latest/download/nanomon-macos-arm64.dmg) ·
 [nanostudio](https://github.com/justrach/nanostudio/releases/latest/download/nanostudio-macos-arm64.dmg).
+nanomail builds from source for now (`zig build`; its README has iOS).
 
 They live in `apps/` as submodules, and each also builds on its own, fetching
 nanoui pinned by commit. To build one against the nanoui next to it, with
