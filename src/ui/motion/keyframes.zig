@@ -29,7 +29,7 @@ pub const Keyframes = struct {
 pub fn keyframes(c: *Context, k: Keyframes) Frame {
     if (k.values.len == 0) return .{};
     const id = c.peekId(null);
-    const got = c.motion.get(c.gpa, id, c.frame) orelse return look(k, 0);
+    const got = c.motion_store.get(c.gpa, id, c.frame) orelse return look(k, 0);
     const s = got.state;
     const which = identity(k);
     if (got.fresh or s.clip_id != which) {
@@ -37,7 +37,7 @@ pub fn keyframes(c: *Context, k: Keyframes) Frame {
         s.clip_start = c.time;
     }
     // Reduced motion: where it ends, or its first look if it never does.
-    if (c.reduced_motion) return look(k, if (k.repeat == null) 0 else end(k));
+    if (c.reduced_motion or c.reduce_motion) return look(k, if (k.repeat == null) 0 else end(k));
     const elapsed = c.time - s.clip_start - k.delay;
     if (elapsed < 0) {
         c.animationFrame();

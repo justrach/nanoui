@@ -13,6 +13,20 @@ pub const Options = struct {
     name: []const u8 = "nanoui",
     /// Quit when the last window closes.
     quit_on_last_window_closed: bool = true,
+    /// Given to the hooks below.
+    ctx: ?*anyopaque = null,
+    /// Links the system asks the app to open (the default browser's).
+    on_open_urls: ?*const fn (ctx: ?*anyopaque, urls: []const []const u8) void = null,
+    /// The Dock icon was clicked with no window showing.
+    on_reopen: ?*const fn (ctx: ?*anyopaque) void = null,
+    /// The Dock icon's menu, above the system's items.
+    dock_menu: ?[]const menu_mod.MenuItem = null,
+    /// The app is about to quit (⌘Q, its last window, `quit`): save what must be saved.
+    on_terminate: ?*const fn (ctx: ?*anyopaque) void = null,
+    /// Handoff from another device: the page's address.
+    on_continue_activity: ?*const fn (ctx: ?*anyopaque, url: []const u8) void = null,
+    /// The app became active (true) or stopped being active.
+    on_active: ?*const fn (ctx: ?*anyopaque, active: bool) void = null,
 };
 
 pub const App = struct {
@@ -25,6 +39,7 @@ pub const App = struct {
     services: std.StringHashMapUnmanaged(ipc.Service) = .empty,
     events: std.ArrayList(tsgen.Service) = .empty,
     main_menu: ?*menu_mod.Menu = null,
+    dock_menu: ?*menu_mod.Menu = null,
     trays: std.ArrayList(*tray_mod.Tray) = .empty,
     /// The generated client, built once on first request.
     client_js: ?[]u8 = null,
@@ -65,8 +80,11 @@ pub const App = struct {
                 .{ .name = "applicationDidFinishLaunching:", .imp = &didFinishLaunching, .types = "v@:@" },
                 .{ .name = "applicationShouldTerminate:", .imp = &shouldTerminate, .types = "Q@:@" },
                 .{ .name = "applicationShouldHandleReopen:hasVisibleWindows:", .imp = &shouldReopen, .types = "c@:@c" },
-                // Opening files: handled (or ignored), never AppKit's "can't open" alert.
                 .{ .name = "application:openURLs:", .imp = &openURLs, .types = "v@:@@" },
+                .{ .name = "applicationDockMenu:", .imp = &dockMenu, .types = "@@:@" },
+                .{ .name = "application:continueUserActivity:restorationHandler:", .imp = &continueActivity, .types = "c@:@@@?" },
+                .{ .name = "applicationDidBecomeActive:", .imp = &becameActive, .types = "v@:@" },
+                .{ .name = "applicationDidResignActive:", .imp = &resignedActive, .types = "v@:@" },
             },
         });
         const delegate = objc.msg(objc.Object, delegate_class, "new", .{});
@@ -101,6 +119,7 @@ pub const App = struct {
         for (self.trays.items) |t| t.destroy();
         self.trays.deinit(self.gpa);
         if (self.main_menu) |m| m.destroy();
+        if (self.dock_menu) |m| m.destroy();
         if (self.client_js) |js| self.gpa.free(js);
         objc.setZig(self.delegate, null);
         objc.msg(void, self.nsapp, "setDelegate:", .{@as(?objc.Object, null)});
@@ -155,6 +174,7 @@ pub const App = struct {
     pub fn quit(self: *App) void {
         if (self.stopping) return;
         self.stopping = true;
+        if (self.options.on_terminate) |f| f(self.options.ctx);
         if (!self.running) return;
         objc.msg(void, self.nsapp, "stop:", .{@as(?objc.Object, null)});
         // `stop:` takes effect after the next event: post one.
@@ -268,24 +288,6 @@ fn didFinishLaunching(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callco
     objc.msg(void, nsapp, "activateIgnoringOtherApps:", .{objc.YES});
 }
 
-fn openURLs(self_obj: objc.Object, _: objc.SEL, _: objc.Object, urls: objc.Object) callconv(.c) void {
-    const app = objc.getZig(App, self_obj) orelse return;
-    const handler = app.open_files orelse return;
-    const pool = objc.Pool.push();
-    defer pool.pop();
-    var paths: std.ArrayList([]const u8) = .empty;
-    defer paths.deinit(app.gpa);
-    const n = objc.msg(objc.NSUInteger, urls, "count", .{});
-    var i: objc.NSUInteger = 0;
-    while (i < n) : (i += 1) {
-        const url = objc.msg(objc.Object, urls, "objectAtIndex:", .{i});
-        if (objc.msg(objc.BOOL, url, "isFileURL", .{}) == objc.NO) continue;
-        const path = objc.fromNSString(objc.msg(?objc.Object, url, "path", .{}));
-        if (path.len > 0) paths.append(app.gpa, path) catch {};
-    }
-    if (paths.items.len > 0) handler.func(handler.ctx, paths.items);
-}
-
 fn shouldTerminate(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) objc.NSUInteger {
     // AppKit would call exit(); stop the loop instead so `App.run` returns.
     if (objc.getZig(App, self_obj)) |app| app.quit();
@@ -293,6 +295,64 @@ fn shouldTerminate(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(
 }
 
 fn shouldReopen(self_obj: objc.Object, _: objc.SEL, _: objc.Object, visible: objc.BOOL) callconv(.c) objc.BOOL {
-    _ = self_obj;
+    const app = objc.getZig(App, self_obj) orelse return !visible;
+    if (!visible) if (app.options.on_reopen) |f| {
+        f(app.options.ctx);
+        return objc.NO;
+    };
     return !visible;
+}
+
+fn openURLs(self_obj: objc.Object, _: objc.SEL, _: objc.Object, urls: objc.Object) callconv(.c) void {
+    const app = objc.getZig(App, self_obj) orelse return;
+    if (app.open_files) |handler| {
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        var paths: std.ArrayList([]const u8) = .empty;
+        defer paths.deinit(app.gpa);
+        const n = objc.msg(objc.NSUInteger, urls, "count", .{});
+        var i: objc.NSUInteger = 0;
+        while (i < n) : (i += 1) {
+            const url = objc.msg(objc.Object, urls, "objectAtIndex:", .{i});
+            if (objc.msg(objc.BOOL, url, "isFileURL", .{}) == objc.NO) continue;
+            const path = objc.fromNSString(objc.msg(?objc.Object, url, "path", .{}));
+            if (path.len > 0) paths.append(app.gpa, path) catch {};
+        }
+        if (paths.items.len > 0) handler.func(handler.ctx, paths.items);
+    }
+    const f = app.options.on_open_urls orelse return;
+    var arena: std.heap.ArenaAllocator = .init(app.gpa);
+    defer arena.deinit();
+    const n = objc.msg(objc.NSUInteger, urls, "count", .{});
+    const list = arena.allocator().alloc([]const u8, n) catch return;
+    for (list, 0..) |*s, i| {
+        const url = objc.msg(objc.Object, urls, "objectAtIndex:", .{@as(objc.NSUInteger, i)});
+        s.* = arena.allocator().dupe(u8, objc.fromNSString(objc.msg(?objc.Object, url, "absoluteString", .{}))) catch "";
+    }
+    f(app.options.ctx, list);
+}
+
+fn dockMenu(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) ?objc.Object {
+    const app = objc.getZig(App, self_obj) orelse return null;
+    const template = app.options.dock_menu orelse return null;
+    if (app.dock_menu == null) app.dock_menu = menu_mod.Menu.create(app.gpa, app.options.name, template) catch return null;
+    return app.dock_menu.?.ns;
+}
+
+fn continueActivity(self_obj: objc.Object, _: objc.SEL, _: objc.Object, activity: objc.Object, _: ?*anyopaque) callconv(.c) objc.BOOL {
+    const app = objc.getZig(App, self_obj) orelse return objc.NO;
+    const f = app.options.on_continue_activity orelse return objc.NO;
+    const url = objc.msg(?objc.Object, activity, "webpageURL", .{}) orelse return objc.NO;
+    f(app.options.ctx, objc.fromNSString(objc.msg(?objc.Object, url, "absoluteString", .{})));
+    return objc.YES;
+}
+
+fn becameActive(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
+    const app = objc.getZig(App, self_obj) orelse return;
+    if (app.options.on_active) |f| f(app.options.ctx, true);
+}
+
+fn resignedActive(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
+    const app = objc.getZig(App, self_obj) orelse return;
+    if (app.options.on_active) |f| f(app.options.ctx, false);
 }

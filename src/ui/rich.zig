@@ -22,14 +22,13 @@ pub const spansHash = spans_mod.spansHash;
 /// `s` (bytes `offset`… of the paragraph the spans index) as an
 /// attributed string, each span in its font; release with CFRelease.
 pub fn attributed(ts: *text.TextSystem, s: []const u8, base: types.TextStyle, spans: []const types.Span, offset: usize) cf.CFAttributedStringRef {
-    const plain = cf.attributed(s, ts.font(base).ref);
+    const m = CFAttributedStringCreateMutable(null, 0) orelse return cf.attributed(s, ts.font(base).ref);
     const str = cf.string(s);
     defer cf.CFRelease(str);
-    const m = CFAttributedStringCreateMutable(null, 0) orelse return plain;
-    cf.CFRelease(plain);
     CFAttributedStringBeginEditing(m);
     CFAttributedStringReplaceString(m, .{ .location = 0, .length = 0 }, str);
-    const total = cf.utf16Offset(s, s.len);
+    const str_len = cf.CFStringGetLength(str);
+    const total = @min(cf.utf16Offset(s, s.len), str_len);
     CFAttributedStringSetAttribute(m, .{ .location = 0, .length = total }, cf.kCTFontAttributeName, ts.font(base).ref);
     CFAttributedStringSetAttribute(m, .{ .location = 0, .length = total }, cf.kCTForegroundColorFromContextAttributeName, cf.kCFBooleanTrue);
     const end = offset + s.len;
@@ -37,8 +36,8 @@ pub fn attributed(ts: *text.TextSystem, s: []const u8, base: types.TextStyle, sp
         if (!sp.styled() or sp.end <= offset or sp.start >= end) continue;
         const a = @max(sp.start, offset) - offset;
         const b = @min(sp.end, end) - offset;
-        const from = cf.utf16Offset(s, a);
-        const to = cf.utf16Offset(s, b);
+        const from = @min(cf.utf16Offset(s, a), total);
+        const to = @min(cf.utf16Offset(s, b), total);
         if (to <= from) continue;
         CFAttributedStringSetAttribute(m, .{ .location = from, .length = to - from }, cf.kCTFontAttributeName, ts.font(spanStyle(base, sp)).ref);
     }

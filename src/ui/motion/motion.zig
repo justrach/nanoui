@@ -129,7 +129,7 @@ pub const Frame = struct {
 /// before the box (use `ui.key` first for a list's items).
 pub fn frame(c: *Context, m: Motion) Frame {
     const id = c.peekId(null);
-    const got = c.motion.get(c.gpa, id, c.frame) orelse return still(m.target);
+    const got = c.motion_store.get(c.gpa, id, c.frame) orelse return still(m.target);
     const s = got.state;
     if (got.fresh) s.mounted = true;
     return step(c, s, id, m, if (got.fresh) m.initial else null, false);
@@ -141,12 +141,12 @@ pub fn frame(c: *Context, m: Motion) Frame {
 pub fn present(c: *Context, key: []const u8, show: bool, m: Motion) ?Frame {
     c.next_key = key;
     const id = c.peekId(null);
-    const known = c.motion.map.getPtr(id);
+    const known = c.motion_store.map.getPtr(id);
     if (!show and (known == null or !known.?.mounted)) {
         c.next_key = null;
         return null;
     }
-    const got = c.motion.get(c.gpa, id, c.frame) orelse return if (show) still(m.target) else null;
+    const got = c.motion_store.get(c.gpa, id, c.frame) orelse return if (show) still(m.target) else null;
     const s = got.state;
     const entering = !s.mounted;
     if (show) {
@@ -167,10 +167,10 @@ pub fn present(c: *Context, key: []const u8, show: bool, m: Motion) ?Frame {
 /// box now open.
 pub fn number(c: *Context, key: []const u8, value: f32, tr: Transition) f32 {
     const id = scoped(c, key);
-    const got = c.motion.get(c.gpa, id, c.frame) orelse return value;
+    const got = c.motion_store.get(c.gpa, id, c.frame) orelse return value;
     const ch = &got.state.ch[0];
     if (got.fresh) ch.* = .at(value);
-    ch.retarget(value, if (c.reduced_motion) .instant else tr, 0, c.time);
+    ch.retarget(value, if (c.reduced_motion or c.reduce_motion) .instant else tr, 0, c.time);
     ch.sample(c.time);
     if (ch.moving) c.animationFrame();
     return @floatCast(ch.value);
@@ -234,7 +234,7 @@ fn step(c: *Context, s: *State, id: u64, m: Motion, initial: ?Target, leaving: b
             goal = goal.overlay(p);
         };
     }
-    const tr: Transition = if (c.reduced_motion) .instant else m.transition;
+    const tr: Transition = if (c.reduced_motion or c.reduce_motion) .instant else m.transition;
     var f: Frame = .{ .gestures = m.hover != null or m.press != null, .layout = if (m.layout) id else 0 };
     if (m.layout) s.layout_transition = m.transition;
     for (0..store.channels) |i| {

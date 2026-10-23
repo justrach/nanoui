@@ -161,7 +161,7 @@ fn caseWord(b: *tf.TextBuffer, e: *EditState, r: *tf.Result, how: u8) void {
     const s = b.text();
     const end = km.wordEnd(s, e.caret);
     var first = true;
-    for (b.buf[e.caret..end]) |*ch| {
+    for (b.buf.items[e.caret..end]) |*ch| {
         if (!km.word(ch.*)) continue;
         ch.* = switch (how) {
             'u' => std.ascii.toUpper(ch.*),

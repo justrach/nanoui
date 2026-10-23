@@ -11,8 +11,8 @@ const Transition = @import("channel.zig").Transition;
 /// The offset to draw box `id` at, laid out at `rect` this frame: from
 /// where it was drawn, easing to nothing.
 pub fn shift(c: *Context, id: u64, rect: types.Rect) [2]f32 {
-    const s = c.motion.map.getPtr(id) orelse return .{ 0, 0 };
-    const tr: Transition = if (c.reduced_motion) .instant else s.layout_transition;
+    const s = c.motion_store.map.getPtr(id) orelse return .{ 0, 0 };
+    const tr: Transition = if (c.reduced_motion or c.reduce_motion) .instant else s.layout_transition;
     defer s.rect = .{ rect.x, rect.y, rect.w, rect.h };
     const was = s.rect orelse return .{ 0, 0 };
     const moved: [2]f32 = .{ was[0] - rect.x, was[1] - rect.y };

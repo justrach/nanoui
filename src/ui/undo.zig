@@ -6,14 +6,15 @@
 const std = @import("std");
 
 pub const depth = 12;
-const capacity = 1024; // TextBuffer's
+// ponytail: snapshots hold 1 KiB; longer text keeps no history (heap snaps if it matters).
+const capacity = 1024;
 
 const Snap = struct {
     buf: [capacity]u8 = undefined,
     len: u16 = 0,
     caret: u16 = 0,
 
-    fn text(s: *const Snap) []const u8 {
+    pub fn text(s: *const Snap) []const u8 {
         return s.buf[0..s.len];
     }
 };
@@ -44,6 +45,12 @@ pub const History = struct {
     /// A new state after the current one; what was undone is dropped, and
     /// the oldest when full.
     fn push(h: *History, text: []const u8, caret: usize) void {
+        // Too long to keep: no undo, rather than undo to a cut copy.
+        if (text.len > capacity) {
+            h.count = 0;
+            h.at = 0;
+            return;
+        }
         if (h.count > 0) h.count = h.at + 1;
         if (h.count == depth) {
             h.first = (h.first + 1) % depth;
@@ -72,7 +79,7 @@ pub const History = struct {
             return;
         }
         if (h.count == 0 or std.mem.eql(u8, h.slot(h.at).text(), text)) return;
-        if (typing and h.group and h.at > 0) store(h.slot(h.at), text, caret) else h.push(text, caret);
+        if (typing and h.group and h.at > 0 and text.len <= capacity) store(h.slot(h.at), text, caret) else h.push(text, caret);
         h.group = typing;
     }
 

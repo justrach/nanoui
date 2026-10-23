@@ -189,6 +189,39 @@ pub const Tester = struct {
         t.ctx.updateHot();
     }
 
+    /// A click with the right button (a context menu) or the middle one.
+    pub fn rightClick(t: *Tester, x: f32, y: f32) void {
+        t.clickWith(.right, x, y);
+    }
+
+    pub fn middleClick(t: *Tester, x: f32, y: f32) void {
+        t.clickWith(.middle, x, y);
+    }
+
+    fn clickWith(t: *Tester, button: @import("input.zig").Button, x: f32, y: f32) void {
+        t.ctx.input.button = button;
+        t.click(x, y);
+        t.ctx.input.button = .left;
+    }
+
+    /// The modifier keys change alone, as a window's `flagsChanged:`.
+    pub fn setMods(t: *Tester, m: struct { cmd: bool = false, ctrl: bool = false, alt: bool = false, shift: bool = false }) void {
+        t.ctx.input.cmd = m.cmd;
+        t.ctx.input.ctrl = m.ctrl;
+        t.ctx.input.alt = m.alt;
+        t.ctx.input.shift = m.shift;
+        t.ctx.input.mods_changed = true;
+        t.frame();
+    }
+
+    /// A sideways scroll of `dx` at `x`, `y` (`input.scroll.x`).
+    pub fn hscroll(t: *Tester, x: f32, y: f32, dx: f32) void {
+        t.ctx.input.mouse = .{ .x = x, .y = y };
+        t.ctx.input.scroll = .{ .x = dx };
+        t.frame();
+        t.ctx.updateHot();
+    }
+
     /// Pinches about (x, y): spread by `factor`, the fingers moved together
     /// by (dx, dy), as two fingers on a touch screen do.
     pub fn pinch(t: *Tester, x: f32, y: f32, factor: f32, dx: f32, dy: f32) void {
@@ -199,6 +232,14 @@ pub const Tester = struct {
         t.ctx.updateHot();
     }
 
+    /// Drops links (`urls`) or `text` at `x`, `y`, as from another app.
+    pub fn drop(t: *Tester, x: f32, y: f32, urls: []const []const u8, text_: []const u8) void {
+        t.ctx.input.drag_over = .{ .x = x, .y = y };
+        t.frame();
+        t.ctx.input.drag_over = null;
+        t.ctx.input.drop = .{ .point = .{ .x = x, .y = y }, .urls = urls, .text = text_ };
+        t.frame();
+    }
     /// The rectangle of the text `s` in the last frame.
     pub fn findText(t: *Tester, s: []const u8) ?types.Rect {
         for (t.ctx.nodes.items) |n| switch (n.content) {

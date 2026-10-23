@@ -41,8 +41,17 @@ pub const Glass = struct {
         return .{ .pipeline = pipeline, .down = try kernel(device, library, "glass_down"), .blur = try kernel(device, library, "glass_blur") };
     }
 
+    pub fn releaseTextures(g: *Glass) void {
+        for ([_]*?objc.Object{ &g.a, &g.b }) |slot| if (slot.*) |tex| {
+            objc.release(tex);
+            slot.* = null;
+        };
+        g.w = 0;
+        g.h = 0;
+    }
+
     pub fn deinit(g: *Glass) void {
-        for ([_]?objc.Object{ g.a, g.b }) |t| if (t) |tex| objc.release(tex);
+        g.releaseTextures();
         objc.release(g.pipeline);
         objc.release(g.down);
         objc.release(g.blur);

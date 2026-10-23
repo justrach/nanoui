@@ -29,6 +29,10 @@ pub const Item = struct {
     pub fn setEnabled(self: *Item, on: bool) void {
         self.disabled = !on;
     }
+
+    pub fn setAccelerator(self: *Item, accel: []const u8) void {
+        self.accel = parseAccelerator(accel);
+    }
 };
 
 pub const Menu = struct {

@@ -40,6 +40,17 @@ pub fn Callback(comptime Window: type) type {
     };
 }
 
+/// Asked before the window closes (its close button, ⌘W): false keeps it.
+pub fn ShouldClose(comptime Window: type) type {
+    return struct {
+        ctx: *anyopaque,
+        func: *const fn (ctx: *anyopaque, window: *Window) bool,
+    };
+}
+
+/// A window, or a panel (`NSPanel`: a floating palette, a popover's window).
+pub const Kind = enum { window, panel };
+
 pub fn Options(comptime Window: type) type {
     return struct {
         title: []const u8 = "",
@@ -65,6 +76,25 @@ pub fn Options(comptime Window: type) type {
         full_bleed: bool = false,
         /// Called as the window closes, before it is freed.
         on_close: ?Callback(Window) = null,
+        /// Called after the window resized.
+        on_resize: ?Callback(Window) = null,
+        /// Called as it enters or leaves full screen: read `isFullScreen()`.
+        on_fullscreen: ?Callback(Window) = null,
+        /// Called as it becomes or stops being the key window: read `isFocused()`.
+        on_key: ?Callback(Window) = null,
+        should_close: ?ShouldClose(Window) = null,
+        /// Its frame is kept in the defaults under this name, and restored.
+        frame_autosave: ?[]const u8 = null,
+        kind: Kind = .window,
+        /// Above other windows (a floating panel's level).
+        floating: bool = false,
+        /// On every Space, and beside full-screen windows.
+        all_spaces: bool = false,
+        /// A panel that takes clicks without making its app active.
+        non_activating: bool = false,
+        /// Never merged into another window's tabs.
+        tabbing_disallowed: bool = true,
+        // Where a platform has none of these (Linux, Windows), they are ignored.
         content: Content,
     };
 }

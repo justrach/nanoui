@@ -34,8 +34,10 @@ pub fn WrapCache(comptime Line: type) type {
 
         /// A new frame: the one before last's wraps go.
         pub fn beginFrame(self: *Self, gpa: std.mem.Allocator) void {
-            free(gpa, &self.previous);
-            std.mem.swap(Map, &self.current, &self.previous);
+            if (self.current.count() >= 2048) {
+                free(gpa, &self.previous);
+                std.mem.swap(Map, &self.current, &self.previous);
+            }
         }
 
         /// Drops every wrap (fonts changed).

@@ -35,7 +35,7 @@ pub const Decoded = struct {
 };
 
 /// Decoded pictures kept at most (the oldest go first).
-const max_kept_bytes = 64 * 1024 * 1024;
+const max_kept_bytes = 12 * 1024 * 1024;
 
 /// Where packed pictures go instead of `pixels`: the GPU's texture, so no
 /// copy of the atlas is kept in memory (a window on Metal).
@@ -44,17 +44,35 @@ pub const Sink = struct {
     upload: *const fn (ctx: *anyopaque, x: u32, y: u32, w: u32, h: u32, bgra: []const u8) void,
 };
 
+pub const SizedKey = struct {
+    key: u64,
+    side: u32,
+};
+
+pub const Info = struct {
+    width: u32,
+    height: u32,
+};
+
+const KeptEntry = struct {
+    entry: ?Entry,
+    last_frame: u64,
+};
+
 pub const Images = struct {
     gpa: std.mem.Allocator,
-    /// Every picture decoded, by key (null: it can't be).
-    decoded: std.AutoArrayHashMapUnmanaged(u64, ?Decoded) = .empty,
+    /// Header dimensions per picture key (null: invalid image).
+    headers: std.AutoHashMapUnmanaged(u64, ?Info) = .empty,
+    /// Every picture decoded, by (key, target_side) (null: it can't be).
+    decoded: std.AutoArrayHashMapUnmanaged(SizedKey, ?Decoded) = .empty,
     kept_bytes: usize = 0,
     /// Rows of `pixels` changed since the GPU's copy was made.
     dirty: ?[2]u32 = null,
     sink: ?Sink = null,
     /// BGRA, `size` × `size`; empty until a picture comes.
     pixels: []u8 = &.{},
-    entries: std.AutoHashMapUnmanaged(u64, ?Entry) = .empty,
+    entries: std.AutoHashMapUnmanaged(SizedKey, KeptEntry) = .empty,
+    frame: u64 = 0,
     shelf_x: u32 = 0,
     shelf_y: u32 = 0,
     shelf_h: u32 = 0,
@@ -64,21 +82,47 @@ pub const Images = struct {
     resets: u64 = 0,
     /// Emptied during a frame: its earlier pictures must be painted again.
     reset_during_frame: bool = false,
+    decodes_left: u32 = 8,
+    wants_frame: bool = false,
 
     pub fn deinit(im: *Images) void {
         if (im.pixels.len > 0) im.gpa.free(im.pixels);
+        im.headers.deinit(im.gpa);
         im.entries.deinit(im.gpa);
-        for (im.decoded.values()) |d| if (d) |x| im.gpa.free(x.bgra);
+        im.trimDecoded();
         im.decoded.deinit(im.gpa);
     }
 
-    /// The picture `k` decoded (from `bytes` the first time), or null.
-    /// Sizing a picture needs only this: it is packed when drawn.
-    pub fn info(im: *Images, k: u64, bytes: []const u8) ?Decoded {
-        if (im.decoded.get(k)) |d| return d;
-        const d = load(im.gpa, bytes) catch null;
+    pub fn trimDecoded(im: *Images) void {
+        for (im.decoded.values()) |d| if (d) |x| im.gpa.free(x.bgra);
+        im.decoded.clearRetainingCapacity();
+        im.kept_bytes = 0;
+    }
+
+    /// Called at the start of `paint`: compacts stale entries before any
+    /// instance is emitted when the atlas is filling up.
+    pub fn beginPaint(im: *Images) void {
+        im.frame +%= 1;
+        im.decodes_left = 8;
+        im.wants_frame = false;
+        if (im.shelf_y + im.shelf_h > size * 3 / 4) im.repackLive();
+    }
+
+    /// The picture `k`'s native dimensions (from `bytes` the first time), or null.
+    /// Sizing a picture needs only this: it is decoded and packed when drawn.
+    pub fn info(im: *Images, k: u64, bytes: []const u8) ?Info {
+        if (im.headers.get(k)) |h| return h;
+        if (im.headers.count() >= 2048) im.headers.clearRetainingCapacity();
+        const h = probeHeader(bytes);
+        im.headers.put(im.gpa, k, h) catch {};
+        return h;
+    }
+
+    fn getDecoded(im: *Images, sk: SizedKey, bytes: []const u8) ?Decoded {
+        if (im.decoded.get(sk)) |d| return d;
+        const d = load(im.gpa, bytes, sk.side) catch null;
         if (d) |x| im.kept_bytes += x.bgra.len;
-        im.decoded.put(im.gpa, k, d) catch {
+        im.decoded.put(im.gpa, sk, d) catch {
             if (d) |x| im.gpa.free(x.bgra);
             return null;
         };
@@ -106,16 +150,53 @@ pub const Images = struct {
         return std.hash.Wyhash.hash(0x1a9e, name);
     }
 
-    /// The picture `k` in the atlas, packing it (decoding `bytes` the
-    /// first time) when it is not there; null if it can't be decoded.
-    pub fn get(im: *Images, k: u64, bytes: []const u8) ?Entry {
-        if (im.entries.get(k)) |e| return e;
-        const d = im.info(k, bytes) orelse return null;
+    /// The picture `k` in the atlas at `target_px`, packing it (decoding `bytes`
+    /// the first time) when it is not there; null if it can't be decoded.
+    pub fn get(im: *Images, k: u64, bytes: []const u8, target_px: u32) ?Entry {
+        const side = std.math.clamp(target_px, 1, max_side);
+        const sk: SizedKey = .{ .key = k, .side = side };
+        if (im.entries.getPtr(sk)) |ke| {
+            ke.last_frame = im.frame;
+            return ke.entry;
+        }
+        if (!im.decoded.contains(sk)) {
+            if (im.decodes_left == 0) {
+                im.wants_frame = true;
+                return null;
+            }
+            im.decodes_left -= 1;
+        }
+        const d = im.getDecoded(sk, bytes) orelse {
+            im.entries.put(im.gpa, sk, .{ .entry = null, .last_frame = im.frame }) catch {};
+            return null;
+        };
+        if (!im.fits(d.w, d.h)) im.repackLive();
         const e = im.pack(d) catch return null;
-        im.entries.put(im.gpa, k, e) catch {};
+        im.entries.put(im.gpa, sk, .{ .entry = e, .last_frame = im.frame }) catch {};
         return e;
     }
 
+    /// Evicts entries not drawn in the current or previous frame and repacks
+    /// live ones from their cached decoded pixels.
+    fn repackLive(im: *Images) void {
+        var live: std.ArrayList(SizedKey) = .empty;
+        defer live.deinit(im.gpa);
+        var same_frame = false;
+        var it = im.entries.iterator();
+        while (it.next()) |kv| {
+            if (kv.value_ptr.entry == null) continue;
+            if (kv.value_ptr.last_frame == im.frame) same_frame = true;
+            if (kv.value_ptr.last_frame + 1 >= im.frame) live.append(im.gpa, kv.key_ptr.*) catch {};
+        }
+        im.empty();
+        if (same_frame) im.reset_during_frame = true;
+        for (live.items) |sk| {
+            const d = (im.decoded.get(sk) orelse continue) orelse continue;
+            if (!im.fits(d.w, d.h)) break;
+            const e = im.pack(d) catch break;
+            im.entries.put(im.gpa, sk, .{ .entry = e, .last_frame = im.frame }) catch break;
+        }
+    }
     fn pack(im: *Images, d: Decoded) !Entry {
         if (im.pixels.len == 0 and im.sink == null) {
             im.pixels = try im.gpa.alloc(u8, size * size * 4);
@@ -164,16 +245,29 @@ pub const Images = struct {
     }
 };
 
+fn probeHeader(bytes: []const u8) ?Info {
+    if (!portable) {
+        const d = imageio.dimensions(bytes) orelse return null;
+        return .{ .width = d.width, .height = d.height };
+    }
+    if (bytes.len >= 24 and std.mem.startsWith(u8, bytes, "\x89PNG\r\n\x1a\n") and std.mem.eql(u8, bytes[12..16], "IHDR")) {
+        const w = std.mem.readInt(u32, bytes[16..20], .big);
+        const h = std.mem.readInt(u32, bytes[20..24], .big);
+        if (w > 0 and h > 0 and @as(u64, w) * h <= 64 * 1024 * 1024) return .{ .width = w, .height = h };
+    }
+    return null;
+}
+
 const Raw = struct { width: u32, height: u32, bgra: []u8 };
 
 /// Decodes and scales a picture to keep.
-fn load(gpa: std.mem.Allocator, bytes: []const u8) !Decoded {
+fn load(gpa: std.mem.Allocator, bytes: []const u8, side: u32) !Decoded {
     if (!portable) {
-        const f = try imageio.decodeFit(gpa, bytes, max_side);
+        const f = try imageio.decodeFit(gpa, bytes, @min(side, max_side));
         return .{ .width = f.width, .height = f.height, .w = f.w, .h = f.h, .bgra = f.bgra };
     }
     const d = try decode(gpa, bytes);
-    const scaled = fit(gpa, d.bgra, d.width, d.height) catch |e| {
+    const scaled = fit(gpa, d.bgra, d.width, d.height, @min(side, max_side)) catch |e| {
         gpa.free(d.bgra);
         return e;
     };
@@ -193,11 +287,11 @@ fn decode(gpa: std.mem.Allocator, bytes: []const u8) !Raw {
 const Scaled = struct { w: u32, h: u32, bgra: []u8 };
 
 /// The picture within `max_side`, averaging the pixels each new one covers.
-fn fit(gpa: std.mem.Allocator, bgra: []u8, w: u32, h: u32) !Scaled {
+fn fit(gpa: std.mem.Allocator, bgra: []u8, w: u32, h: u32, limit: u32) !Scaled {
     const longest = @max(w, h);
-    if (longest <= max_side) return .{ .w = w, .h = h, .bgra = bgra };
-    const nw = @max(1, w * max_side / longest);
-    const nh = @max(1, h * max_side / longest);
+    if (longest <= limit) return .{ .w = w, .h = h, .bgra = bgra };
+    const nw = @max(1, w * limit / longest);
+    const nh = @max(1, h * limit / longest);
     const out = try gpa.alloc(u8, nw * nh * 4);
     for (0..nh) |y| {
         const sy0 = y * h / nh;
@@ -225,18 +319,18 @@ test "pictures pack, scale down and come back by key" {
     var px = [_]u8{ 0, 0, 255, 255, 128, 0, 0, 128 };
     const bytes = try @import("png.zig").encode(gpa, .{ .bytes = &px, .width = 2, .height = 1 });
     defer gpa.free(bytes);
-    const e = im.get(Images.key("a.png"), bytes).?;
+    const e = im.get(Images.key("a.png"), bytes, max_side).?;
     try std.testing.expectEqual(@as(u32, 2), e.width);
     try std.testing.expectEqualSlices(u8, &px, im.pixels[0..8]);
     const gen = im.generation;
-    _ = im.get(Images.key("a.png"), bytes);
+    _ = im.get(Images.key("a.png"), bytes, max_side);
     try std.testing.expectEqual(gen, im.generation);
-    try std.testing.expect(im.get(Images.key("bad"), "not an image") == null);
+    try std.testing.expect(im.get(Images.key("bad"), "not an image", max_side) == null);
     // Too big: averaged down to the longest side.
     const big = try gpa.alloc(u8, 2048 * 2 * 4);
     defer gpa.free(big);
     @memset(big, 200);
-    const s = try fit(gpa, big, 2048, 2);
+    const s = try fit(gpa, big, 2048, 2, max_side);
     defer gpa.free(s.bgra);
     try std.testing.expectEqual(@as(u32, 1024), s.w);
     try std.testing.expectEqual(@as(u32, 1), s.h);

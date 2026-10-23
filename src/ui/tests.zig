@@ -357,12 +357,9 @@ test "rich text: bold and code runs, leading, wrapping, families" {
         },
         else => {},
     };
-    try testing.expectEqual(@as(usize, 2), n);
-    // Bold and monospaced runs are wider than the plain text.
-    try testing.expect(rects[1].w > rects[0].w + 1);
+    try testing.expect(n == 2 and rects[1].w > rects[0].w + 1);
     try testing.expect(t.findText("airy").?.h > t.findText("tight").?.h + 4);
     try testing.expect(t.findText("A paragraph with **bold** words long enough to wrap onto lines in a narrow column.").?.h > 40);
-    // A missing family falls back to the system's: text still has width.
     try testing.expect(t.findText("tight").?.w > 20);
     try t.screenshot("/tmp/nanoui-rich.png");
 }
@@ -385,11 +382,23 @@ test "zoom scales text, key caps show the platform's keys" {
     defer t.deinit();
     const w1 = t.findText("Zoom me").?.w;
     try testing.expect(t.hasText(if (ui.keys.mac) "⌘P" else "Ctrl+P"));
+    const bad = "hello \xff\xfe\xf0\x9f";
+    if (!@import("text.zig").portable) {
+        const objc = @import("../objc.zig");
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        try testing.expect(objc.fromNSString(objc.nsString(bad)).len > 0);
+    }
+    _ = t.ctx.text.wrapAttributed(bad, .{ .size = 13 }, &.{.{ .start = 0, .end = bad.len, .weight = .bold }}, 40);
+    const count_before = t.ctx.text.layouts.count();
+    t.frame();
+    try testing.expect(t.ctx.text.layouts.count() == count_before and t.ctx.text.previous.count() == 0);
+    t.ctx.text.setZoom(1.5);
+    try testing.expectEqual(@as(usize, 0), t.ctx.text.run_fonts.items.len);
     s.zoom = 2;
     t.frame();
     t.frame();
     const w2 = t.findText("Zoom me").?.w;
-    // Twice as large; the system font tightens its tracking as it grows.
     try testing.expect(w2 > w1 * 1.8 and w2 < w1 * 2.1);
 }
 
@@ -403,7 +412,6 @@ test "a picture keeps its proportions, fits its room, and bad bytes draw nothing
             defer ui.end(c);
             p.ok = ui.image(c, .{ .key = "wide", .bytes = p.bytes, .max_width = 100 });
             p.bad = ui.image(c, .{ .key = "junk", .bytes = "not a picture" });
-            // Made at a pixel a point (a picture from the web): twice as large.
             _ = ui.image(c, .{ .key = "web", .bytes = p.bytes, .max_width = 1000, .scale = 1 });
         }
     };
@@ -415,19 +423,14 @@ test "a picture keeps its proportions, fits its room, and bad bytes draw nothing
     try t.init(testing.allocator, .init(&p, Pic.view), .{ .width = 300, .height = 200 });
     defer t.deinit();
     t.settle(1);
-    try testing.expect(p.ok);
-    try testing.expect(!p.bad);
-    // 400×100 pixels is 200×50 points at 2×; fitted to 100 wide. At 1×
-    // it is 400×100 points.
+    try testing.expect(p.ok and !p.bad);
     var sizes: [2][2]f32 = undefined;
     var k: usize = 0;
     for (t.ctx.nodes.items) |n| if (n.content == .image) {
         sizes[k] = .{ n.rect.w, n.rect.h };
         k += 1;
     };
-    try testing.expectEqual(@as(usize, 2), k);
-    try testing.expectEqual([2]f32{ 100, 25 }, sizes[0]);
-    try testing.expectEqual([2]f32{ 400, 100 }, sizes[1]);
+    try testing.expect(k == 2 and std.meta.eql(sizes[0], .{ 100, 25 }) and std.meta.eql(sizes[1], .{ 400, 100 }));
 }
 
 test "a box that follows its end stays where the reader left it when content shrinks and grows" {
@@ -454,26 +457,21 @@ test "a box that follows its end stays where the reader left it when content shr
             return .{ tt.ctx.scroll.get(id) orelse 0, tt.ctx.scroll_max.get(id) orelse 0 };
         }
     }.f;
-    // At the end, it follows what comes.
     try testing.expectEqual(end_of(&t, l.id)[1], end_of(&t, l.id)[0]);
     l.rows = 60;
     t.frame();
     t.frame();
     try testing.expectEqual(end_of(&t, l.id)[1], end_of(&t, l.id)[0]);
-    // Scrolled up, then the content shrinks under the offset and grows back:
-    // it must not jump to the end.
     t.scroll(100, 100, 600);
     t.settle(1);
-    const up = end_of(&t, l.id)[0];
-    try testing.expect(up < end_of(&t, l.id)[1] - 50);
+    try testing.expect(end_of(&t, l.id)[0] < end_of(&t, l.id)[1] - 50);
     l.rows = 12;
     t.frame();
     t.frame();
     l.rows = 60;
     t.frame();
     t.frame();
-    const after = end_of(&t, l.id);
-    try testing.expect(after[0] < after[1] - 50);
+    try testing.expect(end_of(&t, l.id)[0] < end_of(&t, l.id)[1] - 50);
 }
 
 test "text in a selectable box is selected by a drag and copied, and the drag is not a click" {

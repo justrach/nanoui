@@ -134,3 +134,58 @@ pub fn triangle(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize
         }
     }
 }
+
+// Shadows as the shader draws them: a box's coverage blurred by a
+// Gaussian, exact along x with erf, sampled eight times along y.
+fn gaussian(x: f32, sigma: f32) f32 {
+    return @exp(-(x * x) / (2 * sigma * sigma)) / (@sqrt(2 * std.math.pi) * sigma);
+}
+
+fn erf(x: f32) f32 {
+    const s: f32 = if (x < 0) -1 else 1;
+    const a = @abs(x);
+    var y = 1 + (0.278393 + (0.230389 + 0.078108 * (a * a)) * a) * a;
+    y *= y;
+    return s - s / (y * y);
+}
+
+fn blurAlongX(x: f32, y: f32, sigma: f32, corner: f32, hw: f32, hh: f32) f32 {
+    const delta = @min(hh - corner - @abs(y), 0);
+    const curved = hw - corner + @sqrt(@max(0, corner * corner - delta * delta));
+    const k = @sqrt(@as(f32, 0.5)) / sigma;
+    const lo = 0.5 + 0.5 * erf((x - curved) * k);
+    const hi = 0.5 + 0.5 * erf((x + curved) * k);
+    return hi - lo;
+}
+
+pub fn shadowAlpha(px: f32, py: f32, hw: f32, hh: f32, corner: f32, sigma: f32) f32 {
+    const c = @abs(corner);
+    const low = py - hh;
+    const high = py + hh;
+    const start = std.math.clamp(-3 * sigma, low, high);
+    const end = std.math.clamp(3 * sigma, low, high);
+    const step = (end - start) / 8;
+    var y = start + step * 0.5;
+    var alpha: f32 = 0;
+    for (0..8) |_| {
+        alpha += blurAlongX(px, py - y, sigma, c, hw, hh) * gaussian(y, sigma) * step;
+        y += step;
+    }
+    return alpha;
+}
+
+pub fn shadowDither(x: usize, y: usize) f32 {
+    const ux: u32 = @truncate(x);
+    const uy: u32 = @truncate(y);
+    var h1: u32 = (ux *% 1664525 +% uy *% 1013904223) ^ 0x68bc21eb;
+    h1 ^= h1 >> 15;
+    h1 *%= 0x85ebca6b;
+    h1 ^= h1 >> 13;
+    var h2: u32 = (ux *% 22695477 +% uy *% 2891336453) ^ 0x02e5be93;
+    h2 ^= h2 >> 15;
+    h2 *%= 0xc2b2ae35;
+    h2 ^= h2 >> 13;
+    const v1 = @as(f32, @floatFromInt(h1 & 0xffff)) / 65535.0;
+    const v2 = @as(f32, @floatFromInt(h2 & 0xffff)) / 65535.0;
+    return (v1 + v2 - 1.0) * (0.5 / 255.0);
+}

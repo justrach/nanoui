@@ -13,6 +13,14 @@ pub const Options = struct {
     name: []const u8 = "nanoui",
     /// Quit when the last window closes.
     quit_on_last_window_closed: bool = true,
+    // The macOS app's hooks, accepted here and not called yet.
+    ctx: ?*anyopaque = null,
+    on_open_urls: ?*const fn (ctx: ?*anyopaque, urls: []const []const u8) void = null,
+    on_reopen: ?*const fn (ctx: ?*anyopaque) void = null,
+    dock_menu: ?[]const menu_mod.MenuItem = null,
+    on_terminate: ?*const fn (ctx: ?*anyopaque) void = null,
+    on_continue_activity: ?*const fn (ctx: ?*anyopaque, url: []const u8) void = null,
+    on_active: ?*const fn (ctx: ?*anyopaque, active: bool) void = null,
 };
 
 /// GTK 4's main loop, while it runs.

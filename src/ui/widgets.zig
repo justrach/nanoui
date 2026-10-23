@@ -97,11 +97,14 @@ pub const IconOptions = struct {
     frame: ?f32 = null,
     weight: types.Weight = .regular,
     color: ?Color = null,
+    /// Turned clockwise about its centre, in radians (SwiftUI's
+    /// `rotationEffect`); laid out as if it were not.
+    rotation: f32 = 0,
 };
 
 /// An SF Symbol: `ui.icon(c, "star.fill", .{ .color = c.theme.accent })`.
 pub fn icon(c: *Context, name: []const u8, opts: IconOptions) void {
-    const style: Style = if (opts.frame) |f| .{ .width = .{ .px = f }, .height = .{ .px = f } } else .{};
+    const style: Style = if (opts.frame) |f| .{ .width = .{ .px = f }, .height = .{ .px = f }, .rotation = opts.rotation } else .{ .rotation = opts.rotation };
     _ = c.leaf(style, .{ .icon = .{ .name = name, .size = opts.size, .weight = opts.weight, .color = opts.color orelse c.theme.text } }, null);
 }
 
@@ -128,7 +131,7 @@ pub const ImageOptions = struct {
 /// A picture; false (and nothing drawn) if it can't be decoded.
 pub fn image(c: *Context, opts: ImageOptions) bool {
     const k = @import("images.zig").Images.key(opts.key);
-    // Sized from the decoded picture; packed only when it is drawn.
+    // Sized from the picture's header; decoded at device size and packed only when drawn.
     const e = c.text.images.info(k, opts.bytes) orelse return false;
     const w: f32 = @as(f32, @floatFromInt(e.width)) / @max(opts.scale, 0.5);
     const h: f32 = @as(f32, @floatFromInt(e.height)) / @max(opts.scale, 0.5);
@@ -179,6 +182,7 @@ pub fn button(c: *Context, title: []const u8, opts: ButtonOptions) Interaction {
     }, null);
     defer c.end();
     var it = c.interact(i, .{});
+    c.addA11y(i, .button, if (title.len > 0) title else opts.icon, "", false, !opts.disabled);
     if (opts.disabled) {
         it.clicked = false;
         it.hovered = false;
@@ -216,6 +220,7 @@ pub fn checkbox(c: *Context, title: []const u8, value: *bool) bool {
     const th = c.theme;
     const it = pressable(c, .{ .direction = .row, .gap = 8, .align_items = .center, .control = true }, null);
     defer c.end();
+    c.addA11y(c.stack.items[c.stack.items.len - 1], .checkbox, title, "", value.*, true);
     if (it.clicked) {
         value.* = !value.*;
         c.changed = true;
@@ -246,6 +251,7 @@ pub fn toggle(c: *Context, title: []const u8, value: *bool) bool {
     const th = c.theme;
     const it = pressable(c, .{ .direction = .row, .gap = 10, .align_items = .center, .control = true }, null);
     defer c.end();
+    c.addA11y(c.stack.items[c.stack.items.len - 1], .switch_toggle, title, "", value.*, true);
     if (it.clicked) {
         value.* = !value.*;
         c.changed = true;
@@ -284,6 +290,7 @@ pub fn slider(c: *Context, value: *f32, opts: SliderOptions) bool {
     const i = c.open(.{ .direction = .row, .width = opts.width, .height = .{ .px = 22 }, .align_items = .center, .control = true }, null);
     defer c.end();
     const it = c.interact(i, .{});
+    c.addA11y(i, .slider, "Slider", c.print("{d:.2}", .{value.*}), false, true);
     var changed = false;
     if (it.pressed) if (it.rect) |r| {
         const t = std.math.clamp((c.input.mouse.x - r.x - knob / 2) / @max(1, r.w - knob), 0, 1);
@@ -329,6 +336,7 @@ pub fn segmented(c: *Context, options: []const []const u8, selected: *usize) boo
     for (options, 0..) |opt, idx| {
         const it = pressable(c, .{ .padding = .xy(14, 5), .radius = 7, .align_items = .center, .control = true }, null);
         defer c.end();
+        c.addA11y(c.stack.items[c.stack.items.len - 1], .radio_button, opt, "", selected.* == idx, true);
         if (it.clicked and selected.* != idx) {
             selected.* = idx;
             changed = true;

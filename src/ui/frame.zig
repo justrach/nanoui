@@ -26,16 +26,19 @@ pub fn run(c: *Context, view: View, ts: *text.TextSystem, instances: *std.ArrayL
     c.theme = theme;
     c.animating = false;
     c.frame_in = null;
+    c.time_driven = .none;
+    c.painting_group = false;
     ts.setFamilies(theme.font, theme.mono_font);
     ts.beginFrame();
 
     const t0 = now();
-    if (c.input.pressed) c.selection.pressed = true;
+    if (c.input.pressed and c.input.button == .left) c.selection.pressed = true;
     c.copy_done = false;
     c.copy_requested = false;
     for (c.input.ops) |op| if (op == .command and op.command == .copy) {
         c.copy_requested = true;
     };
+    @import("scroll_x.zig").takeScrollX(c);
     c.begin();
     var passes: u32 = 0;
     while (true) : (passes += 1) {
@@ -53,9 +56,12 @@ pub fn run(c: *Context, view: View, ts: *text.TextSystem, instances: *std.ArrayL
     c.scroll_moved.clearRetainingCapacity();
     _ = layout.measure(c, 0, size.w);
     layout.arrange(c, 0, .{ .w = size.w, .h = size.h });
+    std.mem.swap(std.AutoHashMapUnmanaged(u64, types.Rect), &c.prev_rects, &c.rects);
     c.rects.clearRetainingCapacity();
     for (c.nodes.items) |n| c.rects.put(c.gpa, n.id, n.rect) catch {};
-
+    for (c.stage_nodes[0..c.stage_count], 0..) |nidx, si| {
+        if (nidx < c.nodes.items.len) c.stage_rects[si] = c.nodes.items[nidx].rect;
+    }
     const t2 = now();
     ts.images.reset_during_frame = false;
     selection.beginPaint(c);

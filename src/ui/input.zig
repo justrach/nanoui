@@ -25,6 +25,13 @@ pub const Shortcut = struct {
     pub const tab: u21 = '\t';
     pub const enter: u21 = '\r';
 
+    /// The shortcut key for a typed character, ignoring modifiers:
+    /// ASCII lowered, and ⇧Tab's backtab (0x19) offered as Tab (Shift is set).
+    pub fn keyOf(cp: u21) u21 {
+        if (cp == 0x19) return tab;
+        return if (cp < 128) std.ascii.toLower(@intCast(cp)) else cp;
+    }
+
     /// As this platform has it: Command is Control off Apple's systems.
     pub fn native(s: Shortcut) Shortcut {
         if (@import("keys.zig").mac or !s.cmd) return s;
@@ -107,8 +114,10 @@ pub const EditState = struct {
     anchor: usize = 0,
     marked: ?[2]usize = null,
     scroll_x: f32 = 0,
-    /// A multiline field's lines scrolled up past its top.
+    /// A text area's vertical scroll.
     scroll_y: f32 = 0,
+    /// Had the focus in the last frame: gaining it may select all.
+    had_focus: bool = false,
     /// Pressed in the field: dragging extends the selection.
     selecting: bool = false,
     /// Emacs's and Vim's keys (keymap.zig) and the undo history.
@@ -143,14 +152,41 @@ pub const KeyState = struct {
     vim_find: [2]u8 = .{ 0, 0 },
 };
 
+/// The pointer button of a press: clicks, presses and double clicks are
+/// the left one's; `right_clicked` and `middle_clicked` the others'.
+pub const Button = enum { left, right, middle };
+
+/// Where a scroll gesture is: a trackpad's fingers, then its momentum.
+pub const ScrollPhase = enum { none, began, changed, ended, momentum };
+
+/// What a drag and drop delivered, valid during the frame it arrives in.
+pub const Drop = struct {
+    point: types.Point,
+    urls: []const []const u8 = &.{},
+    text: []const u8 = "",
+};
+
 pub const Input = struct {
     mouse: types.Point = .{ .x = -1e6, .y = -1e6 },
     down: bool = false,
     /// The button went down / up in this event.
     pressed: bool = false,
     released: bool = false,
+    /// Which button the last press was.
+    button: Button = .left,
     click_count: u32 = 0,
     scroll: types.Point = .{},
+    scroll_phase: ScrollPhase = .none,
+    /// The wheel's deltas are a trackpad's points, not a mouse's lines.
+    precise: bool = false,
+    /// The modifier keys alone changed in this event.
+    mods_changed: bool = false,
+    /// Where a drag from another app (links, files, text) is over the view.
+    drag_over: ?types.Point = null,
+    /// What was dropped in this event (`Context.dropAt`).
+    drop: ?Drop = null,
+    /// VoiceOver's AXIncrement (+1) / AXDecrement (−1) on box `id`.
+    a11y_step: ?struct { id: u64, dir: i8 } = null,
     /// A pinch in this event (two fingers on a touch screen, a trackpad's
     /// magnify): how much it scaled by (1: none), about `mouse`.
     zoom: f32 = 1,
@@ -179,6 +215,10 @@ pub const Input = struct {
         i.pressed = false;
         i.released = false;
         i.scroll = .{};
+        i.scroll_phase = .none;
+        i.mods_changed = false;
+        i.drop = null;
+        i.a11y_step = null;
         i.zoom = 1;
         i.pan = .{};
         i.key = null;

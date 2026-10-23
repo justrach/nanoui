@@ -215,23 +215,22 @@ pub const Atlas = struct {
         // text they sit beside, as SF Symbols are.
         const side_pt = point_size * 1.2;
         const side: u32 = @intFromFloat(@ceil(side_pt * a.scale));
-        const w = side + 2 * pad;
-        const h = side + 2 * pad;
-        const at = a.place(w, h) orelse return null;
-        var r = tt_raster.Raster.init(a.gpa, w, h) catch return null;
+        const dw = side + 2 * pad;
+        var r = tt_raster.Raster.init(a.gpa, dw, dw) catch return null;
         defer r.deinit(a.gpa);
         const k = @as(f32, @floatFromInt(side)) / 24;
         icons.draw(icon, &r, k, @floatFromInt(pad), 1.6 + 0.35 * @as(f32, @floatFromInt(weight)));
-        a.scratch.resize(a.gpa, w * h) catch return null;
+        a.scratch.resize(a.gpa, dw * dw) catch return null;
         r.coverage(a.scratch.items);
-        a.blit(at, w, h, a.scratch.items);
+        const at = a.place(dw, dw) orelse return null;
+        a.blit(at, dw, dw, a.scratch.items);
         const pp = @as(f32, pad) / a.scale;
         return .{
-            .uv = a.uv(at, w, h),
+            .uv = a.uv(at, dw, dw),
             .x = -pp,
             .y = -pp,
-            .w = @as(f32, @floatFromInt(w)) / a.scale,
-            .h = @as(f32, @floatFromInt(h)) / a.scale,
+            .w = @as(f32, @floatFromInt(dw)) / a.scale,
+            .h = @as(f32, @floatFromInt(dw)) / a.scale,
         };
     }
 };

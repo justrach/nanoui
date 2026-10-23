@@ -170,6 +170,143 @@ test "pictures written straight to the GPU draw as the CPU atlas's copy does" {
     try testing.expectEqualSlices(u8, frames[0].bytes, frames[1].bytes);
 }
 
+test "a box at x = 10.3 pt with a 1 pt border snaps to device pixels with full coverage" {
+    const SnapScene = struct {
+        fn view(_: *@This(), c: *ui.Context) void {
+            _ = c.open(.{ .width = .fill, .height = .fill, .background = .white }, null);
+            defer c.end();
+            _ = c.leaf(.{
+                .absolute = true,
+                .offset = .{ .x = 10.3, .y = 10.3 },
+                .width = .{ .px = 20 },
+                .height = .{ .px = 20 },
+                .background = .white,
+                .border = .black,
+                .border_width = 1,
+            }, .none, null);
+        }
+    };
+    const gpa = testing.allocator;
+    var s: SnapScene = .{};
+    var t: ui.Tester = undefined;
+    try t.init(gpa, .init(&s, SnapScene.view), .{ .width = 60, .height = 60 });
+    defer t.deinit();
+    t.settle(1);
+    const w: usize = @intFromFloat(t.size.w * t.scale);
+    const h: usize = @intFromFloat(t.size.h * t.scale);
+    const bytes = try gpa.alloc(u8, w * h * 4);
+    defer gpa.free(bytes);
+    const out: @import("gpu.zig").Pixels = .{ .bytes = bytes, .width = w, .height = h };
+    raster.draw(out, t.instances.items, .{ .pixels = &.{}, .size = 0 }, .{}, t.scale, .white);
+    // 10.3 pt at 2x snaps to 10.5 pt = pixel 21; a 1 pt border spans 2 device pixels (21 and 22),
+    // while pixel 20 (outside) and pixel 23 (inside fill) stay pure white.
+    const px20 = out.bytes[(30 * w + 20) * 4 ..][0..4].*;
+    const px21 = out.bytes[(30 * w + 21) * 4 ..][0..4].*;
+    const px22 = out.bytes[(30 * w + 22) * 4 ..][0..4].*;
+    const px23 = out.bytes[(30 * w + 23) * 4 ..][0..4].*;
+    try testing.expectEqual([4]u8{ 255, 255, 255, 255 }, px20);
+    try testing.expectEqual([4]u8{ 0, 0, 0, 255 }, px21);
+    try testing.expectEqual([4]u8{ 0, 0, 0, 255 }, px22);
+    try testing.expectEqual([4]u8{ 255, 255, 255, 255 }, px23);
+}
+
+test "a translating box keeps its width in device pixels" {
+    const MoveScene = struct {
+        x: f32 = 10.1,
+        fn view(s: *@This(), c: *ui.Context) void {
+            _ = c.open(.{ .width = .fill, .height = .fill, .background = .white }, null);
+            defer c.end();
+            _ = c.leaf(.{
+                .absolute = true,
+                .offset = .{ .x = s.x, .y = 10 },
+                .width = .{ .px = 19.4 },
+                .height = .{ .px = 20 },
+                .background = .black,
+            }, .none, "box");
+        }
+    };
+    const gpa = testing.allocator;
+    var s: MoveScene = .{};
+    var t: ui.Tester = undefined;
+    try t.init(gpa, .init(&s, MoveScene.view), .{ .width = 80, .height = 60 });
+    defer t.deinit();
+    for ([_]f32{ 10.1, 10.3, 10.6, 10.8 }) |x| {
+        s.x = x;
+        t.frame();
+        const inst = t.instances.items[t.instances.items.len - 1];
+        try testing.expectApproxEqAbs(@as(f32, 39), inst.rect[2] * t.scale, 1e-4);
+    }
+}
+
+test "group opacity composites once" {
+    const GroupScene = struct {
+        fn view(_: *@This(), c: *ui.Context) void {
+            _ = c.open(.{ .width = .fill, .height = .fill, .background = .white }, null);
+            defer c.end();
+            _ = c.open(.{ .width = .{ .px = 120 }, .height = .{ .px = 80 }, .opacity = 0.5, .group = true }, "grp");
+            defer c.end();
+            _ = c.leaf(.{
+                .absolute = true,
+                .offset = .{ .x = 10, .y = 10 },
+                .width = .{ .px = 50 },
+                .height = .{ .px = 40 },
+                .background = .{ .r = 1, .g = 0, .b = 0, .a = 1 },
+            }, .none, "a");
+            _ = c.leaf(.{
+                .absolute = true,
+                .offset = .{ .x = 30, .y = 20 },
+                .width = .{ .px = 50 },
+                .height = .{ .px = 40 },
+                .background = .{ .r = 1, .g = 0, .b = 0, .a = 1 },
+            }, .none, "b");
+        }
+    };
+    const gpa = testing.allocator;
+    var s: GroupScene = .{};
+    var t: ui.Tester = undefined;
+    try t.init(gpa, .init(&s, GroupScene.view), .{ .width = 140, .height = 100 });
+    defer t.deinit();
+    t.settle(1);
+    const w: usize = @intFromFloat(t.size.w * t.scale);
+    const h: usize = @intFromFloat(t.size.h * t.scale);
+    const cpu_bytes = try gpa.alloc(u8, w * h * 4);
+    defer gpa.free(cpu_bytes);
+    const cpu: @import("gpu.zig").Pixels = .{ .bytes = cpu_bytes, .width = w, .height = h };
+    raster.draw(cpu, t.instances.items, .{ .pixels = &.{}, .size = 0 }, .{}, t.scale, t.theme.background);
+
+    // Single-box pixel at (20, 20) pt -> (40, 40) px; overlap pixel at (40, 30) pt -> (80, 60) px.
+    // Control pixel outside both boxes at (5, 5) pt -> (10, 10) px.
+    const outside_cpu = cpu.bytes[(10 * w + 10) * 4 ..][0..4].*;
+    const single_cpu = cpu.bytes[(40 * w + 40) * 4 ..][0..4].*;
+    const overlap_cpu = cpu.bytes[(60 * w + 80) * 4 ..][0..4].*;
+    try testing.expectEqual([4]u8{ 255, 255, 255, 255 }, outside_cpu);
+    try testing.expectEqual(single_cpu, overlap_cpu);
+    try testing.expect(@abs(@as(i16, single_cpu[0]) - 128) <= 2);
+    try testing.expect(@abs(@as(i16, single_cpu[1]) - 128) <= 2);
+    try testing.expectEqual(@as(u8, 255), single_cpu[2]);
+    try testing.expectEqual(@as(u8, 255), single_cpu[3]);
+
+    if (!@import("text.zig").portable) {
+        const metal = try t.renderer.drawOffscreen(gpa, t.instances.items, t.text.texture(), t.size, t.scale, t.theme.background);
+        defer metal.deinit(gpa);
+        const outside_mtl = metal.bytes[(10 * w + 10) * 4 ..][0..4].*;
+        const single_mtl = metal.bytes[(40 * w + 40) * 4 ..][0..4].*;
+        const overlap_mtl = metal.bytes[(60 * w + 80) * 4 ..][0..4].*;
+        try testing.expectEqual([4]u8{ 255, 255, 255, 255 }, outside_mtl);
+        try testing.expectEqual(single_mtl, overlap_mtl);
+        var total: u64 = 0;
+        var worst: u8 = 0;
+        for (metal.bytes, cpu.bytes) |a, b| {
+            const d = if (a > b) a - b else b - a;
+            total += d;
+            worst = @max(worst, d);
+        }
+        const mean = @as(f64, @floatFromInt(total)) / @as(f64, @floatFromInt(metal.bytes.len));
+        try testing.expect(mean < 0.05);
+        try testing.expect(worst <= 16);
+    }
+}
+
 test "drawing only what a frame changed makes the pixels drawing it all does" {
     // The CPU renderer's own atlas: where nanoui shapes text itself.
     if (!@import("text.zig").portable) return error.SkipZigTest else try partial();
@@ -214,4 +351,49 @@ fn partial() !void {
     raster.drawRegion(pixels, fewer.items, t.text.atlas.mask(), t.text.images.pictures(), t.scale, t.theme.background, e);
     raster.draw(whole, fewer.items, t.text.atlas.mask(), t.text.images.pictures(), t.scale, t.theme.background);
     try testing.expectEqualSlices(u8, whole.bytes, pixels.bytes);
+}
+
+test "rounded boxes, borders, glyphs and shadows" {
+    const gpa = std.testing.allocator;
+    const bytes = try gpa.alloc(u8, 40 * 40 * 4);
+    defer gpa.free(bytes);
+    const out: @import("gpu.zig").Pixels = .{ .bytes = bytes, .width = 40, .height = 40 };
+    var texels: [4]u8 = .{ 255, 255, 255, 255 };
+    raster.draw(out, &.{
+        .{ .rect = .{ 2, 2, 16, 16 }, .color = .{ 1, 0, 0, 1 }, .radius = 4 },
+        .{ .rect = .{ 0, 0, 10, 10 }, .color = .{ 0, 0, 1, 1 }, .uv = .{ 0, 0, 1, 1 }, .kind = @import("gpu.zig").Kind.text, .clip = .{ 0, 0, 5, 20 } },
+    }, .{ .pixels = &texels, .size = 2 }, .{}, 2, .{ .r = 1, .g = 1, .b = 1 });
+    const at = struct {
+        fn f(o: @import("gpu.zig").Pixels, x: usize, y: usize) [4]u8 { return o.bytes[(y * o.width + x) * 4 ..][0..4].*; }
+    }.f;
+    try std.testing.expectEqual([4]u8{ 0, 0, 255, 255 }, at(out, 20, 20));
+    try std.testing.expectEqual([4]u8{ 255, 255, 255, 255 }, at(out, 4, 34));
+    try std.testing.expectEqual([4]u8{ 255, 0, 0, 255 }, at(out, 2, 2));
+    try std.testing.expectEqual([4]u8{ 255, 255, 255, 255 }, at(out, 15, 2));
+}
+
+test "a clip's rounded corners cut what it clips, only where asked" {
+    const gpa = std.testing.allocator;
+    const bytes = try gpa.alloc(u8, 40 * 40 * 4);
+    defer gpa.free(bytes);
+    const out: @import("gpu.zig").Pixels = .{ .bytes = bytes, .width = 40, .height = 40 };
+    raster.draw(out, &.{
+        .{ .rect = .{ 0, 0, 20, 20 }, .color = .{ 1, 0, 0, 1 }, .clip = .{ 0, 0, 20, 20 }, .clip_round = @import("gpu.zig").clipRound(8, 1 | 8) },
+    }, .{ .pixels = &.{}, .size = 0 }, .{}, 2, .{ .r = 1, .g = 1, .b = 1 });
+    const at = struct {
+        fn f(o: @import("gpu.zig").Pixels, x: usize, y: usize) [4]u8 { return o.bytes[(y * o.width + x) * 4 ..][0..4].*; }
+    }.f;
+    try std.testing.expectEqual([4]u8{ 255, 255, 255, 255 }, at(out, 0, 0));
+    try std.testing.expectEqual([4]u8{ 255, 255, 255, 255 }, at(out, 0, 39));
+    try std.testing.expectEqual([4]u8{ 0, 0, 255, 255 }, at(out, 39, 0));
+    try std.testing.expectEqual([4]u8{ 0, 0, 255, 255 }, at(out, 39, 39));
+    try std.testing.expectEqual([4]u8{ 0, 0, 255, 255 }, at(out, 20, 20));
+    const unpacked = @import("gpu.zig").clipCorners(@import("gpu.zig").clipRound(8, 1 | 8));
+    try std.testing.expectEqual(@as(f32, 8), unpacked.radius);
+    try std.testing.expectEqual(@as(u4, 9), unpacked.corners);
+}
+
+test {
+    _ = @import("tests_corners.zig");
+    _ = @import("tests_text_weight.zig");
 }

@@ -197,6 +197,10 @@ pub const Surface = struct {
             .text => "text",
             .resize_left_right => "col-resize",
             .resize_up_down => "row-resize",
+            .open_hand => "grab",
+            .closed_hand => "grabbing",
+            .not_allowed => "not-allowed",
+            .crosshair => "crosshair",
         };
         if (gtk.v4) return gtk.v4api.gtk_widget_set_cursor_from_name(self.area, name);
         const win = gtk.v3.gtk_widget_get_window(self.area) orelse return;

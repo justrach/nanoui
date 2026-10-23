@@ -18,8 +18,20 @@ const textfield = @import("textfield.zig");
 const ctx_mod = @import("context.zig");
 
 pub const Context = ctx_mod.Context;
+/// Springs and timed curves (`spring`, `springFrom`, `tween`).
+const motion_legacy = @import("motion.zig");
+pub const Spring = motion_legacy.Spring;
+pub const Curve = motion_legacy.Curve;
+pub const spring = motion_legacy.spring;
+pub const springFrom = motion_legacy.springFrom;
+pub const tween = motion_legacy.tween;
+pub const jump = motion_legacy.jump;
 pub const Interaction = ctx_mod.Interaction;
 pub const FrameStats = ctx_mod.FrameStats;
+pub const frame_log = @import("frame_log.zig");
+pub const FrameLog = frame_log.FrameLog;
+pub const Surface = if (@import("builtin").os.tag == .macos) @import("surface.zig").Surface else void;
+pub const KeysReleased = if (@import("builtin").os.tag == .macos) @import("surface.zig").KeysReleased else void;
 pub const Shortcut = ctx_mod.Shortcut;
 /// A text field's editing keys: the system's, Emacs's or Vim's.
 pub const Keymap = @import("keymap.zig").Keymap;
@@ -28,6 +40,8 @@ pub const Command = @import("input.zig").Command;
 pub const TextOp = @import("input.zig").TextOp;
 pub const Cursor = ctx_mod.Cursor;
 pub const Theme = @import("theme.zig").Theme;
+pub const A11yRole = ctx_mod.A11yRole;
+pub const A11yItem = ctx_mod.A11yItem;
 /// Key combinations as the platform writes them: `ui.keys.label("⌘P")`.
 pub const keys = @import("keys.zig");
 /// A monotonic clock in seconds.
@@ -36,12 +50,14 @@ pub const clock = @import("clock.zig");
 pub const png = @import("png.zig");
 
 pub const Point = types.Point;
+pub const Fade = types.Fade;
 pub const Size = types.Size;
 pub const Rect = types.Rect;
 pub const Color = types.Color;
 pub const Edges = types.Edges;
 pub const Length = types.Length;
 pub const Style = types.Style;
+pub const Pulse = types.Pulse;
 pub const TextStyle = types.TextStyle;
 pub const Shadow = types.Shadow;
 pub const Glass = types.Glass;
@@ -96,6 +112,14 @@ pub const ListOptions = @import("list.zig").Options;
 pub const ListRows = @import("list.zig").Rows;
 pub const Tester = @import("tester.zig").Tester;
 pub const TesterOptions = @import("tester.zig").Options;
+pub const textArea = @import("textarea.zig").textArea;
+pub const AreaOptions = @import("textarea.zig").AreaOptions;
+/// Focuses the field built next (`c.focusNext`), selecting all its text if asked.
+pub const focusNext = @import("context_hooks.zig").focusNext;
+/// What a drop from another app brought (`Context.dropAt`).
+pub const Drop = @import("input.zig").Drop;
+pub const MouseButton = @import("input.zig").Button;
+pub const ScrollPhase = @import("input.zig").ScrollPhase;
 
 /// What a window of native UI shows: `build` runs on every frame.
 pub const View = struct {
@@ -117,6 +141,15 @@ pub const View = struct {
 };
 
 test {
+    _ = @import("tests_motion.zig");
+    _ = frame_log;
+    _ = @import("tests_effects.zig");
+    _ = @import("tests_scroll_x.zig");
+    _ = @import("tests_a11y_adjust.zig");
+    _ = @import("tests_shadow_x.zig");
+    _ = @import("tests_text_style.zig");
+    _ = @import("tests_text_extras.zig");
+    _ = @import("tests_settle.zig");
     _ = types;
     _ = @import("layout.zig");
     _ = textfield;
@@ -126,7 +159,6 @@ test {
     _ = @import("tests_texture.zig");
     _ = @import("tests_canvas.zig");
     _ = @import("triangulate.zig");
-    _ = @import("tests_motion.zig");
     _ = @import("tests_layer.zig");
     _ = @import("tests_safe_area.zig");
     _ = @import("motion/motion.zig");
@@ -148,6 +180,14 @@ test {
     _ = @import("png.zig");
     _ = @import("png_decode.zig");
     _ = @import("images.zig");
+    _ = @import("tests_images.zig");
     _ = @import("icons.zig");
     _ = keys;
+    _ = @import("tests_textedit.zig");
+    _ = @import("tests_input.zig");
+    _ = @import("tests_backtab.zig");
+    if (@import("builtin").os.tag == .macos) {
+        _ = @import("tests_menu.zig");
+        _ = @import("tests_a11y.zig");
+    }
 }

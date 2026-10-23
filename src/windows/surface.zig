@@ -159,13 +159,16 @@ pub const Surface = struct {
     }
 
     fn setCursor(self: *Surface) void {
-        // IDC_ARROW, IDC_HAND, IDC_IBEAM, IDC_SIZEWE, IDC_SIZENS.
+        // IDC_ARROW, IDC_HAND, IDC_IBEAM, IDC_SIZEWE, IDC_SIZENS, IDC_SIZEALL, IDC_NO.
         const id: usize = switch (self.cursor) {
             .arrow => 32512,
             .hand => 32649,
             .text => 32513,
             .resize_left_right => 32644,
             .resize_up_down => 32645,
+            .open_hand, .closed_hand => 32646,
+            .not_allowed => 32648,
+            .crosshair => 32515,
         };
         _ = w.SetCursor(w.LoadCursorW(null, id));
     }

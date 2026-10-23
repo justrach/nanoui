@@ -84,6 +84,8 @@ pub const http = @import("http.zig");
 /// Components after GPUI Kit: buttons, overlays, tabs, forms, toasts.
 pub const kit = @import("kit/kit.zig");
 pub const tsgen = @import("tsgen.zig");
+pub const Surface = if (mac) @import("ui/surface.zig").Surface else void;
+pub const a11y = if (mac) @import("ui/a11y.zig") else struct {};
 
 pub const App = plat.app.App;
 pub const AppOptions = plat.app.Options;

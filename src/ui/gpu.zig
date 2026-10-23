@@ -17,7 +17,13 @@ pub const Instance = extern struct {
     kind: f32 = 0,
     /// The clip's rounded corners (`clipRound`): 0 for a plain rectangle.
     clip_round: f32 = 0,
+    xf: [4]f32 = .{ 0, 0, 0, 0 },
+    pulse: [4]f32 = .{ 0, 0, 1, 0 },
+    vel: [4]f32 = .{ 0, 0, 0, 0 },
 };
+comptime {
+    std.debug.assert(@sizeOf(Instance) == 144);
+}
 
 /// The clip rectangle's corners rounded by `radius`: those in `corners`
 /// (1 top left, 2 top right, 4 bottom right, 8 bottom left), packed in one
@@ -45,10 +51,10 @@ pub const Kind = struct {
     /// `border_color` its tone (low, high, curve, saturation), and
     /// `border_width` the blur of what shows through, all in points.
     pub const glass: f32 = 4;
-    /// A texture the app gave this frame (`ui.texture`, a video frame):
-    /// `uv` the part of it shown, `border_width` its slot in the frame's
-    /// textures, its corners rounded as a picture's.
-    pub const texture: f32 = 5;
+    /// A shadow drawn outside its box only (`Shadow.knockout`): what is
+    /// under the box shows through it. `uv`'s x, y: where the box is from
+    /// the shadow's rect, in points.
+    pub const shadow_out: f32 = 5;
     /// A line (`ui.Canvas`): from `uv`'s first point to its second, in
     /// points, `border_width` wide, its ends round; dashed when
     /// `border_color` holds a dash's length, the gap's and where the line
@@ -60,6 +66,13 @@ pub const Kind = struct {
     /// the third to the first), the others shared with triangles beside it,
     /// cut sharp so the two meet without a seam. `rect` bounds it.
     pub const triangle: f32 = 7;
+    /// A texture the app gave this frame (`ui.texture`, a video frame):
+    /// `uv` the part of it shown, `border_width` its slot in the frame's
+    /// textures, its corners rounded as a picture's.
+    pub const texture: f32 = 8;
+    pub const layer_begin: f32 = 9;
+    pub const layer_end: f32 = 10;
+    pub const layer_composite: f32 = 11;
 };
 
 /// Pixels the app gives a frame to show (`ui.texture`), changing as often

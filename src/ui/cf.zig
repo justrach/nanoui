@@ -28,7 +28,7 @@ pub extern "c" fn CFStringCreateWithBytes(alloc: ?*anyopaque, bytes: [*]const u8
 pub extern "c" fn CFStringGetLength(s: CFStringRef) CFIndex;
 pub extern "c" fn CFDictionaryCreate(alloc: ?*anyopaque, keys: [*]const ?*const anyopaque, values: [*]const ?*const anyopaque, n: CFIndex, key_cb: *const anyopaque, value_cb: *const anyopaque) ?CFDictionaryRef;
 pub extern "c" fn CFAttributedStringCreate(alloc: ?*anyopaque, s: CFStringRef, attrs: CFDictionaryRef) ?CFAttributedStringRef;
-
+pub extern "c" fn CFAttributedStringGetLength(s: CFAttributedStringRef) CFIndex;
 pub extern "c" fn CTLineCreateWithAttributedString(s: CFAttributedStringRef) ?CTLineRef;
 pub extern "c" fn CTLineGetTypographicBounds(line: CTLineRef, ascent: ?*f64, descent: ?*f64, leading: ?*f64) f64;
 pub extern "c" fn CTLineDraw(line: CTLineRef, ctx: CGContextRef) void;
@@ -75,8 +75,9 @@ pub fn attributed(s: []const u8, font: CTFontRef) CFAttributedStringRef {
 pub fn utf16Offset(s: []const u8, byte: usize) CFIndex {
     var n: CFIndex = 0;
     var i: usize = 0;
-    while (i < byte and i < s.len) {
-        const len = seqLen(s[i]);
+    const limit = @min(byte, s.len);
+    while (i < limit) {
+        const len = @min(seqLen(s[i]), s.len - i);
         n += if (len == 4) 2 else 1;
         i += len;
     }
@@ -88,7 +89,7 @@ pub fn byteOffset(s: []const u8, u16_index: CFIndex) usize {
     var n: CFIndex = 0;
     var i: usize = 0;
     while (i < s.len and n < u16_index) {
-        const len = seqLen(s[i]);
+        const len = @min(seqLen(s[i]), s.len - i);
         n += if (len == 4) 2 else 1;
         i += len;
     }

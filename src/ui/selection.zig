@@ -24,6 +24,9 @@ pub const Selection = struct {
     blocked: bool = false,
     /// Where the pointer is in the text, found by this frame's paint.
     hit: ?Point = null,
+    hit_word: ?[2]usize = null,
+    hit_line: ?[2]usize = null,
+    hit_str: []const u8 = "",
     /// The end of the last line above the pointer, if it is between lines.
     below: ?Point = null,
     /// Selectable texts in reading order: last frame's, and this one's.
@@ -80,7 +83,10 @@ pub const Selection = struct {
 /// notes where the pointer is, draws the highlight, gathers the text.
 pub fn line(c: anytype, out: *std.ArrayList(gpu.Instance), id: u64, index: u32, str: []const u8, start: usize, end: usize, lay: text_mod.Layout, x: f32, y: f32, lh: f32, bx: f32, bx_end: f32, clip4: [4]f32) void {
     const s = &c.selection;
-    if (!s.next_order.contains(id)) s.next_order.put(c.gpa, id, @intCast(s.next_order.count())) catch {};
+    const count: u32 = @intCast(s.next_order.count());
+    if (s.next_order.getOrPut(c.gpa, id) catch null) |g| if (!g.found_existing) {
+        g.value_ptr.* = count;
+    };
     // Where the pointer finds the line: a little past its box's sides.
     const area: types.Rect = .{ .x = bx - 6, .y = y, .w = bx_end - bx + 12, .h = lh };
     // Under a box drawn over it, the line is not there for the pointer
@@ -89,7 +95,13 @@ pub fn line(c: anytype, out: *std.ArrayList(gpu.Instance), id: u64, index: u32, 
     if (!covered) s.lines.append(c.gpa, area) catch {};
     const m = c.input.mouse;
     if (!covered and area.contains(m)) {
-        s.hit = .{ .id = id, .at = start + indexAt(lay, m.x - x, end - start) };
+        const at = start + indexAt(lay, m.x - x, end - start);
+        s.hit = .{ .id = id, .at = at };
+        const te = @import("textedit.zig");
+        const word_at = if (at > start and (at >= end or !te.isWordByte(str[at])) and te.isWordByte(str[at - 1])) at - 1 else at;
+        s.hit_word = .{ te.prevWord(str, word_at), te.nextWord(str, word_at) };
+        s.hit_line = .{ start, end };
+        s.hit_str = str;
         // Over text that selects: the text cursor, as over a text field.
         c.cursor_text = true;
     } else if (y + lh <= m.y) s.below = .{ .id = id, .at = end };
@@ -137,15 +149,21 @@ pub fn beginPaint(c: anytype) void {
     const s = &c.selection;
     s.text.clearRetainingCapacity();
     s.lines.clearRetainingCapacity();
-    s.last_id = 0;
-    s.hit = null;
-    s.below = null;
     s.next_order.clearRetainingCapacity();
+    s.hit = null;
+    s.hit_word = null;
+    s.hit_line = null;
+    s.hit_str = "";
+    s.below = null;
     s.cover = null;
-    if (c.hot != 0) for (c.nodes.items, 0..) |n, i| if (n.id == c.hot) {
-        s.cover = @intCast(i);
-        break;
-    };
+    if (c.hot != 0) {
+        if (c.hot_index < c.nodes.items.len and c.nodes.items[c.hot_index].id == c.hot) {
+            s.cover = c.hot_index;
+        } else for (c.nodes.items, 0..) |n, i| if (n.id == c.hot) {
+            s.cover = @intCast(i);
+            break;
+        };
+    }
 }
 
 /// After paint: a press starts a selection (or clears it), a drag moves
@@ -157,11 +175,27 @@ pub fn afterPaint(c: anytype) void {
         s.pressed = false;
         s.moved = false;
         if (s.hit != null and !s.blocked) {
-            s.anchor = s.hit;
-            s.focus = s.hit;
+            const h = s.hit.?;
+            if (c.input.click_count >= 3 and s.hit_line != null) {
+                const hl = s.hit_line.?;
+                s.anchor = .{ .id = h.id, .at = hl[0] };
+                s.focus = .{ .id = h.id, .at = hl[1] };
+                s.text.clearRetainingCapacity();
+                s.text.appendSlice(c.gpa, s.hit_str[hl[0]..hl[1]]) catch {};
+                c.animating = true;
+            } else if (c.input.click_count == 2 and s.hit_word != null) {
+                const hw = s.hit_word.?;
+                s.anchor = .{ .id = h.id, .at = hw[0] };
+                s.focus = .{ .id = h.id, .at = hw[1] };
+                s.text.clearRetainingCapacity();
+                s.text.appendSlice(c.gpa, s.hit_str[hw[0]..hw[1]]) catch {};
+                c.animating = true;
+            } else {
+                s.anchor = h;
+                s.focus = h;
+            }
             s.dragging = true;
         } else if (!s.blocked) s.clear();
-        s.blocked = false;
     } else if (s.dragging and c.input.down) {
         if (s.hit orelse s.below) |p| if (s.focus == null or !std.meta.eql(p, s.focus.?)) {
             s.focus = p;

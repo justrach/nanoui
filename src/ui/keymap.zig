@@ -95,16 +95,15 @@ pub fn put(b: *tf.TextBuffer, e: *EditState, at: usize, i: u8, r: *tf.Result) vo
 /// Replaces [from, to) with `s`, the caret at `caret` (clamped).
 pub fn replace(b: *tf.TextBuffer, e: *EditState, from: usize, to: usize, s: []const u8, caret: usize, r: *tf.Result) void {
     _ = b.replace(from, to, s);
-    moveTo(e, @min(caret, b.len), null);
+    moveTo(e, @min(caret, b.text().len), null);
     r.changed = true;
 }
 
 /// Undo or redo: the text and caret as they were.
 pub fn undoStep(b: *tf.TextBuffer, e: *EditState, r: *tf.Result, redo: bool) void {
     const snap = (if (redo) e.undo.redo() else e.undo.undo()) orelse return;
-    b.len = 0;
-    _ = b.replace(0, 0, snap.buf[0..snap.len]);
-    moveTo(e, @min(snap.caret, b.len), null);
+    _ = b.replace(0, b.text().len, snap.text());
+    moveTo(e, @min(snap.caret, b.text().len), null);
     r.changed = true;
 }
 
