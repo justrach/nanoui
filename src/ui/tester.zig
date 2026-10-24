@@ -254,7 +254,9 @@ pub const Tester = struct {
     /// `type:TEXT`, `key:enter|backspace|tab|escape|left|right`,
     /// `scroll:DY` (at the pointer), `wait:SECONDS` (simulated time),
     /// `live:SECONDS` (the real event loop: replies, processes, timers),
-    /// `resize:WxH`.
+    /// `resize:WxH`; `at:X,Y` and `hover:X,Y` (a click, or the pointer, at
+    /// points), `chord:cmd+shift+n` (a key combination, as a window offers
+    /// it), `snap:PNG` (the frame so far, written: one per step of a run).
     pub fn runScript(t: *Tester, script: []const u8) !void {
         var steps = std.mem.splitScalar(u8, script, ';');
         while (steps.next()) |raw| {
@@ -283,6 +285,18 @@ pub const Tester = struct {
                     runFor(0.05);
                     t.frame();
                 }
+            } else if (std.mem.eql(u8, op, "at") or std.mem.eql(u8, op, "hover")) {
+                const comma = std.mem.indexOfScalar(u8, arg, ',') orelse return error.BadPoint;
+                const x = try std.fmt.parseFloat(f32, std.mem.trim(u8, arg[0..comma], " "));
+                const y = try std.fmt.parseFloat(f32, std.mem.trim(u8, arg[comma + 1 ..], " "));
+                if (op[0] == 'a') t.click(x, y) else t.moveTo(x, y);
+            } else if (std.mem.eql(u8, op, "chord")) {
+                const s = ctx_mod.Shortcut.parse(arg) orelse return error.UnknownKey;
+                _ = t.shortcut(s.native());
+            } else if (std.mem.eql(u8, op, "snap")) {
+                t.settle(2);
+                try t.screenshot(arg);
+                continue;
             } else if (std.mem.eql(u8, op, "resize")) {
                 const x = std.mem.indexOfScalar(u8, arg, 'x') orelse return error.BadSize;
                 t.resize(try std.fmt.parseFloat(f32, arg[0..x]), try std.fmt.parseFloat(f32, arg[x + 1 ..]));

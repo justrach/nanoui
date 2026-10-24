@@ -221,6 +221,9 @@ pub const TextStyle = struct {
     /// Line height in points (CSS's `line-height: 22px`), taking the place
     /// of `leading` when above 0; the extra room goes half above, half below.
     line_height: f32 = 0,
+    /// Inline code's size (`Span.mono`) over the text's: smaller, as the
+    /// monospaced font looks larger at the same size; 1 keeps it.
+    mono_scale: f32 = 0.9,
     /// A line longer than its box (text that doesn't wrap): cut before an
     /// ellipsis, or faded out over its last `fade_width` points. Such text
     /// gives room back in a row, as wrapping text does.

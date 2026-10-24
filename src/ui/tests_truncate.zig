@@ -80,3 +80,84 @@ test "a line height in points spaces wrapped lines exactly" {
         try testing.expectEqual(22 * lines, n.rect.h);
     };
 }
+
+test "inline code at the text's own size when mono_scale is 1" {
+    const Code = struct {
+        fn view(_: *@This(), c: *ui.Context) void {
+            const col = ui.div(c).column().p(0);
+            defer col.end();
+            const spans = [_]ui.Span{.{ .start = 0, .end = 8, .mono = true }};
+            ui.richText(c, "fetchAll", &spans, .{ .size = 14 });
+            ui.richText(c, "fetchAll", &spans, .{ .size = 14, .mono_scale = 1 });
+        }
+    };
+    var s: Code = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&s, Code.view), .{ .width = 300, .height = 100 });
+    defer t.deinit();
+    t.settle(1);
+    var widths: [2]f32 = undefined;
+    var n: usize = 0;
+    for (t.ctx.nodes.items) |node| if (node.content == .text) {
+        widths[n] = node.rect.w;
+        n += 1;
+    };
+    try testing.expectEqual(@as(usize, 2), n);
+    // Ten percent larger, to the pixel's rounding.
+    try testing.expect(widths[1] > widths[0] * 1.07);
+}
+
+test "scripts click at points, press combinations and write frames as they go" {
+    const S = ui.Shortcut;
+    try testing.expectEqual(S{ .key = 'n', .cmd = true, .shift = true }, S.parse("cmd+shift+N").?);
+    try testing.expectEqual(S{ .key = S.enter, .cmd = true }, S.parse("cmd+enter").?);
+    try testing.expectEqual(S{ .key = '1', .cmd = true }, S.parse("cmd+1").?);
+    try testing.expect(S.parse("cmd+") == null);
+    const Pad = struct {
+        n: i32 = 0,
+        news: i32 = 0,
+        fn view(p: *@This(), c: *ui.Context) void {
+            if (c.shortcut(.{ .key = 'n', .cmd = true })) p.news += 1;
+            const b = ui.div(c).w(40).h(40).bg(.hex(0x336699));
+            defer b.end();
+            if (b.clicked()) p.n += 1;
+        }
+    };
+    var p: Pad = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&p, Pad.view), .{ .width = 100, .height = 100 });
+    defer t.deinit();
+    var dir = testing.tmpDir(.{});
+    defer dir.cleanup();
+    var buf: [512]u8 = undefined;
+    const real = try dir.dir.realPathFile(std.testing.io, ".", &buf);
+    var script_buf: [700]u8 = undefined;
+    const script = try std.fmt.bufPrint(&script_buf, "at:20,20;chord:cmd+n;snap:{s}/one.png;hover:90,90;at:80,80", .{buf[0..real]});
+    try t.runScript(script);
+    try testing.expectEqual(@as(i32, 1), p.n);
+    try testing.expectEqual(@as(i32, 1), p.news);
+    _ = try dir.dir.statFile(std.testing.io, "one.png", .{});
+}
+
+test "a text buffer asked for focus gives its field the keyboard" {
+    const Form = struct {
+        a: ui.TextBuffer = .{},
+        b: ui.TextBuffer = .{},
+        fn view(f: *@This(), c: *ui.Context) void {
+            const col = ui.div(c).column().p(10).gap(8);
+            defer col.end();
+            _ = ui.textField(c, &f.a, .{});
+            _ = ui.textField(c, &f.b, .{});
+        }
+    };
+    var f: Form = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&f, Form.view), .{ .width = 300, .height = 120 });
+    defer t.deinit();
+    t.settle(1);
+    f.b.focus();
+    t.frame();
+    t.typeText("hi");
+    try testing.expectEqualStrings("", f.a.text());
+    try testing.expectEqualStrings("hi", f.b.text());
+}
