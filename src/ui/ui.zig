@@ -153,6 +153,7 @@ test {
     _ = @import("png.zig");
     _ = @import("png_decode.zig");
     _ = @import("images.zig");
+    _ = @import("pacing.zig");
     _ = @import("svg.zig");
     _ = @import("tests_svg.zig");
     _ = @import("tests_truncate.zig");
