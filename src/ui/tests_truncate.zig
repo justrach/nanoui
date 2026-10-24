@@ -80,3 +80,29 @@ test "a line height in points spaces wrapped lines exactly" {
         try testing.expectEqual(22 * lines, n.rect.h);
     };
 }
+
+test "inline code at the text's own size when mono_scale is 1" {
+    const Code = struct {
+        fn view(_: *@This(), c: *ui.Context) void {
+            const col = ui.div(c).column().p(0);
+            defer col.end();
+            const spans = [_]ui.Span{.{ .start = 0, .end = 8, .mono = true }};
+            ui.richText(c, "fetchAll", &spans, .{ .size = 14 });
+            ui.richText(c, "fetchAll", &spans, .{ .size = 14, .mono_scale = 1 });
+        }
+    };
+    var s: Code = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&s, Code.view), .{ .width = 300, .height = 100 });
+    defer t.deinit();
+    t.settle(1);
+    var widths: [2]f32 = undefined;
+    var n: usize = 0;
+    for (t.ctx.nodes.items) |node| if (node.content == .text) {
+        widths[n] = node.rect.w;
+        n += 1;
+    };
+    try testing.expectEqual(@as(usize, 2), n);
+    // Ten percent larger, to the pixel's rounding.
+    try testing.expect(widths[1] > widths[0] * 1.07);
+}
