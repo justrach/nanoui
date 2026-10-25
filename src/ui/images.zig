@@ -16,6 +16,11 @@ pub const size: u32 = 2048;
 pub const max_side: u32 = 1024;
 const pad: u32 = 1;
 
+/// NANOUI_DEBUG_IMAGES set: say where each picture is packed.
+fn debug() bool {
+    return std.c.getenv("NANOUI_DEBUG_IMAGES") != null;
+}
+
 pub const Entry = struct {
     uv: [4]f32,
     /// The picture's own size in pixels (before scaling down).
@@ -138,6 +143,7 @@ pub const Images = struct {
             return null;
         };
         im.entries.put(im.gpa, k, e) catch {};
+        if (debug()) std.log.warn("nanoui: packed {x} {d}x{d} at uv {d:.4},{d:.4} (shelf {d},{d}; resets {d}; sink {})", .{ k, d.w, d.h, e.uv[0], e.uv[1], im.shelf_x, im.shelf_y, im.resets, im.sink != null });
         return e;
     }
 
@@ -157,12 +163,14 @@ pub const Images = struct {
         }
         const x = im.shelf_x;
         const y = im.shelf_y;
-        if (im.sink) |sk| {
-            sk.upload(sk.ctx, x, y, d.w, d.h, d.bgra);
-        } else for (0..d.h) |row| {
+        if (im.sink) |sk| sk.upload(sk.ctx, x, y, d.w, d.h, d.bgra);
+        // The CPU's copy too, while there is one (pictures packed before the
+        // sink came): its changed rows are copied to the GPU after, and
+        // without this one they'd draw over it.
+        if (im.pixels.len > 0) for (0..d.h) |row| {
             const src = d.bgra[row * d.w * 4 ..][0 .. d.w * 4];
             @memcpy(im.pixels[((y + row) * size + x) * 4 ..][0 .. d.w * 4], src);
-        }
+        };
         im.shelf_x += d.w + pad;
         im.shelf_h = @max(im.shelf_h, d.h);
         im.generation +%= 1;
@@ -181,6 +189,7 @@ pub const Images = struct {
     }
 
     fn empty(im: *Images) void {
+        if (debug()) std.log.warn("nanoui: image atlas full: starting over", .{});
         im.entries.clearRetainingCapacity();
         im.shelf_x = 0;
         im.shelf_y = 0;

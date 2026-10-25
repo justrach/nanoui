@@ -83,6 +83,9 @@ pub const Surface = struct {
             .start_time = cf.CACurrentMediaTime(),
         };
         self.ctx = .init(gpa, &self.text);
+        // Pictures go straight to the GPU: no copy of their atlas in memory.
+        // Before anything can draw (setContentView: below already does).
+        self.text.images.sink = .{ .ctx = &self.renderer, .upload = @import("metal.zig").Renderer.uploadImage };
         objc.setZig(nsview, self);
         // A layer-hosting view: the Metal layer is ours.
         objc.msg(void, nsview, "setLayer:", .{renderer.layer});
@@ -104,8 +107,6 @@ pub const Surface = struct {
             self.display_link = link;
         }
         self.live_timer = @import("live_snapshot.zig").start(nsview);
-        // Pictures go straight to the GPU: no copy of their atlas in memory.
-        self.text.images.sink = .{ .ctx = &self.renderer, .upload = @import("metal.zig").Renderer.uploadImage };
         self.updateGeometry();
         self.frame();
         return self;
@@ -142,7 +143,7 @@ pub const Surface = struct {
         self.renderer.resize(self.size, self.scale);
     }
 
-    fn theme(self: *Surface) Theme {
+    pub fn theme(self: *Surface) Theme {
         if (self.theme_override) |t| return t;
         const appearance = objc.msg(objc.Object, self.nsview, "effectiveAppearance", .{});
         const name = objc.fromNSString(objc.msg(?objc.Object, appearance, "name", .{}));

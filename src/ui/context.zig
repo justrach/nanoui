@@ -221,6 +221,10 @@ pub const Context = struct {
     changed: bool = false,
     /// Set while an animated value has not reached its target.
     animating: bool = false,
+    /// While a live snapshot is drawn (live_snapshot.zig): what its request
+    /// asked for, for the view to show it in that frame alone (it isn't put
+    /// on screen); empty otherwise.
+    snapshot_request: []const u8 = "",
     stats: FrameStats = .{},
     /// Set when the pointer is over something clickable.
     cursor_hand: bool = false,

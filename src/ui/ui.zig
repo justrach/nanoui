@@ -138,6 +138,7 @@ test {
     _ = @import("keymap.zig");
     _ = @import("undo.zig");
     _ = @import("tests_cursor.zig");
+    _ = @import("tests_image_sink.zig");
     // CoreText's fast path, on macOS.
     if (!@import("text.zig").portable) {
         _ = @import("shaper.zig");
