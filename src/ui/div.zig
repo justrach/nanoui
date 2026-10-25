@@ -12,6 +12,7 @@ const types = @import("types.zig");
 const ctx_mod = @import("context.zig");
 const Context = ctx_mod.Context;
 const Color = types.Color;
+const tooltip_mod = @import("tooltip.zig");
 
 pub const Div = struct {
     c: *Context,
@@ -249,6 +250,20 @@ pub const Div = struct {
 
     pub fn hovered(d: Div) bool {
         return d.c.interact(d.index, .{}).hovered;
+    }
+
+    /// `text` in a tooltip once the pointer has been over it for the delay
+    /// (`tooltip.zig`), as GPUI's `.tooltip(text_tooltip(..))`. It doesn't
+    /// make the box take the pointer.
+    pub fn tooltip(d: Div, text: []const u8, opts: tooltip_mod.Options) Div {
+        tooltip_mod.tooltip(d.c, d.index, text, opts);
+        return d;
+    }
+
+    /// A tooltip whose content `draw_fn(ptr, c)` draws.
+    pub fn tooltipWith(d: Div, ptr: anytype, comptime draw_fn: fn (@TypeOf(ptr), *Context) void, opts: tooltip_mod.Options) Div {
+        tooltip_mod.tooltipWith(d.c, d.index, ptr, draw_fn, opts);
+        return d;
     }
 
     pub fn end(d: Div) void {

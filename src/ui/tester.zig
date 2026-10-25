@@ -228,6 +228,23 @@ pub const Tester = struct {
         return false;
     }
 
+    /// Puts the pointer on the middle of the text `s`.
+    pub fn hoverText(t: *Tester, s: []const u8) !void {
+        const r = t.findText(s) orelse return error.TextNotFound;
+        t.moveTo(r.x + r.w / 2, r.y + r.h / 2);
+    }
+
+    /// The text of the tooltip in the last frame ("" for drawn content).
+    pub fn tooltipText(t: *Tester) ?[]const u8 {
+        return if (t.ctx.tooltip.shown) |s| s.text else null;
+    }
+
+    /// The tooltip's box in the last frame.
+    pub fn tooltipRect(t: *Tester) ?types.Rect {
+        const s = t.ctx.tooltip.shown orelse return null;
+        return t.ctx.rects.get(s.id);
+    }
+
     /// Clicks the middle of the text `s`.
     pub fn clickText(t: *Tester, s: []const u8) !void {
         const r = t.findText(s) orelse return error.TextNotFound;

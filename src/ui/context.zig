@@ -184,6 +184,8 @@ pub const Context = struct {
     copy_requested: bool = false,
     /// The soonest a view asked for another frame (`frameIn`), seconds.
     frame_in: ?f32 = null,
+    /// This frame's tooltip, drawn over the page after the view (`ui.tooltip`).
+    tooltip: @import("tooltip.zig").Frame = .{},
     copy_done: bool = false,
     /// Set when the view took the offered shortcut: it goes no further.
     shortcut_taken: bool = false,

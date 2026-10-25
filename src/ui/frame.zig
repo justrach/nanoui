@@ -8,6 +8,7 @@ const text = @import("text.zig");
 const layout = @import("layout.zig");
 const paint = @import("paint.zig");
 const selection = @import("selection.zig");
+const tooltip = @import("tooltip.zig");
 const Theme = @import("theme.zig").Theme;
 const Context = @import("context.zig").Context;
 const View = @import("ui.zig").View;
@@ -40,6 +41,7 @@ pub fn run(c: *Context, view: View, ts: *text.TextSystem, instances: *std.ArrayL
     var passes: u32 = 0;
     while (true) : (passes += 1) {
         view.build(view.ptr, c);
+        if (c.stack.items.len == 1) tooltip.flush(c);
         if (c.stack.items.len != 1)
             std.debug.panic("nanoui: {d} box(es) left open: every column, row, card, scroll and pressable needs an end", .{c.stack.items.len - 1});
         if (!c.changed or passes >= 3) break;

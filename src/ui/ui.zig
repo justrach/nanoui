@@ -101,6 +101,12 @@ pub const Div = @import("div.zig").Div;
 pub const list = @import("list.zig").list;
 pub const ListOptions = @import("list.zig").Options;
 pub const ListRows = @import("list.zig").Rows;
+/// Tooltips as GPUI's (`Div.tooltip`): after the pointer rests, by it.
+pub const tooltip = @import("tooltip.zig").tooltip;
+pub const tooltipWith = @import("tooltip.zig").tooltipWith;
+pub const TooltipOptions = @import("tooltip.zig").Options;
+/// Whether the pointer is over a box that doesn't take it (`tooltip.zig`).
+pub const pointerOver = @import("tooltip.zig").pointerOver;
 pub const Tester = @import("tester.zig").Tester;
 pub const TesterOptions = @import("tester.zig").Options;
 
@@ -161,6 +167,8 @@ test {
     _ = @import("svg.zig");
     _ = @import("tests_svg.zig");
     _ = @import("tests_truncate.zig");
+    _ = @import("tooltip.zig");
+    _ = @import("tests_tooltip.zig");
     _ = @import("icons.zig");
     _ = keys;
 }

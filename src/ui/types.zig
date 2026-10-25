@@ -115,6 +115,11 @@ pub const Shadow = struct {
     /// 0 shrinks it, as CSS's spread radius does.
     spread: f32 = 0,
 
+    /// Tailwind's `shadow-md`, as GPUI's `shadow_md`: tooltips' and cards'.
+    pub const md = [_]Shadow{
+        .{ .color = .{ .a = 0.1 }, .blur = 6, .y = 4, .spread = -1 },
+        .{ .color = .{ .a = 0.1 }, .blur = 4, .y = 2, .spread = -2 },
+    };
     /// Tailwind's `shadow-lg`, as GPUI draws it: two faint layers.
     pub const lg = [_]Shadow{
         .{ .color = .{ .a = 0.1 }, .blur = 15, .y = 10, .spread = -3 },
