@@ -38,6 +38,8 @@ pub const Surface = struct {
     tick_scheduled: bool = false,
     /// Paces animation frames at the display's refresh (CADisplayLink).
     display_link: ?objc.Object = null,
+    /// Checks for a live snapshot's request (live_snapshot.zig).
+    live_timer: ?objc.Object = null,
     /// The pace asked of the link: 0 is the display's.
     link_fps: f32 = 0,
     /// A frame was wanted while the window was hidden: run it once visible.
@@ -101,6 +103,7 @@ pub const Surface = struct {
             objc.msg(void, link, "addToRunLoop:forMode:", .{ loop, NSRunLoopCommonModes });
             self.display_link = link;
         }
+        self.live_timer = @import("live_snapshot.zig").start(nsview);
         // Pictures go straight to the GPU: no copy of their atlas in memory.
         self.text.images.sink = .{ .ctx = &self.renderer, .upload = @import("metal.zig").Renderer.uploadImage };
         self.updateGeometry();
@@ -110,6 +113,10 @@ pub const Surface = struct {
 
     pub fn destroy(self: *Surface) void {
         objc.setZig(self.nsview, null);
+        if (self.live_timer) |t| {
+            objc.msg(void, t, "invalidate", .{});
+            objc.release(t);
+        }
         if (self.display_link) |link| {
             // The link retains its target, the view: break the cycle.
             objc.msg(void, link, "invalidate", .{});
@@ -145,7 +152,7 @@ pub const Surface = struct {
     /// Builds, lays out, paints and draws one frame.
     /// The atlas texture the renderer samples: CoreText's, or the one
     /// nanoui's own text rasterized into memory, uploaded when it changed.
-    fn atlasTexture(self: *Surface) objc.Object {
+    pub fn atlasTexture(self: *Surface) objc.Object {
         if (!text.portable) return self.text.texture();
         const a = &self.text.atlas;
         const Region = extern struct { x: usize, y: usize, z: usize, w: usize, h: usize, d: usize };
@@ -304,6 +311,7 @@ const view_methods = [_]objc.Method{
                 .{ .name = "viewDidChangeEffectiveAppearance", .imp = &backingChanged, .types = "v@:" },
                 .{ .name = "updateTrackingAreas", .imp = &updateTrackingAreas, .types = "v@:" },
                 .{ .name = "displayLinkFired:", .imp = &displayLinkFired, .types = "v@:@" },
+                .{ .name = "liveSnapshotTick:", .imp = &liveSnapshotTick, .types = "v@:@" },
                 .{ .name = "viewWillStartLiveResize", .imp = &liveResizeStart, .types = "v@:" },
                 .{ .name = "viewDidEndLiveResize", .imp = &liveResizeEnd, .types = "v@:" },
 } ++ textinput.methods;
@@ -506,6 +514,10 @@ fn paste(obj: objc.Object, _: objc.SEL, _: ?objc.Object) callconv(.c) void {
         ch.* = ' ';
     };
     textinput.paste(s, s.pasted.items);
+}
+
+fn liveSnapshotTick(obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
+    @import("live_snapshot.zig").tick(surfaceOf(obj) orelse return);
 }
 
 fn displayLinkFired(obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
