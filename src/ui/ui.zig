@@ -44,6 +44,7 @@ pub const Length = types.Length;
 pub const Style = types.Style;
 pub const TextStyle = types.TextStyle;
 pub const Truncate = types.Truncate;
+pub const SpanBox = types.SpanBox;
 pub const Shadow = types.Shadow;
 pub const Glass = types.Glass;
 pub const Weight = types.Weight;

@@ -106,3 +106,37 @@ test "inline code at the text's own size when mono_scale is 1" {
     // Ten percent larger, to the pixel's rounding.
     try testing.expect(widths[1] > widths[0] * 1.07);
 }
+
+test "inline code's wash by its line's box when span_box is set: GPUI's 2 past, 2 in, 4.5 round" {
+    const Code = struct {
+        const wash: ui.Color = .hex(0x336699);
+        box: ?ui.SpanBox = null,
+        fn view(s: *@This(), c: *ui.Context) void {
+            const col = ui.div(c).column().p(10);
+            defer col.end();
+            const spans = [_]ui.Span{.{ .start = 4, .end = 9, .mono = true, .background = wash }};
+            ui.richText(c, "Use title here", &spans, .{ .size = 14, .line_height = 22, .mono_scale = 1, .span_box = s.box });
+        }
+    };
+    var found: [2]?[4]f32 = .{ null, null };
+    for ([_]?ui.SpanBox{ null, .{ .pad_x = 2, .inset_y = 2, .radius = 4.5 } }, 0..) |box, n| {
+        var s: Code = .{ .box = box };
+        var t: ui.Tester = undefined;
+        try t.init(testing.allocator, .init(&s, Code.view), .{ .width = 300, .height = 100 });
+        defer t.deinit();
+        t.settle(1);
+        const want = @import("gpu.zig").color4(Code.wash);
+        for (t.instances.items) |i| if (std.mem.eql(f32, &i.color, &want)) {
+            found[n] = i.rect;
+            if (box) |b| try testing.expectEqual(b.radius, i.radius);
+        };
+    }
+    const default = found[0].?;
+    const boxed = found[1].?;
+    // The line is 22 tall from y 10: the wash 18 tall from 12, a point
+    // narrower each side than by default.
+    try testing.expectEqual(@as(f32, 12), boxed[1]);
+    try testing.expectEqual(@as(f32, 18), boxed[3]);
+    try testing.expectEqual(default[0] + 1, boxed[0]);
+    try testing.expectEqual(default[2] - 2, boxed[2]);
+}

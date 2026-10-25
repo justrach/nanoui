@@ -246,6 +246,7 @@ pub const WrapRule = enum {
     glyph_positions,
 };
 
+
 pub const TextStyle = struct {
     size: f32 = 14,
     weight: Weight = .regular,
@@ -262,6 +263,10 @@ pub const TextStyle = struct {
     /// Inline code's size (`Span.mono`) over the text's: smaller, as the
     /// monospaced font looks larger at the same size; 1 keeps it.
     mono_scale: f32 = 0.9,
+    /// How a span's background (`Span.background`, inline code's) sits:
+    /// null, 3 points past its glyphs and 2 past the font's ascent and
+    /// descent, 4 round.
+    span_box: ?SpanBox = null,
     /// A line longer than its box (text that doesn't wrap): cut before an
     /// ellipsis, or faded out over its last `fade_width` points. Such text
     /// gives room back in a row, as wrapping text does.
@@ -270,6 +275,15 @@ pub const TextStyle = struct {
 };
 
 pub const Truncate = enum { none, ellipsis, fade };
+
+/// A span's background by its line's box, as GPUI's Markdown washes inline
+/// code: `pad_x` past its glyphs at either end, `inset_y` in from the
+/// line's top and bottom, `radius` round.
+pub const SpanBox = struct {
+    pad_x: f32,
+    inset_y: f32,
+    radius: f32,
+};
 
 test "rect" {
     const r: Rect = .{ .x = 10, .y = 10, .w = 100, .h = 50 };

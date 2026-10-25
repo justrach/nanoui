@@ -277,7 +277,7 @@ fn textRunLimit(c: *Context, out: *std.ArrayList(metal.Instance), t: ctx_mod.Con
     const baseline = snap(y + (lh - f.lineHeight()) / 2 + f.leading / 2 + f.ascent, scale);
     const base = metal.color4(t.color.alpha(opacity));
     if (sel) |s| @import("selection.zig").line(c, out, s.id, s.index, t.str, start, end, lay, x, y, lh, s.x0, s.x1, clip4);
-    if (t.spans.len > 0) decorations(c, out, t, lay, start, end, x, baseline, f, clip4, opacity);
+    if (t.spans.len > 0) decorations(c, out, t, lay, start, end, x, .{ .top = y, .h = lh, .baseline = baseline }, f, clip4, opacity);
     var span_i: usize = 0;
     for (lay.glyphs) |g| {
         const pen = (x + g.x) * scale;
@@ -322,9 +322,13 @@ fn xAt(lay: text_mod.Layout, at: usize) f32 {
     return lay.width;
 }
 
+/// A line's box: its top, its height and its baseline.
+const LineBox = struct { top: f32, h: f32, baseline: f32 };
+
 /// What spans draw besides their glyphs: backgrounds (inline code, marks)
 /// behind the text, underlines (links) and lines through.
-fn decorations(c: *Context, out: *std.ArrayList(metal.Instance), t: ctx_mod.Content.Text, lay: text_mod.Layout, start: usize, end: usize, x: f32, baseline: f32, f: text_mod.Font, clip4: [4]f32, opacity: f32) void {
+fn decorations(c: *Context, out: *std.ArrayList(metal.Instance), t: ctx_mod.Content.Text, lay: text_mod.Layout, start: usize, end: usize, x: f32, line: LineBox, f: text_mod.Font, clip4: [4]f32, opacity: f32) void {
+    const baseline = line.baseline;
     for (t.spans) |sp| {
         if (sp.end <= start or sp.start >= end) continue;
         if (sp.background == null and !sp.underline and !sp.strike) continue;
@@ -335,9 +339,12 @@ fn decorations(c: *Context, out: *std.ArrayList(metal.Instance), t: ctx_mod.Cont
         if (x1 <= x0) continue;
         const color = sp.color orelse t.color;
         if (sp.background) |bg| push(c, out, .{
-            .rect = .{ x0 - 3, baseline - f.ascent * 0.92 - 2, x1 - x0 + 6, (f.ascent + f.descent) * 0.92 + 4 },
+            .rect = if (t.style.span_box) |box|
+                .{ x0 - box.pad_x, line.top + box.inset_y, x1 - x0 + 2 * box.pad_x, line.h - 2 * box.inset_y }
+            else
+                .{ x0 - 3, baseline - f.ascent * 0.92 - 2, x1 - x0 + 6, (f.ascent + f.descent) * 0.92 + 4 },
             .color = metal.color4(bg.alpha(opacity)),
-            .radius = 4,
+            .radius = if (t.style.span_box) |box| box.radius else 4,
             .clip = clip4,
         });
         if (sp.underline) push(c, out, .{
