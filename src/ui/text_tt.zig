@@ -66,6 +66,8 @@ pub const TextSystem = struct {
     mono_family: ?[]const u8 = null,
     /// Every size times this (`Context.setZoom`).
     zoom: f32 = 1,
+    /// How text breaks into lines; this typesetter only has its own.
+    wrap_rule: types.WrapRule = .typesetter,
 
     pub fn init(gpa: std.mem.Allocator) TextSystem {
         return .{ .gpa = gpa, .db = .init(gpa, std.Io.Threaded.global_single_threaded.io()), .atlas = .init(gpa), .images = .{ .gpa = gpa } };

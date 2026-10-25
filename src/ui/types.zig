@@ -235,6 +235,17 @@ pub const Span = struct {
     }
 };
 
+/// How text breaks into lines (`TextSystem.wrap_rule`).
+pub const WrapRule = enum {
+    /// Where the platform's typesetter suggests (CoreText on the Mac).
+    typesetter,
+    /// As GPUI breaks them (`LineLayout::compute_wrap_boundaries`): the
+    /// paragraph laid out as one line, a break once the width from the
+    /// line's start to a glyph's end (a space's too) passes the limit,
+    /// before the word that glyph is in, else at the glyph.
+    glyph_positions,
+};
+
 pub const TextStyle = struct {
     size: f32 = 14,
     weight: Weight = .regular,

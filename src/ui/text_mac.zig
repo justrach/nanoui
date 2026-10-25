@@ -81,6 +81,8 @@ pub const TextSystem = struct {
     mono_family: ?[]const u8 = null,
     /// Every size times this (`Context.setZoom`).
     zoom: f32 = 1,
+    /// How text breaks into lines.
+    wrap_rule: types.WrapRule = .typesetter,
 
     pub fn init(gpa: std.mem.Allocator, device: objc.Object) TextSystem {
         return .{ .gpa = gpa, .atlas = .init(gpa, device), .images = .{ .gpa = gpa } };
@@ -336,14 +338,87 @@ pub const TextSystem = struct {
     /// `s` with its spans broken into lines no wider than `max_width`.
     pub fn wrapAttributed(self: *TextSystem, s: []const u8, style: types.TextStyle, spans: []const types.Span, max_width: f32) []const Line {
         const styled = rich.styled(spans);
-        const k = key(s, style, (@as(u64, @intFromFloat(@max(0, @min(max_width, 1e6)))) + 2) ^ (if (styled) rich.spansHash(spans, 0, s.len) else 0));
+        const k = key(s, style, (@as(u64, @intFromFloat(@max(0, @min(max_width, 1e6)))) + 2) ^ (if (styled) rich.spansHash(spans, 0, s.len) else 0) ^ (@as(u64, @intFromEnum(self.wrap_rule)) << 60));
         if (self.wraps.get(self.gpa, k)) |lines| return lines;
         if (self.oneLine(s, style, spans, max_width)) |line_| {
             const one = self.gpa.alloc(Line, 1) catch return &.{};
             one[0] = line_;
             return self.wraps.put(self.gpa, k, one);
         }
-        return self.wraps.put(self.gpa, k, self.breakLines(s, style, spans, max_width) catch return &.{});
+        const lines = switch (self.wrap_rule) {
+            .typesetter => self.breakLines(s, style, spans, max_width),
+            .glyph_positions => self.breakAtGlyphs(s, style, spans, max_width),
+        };
+        return self.wraps.put(self.gpa, k, lines catch return &.{});
+    }
+
+    /// `s` broken as GPUI breaks it (`WrapRule.glyph_positions`), each
+    /// paragraph on its own.
+    pub fn breakAtGlyphs(self: *TextSystem, s: []const u8, style: types.TextStyle, spans: []const types.Span, max_width: f32) ![]Line {
+        var lines: std.ArrayList(Line) = .empty;
+        defer lines.deinit(self.gpa);
+        var a: usize = 0;
+        while (true) {
+            const b = std.mem.indexOfScalarPos(u8, s, a, '\n') orelse s.len;
+            try self.breakParagraph(&lines, s, a, b, style, spans, max_width);
+            if (b >= s.len) break;
+            a = b + 1;
+        }
+        return lines.toOwnedSlice(self.gpa);
+    }
+
+    fn breakParagraph(self: *TextSystem, lines: *std.ArrayList(Line), s: []const u8, a: usize, b: usize, style: types.TextStyle, spans: []const types.Span, max_width: f32) !void {
+        const seg = std.mem.trimEnd(u8, s[a..b], "\r");
+        if (seg.len == 0) return lines.append(self.gpa, .{ .start = a, .end = a, .width = 0 });
+        const attr = if (rich.styled(spans)) rich.attributed(self, seg, style, spans, a) else cf.attributed(seg, self.font(style).ref);
+        defer cf.CFRelease(attr);
+        const ln = cf.CTLineCreateWithAttributedString(attr).?;
+        defer cf.CFRelease(ln);
+        const total: f32 = @floatCast(cf.CTLineGetTypographicBounds(ln, null, null, null));
+        // Each character's start and its x, then the paragraph's end.
+        var marks: std.ArrayList(struct { at: usize, x: f32, c: u21 }) = .empty;
+        defer marks.deinit(self.gpa);
+        var it = std.unicode.Utf8View.initUnchecked(seg).iterator();
+        var at: usize = 0;
+        while (it.nextCodepoint()) |c| {
+            try marks.append(self.gpa, .{ .at = at, .x = @floatCast(cf.CTLineGetOffsetForStringIndex(ln, cf.utf16Offset(seg, at), null)), .c = c });
+            at = it.i;
+        }
+        const xAt = struct {
+            fn f(m: anytype, i: usize, end: f32) f32 {
+                return if (i < m.len) m[i].x else end;
+            }
+        }.f;
+        var first_non_ws = false;
+        var candidate: ?usize = null;
+        var line_start: usize = 0;
+        var prev: u21 = 0;
+        const items = marks.items;
+        for (items, 0..) |m, i| {
+            if (isWordChar(m.c)) {
+                if (prev == ' ' and m.c != ' ' and first_non_ws) candidate = i;
+            } else if (m.c != ' ' and !isWordChar(prev) and first_non_ws) candidate = i;
+            if (m.c != ' ') first_non_ws = true;
+            const so_far = xAt(items, i + 1, total) - items[line_start].x;
+            if (so_far > @max(1, max_width) and i > line_start) {
+                const cut = if (candidate) |cnd| (if (cnd > line_start) cnd else i) else i;
+                candidate = null;
+                try self.appendLine(lines, seg, a, items, line_start, cut, total);
+                line_start = cut;
+            }
+            prev = m.c;
+        }
+        try self.appendLine(lines, seg, a, items, line_start, items.len, total);
+    }
+
+    /// Characters `from` to `to` as a line, its trailing blanks left out.
+    fn appendLine(self: *TextSystem, lines: *std.ArrayList(Line), seg: []const u8, a: usize, items: anytype, from: usize, to: usize, total: f32) !void {
+        var end = to;
+        while (end > from and (items[end - 1].c == ' ' or items[end - 1].c == '\t')) end -= 1;
+        const start_b = items[from].at;
+        const end_b = if (end < items.len) items[end].at else seg.len;
+        const x_end = if (end < items.len) items[end].x else total;
+        try lines.append(self.gpa, .{ .start = a + start_b, .end = a + end_b, .width = x_end - items[from].x });
     }
 
     /// `s` as one line, when it has no line breaks and fits: what CoreText
@@ -384,6 +459,17 @@ pub const TextSystem = struct {
         }
         if (lines.items.len == 0) lines.append(self.gpa, .{ .start = 0, .end = 0, .width = 0 }) catch {};
         return lines.toOwnedSlice(self.gpa);
+    }
+
+    /// A character a word holds together (`LineWrapper::is_word_char`).
+    pub fn isWordChar(c: u21) bool {
+        return switch (c) {
+            'a'...'z', 'A'...'Z', '0'...'9' => true,
+            0xC0...0xFF, 0x100...0x17F, 0x180...0x24F, 0x400...0x4FF, 0x1E00...0x1EFF, 0x300...0x36F, 0x980...0x9FF => true,
+            '-', '_', '.', '\'', 0x2019, 0x2018, '$', '%', '@', '#', '^', '~', ',', '=', ':', ';' => true,
+            0x22EF, 0x202F, 0xA0, 0x2011 => true,
+            else => false,
+        };
     }
 
     /// The x offset of the caret before byte `index` of `s`.
