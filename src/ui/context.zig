@@ -197,6 +197,11 @@ pub const Context = struct {
     next_key_int: ?u64 = null,
     /// The topmost interactive box under the pointer: it takes presses.
     hot: u64 = 0,
+    /// GPUI's input modality: after keyboard input nothing is hovered
+    /// until the pointer moves or presses (`Hitbox::is_hovered`).
+    keyboard_hides_hover: bool = false,
+    /// The last input was the keyboard's.
+    keyboard_modality: bool = false,
     /// The hot box and the boxes it is in, innermost first: all hovered.
     hot_path: std.ArrayList(u64) = .empty,
     active: u64 = 0,
@@ -527,13 +532,31 @@ pub const Context = struct {
     /// Swaps in the boxes of the frame just painted.
     pub fn commitHits(c: *Context) void {
         std.mem.swap(std.ArrayList(Hit), &c.hits, &c.next_hits);
-        c.updateHot();
+        c.computeHot();
+    }
+
+    /// This frame's input, if the keyboard's, makes it the modality.
+    pub fn noteModality(c: *Context) void {
+        const i = c.input;
+        if (i.key == null and i.chars.len == 0 and i.ops.len == 0 and i.shortcut == null) return;
+        c.keyboard_modality = true;
+        if (c.keyboard_hides_hover) {
+            c.hot = 0;
+            c.hot_path.clearRetainingCapacity();
+        }
     }
 
     /// The topmost interactive box under the pointer becomes hot.
+    /// The pointer moved or pressed: it's the modality again.
     pub fn updateHot(c: *Context) void {
+        c.keyboard_modality = false;
+        c.computeHot();
+    }
+
+    fn computeHot(c: *Context) void {
         c.hot = 0;
         c.hot_path.clearRetainingCapacity();
+        if (c.keyboard_hides_hover and c.keyboard_modality) return;
         var i = c.hits.items.len;
         while (i > 0) {
             i -= 1;

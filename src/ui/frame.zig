@@ -37,6 +37,7 @@ pub fn run(c: *Context, view: View, ts: *text.TextSystem, instances: *std.ArrayL
     for (c.input.ops) |op| if (op == .command and op.command == .copy) {
         c.copy_requested = true;
     };
+    c.noteModality();
     c.begin();
     var passes: u32 = 0;
     while (true) : (passes += 1) {
