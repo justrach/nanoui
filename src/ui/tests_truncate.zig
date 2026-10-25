@@ -140,3 +140,36 @@ test "inline code's wash by its line's box when span_box is set: GPUI's 2 past, 
     try testing.expectEqual(default[0] + 1, boxed[0]);
     try testing.expectEqual(default[2] - 2, boxed[2]);
 }
+
+test "a tall line's glyphs centred on their own ascent and descent with baseline_rule glyph_box" {
+    const Line = struct {
+        fn view(_: *@This(), c: *ui.Context) void {
+            const col = ui.div(c).column().p(10);
+            defer col.end();
+            ui.text(c, "Hxg", .{ .size = 14, .line_height = 22, .color = .hex(0x000000) });
+        }
+    };
+    var tops: [2]f32 = undefined;
+    var baselines: [2]f32 = undefined;
+    for ([_]ui.BaselineRule{ .font_line, .glyph_box }, 0..) |rule, n| {
+        var s: Line = .{};
+        var t: ui.Tester = undefined;
+        try t.init(testing.allocator, .init(&s, Line.view), .{ .width = 200, .height = 60 });
+        defer t.deinit();
+        t.text.baseline_rule = rule;
+        t.settle(1);
+        const f = t.text.font(.{ .size = 14 });
+        const snap = struct {
+            fn half(v: f32) f32 {
+                return @round(v * 2) / 2;
+            }
+        }.half;
+        baselines[n] = if (rule == .glyph_box) snap(10 + (22 - f.ascent - f.descent) / 2 + f.ascent) else snap(10 + (22 - f.lineHeight()) / 2 + f.leading / 2 + f.ascent);
+        tops[n] = 1e9;
+        for (t.instances.items) |i| if (i.kind == @import("gpu.zig").Kind.text) {
+            tops[n] = @min(tops[n], i.rect[1]);
+        };
+    }
+    // The glyphs move by just what the baseline does.
+    try testing.expectEqual(baselines[1] - baselines[0], tops[1] - tops[0]);
+}

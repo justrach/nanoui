@@ -274,7 +274,10 @@ fn textRunLimit(c: *Context, out: *std.ArrayList(metal.Instance), t: ctx_mod.Con
     if (lay.glyphs.len == 0 or x + lay.width < clip4[0]) return;
     const scale = c.scale;
     // The line's extra height (its leading) goes half above, half below.
-    const baseline = snap(y + (lh - f.lineHeight()) / 2 + f.leading / 2 + f.ascent, scale);
+    const baseline = if (c.text.baseline_rule == .glyph_box and lh != f.lineHeight())
+        snap(y + (lh - f.ascent - f.descent) / 2 + f.ascent, scale)
+    else
+        snap(y + (lh - f.lineHeight()) / 2 + f.leading / 2 + f.ascent, scale);
     const base = metal.color4(t.color.alpha(opacity));
     if (sel) |s| @import("selection.zig").line(c, out, s.id, s.index, t.str, start, end, lay, x, y, lh, s.x0, s.x1, clip4);
     if (t.spans.len > 0) decorations(c, out, t, lay, start, end, x, .{ .top = y, .h = lh, .baseline = baseline }, f, clip4, opacity);

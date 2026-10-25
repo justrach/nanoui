@@ -83,6 +83,8 @@ pub const TextSystem = struct {
     zoom: f32 = 1,
     /// How text breaks into lines.
     wrap_rule: types.WrapRule = .typesetter,
+    /// Where glyphs sit in a line given its own height.
+    baseline_rule: types.BaselineRule = .font_line,
 
     pub fn init(gpa: std.mem.Allocator, device: objc.Object) TextSystem {
         return .{ .gpa = gpa, .atlas = .init(gpa, device), .images = .{ .gpa = gpa } };

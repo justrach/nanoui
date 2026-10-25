@@ -246,6 +246,17 @@ pub const WrapRule = enum {
     glyph_positions,
 };
 
+/// Where a line's glyphs sit in a line taller than the font's
+/// (`TextSystem.baseline_rule`): what is left over goes half above, half
+/// below, of
+pub const BaselineRule = enum {
+    /// the font's line (its ascent, descent and leading, to the point
+    /// above).
+    font_line,
+    /// its glyphs' ascent and descent alone, as GPUI and CSS place them
+    /// (`ShapedLine::paint`'s `(line_height - ascent - descent) / 2`).
+    glyph_box,
+};
 
 pub const TextStyle = struct {
     size: f32 = 14,
