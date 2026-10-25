@@ -94,6 +94,8 @@ pub const Options = struct {
     placeholder: []const u8 = "",
     width: types.Length = .{ .px = 240 },
     size: f32 = 14,
+    /// In the monospaced face (a code, a command).
+    mono: bool = false,
     /// Shows bullets instead of the text, and keeps it off the clipboard.
     password: bool = false,
     /// Text that would follow what is typed, drawn faintly after it, as a
@@ -263,7 +265,7 @@ const bullets = "•••••••••••••••••••••
 
 pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
     const th = c.theme;
-    const style: types.TextStyle = .{ .size = opts.size, .line_height = opts.line_height };
+    const style: types.TextStyle = .{ .size = opts.size, .line_height = opts.line_height, .mono = opts.mono };
     const pad_x: f32 = if (opts.bare) 0 else 10;
     const pad_y: f32 = if (opts.bare) 2 else 7;
     const multi = opts.multiline and !opts.password;
