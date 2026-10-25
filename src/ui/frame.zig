@@ -55,6 +55,7 @@ pub fn run(c: *Context, view: View, ts: *text.TextSystem, instances: *std.ArrayL
     c.scroll_moved.clearRetainingCapacity();
     _ = layout.measure(c, 0, size.w);
     layout.arrange(c, 0, .{ .w = size.w, .h = size.h });
+    if (c.pixel_snap) layout.snapToPixels(c);
     c.rects.clearRetainingCapacity();
     for (c.nodes.items) |n| c.rects.put(c.gpa, n.id, n.rect) catch {};
 

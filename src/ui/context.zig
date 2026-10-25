@@ -227,6 +227,11 @@ pub const Context = struct {
     /// asked for, for the view to show it in that frame alone (it isn't put
     /// on screen); empty otherwise.
     snapshot_request: []const u8 = "",
+    /// Lay boxes out on the device's pixels, as GPUI does
+    /// (`taffy.rs`): measured text rounded up to a whole device pixel, and
+    /// every box's edges rounded to one after layout. Off: whole points up
+    /// for text, and boxes where they fall.
+    pixel_snap: bool = false,
     stats: FrameStats = .{},
     /// Set when the pointer is over something clickable.
     cursor_hand: bool = false,
