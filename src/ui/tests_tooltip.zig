@@ -63,6 +63,10 @@ test "a tooltip shows after its delay, not before, by the pointer; leaving hides
     try testing.expect(t.ctx.frame_in != null and t.ctx.frame_in.? <= 0.06);
     t.advance(0.1);
     try testing.expectEqualStrings("Sidebar view options", t.tooltipText().?);
+    // In the system's font, as GPUI's own root draws it.
+    for (t.ctx.nodes.items) |n| if (n.content == .text and std.mem.eql(u8, n.content.text.str, "Sidebar view options")) {
+        try testing.expect(n.content.text.style.system_font);
+    };
     const r = t.tooltipRect().?;
     try testing.expectEqual(@as(f32, 31), r.x);
     try testing.expectEqual(@as(f32, 21), r.y);

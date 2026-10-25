@@ -271,6 +271,9 @@ pub const TextStyle = struct {
     wrap: bool = false,
     mono: bool = false,
     italic: bool = false,
+    /// In the system's font, not the theme's: as GPUI draws what a window
+    /// lays out on its own, its tooltips.
+    system_font: bool = false,
     /// Line height as a multiple of the font's (1.5 for airy prose).
     leading: f32 = 1,
     /// Line height in points (CSS's `line-height: 22px`), taking the place

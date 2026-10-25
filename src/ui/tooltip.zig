@@ -32,8 +32,10 @@ pub const Options = struct {
     max_width: f32 = 280,
     /// Tailwind's `shadow-md`, as GPUI's `shadow_md`.
     shadows: []const types.Shadow = &types.Shadow.md,
-    /// The text's size, color and line (`ui_rems(11)` in the theme's text).
-    text: types.TextStyle = .{ .size = 11 },
+    /// The text's size, color and line: `ui_rems(11)`, in the system's
+    /// font, as GPUI lays a tooltip out as a root of its own, outside the
+    /// families the app's views set.
+    text: types.TextStyle = .{ .size = 11, .system_font = true },
     /// Over every page, menu and popover.
     layer: u8 = 200,
     /// The box takes the theme's colors when the app gives none.
