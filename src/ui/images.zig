@@ -87,7 +87,11 @@ pub const Images = struct {
     /// Sizing a picture needs only this: it is packed when drawn.
     pub fn info(im: *Images, k: u64, bytes: []const u8) ?Decoded {
         if (im.decoded.get(k)) |d| return d;
-        const d = (if (im.svgs.get(k)) |spec| drawSvg(im.gpa, bytes, spec) else load(im.gpa, bytes)) catch null;
+        const d = (if (im.svgs.get(k)) |spec| drawSvg(im.gpa, bytes, spec) else load(im.gpa, bytes)) catch |e| blk: {
+            // Not drawn from now on: say why, once.
+            std.log.warn("nanoui: picture {x} ({d} bytes) can't be decoded: {s}", .{ k, bytes.len, @errorName(e) });
+            break :blk null;
+        };
         if (d) |x| im.kept_bytes += x.bgra.len;
         im.decoded.put(im.gpa, k, d) catch {
             if (d) |x| im.gpa.free(x.bgra);
@@ -129,7 +133,10 @@ pub const Images = struct {
     pub fn get(im: *Images, k: u64, bytes: []const u8) ?Entry {
         if (im.entries.get(k)) |e| return e;
         const d = im.info(k, bytes) orelse return null;
-        const e = im.pack(d) catch return null;
+        const e = im.pack(d) catch |err| {
+            std.log.warn("nanoui: picture {x} can't be packed: {s}", .{ k, @errorName(err) });
+            return null;
+        };
         im.entries.put(im.gpa, k, e) catch {};
         return e;
     }
