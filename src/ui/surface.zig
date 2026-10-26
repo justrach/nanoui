@@ -15,6 +15,7 @@ const ctx_mod = @import("context.zig");
 const Context = ctx_mod.Context;
 const ui = @import("ui.zig");
 const Window = @import("../window.zig").Window;
+const pacing = @import("pacing.zig");
 
 pub const Surface = struct {
     gpa: std.mem.Allocator,
@@ -40,8 +41,8 @@ pub const Surface = struct {
     display_link: ?objc.Object = null,
     /// Checks for a live snapshot's request (live_snapshot.zig).
     live_timer: ?objc.Object = null,
-    /// The pace asked of the link: 0 is the display's.
-    link_fps: f32 = 0,
+    /// The pace asked of the link: 0 is the display's; -1 none asked yet.
+    link_fps: f32 = -1,
     /// A frame was wanted while the window was hidden: run it once visible.
     pending: bool = false,
     dead: bool = false,
@@ -51,6 +52,9 @@ pub const Surface = struct {
     resizing: bool = false,
     cursor: ctx_mod.Cursor = .arrow,
     theme_override: ?Theme = null,
+    /// Scrolling gathered for the link's next frame, and the frames' log.
+    scroll: pacing.Scroll = .{},
+    frame_log: pacing.FrameLog = .{},
 
     pub fn create(window: *Window, view: ui.View, theme_override: ?Theme) !*Surface {
         const gpa = window.app.gpa;
@@ -83,6 +87,7 @@ pub const Surface = struct {
             .start_time = cf.CACurrentMediaTime(),
         };
         self.ctx = .init(gpa, &self.text);
+        self.frame_log = .open();
         // Pictures go straight to the GPU: no copy of their atlas in memory.
         // Before anything can draw (setContentView: below already does).
         self.text.images.sink = .{ .ctx = &self.renderer, .upload = @import("metal.zig").Renderer.uploadImage };
@@ -124,6 +129,7 @@ pub const Surface = struct {
             objc.release(link);
         }
         if (self.tracking) |t| objc.release(t);
+        self.frame_log.close();
         objc.release(self.nsview);
         self.instances.deinit(self.gpa);
         self.pasted.deinit(self.gpa);
@@ -183,7 +189,7 @@ pub const Surface = struct {
         // Nothing to show while hidden (another Space, covered, minimized):
         // the frame runs once the window is visible again. The first frame
         // runs at once, so the window opens with its content drawn.
-        if (self.ctx.frame > 0 and !self.visible()) {
+        if (self.ctx.frame > 0 and !@import("surface_pacing.zig").visible(self)) {
             self.pending = true;
             self.setPaced(false);
             return;
@@ -195,21 +201,27 @@ pub const Surface = struct {
         const now = cf.CACurrentMediaTime();
         const dt: f32 = if (self.last_frame_time > 0) @floatCast(@min(now - self.last_frame_time, 0.1)) else 1.0 / 60.0;
         self.last_frame_time = now;
+        self.frame_log.note(now);
         c.reduced_motion = reduceMotion();
+        // What scrolling gathered since the last frame, applied at once.
+        const dy = self.scroll.take();
+        if (dy != 0 and !c.applyScroll(dy) and c.wants_wheel) c.input.scroll = .{ .y = dy };
         const r = frame_mod.run(c, self.view, &self.text, &self.instances, self.size, self.scale, self.theme(), dt, now - self.start_time);
         @import("../play.zig").paint(self.gpa, &self.instances);
         self.renderer.syncImages(&self.text.images);
         self.renderer.textures = c.textures.items;
         self.renderer.draw(self.instances.items, self.atlasTexture(), self.size, c.theme.background);
         self.updateCursor();
-        // Something moved under a still pointer, or a value is animating.
-        const more = c.animating or r.hot_changed;
+        if (dy != 0) c.updateHot();
+        // Something moved under a still pointer, a value is animating, or
+        // a scroll goes on: the link keeps the display's pace.
+        const more = c.animating or r.hot_changed or self.scroll.active(now);
         if (self.resizing) {
             // The resize's next step draws again; its end catches up.
             self.setPaced(false);
         } else if (self.display_link != null) {
             // Something changes now and then: the link, at that pace.
-            self.setRate(if (more) null else c.frame_in);
+            @import("surface_pacing.zig").setRate(self, if (more) null else c.frame_in);
             self.setPaced(more or c.frame_in != null);
         } else if (more or c.frame_in != null) self.scheduleTick();
         if (!c.animating) self.last_frame_time = 0;
@@ -220,25 +232,9 @@ pub const Surface = struct {
     pub fn requestFrame(self: *Surface) void {
         if (self.resizing) return;
         if (self.display_link != null) {
-            self.setRate(null);
+            @import("surface_pacing.zig").setRate(self, null);
             self.setPaced(true);
         } else self.scheduleTick();
-    }
-
-    /// The display link's pace: the display's (null), or one frame every
-    /// `seconds`.
-    fn setRate(self: *Surface, seconds: ?f32) void {
-        const link = self.display_link orelse return;
-        const fps: f32 = if (seconds) |s| std.math.clamp(1 / @max(s, 0.001), 1, 60) else 0;
-        if (fps == self.link_fps) return;
-        self.link_fps = fps;
-        const Range = extern struct { minimum: f32, maximum: f32, preferred: f32 };
-        const range: Range = if (fps == 0) .{ .minimum = 0, .maximum = 0, .preferred = 0 } else .{ .minimum = fps, .maximum = fps, .preferred = fps };
-        objc.msg(void, link, "setPreferredFrameRateRange:", .{range});
-    }
-
-    fn visible(self: *Surface) bool {
-        return objc.msg(objc.NSUInteger, self.window.nswindow, "occlusionState", .{}) & 2 != 0;
     }
 
     fn setPaced(self: *Surface, on: bool) void {
@@ -247,7 +243,7 @@ pub const Surface = struct {
 
     /// The window was shown, uncovered or covered.
     pub fn occlusionChanged(self: *Surface) void {
-        if (self.visible() and self.pending) self.frame();
+        if (@import("surface_pacing.zig").visible(self) and self.pending) self.frame();
     }
 
     fn updateCursor(self: *Surface) void {
@@ -400,6 +396,11 @@ fn scrollWheel(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) v
     s.setMouse(event);
     var dy: f32 = @floatCast(objc.msg(f64, event, "scrollingDeltaY", .{}));
     if (!objc.msg(objc.BOOL, event, "hasPreciseScrollingDeltas", .{})) dy *= 12;
+    // On the display link: gathered, and drawn at the next refresh.
+    if (s.display_link != null and !s.resizing) {
+        s.scroll.add(dy, cf.CACurrentMediaTime());
+        return s.requestFrame();
+    }
     if (s.ctx.applyScroll(dy)) {
         s.frame();
         s.ctx.updateHot();
@@ -554,7 +555,7 @@ fn setFrameSize(obj: objc.Object, _: objc.SEL, size: objc.CGSize) callconv(.c) v
     s.updateGeometry();
     // The frame is drawn when the layer is displayed (`displayLayer:`), in
     // this resize's transaction; a hidden window's waits until it shows.
-    if (s.visible()) objc.msg(void, s.renderer.layer, "setNeedsDisplay", .{}) else s.frame();
+    if (@import("surface_pacing.zig").visible(s)) objc.msg(void, s.renderer.layer, "setNeedsDisplay", .{}) else s.frame();
 }
 
 /// Core Animation displays the layer (its bounds changed): a frame now,
