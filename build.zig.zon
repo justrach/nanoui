@@ -1,6 +1,6 @@
 .{
     .name = .nanoui,
-    .version = "0.7.0",
+    .version = "0.7.1",
     .fingerprint = 0xd93ac916310aedc1,
     .minimum_zig_version = "0.17.0",
     .dependencies = .{
