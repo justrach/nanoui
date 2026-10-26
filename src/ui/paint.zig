@@ -434,7 +434,7 @@ fn paintOverlayBar(c: *Context, out: *std.ArrayList(metal.Instance), n: ctx_mod.
     const w: f32 = if (held) 5 else 3;
     push(c, out, .{
         .rect = .{ n.rect.x + n.rect.w - 2 - w, n.rect.y + inset + (track - bar_h) * std.math.clamp(t, 0, 1), w, bar_h },
-        .color = metal.color4(color.alpha(color.a * @as(f32, if (held) 0.68 / 0.5 else 1) * fade * opacity)),
+        .color = metal.color4(color.alpha(@as(f32, if (held) 0.68 / 0.5 else 1) * fade * opacity)),
         .radius = w / 2,
         .clip = metal.clip4(visible),
     });
