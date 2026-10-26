@@ -172,7 +172,9 @@ pub const Atlas = struct {
         cf.CGContextSetShouldSubpixelQuantizeFonts(ctx, false);
         // Smoothing thickens strokes by the fill's luminance; the alpha
         // drawn is the same whatever the fill.
-        cf.CGContextSetShouldSmoothFonts(ctx, dilation > 0);
+        // Only turned on (GPUI's rasterize_glyph): with no dilation the
+        // context keeps CoreText's own default.
+        if (dilation > 0) cf.CGContextSetShouldSmoothFonts(ctx, true);
         cf.CGContextSetGrayFillColor(ctx, @as(f64, @floatFromInt(dilation)) * 0.25, 1);
         // The glyph's origin, in pixels from the bitmap's bottom left.
         CGContextTranslateCTM(ctx, @as(f64, pad) - x0 + sub, @as(f64, pad) - y0);
