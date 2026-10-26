@@ -263,6 +263,16 @@ pub const BaselineRule = enum {
     glyph_box,
 };
 
+/// How a glyph's origin lands on the device's pixels
+/// (`TextSystem.glyph_snap`):
+pub const GlyphSnap = enum {
+    /// its baseline to the nearest pixel, its x down to a quarter pixel.
+    nearest,
+    /// both to the nearest (a quarter pixel across), a half toward zero,
+    /// as GPUI's `paint_glyph` quantizes them.
+    half_toward_zero,
+};
+
 pub const TextStyle = struct {
     size: f32 = 14,
     weight: Weight = .regular,

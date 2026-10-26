@@ -237,6 +237,10 @@ pub const Context = struct {
     /// every box's edges rounded to one after layout. Off: whole points up
     /// for text, and boxes where they fall.
     pixel_snap: bool = false,
+    /// With `pixel_snap`, measured text too (as GPUI's taffy.rs rounds a
+    /// measured size up). Off: text keeps the sizes the view gave it, and
+    /// only the edges land on pixels.
+    pixel_snap_text: bool = true,
     stats: FrameStats = .{},
     /// Set when the pointer is over something clickable.
     cursor_hand: bool = false,

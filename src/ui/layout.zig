@@ -45,11 +45,11 @@ pub fn measure(c: *Context, index: u32, avail_w: f32) types.Size {
                 t.lines = c.text.wrapAttributed(t.str, t.style, t.spans, inner_w);
                 for (t.lines) |l| content.w = @max(content.w, l.width);
                 content.h = lh * @as(f32, @floatFromInt(t.lines.len));
-                if (c.pixel_snap) content = .{ .w = ceilDevice(content.w, c.scale), .h = ceilDevice(content.h, c.scale) };
+                if (c.pixel_snap and c.pixel_snap_text) content = .{ .w = ceilDevice(content.w, c.scale), .h = ceilDevice(content.h, c.scale) };
             } else {
                 const w = if (rich.styled(t.spans)) rich.layout(c.text, t.str, t.style, t.spans, 0).width else c.text.width(t.str, t.style);
-                content.w = if (c.pixel_snap) ceilDevice(w, c.scale) else @ceil(w);
-                content.h = if (c.pixel_snap) ceilDevice(lh, c.scale) else lh;
+                content.w = if (c.pixel_snap and c.pixel_snap_text) ceilDevice(w, c.scale) else @ceil(w);
+                content.h = if (c.pixel_snap and c.pixel_snap_text) ceilDevice(lh, c.scale) else lh;
                 // Truncating text fits the room it's given.
                 if (t.style.truncate != .none) {
                     content.w = @min(content.w, inner_w);

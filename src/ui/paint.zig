@@ -35,6 +35,11 @@ fn snap(v: f32, scale: f32) f32 {
     return @round(v * scale) / scale;
 }
 
+/// To the nearest whole, a half toward zero (GPUI's `round_half_toward_zero`).
+fn halfTowardZero(v: f32) f32 {
+    return std.math.copysign(@ceil(@abs(v) - 0.5), v);
+}
+
 fn push(c: *Context, out: *std.ArrayList(metal.Instance), inst: metal.Instance) void {
     out.append(c.gpa, inst) catch {};
 }
@@ -274,10 +279,12 @@ fn textRunLimit(c: *Context, out: *std.ArrayList(metal.Instance), t: ctx_mod.Con
     if (lay.glyphs.len == 0 or x + lay.width < clip4[0]) return;
     const scale = c.scale;
     // The line's extra height (its leading) goes half above, half below.
-    const baseline = if (c.text.baseline_rule == .glyph_box and lh != f.lineHeight())
-        snap(y + (lh - f.ascent - f.descent) / 2 + f.ascent, scale)
+    const gpui_snap = c.text.glyph_snap == .half_toward_zero;
+    const baseline_at = if (c.text.baseline_rule == .glyph_box and lh != f.lineHeight())
+        y + (lh - f.ascent - f.descent) / 2 + f.ascent
     else
-        snap(y + (lh - f.lineHeight()) / 2 + f.leading / 2 + f.ascent, scale);
+        y + (lh - f.lineHeight()) / 2 + f.leading / 2 + f.ascent;
+    const baseline = if (gpui_snap) halfTowardZero(baseline_at * scale) / scale else snap(baseline_at, scale);
     const base = metal.color4(t.color.alpha(opacity));
     if (sel) |s| @import("selection.zig").line(c, out, s.id, s.index, t.str, start, end, lay, x, y, lh, s.x0, s.x1, clip4);
     if (t.spans.len > 0) decorations(c, out, t, lay, start, end, x, .{ .top = y, .h = lh, .baseline = baseline }, f, clip4, opacity);
@@ -286,8 +293,10 @@ fn textRunLimit(c: *Context, out: *std.ArrayList(metal.Instance), t: ctx_mod.Con
         const pen = (x + g.x) * scale;
         if (pen / scale > clip4[2]) break;
         if (limit) |l| if (pen / scale >= l.end) break;
-        const px = @floor(pen);
-        const bin: u8 = @intFromFloat(@min(text_mod.subpixel_bins - 1, @floor((pen - px) * text_mod.subpixel_bins)));
+        const bins: f32 = text_mod.subpixel_bins;
+        const pen_at = if (gpui_snap) halfTowardZero(pen * bins) / bins else pen;
+        const px = @floor(pen_at);
+        const bin: u8 = @intFromFloat(@min(bins - 1, @floor((pen_at - px) * bins + if (gpui_snap) @as(f32, 0.001) else 0)));
         var color = base;
         var tone = t.color;
         if (t.spans.len > 0) {

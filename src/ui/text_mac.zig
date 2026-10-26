@@ -85,6 +85,8 @@ pub const TextSystem = struct {
     wrap_rule: types.WrapRule = .typesetter,
     /// Where glyphs sit in a line given its own height.
     baseline_rule: types.BaselineRule = .font_line,
+    /// How glyph origins land on the device's pixels.
+    glyph_snap: types.GlyphSnap = .nearest,
 
     pub fn init(gpa: std.mem.Allocator, device: objc.Object) TextSystem {
         return .{ .gpa = gpa, .atlas = .init(gpa, device), .images = .{ .gpa = gpa } };
