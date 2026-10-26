@@ -37,6 +37,8 @@ pub const Channel = struct {
 
     /// Heads for `target` from now (`now` seconds), unless it already is.
     pub fn retarget(ch: *Channel, target: f64, tr: Transition, delay: f64, now: f64) void {
+        // An accessibility snap interrupts even an unchanged destination.
+        if (tr == .instant and delay <= 0) return ch.jump(target);
         if (target == ch.target and (ch.moving or ch.value == target)) return;
         ch.sample(now);
         ch.from = ch.value;
@@ -47,7 +49,6 @@ pub const Channel = struct {
         ch.delay = delay;
         ch.transition = tr;
         ch.moving = ch.from != target or ch.velocity0 != 0;
-        if (tr == .instant and delay <= 0) ch.jump(target);
     }
 
     /// There at once, still.
