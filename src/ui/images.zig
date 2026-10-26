@@ -1,8 +1,10 @@
 //! Pictures the UI shows (`ui.image`): decoded once from the bytes the app
 //! gives (ImageIO on macOS and iOS, nanoui's PNG decoder elsewhere), scaled to at
 //! most `max_side` pixels, and packed into one BGRA atlas the renderers
-//! sample (premultiplied). Made on the first picture; when full, emptied
-//! and packed again, and the frame painted again.
+//! sample (premultiplied). Made on the first picture, `min_size` a side;
+//! when full, twice the side up to `size` (a window's dozen icons take a
+//! megabyte, not sixteen), then emptied; either way packed again and the
+//! frame painted again.
 const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
@@ -11,7 +13,9 @@ const png_decode = @import("png_decode.zig");
 const portable = build_options.portable or !(builtin.os.tag == .macos or builtin.os.tag == .ios);
 const imageio = if (portable) void else @import("image.zig");
 
+/// The atlas's largest side, and its first.
 pub const size: u32 = 2048;
+pub const min_size: u32 = 512;
 /// The longest side a picture keeps.
 pub const max_side: u32 = 1024;
 const pad: u32 = 1;
@@ -46,7 +50,8 @@ const max_kept_bytes = 64 * 1024 * 1024;
 /// copy of the atlas is kept in memory (a window on Metal).
 pub const Sink = struct {
     ctx: *anyopaque,
-    upload: *const fn (ctx: *anyopaque, x: u32, y: u32, w: u32, h: u32, bgra: []const u8) void,
+    /// `side` is the atlas's now: a texture of another side is made anew.
+    upload: *const fn (ctx: *anyopaque, side: u32, x: u32, y: u32, w: u32, h: u32, bgra: []const u8) void,
 };
 
 pub const SvgSpec = struct {
@@ -64,8 +69,10 @@ pub const Images = struct {
     /// Rows of `pixels` changed since the GPU's copy was made.
     dirty: ?[2]u32 = null,
     sink: ?Sink = null,
-    /// BGRA, `size` × `size`; empty until a picture comes.
+    /// BGRA, `side` × `side`; empty until a picture comes.
     pixels: []u8 = &.{},
+    /// The atlas's side now: `min_size`, doubled as it fills, to `size`.
+    side: u32 = min_size,
     entries: std.AutoHashMapUnmanaged(u64, ?Entry) = .empty,
     /// Pictures drawn from SVG (`ui.svg`), by key: the size and color they
     /// are drawn at, so they are drawn again the same if they're let go.
@@ -126,7 +133,7 @@ pub const Images = struct {
 
     /// The atlas as the CPU renderer reads it.
     pub fn pictures(im: *const Images) @import("raster.zig").Pictures {
-        return .{ .pixels = im.pixels, .size = if (im.pixels.len > 0) size else 0 };
+        return .{ .pixels = im.pixels, .size = if (im.pixels.len > 0) im.side else 0 };
     }
 
     pub fn key(name: []const u8) u64 {
@@ -148,34 +155,45 @@ pub const Images = struct {
     }
 
     fn pack(im: *Images, d: Decoded) !Entry {
-        if (im.pixels.len == 0 and im.sink == null) {
-            im.pixels = try im.gpa.alloc(u8, size * size * 4);
-            @memset(im.pixels, 0);
-        }
         if (!im.fits(d.w, d.h)) {
-            im.empty();
+            // Twice the side while it can grow, else the same emptied:
+            // what was packed packs again, the frame paints again.
+            while (!im.fits(d.w, d.h) and im.side < size) {
+                im.side *= 2;
+                im.empty();
+                if (im.pixels.len > 0) {
+                    im.gpa.free(im.pixels);
+                    im.pixels = &.{};
+                }
+            }
+            if (!im.fits(d.w, d.h)) im.empty();
             im.reset_during_frame = true;
         }
-        if (im.shelf_x + d.w + pad > size) {
+        if (im.pixels.len == 0 and im.sink == null) {
+            im.pixels = try im.gpa.alloc(u8, @as(usize, im.side) * im.side * 4);
+            @memset(im.pixels, 0);
+            im.dirty = .{ 0, im.side };
+        }
+        if (im.shelf_x + d.w + pad > im.side) {
             im.shelf_y += im.shelf_h + pad;
             im.shelf_x = 0;
             im.shelf_h = 0;
         }
         const x = im.shelf_x;
         const y = im.shelf_y;
-        if (im.sink) |sk| sk.upload(sk.ctx, x, y, d.w, d.h, d.bgra);
+        if (im.sink) |sk| sk.upload(sk.ctx, im.side, x, y, d.w, d.h, d.bgra);
         // The CPU's copy too, while there is one (pictures packed before the
         // sink came): its changed rows are copied to the GPU after, and
         // without this one they'd draw over it.
         if (im.pixels.len > 0) for (0..d.h) |row| {
             const src = d.bgra[row * d.w * 4 ..][0 .. d.w * 4];
-            @memcpy(im.pixels[((y + row) * size + x) * 4 ..][0 .. d.w * 4], src);
+            @memcpy(im.pixels[((y + row) * im.side + x) * 4 ..][0 .. d.w * 4], src);
         };
         im.shelf_x += d.w + pad;
         im.shelf_h = @max(im.shelf_h, d.h);
         im.generation +%= 1;
         im.dirty = if (im.dirty) |r| .{ @min(r[0], y), @max(r[1], y + d.h) } else .{ y, y + d.h };
-        const s: f32 = @floatFromInt(size);
+        const s: f32 = @floatFromInt(im.side);
         return .{
             .uv = .{ @as(f32, @floatFromInt(x)) / s, @as(f32, @floatFromInt(y)) / s, @as(f32, @floatFromInt(x + d.w)) / s, @as(f32, @floatFromInt(y + d.h)) / s },
             .width = d.width,
@@ -184,8 +202,10 @@ pub const Images = struct {
     }
 
     fn fits(im: *const Images, w: u32, h: u32) bool {
-        if (im.shelf_x + w + pad <= size) return im.shelf_y + @max(im.shelf_h, h) <= size;
-        return im.shelf_y + im.shelf_h + pad + h <= size;
+        // Wider or taller than the atlas: no shelf holds it.
+        if (w + pad > im.side or h + pad > im.side) return false;
+        if (im.shelf_x + w + pad <= im.side) return im.shelf_y + @max(im.shelf_h, h) <= im.side;
+        return im.shelf_y + im.shelf_h + pad + h <= im.side;
     }
 
     fn empty(im: *Images) void {
@@ -280,4 +300,31 @@ test "pictures pack, scale down and come back by key" {
     try std.testing.expectEqual(@as(u32, 1024), s.w);
     try std.testing.expectEqual(@as(u32, 1), s.h);
     try std.testing.expectEqual(@as(u8, 200), s.bgra[0]);
+}
+
+test "the atlas starts small and doubles to fit, packing again what it held" {
+    const gpa = std.testing.allocator;
+    var im: Images = .{ .gpa = gpa };
+    defer im.deinit();
+    var px = [_]u8{ 0, 0, 255, 255 };
+    const small = try @import("png.zig").encode(gpa, .{ .bytes = &px, .width = 1, .height = 1 });
+    defer gpa.free(small);
+    _ = im.get(Images.key("dot"), small).?;
+    // A dozen icons' worth: a megabyte, not sixteen.
+    try std.testing.expectEqual(min_size, im.side);
+    try std.testing.expectEqual(@as(usize, min_size) * min_size * 4, im.pixels.len);
+    // A picture wider than it: twice, and again, until it fits.
+    const wide_px = try gpa.alloc(u8, 900 * 4);
+    defer gpa.free(wide_px);
+    @memset(wide_px, 255);
+    const wide = try @import("png.zig").encode(gpa, .{ .bytes = wide_px, .width = 900, .height = 1 });
+    defer gpa.free(wide);
+    im.reset_during_frame = false;
+    const e = im.get(Images.key("wide"), wide).?;
+    try std.testing.expectEqual(@as(u32, 1024), im.side);
+    try std.testing.expect(im.reset_during_frame);
+    try std.testing.expectEqual(@as(usize, 1024) * 1024 * 4, im.pixels.len);
+    // Its place reads against the new side; the dot packs again when drawn.
+    try std.testing.expectApproxEqAbs(@as(f32, 900.0 / 1024.0), e.uv[2], 1e-6);
+    try std.testing.expect(im.entries.get(Images.key("dot")) == null);
 }

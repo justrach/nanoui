@@ -20,6 +20,8 @@ pub const Pixels = gpu.Pixels;
 pub const Renderer = struct {
     /// The image atlas on the GPU, copied when its generation changes.
     images_texture: ?objc.Object = null,
+    /// The side `images_texture` was made at.
+    images_side: u32 = 0,
     images_generation: u64 = std.math.maxInt(u64),
     device: objc.Object,
     queue: objc.Object,
@@ -88,9 +90,15 @@ pub const Renderer = struct {
     /// first picture).
     /// Puts a packed picture straight into the GPU's image atlas (the
     /// `Images.Sink` of a window): no copy of the atlas stays in memory.
-    pub fn uploadImage(ctx: *anyopaque, x: u32, y: u32, w: u32, h: u32, bgra: []const u8) void {
+    pub fn uploadImage(ctx: *anyopaque, atlas_side: u32, x: u32, y: u32, w: u32, h: u32, bgra: []const u8) void {
         const self: *Renderer = @ptrCast(@alignCast(ctx));
-        const side: objc.NSUInteger = @import("images.zig").size;
+        const side: objc.NSUInteger = atlas_side;
+        // The atlas grew: a texture of its new side.
+        if (self.images_texture != null and self.images_side != atlas_side) {
+            objc.release(self.images_texture.?);
+            self.images_texture = null;
+        }
+        self.images_side = atlas_side;
         if (self.images_texture == null) {
             const desc = objc.msg(objc.Object, objc.class("MTLTextureDescriptor"), "texture2DDescriptorWithPixelFormat:width:height:mipmapped:", .{ pixel_format, side, side, objc.NO });
             self.images_texture = objc.msg(objc.Object, self.device, "newTextureWithDescriptor:", .{desc});
@@ -103,7 +111,14 @@ pub const Renderer = struct {
 
     pub fn syncImages(self: *Renderer, im: *Images) void {
         if (im.pixels.len == 0 or im.generation == self.images_generation) return;
-        const side: objc.NSUInteger = @import("images.zig").size;
+        const side: objc.NSUInteger = im.side;
+        if (self.images_texture != null and self.images_side != im.side) {
+            objc.release(self.images_texture.?);
+            self.images_texture = null;
+            // All of it, into the new texture.
+            self.images_generation = std.math.maxInt(u64);
+        }
+        self.images_side = im.side;
         if (self.images_texture == null) {
             const desc = objc.msg(objc.Object, objc.class("MTLTextureDescriptor"), "texture2DDescriptorWithPixelFormat:width:height:mipmapped:", .{ pixel_format, side, side, objc.NO });
             self.images_texture = objc.msg(objc.Object, self.device, "newTextureWithDescriptor:", .{desc});
