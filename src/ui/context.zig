@@ -422,7 +422,9 @@ pub const Context = struct {
         const hovered = top or std.mem.indexOfScalar(u64, c.hot_path.items, id) != null;
         if (top and c.input.pressed) {
             c.active = id;
-            c.focus = if (opts.focusable) id else 0;
+            // A focusable box takes the focus; asking about the same box
+            // again (its hover, its click) doesn't drop it.
+            if (opts.focusable) c.focus = id else if (c.focus != id) c.focus = 0;
         }
         // A drag that selected text is not a click.
         const clicked = c.input.released and c.active == id and top and !c.selection.moved;
