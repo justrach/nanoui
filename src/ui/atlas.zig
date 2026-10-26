@@ -162,9 +162,14 @@ pub const Atlas = struct {
         defer cf.CGColorSpaceRelease(gray);
         const ctx = cf.CGBitmapContextCreate(a.pixels.items.ptr, w, h, 8, w, gray, cf.image_alpha_only) orelse return null;
         defer cf.CGContextRelease(ctx);
+        cf.CGContextSetAllowsAntialiasing(ctx, true);
         cf.CGContextSetShouldAntialias(ctx, true);
         cf.CGContextSetAllowsFontSubpixelPositioning(ctx, true);
         cf.CGContextSetShouldSubpixelPositionFonts(ctx, true);
+        // The glyph at its exact quarter-pixel offset, not CoreText's own
+        // quantized one (GPUI's rasterize_glyph turns quantizing off).
+        cf.CGContextSetAllowsFontSubpixelQuantization(ctx, false);
+        cf.CGContextSetShouldSubpixelQuantizeFonts(ctx, false);
         // Smoothing thickens strokes by the fill's luminance; the alpha
         // drawn is the same whatever the fill.
         cf.CGContextSetShouldSmoothFonts(ctx, dilation > 0);

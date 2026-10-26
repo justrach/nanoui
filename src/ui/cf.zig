@@ -46,6 +46,9 @@ pub extern "c" fn CGContextSetShouldSmoothFonts(ctx: CGContextRef, v: bool) void
 pub extern "c" fn CGContextSetShouldAntialias(ctx: CGContextRef, v: bool) void;
 pub extern "c" fn CGContextSetAllowsFontSubpixelPositioning(ctx: CGContextRef, v: bool) void;
 pub extern "c" fn CGContextSetShouldSubpixelPositionFonts(ctx: CGContextRef, v: bool) void;
+pub extern "c" fn CGContextSetAllowsFontSubpixelQuantization(ctx: CGContextRef, v: bool) void;
+pub extern "c" fn CGContextSetShouldSubpixelQuantizeFonts(ctx: CGContextRef, v: bool) void;
+pub extern "c" fn CGContextSetAllowsAntialiasing(ctx: CGContextRef, v: bool) void;
 
 pub extern "c" const kCGColorSpaceSRGB: CFStringRef;
 pub extern "c" fn CGColorSpaceCreateWithName(name: CFStringRef) ?CGColorSpaceRef;
