@@ -9,6 +9,8 @@ const fontdb = @import("tt/fontdb.zig");
 const tt = @import("tt/font.zig");
 const atlas_mod = @import("atlas_tt.zig");
 const utf8 = @import("utf8.zig");
+const color = @import("tt/color.zig");
+const images_mod = @import("images.zig");
 pub const rich = @import("rich_tt.zig");
 
 pub const Atlas = atlas_mod.Atlas;
@@ -52,8 +54,12 @@ pub const TextSystem = struct {
     gpa: std.mem.Allocator,
     db: fontdb.Db,
     atlas: Atlas,
-    /// The pictures shown (`ui.image`).
+    /// The pictures shown (`ui.image`), color glyphs among them.
     images: @import("images.zig").Images,
+    /// Emoji drawn in their own colors (`tt/color.zig`), by run font,
+    /// glyph and scale (null: the glyph has none).
+    color: std.AutoHashMapUnmanaged([3]u32, ?images_mod.Decoded) = .empty,
+    color_at: std.AutoHashMapUnmanaged([3]u32, [2]f32) = .empty,
     scale: f32 = 2,
     fonts: std.AutoHashMapUnmanaged(FontKey, Font) = .empty,
     /// Faces at sizes, as glyphs refer to them.
@@ -79,6 +85,10 @@ pub const TextSystem = struct {
 
     pub fn deinit(self: *TextSystem) void {
         self.images.deinit();
+        var cit = self.color.valueIterator();
+        while (cit.next()) |d| if (d.*) |x| self.gpa.free(x.bgra);
+        self.color.deinit(self.gpa);
+        self.color_at.deinit(self.gpa);
         self.fonts.deinit(self.gpa);
         self.run_fonts.deinit(self.gpa);
         self.run_faces.deinit(self.gpa);
@@ -229,6 +239,12 @@ pub const TextSystem = struct {
             const want = utf8.seqLen(s[i]);
             const n = @min(want, s.len - i);
             const cp: u21 = if (n == want) std.unicode.utf8Decode(s[i .. i + n]) catch 0xfffd else 0xfffd;
+            // Joiners and variation selectors (the U+FE0F of ❤️) shape
+            // emoji sequences; drawn alone they would be missing boxes.
+            if (invisible(cp)) {
+                i += n;
+                continue;
+            }
             var id = f.id;
             var rf = primary;
             var g = rf.font.glyphIndex(if (cp == '\t') ' ' else cp);
@@ -261,12 +277,26 @@ pub const TextSystem = struct {
         return self.atlas.glyph(g.font, self.run_fonts.items[g.font], g.glyph, bin);
     }
 
-    /// Color fonts' own colors (CBDT, COLR) aren't read here yet: an
-    /// emoji draws in the text's color, from its outline if it has one.
+    /// A glyph of a color font (an emoji) as a picture in the image atlas,
+    /// drawn untinted; null for every other glyph.
     pub fn colorGlyph(self: *TextSystem, g: Glyph) ?Sprite {
-        _ = self;
-        _ = g;
-        return null;
+        if (g.font >= self.run_fonts.items.len) return null;
+        const rf = self.run_fonts.items[g.font];
+        if (!color.has(rf.font)) return null;
+        const k: [3]u32 = .{ g.font, g.glyph, @bitCast(self.scale) };
+        const d = self.color.get(k) orelse blk: {
+            const drawn = color.draw(self.gpa, rf.font, g.glyph, rf.size * self.scale);
+            const d: ?images_mod.Decoded = if (drawn) |x| .{ .width = x.w, .height = x.h, .w = x.w, .h = x.h, .bgra = x.bgra } else null;
+            self.color.put(self.gpa, k, d) catch {
+                if (d) |x| self.gpa.free(x.bgra);
+                return null;
+            };
+            if (drawn) |x| self.color_at.put(self.gpa, k, .{ x.left, x.top }) catch {};
+            break :blk d;
+        } orelse return null;
+        const at = self.color_at.get(k) orelse return null;
+        const e = self.images.getDrawn(std.hash.Wyhash.hash(0xe3071, std.mem.asBytes(&k)), d) orelse return null;
+        return .{ .uv = e.uv, .x = at[0] / self.scale, .y = -at[1] / self.scale, .w = @as(f32, @floatFromInt(d.w)) / self.scale, .h = @as(f32, @floatFromInt(d.h)) / self.scale };
     }
 
     pub fn dilationFor(r: f32, g: f32, b: f32) u8 {
@@ -364,4 +394,10 @@ test "a character cut off at a string's end is shaped, not decoded short" {
     // "a→" with the arrow's last byte gone, as a span can end.
     const w = ts.width("a\xe2\x86", .{ .size = 13 });
     try std.testing.expect(w > 0);
+}
+
+/// Characters with no look of their own: zero width joiners and
+/// non-joiners, variation selectors and emoji tag characters.
+fn invisible(cp: u21) bool {
+    return cp == 0x200c or cp == 0x200d or (cp >= 0xfe00 and cp <= 0xfe0f) or (cp >= 0xe0020 and cp <= 0xe007f);
 }

@@ -8,7 +8,7 @@
 # forever for the signal Xvfb sends when it's ready, without printing a line.
 FROM ubuntu:24.04
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    libgtk-3-0t64 libgtk-4-1 libegl1 libegl-mesa0 libgles2 libgl1-mesa-dri fonts-dejavu-core fonts-noto-core xvfb xauth x11-utils imagemagick xdotool zsh vim less python3 git curl ca-certificates tini \
+    libgtk-3-0t64 libgtk-4-1 libegl1 libegl-mesa0 libgles2 libgl1-mesa-dri fonts-dejavu-core fonts-noto-core fonts-noto-color-emoji xvfb xauth x11-utils imagemagick xdotool zsh vim less python3 git curl ca-certificates tini \
     && rm -rf /var/lib/apt/lists/*
 ENTRYPOINT ["/usr/bin/tini", "--"]
 WORKDIR /work

@@ -32,6 +32,15 @@ const sans = (if (android) [_][]const u8{"Roboto"} else [_][]const u8{}) ++ [_][
 const monos = (if (android) [_][]const u8{ "Droid Sans Mono", "Cutive Mono" } else [_][]const u8{}) ++ [_][]const u8{ "JetBrains Mono", "Geist Mono", "Cascadia Mono", "Consolas", "Noto Sans Mono", "DejaVu Sans Mono", "Ubuntu Mono", "Liberation Mono", "Menlo", "Courier New" };
 /// Where characters a font lacks are looked for first.
 const fallbacks = [_][]const u8{ "Noto Sans", "DejaVu Sans", "Segoe UI Symbol", "Noto Sans Symbols", "Noto Sans Symbols2", "Arial Unicode MS", "Symbola" };
+/// Color emoji (`color.zig`): first for emoji, after the rest otherwise,
+/// so ✓ stays a letter of the text and 👋 a picture.
+const emoji_families = [_][]const u8{ "Noto Color Emoji", "Segoe UI Emoji", "Apple Color Emoji" };
+
+/// Characters drawn as emoji when no font of the text has them: the
+/// pictographs, emoticons, transport, flags and supplemental symbols.
+fn emojiFirst(cp: u21) bool {
+    return cp >= 0x1f000 and cp <= 0x1faff;
+}
 
 extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
 
@@ -201,6 +210,13 @@ pub const Db = struct {
         return &l.font;
     }
 
+    fn inFamilies(db: *Db, names: []const []const u8, cp: u21, weight: u16) ?u32 {
+        for (names) |n| if (db.family(n, weight, false)) |face| {
+            if (db.load(face)) |f| if (f.glyphIndex(cp) != 0) return face;
+        };
+        return null;
+    }
+
     /// A face that has `cp`, for text its font lacks.
     pub fn fallback(db: *Db, cp: u21, weight: u16) ?u32 {
         if (db.found.get(cp)) |f| return f;
@@ -210,9 +226,9 @@ pub const Db = struct {
     }
 
     fn findFallback(db: *Db, cp: u21, weight: u16) ?u32 {
-        for (fallbacks) |n| if (db.family(n, weight, false)) |face| {
-            if (db.load(face)) |f| if (f.glyphIndex(cp) != 0) return face;
-        };
+        if (emojiFirst(cp)) if (db.inFamilies(&emoji_families, cp, weight)) |face| return face;
+        if (db.inFamilies(&fallbacks, cp, weight)) |face| return face;
+        if (!emojiFirst(cp)) if (db.inFamilies(&emoji_families, cp, weight)) |face| return face;
         // Any face at all: the loaded first, then the rest.
         var it = db.loaded.iterator();
         while (it.next()) |e| if (e.value_ptr.*.font.glyphIndex(cp) != 0) return e.key_ptr.*;

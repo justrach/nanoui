@@ -163,6 +163,7 @@ test {
     if (@import("builtin").os.tag == .linux) _ = @import("tests_opengl.zig");
     _ = @import("tt/raster.zig");
     _ = @import("tt/tests.zig");
+    _ = @import("tt/color.zig");
     _ = @import("png.zig");
     _ = @import("png_decode.zig");
     _ = @import("images.zig");

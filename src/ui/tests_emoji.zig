@@ -1,5 +1,6 @@
 //! Emoji in text: drawn in their own colors, as AppKit draws them, not
-//! filled with the text's color like a letter.
+//! filled with the text's color like a letter. With CoreText on macOS and
+//! iOS; from the font's own color tables elsewhere (`tt/color.zig`).
 const std = @import("std");
 const testing = std.testing;
 const ui = @import("ui.zig");
@@ -29,12 +30,23 @@ fn colored(px: @import("gpu.zig").Pixels) usize {
     return n;
 }
 
+/// Where nanoui reads fonts itself, the color emoji font installed (Noto
+/// Color Emoji, Segoe UI Emoji or Apple Color Emoji); none, nothing to test.
+fn emojiFont(t: *ui.Tester) bool {
+    if (comptime @import("text.zig").portable) {
+        for ([_][]const u8{ "Noto Color Emoji", "Segoe UI Emoji", "Apple Color Emoji" }) |n|
+            if (t.ctx.text.db.family(n, 400, false) != null) return true;
+        return false;
+    }
+    return true;
+}
+
 test "emoji keep their own colors in text of any color" {
-    if (@import("text.zig").portable) return error.SkipZigTest;
     var s: Line = .{};
     var t: ui.Tester = undefined;
     try t.init(testing.allocator, .init(&s, Line.view), .{ .width = 260, .height = 70 });
     defer t.deinit();
+    if (!emojiFont(&t)) return error.SkipZigTest;
     t.settle(1);
     if (std.c.getenv("NANOUI_EMOJI_SNAPSHOT")) |path| try t.screenshot(std.mem.span(path));
     const px = try t.render(testing.allocator);
@@ -52,7 +64,6 @@ test "emoji keep their own colors in text of any color" {
 }
 
 test "letters stay the text's color beside an emoji" {
-    if (@import("text.zig").portable) return error.SkipZigTest;
     var s: Line = .{ .text = "Hey" };
     var t: ui.Tester = undefined;
     try t.init(testing.allocator, .init(&s, Line.view), .{ .width = 260, .height = 70 });

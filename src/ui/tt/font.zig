@@ -7,16 +7,16 @@ const std = @import("std");
 
 pub const Error = error{ NotAFont, Unsupported, Truncated };
 
-fn be16(d: []const u8, at: usize) u16 {
+pub fn be16(d: []const u8, at: usize) u16 {
     if (at + 2 > d.len) return 0;
     return std.mem.readInt(u16, d[at..][0..2], .big);
 }
 
-fn bei16(d: []const u8, at: usize) i16 {
+pub fn bei16(d: []const u8, at: usize) i16 {
     return @bitCast(be16(d, at));
 }
 
-fn be32(d: []const u8, at: usize) u32 {
+pub fn be32(d: []const u8, at: usize) u32 {
     if (at + 4 > d.len) return 0;
     return std.mem.readInt(u32, d[at..][0..4], .big);
 }
@@ -55,6 +55,13 @@ pub const Tables = struct {
     name: u32 = 0,
     os2: u32 = 0,
     name_len: u32 = 0,
+    /// Color glyphs (`color.zig`): PNG strikes (CBDT and its index CBLC,
+    /// Apple's sbix) and layered outlines (COLR with its palettes, CPAL).
+    cbdt: u32 = 0,
+    cblc: u32 = 0,
+    sbix: u32 = 0,
+    colr: u32 = 0,
+    cpal: u32 = 0,
 
     pub fn read(data: []const u8, index: usize) Error!Tables {
         const at = try faceOffset(data, index);
@@ -77,6 +84,11 @@ pub const Tables = struct {
                 tag("glyf") => t.glyf = off,
                 tag("kern") => t.kern = off,
                 tag("OS/2") => t.os2 = off,
+                tag("CBDT") => t.cbdt = off,
+                tag("CBLC") => t.cblc = off,
+                tag("sbix") => t.sbix = off,
+                tag("COLR") => t.colr = off,
+                tag("CPAL") => t.cpal = off,
                 tag("name") => {
                     t.name = off;
                     t.name_len = be32(data, rec + 12);
@@ -85,7 +97,9 @@ pub const Tables = struct {
             }
         }
         if (t.head == 0 or t.hhea == 0 or t.hmtx == 0 or t.maxp == 0 or t.cmap == 0) return error.NotAFont;
-        if (t.glyf == 0 or t.loca == 0) return error.Unsupported;
+        // An emoji font may have pictures and no outlines.
+        const pictures = (t.cbdt != 0 and t.cblc != 0) or t.sbix != 0;
+        if ((t.glyf == 0 or t.loca == 0) and !pictures) return error.Unsupported;
         return t;
     }
 };
@@ -292,7 +306,7 @@ pub const Font = struct {
     }
 
     fn glyphRange(f: *const Font, g: u16) ?[2]usize {
-        if (g >= f.num_glyphs) return null;
+        if (g >= f.num_glyphs or f.t.glyf == 0 or f.t.loca == 0) return null;
         const d = f.data;
         const a: usize, const b: usize = if (f.long_loca)
             .{ be32(d, f.t.loca + 4 * @as(usize, g)), be32(d, f.t.loca + 4 * @as(usize, g) + 4) }
