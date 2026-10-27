@@ -94,6 +94,8 @@ pub const Options = struct {
     placeholder: []const u8 = "",
     width: types.Length = .{ .px = 240 },
     size: f32 = 14,
+    /// The same face weight for drawing, caret placement and hit testing.
+    weight: types.Weight = .regular,
     /// In the monospaced face (a code, a command).
     mono: bool = false,
     /// Shows bullets instead of the text, and keeps it off the clipboard.
@@ -265,7 +267,7 @@ const bullets = "•••••••••••••••••••••
 
 pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
     const th = c.theme;
-    const style: types.TextStyle = .{ .size = opts.size, .line_height = opts.line_height, .mono = opts.mono };
+    const style: types.TextStyle = .{ .size = opts.size, .weight = opts.weight, .line_height = opts.line_height, .mono = opts.mono };
     const pad_x: f32 = if (opts.bare) 0 else 10;
     const pad_y: f32 = if (opts.bare) 2 else 7;
     const multi = opts.multiline and !opts.password;
@@ -434,6 +436,8 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
     result.vim_normal = opts.keys == .vim and e.keys.vim_normal;
     result.vim_visual = result.vim_normal and e.keys.vim_visual;
     const s = buffer.text();
+    const show_caret = @import("caret.zig").shown(c, focused, e.caret != e.anchor, e.marked != null, result.changed or result.submitted or e.caret != caret_before[0] or e.anchor != caret_before[1] or buffer.len != caret_before[2] or
+        c.input.ops.len > 0 or c.input.chars.len > 0 or c.input.key != null or c.input.pressed);
     if (multi) {
         const lines = lines_mod.layout(c, s, style, wrap_w);
         const rows: f32 = @floatFromInt(@max(1, @min(lines.len, opts.max_lines)));
@@ -442,7 +446,7 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
         // Past its most lines it scrolls: the wheel's, and a scrollbar.
         c.node(i).style.scroll = lines.len > opts.max_lines;
         const follow = result.changed or e.caret != caret_before[0] or e.anchor != caret_before[1] or buffer.len != caret_before[2];
-        const d = lines_mod.draw(c, s, e, style, lines, view_h, focused, follow, result.vim_normal, opts.placeholder, opts.placeholder_color orelse th.muted, opts.suggestion);
+        const d = lines_mod.draw(c, s, e, style, lines, view_h, focused, show_caret, follow, result.vim_normal, opts.placeholder, opts.placeholder_color orelse th.muted, opts.suggestion);
         c.scroll.put(c.gpa, it.id, e.scroll_y) catch {};
         result.line = d.line;
         result.lines = d.lines;
@@ -489,7 +493,7 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
         const x1 = c.text.caretX(shown, style, shownIndex(s, opts.password, m[1]));
         _ = c.leaf(.{ .absolute = true, .width = .{ .px = x1 - x0 }, .height = .{ .px = 1.5 }, .background = th.text, .offset = .{ .x = x0 - e.scroll_x, .y = lh - 1 } }, .none, null);
     };
-    if (focused and hi == lo) {
+    if (show_caret) {
         // Vim's normal mode: a block over the character under the caret.
         const block = result.vim_normal;
         const w: f32 = if (!block) 1.5 else if (e.caret < s.len) @max(4, c.text.caretX(shown, style, shownIndex(s, opts.password, @min(s.len, e.caret + 1))) - caret_x) else c.text.width("m", style);

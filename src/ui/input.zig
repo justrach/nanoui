@@ -144,6 +144,8 @@ pub const KeyState = struct {
 };
 
 pub const Input = struct {
+    /// The host window has the keys. Kept when this event's edges clear.
+    window_active: bool = true,
     mouse: types.Point = .{ .x = -1e6, .y = -1e6 },
     down: bool = false,
     /// The button went down / up in this event.

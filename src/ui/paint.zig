@@ -107,7 +107,7 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip:
         });
         switch (n.content) {
             .text => |t| paintText(c, out, index, n, t, clip4, opacity, selectable),
-            .icon => |ic| if (c.text.atlas.symbol(ic.name, ic.size, @intFromEnum(ic.weight))) |sp| {
+            .icon => |ic| if (c.text.atlas.symbol(ic.name, ic.size, @backingInt(ic.weight))) |sp| {
                 // Centered in its box, which may be larger (a fixed frame).
                 const inner = r.inset(st.padding);
                 const x = inner.x + (inner.w - (sp.w + 2 * sp.x)) / 2;
@@ -179,9 +179,13 @@ fn scaleItems(items: []metal.Instance, cx: f32, cy: f32, k: f32, outer: [4]f32) 
     for (items) |*it| {
         it.rect = .{ cx + (it.rect[0] - cx) * k, cy + (it.rect[1] - cy) * k, it.rect[2] * k, it.rect[3] * k };
         it.radius *= k;
+        if (it.kind == metal.Kind.shadow_out) {
+            for (&it.uv) |*v| v.* *= k;
+            it.border_color[0] *= k;
+        }
         // A quad's border, a shadow's blur, glass's blur; a texture keeps
         // its slot there.
-        if (it.kind == metal.Kind.quad or it.kind == metal.Kind.shadow or it.kind == metal.Kind.glass) it.border_width *= k;
+        if (it.kind == metal.Kind.quad or it.kind == metal.Kind.shadow or it.kind == metal.Kind.shadow_out or it.kind == metal.Kind.glass) it.border_width *= k;
         if (!std.mem.eql(f32, &it.clip, &outer) and it.clip[0] > -1e5) {
             it.clip = .{ cx + (it.clip[0] - cx) * k, cy + (it.clip[1] - cy) * k, cx + (it.clip[2] - cx) * k, cy + (it.clip[3] - cy) * k };
             const round = metal.clipCorners(it.clip_round);
@@ -215,7 +219,9 @@ fn paintShadow(c: *Context, out: *std.ArrayList(metal.Instance), sh: types.Shado
         .radius = @max(0, radius + s),
         // CSS's blur radius is twice the Gaussian's standard deviation.
         .border_width = sh.blur / 2,
-        .kind = metal.Kind.shadow,
+        .uv = if (sh.knockout) .{ 0, -sh.y, r.w, r.h } else .{ 0, 0, 0, 0 },
+        .border_color = .{ radius, 0, 0, 0 },
+        .kind = if (sh.knockout) metal.Kind.shadow_out else metal.Kind.shadow,
         .clip = clip4,
     });
 }

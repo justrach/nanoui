@@ -111,6 +111,9 @@ pub const Shadow = struct {
     color: Color = .{ .a = 0.18 },
     blur: f32 = 12,
     y: f32 = 4,
+    /// Exclude the original rounded box, so translucent fills do not
+    /// expose their own shadow (Shadow.knockout, upstream PR #15).
+    knockout: bool = false,
     /// Grows the shadow's box on every side before it's blurred; less than
     /// 0 shrinks it, as CSS's spread radius does.
     spread: f32 = 0,

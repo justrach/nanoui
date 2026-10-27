@@ -37,7 +37,7 @@ vertex VOut vs(uint vid [[vertex_id]], uint iid [[instance_id]],
     Instance i = instances[iid];
     float2 corner = float2(vid & 1, vid >> 1);
     // Shadows reach three standard deviations past their box.
-    float grow = i.kind == 2 ? i.border_width * 3.0 : 0.0;
+    float grow = (i.kind == 2 || i.kind == 8) ? i.border_width * 3.0 : 0.0;
     float2 p = i.rect.xy - grow + corner * (i.rect.zw + 2.0 * grow);
     if (i.kind == 6.0) {
         // A box along the line, a point past its round ends.
@@ -248,9 +248,15 @@ static float4 shade(VOut in, Instance i, texture2d<float> atlas, texture2d<float
         return frame.sample(s, in.uv) * (coverage * i.color.a);
     }
 
-    if (i.kind == 2.0) {
+    if (i.kind == 2.0 || i.kind == 8.0) {
         float sigma = max(i.border_width, 0.25);
         float a = shadow_alpha(p, half_size, r, sigma) * i.color.a;
+        if (i.kind == 8.0) {
+            float r_box = min(i.border_color.x, min(i.uv.z, i.uv.w) * 0.5);
+            float d_box = rounded_box(p - i.uv.xy, i.uv.zw * 0.5, r_box);
+            float aa_box = max(fwidth(d_box), 0.0001) * 0.5;
+            a *= smoothstep(-aa_box, aa_box, d_box);
+        }
         return float4(i.color.rgb * a, a);
     }
 

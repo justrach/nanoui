@@ -62,6 +62,7 @@ pub const Window = struct {
                 .{ .name = "windowWillClose:", .imp = &windowWillClose, .types = "v@:@" },
                 .{ .name = "windowDidChangeOcclusionState:", .imp = &occlusionChanged, .types = "v@:@" },
                 .{ .name = "windowDidResignKey:", .imp = &resignedKey, .types = "v@:@" },
+                .{ .name = "windowDidBecomeKey:", .imp = &becameKey, .types = "v@:@" },
             },
         });
         const delegate = objc.msg(objc.Object, delegate_class, "new", .{});
@@ -287,8 +288,14 @@ fn yes(_: objc.Object, _: objc.SEL) callconv(.c) bool {
     return true;
 }
 
+fn becameKey(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
+    const w = objc.getZig(Window, self_obj) orelse return;
+    if (w.surface) |s| s.requestFrame();
+}
+
 fn resignedKey(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
     const w = objc.getZig(Window, self_obj) orelse return;
+    if (w.surface) |s| s.requestFrame();
     if (w.title_bar != .popover) return;
     w.hide();
     w.resigned_at = CACurrentMediaTime();

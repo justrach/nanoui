@@ -33,7 +33,7 @@ pub fn draw(out: gpu.Pixels, instances: []const gpu.Instance, mask: Mask, pictur
 /// `out` is kept. Over the pixels of an earlier frame, with the `damage`
 /// between the two, it makes the same pixels as drawing it all.
 pub fn drawRegion(out: gpu.Pixels, instances: []const gpu.Instance, mask: Mask, pictures: Pictures, scale: f32, clear: types.Color, region: [4]usize) void {
-    const px: [4]u8 = .{ unit(clear.b), unit(clear.g), unit(clear.r), 255 };
+    const px: [4]u8 = .{ unit(clear.b * clear.a), unit(clear.g * clear.a), unit(clear.r * clear.a), unit(clear.a) };
     var job: Band = .{ .out = out, .instances = instances, .mask = mask, .pictures = pictures, .scale = scale, .clear = @bitCast(px), .region = region };
     // Glass reads what's drawn beyond its band: the bands meet before each
     // pane, which one thread draws.
@@ -147,7 +147,7 @@ fn unit(v: f32) u8 {
 /// The pixels an instance covers: its quad (grown for a shadow's blur),
 /// within its clip and the frame.
 fn bounds(out: gpu.Pixels, i: *const gpu.Instance, scale: f32) ?[4]usize {
-    const grow: f32 = if (i.kind == gpu.Kind.shadow) i.border_width * 3 else 0;
+    const grow: f32 = if (i.kind == gpu.Kind.shadow or i.kind == gpu.Kind.shadow_out) i.border_width * 3 else 0;
     const x0 = @max(i.rect[0] - grow, i.clip[0]);
     const y0 = @max(i.rect[1] - grow, i.clip[1]);
     const x1 = @min(i.rect[0] + i.rect[2] + grow, i.clip[2]);
@@ -175,7 +175,7 @@ fn drawOne(out: gpu.Pixels, i: *const gpu.Instance, mask: Mask, pictures: Pictur
         if (slot < pictures.textures.len) picture(out, i, .texture(pictures.textures[slot]), scale, b);
         return;
     }
-    if (i.kind == gpu.Kind.shadow) return shadow(out, i, scale, b);
+    if (i.kind == gpu.Kind.shadow or i.kind == gpu.Kind.shadow_out) return shadow(out, i, scale, b);
     if (i.kind == gpu.Kind.glass) return pane(out, i, scale, b);
     if (i.kind == gpu.Kind.segment) return shapes.segment(out, i, scale, b);
     if (i.kind == gpu.Kind.triangle) return shapes.triangle(out, i, scale, b);
@@ -472,7 +472,13 @@ fn shadow(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize) void
         for (b[0]..b[2]) |x| {
             const wx = (@as(f32, @floatFromInt(x)) + 0.5) * inv;
             const pxl = wx - cx;
-            const a = shadowAlpha(pxl, py, hw, hh, r, sigma) * c[3] * clipCover(i, wx, wy, inv);
+            var a = shadowAlpha(pxl, py, hw, hh, r, sigma) * c[3] * clipCover(i, wx, wy, inv);
+            if (i.kind == gpu.Kind.shadow_out) {
+                const r_box = @min(i.border_color[0], @min(i.uv[2], i.uv[3]) * 0.5);
+                const d = roundedBox(pxl - i.uv[0], py - i.uv[1], i.uv[2] * 0.5, i.uv[3] * 0.5, r_box);
+                const aa = @max(d[1] * inv, 0.0001) * 0.5;
+                a *= smoothstep(-aa, aa, d[0]);
+            }
             blend(out.bytes, row + x * 4, c[0] * a, c[1] * a, c[2] * a, a);
         }
     }

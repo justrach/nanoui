@@ -38,13 +38,15 @@ pub fn lineOf(lines: []const Line, at: usize) usize {
 
 /// The caret's x in its line.
 pub fn caretX(c: *Context, s: []const u8, style: types.TextStyle, l: Line, at: usize) f32 {
-    const to = @min(@max(at, l.start), l.end);
-    return c.text.caretX(s[l.start..l.end], style, to - l.start);
+    // Wrapping trims spaces from the painted text, not from the editable
+    // line. Their advances still belong to the caret and selection.
+    const to = @min(@max(at, l.start), l.stop);
+    return c.text.caretX(s[l.start..l.stop], style, to - l.start);
 }
 
 /// The byte nearest to `x` on line `l`.
 pub fn indexAt(c: *Context, s: []const u8, style: types.TextStyle, l: Line, x: f32) usize {
-    return l.start + c.text.indexAt(s[l.start..l.end], style, x);
+    return l.start + c.text.indexAt(s[l.start..l.stop], style, x);
 }
 
 /// Where the caret goes a line up (`dir` -1) or down (1), keeping its x;
@@ -74,7 +76,7 @@ pub const Drawn = struct {
 /// over a spacer as tall as the lines): selection, text, composition and
 /// caret. When `follow` (the caret moved, the text changed), scrolled to
 /// keep the caret in view within `view_h`; else where the wheel left it.
-pub fn draw(c: *Context, s: []const u8, e: *EditState, style: types.TextStyle, lines: []const Line, view_h: f32, focused: bool, follow: bool, block: bool, placeholder: []const u8, placeholder_color: types.Color, suggestion: []const u8) Drawn {
+pub fn draw(c: *Context, s: []const u8, e: *EditState, style: types.TextStyle, lines: []const Line, view_h: f32, focused: bool, show_caret: bool, follow: bool, block: bool, placeholder: []const u8, placeholder_color: types.Color, suggestion: []const u8) Drawn {
     const th = c.theme;
     const lh = c.text.lineHeight(style);
     const k = lineOf(lines, e.caret);
@@ -96,20 +98,20 @@ pub fn draw(c: *Context, s: []const u8, e: *EditState, style: types.TextStyle, l
             const x0 = caretX(c, s, style, l, @max(lo, l.start));
             // A selection across the line's end covers a space's width past it.
             const past: f32 = if (hi > l.stop or (hi == l.stop and l.stop < s.len)) 4 else 0;
-            const x1 = caretX(c, s, style, l, @min(hi, l.end)) + past;
+            const x1 = caretX(c, s, style, l, @min(hi, l.stop)) + past;
             if (x1 > x0) _ = c.leaf(.{ .absolute = true, .width = .{ .px = x1 - x0 }, .height = .{ .px = lh }, .radius = 2, .background = th.accent.alpha(0.3), .offset = .{ .x = x0, .y = y } }, .none, null);
         }
         if (l.end > l.start) _ = c.leaf(.{ .absolute = true, .offset = .{ .y = y } }, .{ .text = .{ .str = s[l.start..l.end], .style = style, .color = th.text } }, null);
         if (focused) if (e.marked) |m| if (m[1] > l.start and m[0] < l.stop) {
             const x0 = caretX(c, s, style, l, @max(m[0], l.start));
-            const x1 = caretX(c, s, style, l, @min(m[1], l.end));
+            const x1 = caretX(c, s, style, l, @min(m[1], l.stop));
             _ = c.leaf(.{ .absolute = true, .width = .{ .px = x1 - x0 }, .height = .{ .px = 1.5 }, .background = th.text, .offset = .{ .x = x0, .y = y + lh - 1 } }, .none, null);
         };
     }
     if (s.len == 0) _ = c.leaf(.{ .absolute = true }, .{ .text = .{ .str = placeholder, .style = style, .color = placeholder_color } }, null);
     if (suggestion.len > 0 and focused and e.caret == s.len)
         _ = c.leaf(.{ .absolute = true, .offset = .{ .x = cx, .y = cy } }, .{ .text = .{ .str = suggestion, .style = style, .color = th.muted.alpha(0.8) } }, null);
-    if (focused and hi == lo) {
+    if (show_caret) {
         const l = lines[k];
         const w: f32 = if (!block) 1.5 else if (e.caret < l.end) @max(4, caretX(c, s, style, l, e.caret + 1) - cx) else c.text.width("m", style);
         _ = c.leaf(.{ .absolute = true, .width = .{ .px = w }, .height = .{ .px = lh }, .background = if (block) th.accent.alpha(0.45) else th.accent, .offset = .{ .x = cx, .y = cy } }, .none, null);

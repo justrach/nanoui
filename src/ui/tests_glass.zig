@@ -124,3 +124,72 @@ test "drawn on many threads, glass and all, the pixels are those of one" {
     defer one.deinit(gpa);
     try testing.expectEqualSlices(u8, one.bytes, many.bytes);
 }
+
+// A native under-window material can show through only if clearing the UI
+// preserves alpha. An empty scene must not become an opaque black sheet.
+test "transparent window clears retain premultiplied alpha on CPU and GPU" {
+    const Empty = struct {
+        fn view(_: *@This(), c: *ui.Context) void {
+            // Test the clear itself, not a second background quad.
+            c.node(0).style.background = null;
+        }
+    };
+    var empty: Empty = .{};
+    var theme: ui.Theme = .light;
+    for ([_]ui.Color{ .transparent, .{ .r = 0.8, .g = 0.4, .b = 0.2, .a = 0.5 } }) |clear| {
+        theme.background = clear;
+        var t: ui.Tester = undefined;
+        try t.init(testing.allocator, .init(&empty, Empty.view), .{ .width = 24, .height = 24, .theme = theme });
+        defer t.deinit();
+        t.frame();
+        const pixels = try t.render(testing.allocator);
+        defer pixels.deinit(testing.allocator);
+        const expected = [_]f32{ clear.b * clear.a, clear.g * clear.a, clear.r * clear.a, clear.a };
+        for (pixels.bytes, 0..) |v, at_| {
+            try testing.expectApproxEqAbs(expected[at_ % 4] * 255, @as(f32, @floatFromInt(v)), 1);
+        }
+        const bytes = try testing.allocator.alloc(u8, pixels.bytes.len);
+        defer testing.allocator.free(bytes);
+        raster.draw(.{ .bytes = bytes, .width = pixels.width, .height = pixels.height }, &.{}, .{ .pixels = &.{}, .size = 0 }, .{}, t.scale, clear);
+        for (bytes, 0..) |v, at_| {
+            try testing.expectApproxEqAbs(expected[at_ % 4] * 255, @as(f32, @floatFromInt(v)), 1);
+        }
+    }
+}
+
+test "knockout shadows retain their halo without darkening translucent fills" {
+    const Scene_ = struct {
+        fn view(_: *@This(), c: *ui.Context) void {
+            const box = ui.div(c).absolute().offset(30, 20).size(100, 70).rounded(12).bg(.{ .r = 0.8, .g = 0.4, .b = 0.2, .a = 0.25 });
+            c.node(box.index).style.shadow = .{ .blur = 8, .y = 8, .spread = -4, .color = .{ .a = 0.3 }, .knockout = true };
+            box.end();
+        }
+    };
+    var scene: Scene_ = .{};
+    var theme: ui.Theme = .light;
+    theme.background = .white;
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&scene, Scene_.view), .{ .width = 180, .height = 130, .theme = theme });
+    defer t.deinit();
+    const p = try t.render(testing.allocator);
+    defer p.deinit(testing.allocator);
+    const center = at(p, t.scale, 80, 55);
+    const expected = [_]u8{ 204, 217, 242, 255 };
+    for (center, expected) |v, e| try testing.expectApproxEqAbs(@as(f32, @floatFromInt(e)), @as(f32, @floatFromInt(v)), 1);
+    // The shadow is excluded by the ORIGINAL box, not its shrunken,
+    // offset spread rect. The outside halo is kept.
+    try testing.expectEqualSlices(u8, &center, &at(p, t.scale, 80, 24));
+    try testing.expect(at(p, t.scale, 80, 94)[0] < 255);
+    const bytes = try testing.allocator.alloc(u8, p.bytes.len);
+    defer testing.allocator.free(bytes);
+    raster.draw(.{ .bytes = bytes, .width = p.width, .height = p.height }, t.instances.items, .{ .pixels = &.{}, .size = 0 }, .{}, t.scale, .white);
+    var total: u64 = 0;
+    var worst: u8 = 0;
+    for (bytes, p.bytes) |a, b| {
+        const d = if (a > b) a - b else b - a;
+        total += d;
+        worst = @max(worst, d);
+    }
+    try testing.expect(@as(f64, @floatFromInt(total)) / @as(f64, @floatFromInt(bytes.len)) < 0.15);
+    try testing.expect(worst <= 8);
+}

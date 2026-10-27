@@ -309,7 +309,7 @@ pub const Renderer = struct {
         objc.msg(void, ca, "setStoreAction:", .{@as(objc.NSUInteger, 1)}); // store
         if (clear) |c| {
             const ClearColor = extern struct { r: f64, g: f64, b: f64, a: f64 };
-            objc.msg(void, ca, "setClearColor:", .{ClearColor{ .r = c.r, .g = c.g, .b = c.b, .a = 1 }});
+            objc.msg(void, ca, "setClearColor:", .{ClearColor{ .r = c.r * c.a, .g = c.g * c.a, .b = c.b * c.a, .a = c.a }});
         }
         return objc.msg(objc.Object, cmd, "renderCommandEncoderWithDescriptor:", .{desc});
     }

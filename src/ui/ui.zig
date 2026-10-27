@@ -136,6 +136,8 @@ test {
     _ = @import("tests.zig");
     _ = @import("tests_keymap.zig");
     _ = @import("tests_multiline.zig");
+    _ = @import("tests_caret.zig");
+    _ = @import("tests_textfield_weight.zig");
     _ = @import("tests_texture.zig");
     _ = @import("tests_canvas.zig");
     _ = @import("triangulate.zig");

@@ -111,3 +111,40 @@ test "past its most lines a multiline field scrolls, by the caret and the wheel"
     try testing.expect(one.y >= field.y - 0.5);
     try testing.expectEqual(@as(usize, 6), k.last.line);
 }
+
+test "trailing spaces have editable caret and hit-test positions before a newline" {
+    var k: Composer = .{};
+    k.buf.set("draft  \nnext  ");
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&k, Composer.view), .{ .width = 400, .height = 300 });
+    defer t.deinit();
+    const lines = @import("textfield_lines.zig");
+    const style: ui.TextStyle = .{ .size = 14 };
+    const laid = lines.layout(&t.ctx, k.buf.text(), style, 200);
+    try testing.expectEqual(@as(usize, 2), laid.len);
+    for (laid) |l| {
+        const before = lines.caretX(&t.ctx, k.buf.text(), style, l, l.stop - 2);
+        const one = lines.caretX(&t.ctx, k.buf.text(), style, l, l.stop - 1);
+        const two = lines.caretX(&t.ctx, k.buf.text(), style, l, l.stop);
+        try testing.expect(one > before + 2);
+        try testing.expect(two > one + 2);
+        try testing.expectEqual(l.stop, lines.indexAt(&t.ctx, k.buf.text(), style, l, two));
+    }
+}
+
+test "a selection containing only trailing spaces is visible" {
+    var k: Composer = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&k, Composer.view), .{ .width = 400, .height = 300 });
+    defer t.deinit();
+    t.textOps(&.{.{ .insert = "draft  " }});
+    t.textOps(&.{ .{ .command = .select_left }, .{ .command = .select_left } });
+    var selected = false;
+    for (t.ctx.nodes.items) |n| {
+        if (n.style.background) |color| {
+            if (n.style.absolute and color.a == t.ctx.theme.accent.alpha(0.3).a and n.rect.w > 4)
+                selected = true;
+        }
+    }
+    try testing.expect(selected);
+}

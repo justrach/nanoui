@@ -203,6 +203,7 @@ pub const Surface = struct {
         self.last_frame_time = now;
         self.frame_log.note(now);
         c.reduced_motion = reduceMotion();
+        c.input.window_active = objc.msg(objc.BOOL, self.window.nswindow, "isKeyWindow", .{});
         // What scrolling gathered since the last frame, applied at once.
         const dy = self.scroll.take();
         if (dy != 0 and !c.applyScroll(dy) and c.wants_wheel) c.input.scroll = .{ .y = dy };

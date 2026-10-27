@@ -150,7 +150,7 @@ pub const Renderer = struct {
         if (!r.es) g.glDisable(gl.FRAMEBUFFER_SRGB);
         g.glBindFramebuffer(gl.FRAMEBUFFER, r.frame.fbo);
         g.glViewport(0, 0, @intCast(w), @intCast(h));
-        g.glClearColor(clear.r, clear.g, clear.b, 1);
+        g.glClearColor(clear.r * clear.a, clear.g * clear.a, clear.b * clear.a, clear.a);
         g.glClear(gl.COLOR_BUFFER_BIT);
         if (instances.len > 0) {
             g.glBindBuffer(gl.ARRAY_BUFFER, r.vbo);

@@ -7,6 +7,7 @@
 //! more for lighter text, so light text on a dark ground doesn't read thin
 //! (`dilationFor`; the levels AppKit and GPUI use).
 const std = @import("std");
+const builtin = @import("builtin");
 const objc = @import("../objc.zig");
 const cf = @import("cf.zig");
 const types = @import("types.zig");
@@ -51,6 +52,7 @@ pub var smoothing_allowed: ?bool = null;
 
 fn smoothingAllowed() bool {
     if (smoothing_allowed) |v| return v;
+    if (builtin.os.tag != .macos) return true;
     var allowed = true;
     const key = cf.string("AppleFontSmoothing");
     defer cf.CFRelease(@ptrCast(key));

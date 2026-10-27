@@ -26,7 +26,7 @@ flat out vec4 i_misc;
 void main() {
     vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
     // Shadows reach three standard deviations past their box.
-    float grow = a_misc.z == 2.0 ? a_misc.y * 3.0 : 0.0;
+    float grow = (a_misc.z == 2.0 || a_misc.z == 8.0) ? a_misc.y * 3.0 : 0.0;
     vec2 p = a_rect.xy - grow + corner * (a_rect.zw + 2.0 * grow);
     if (a_misc.z == 6.0) {
         // A box along the line, a point past its round ends.
@@ -255,9 +255,15 @@ vec4 shade() {
         }
         return px * (coverage * i_color.a);
     }
-    if (kind == 2.0) {
+    if (kind == 2.0 || kind == 8.0) {
         float sigma = max(i_misc.y, 0.25);
         float a = shadow_alpha(p, half_size, r, sigma) * i_color.a;
+        if (kind == 8.0) {
+            float r_box = min(i_border_color.x, min(i_uv.z, i_uv.w) * 0.5);
+            float d_box = rounded_box(p - i_uv.xy, i_uv.zw * 0.5, r_box);
+            float aa_box = max(fwidth(d_box), 0.0001) * 0.5;
+            a *= smoothstep(-aa_box, aa_box, d_box);
+        }
         return vec4(i_color.rgb * a, a);
     }
     // Premultiplied: the border is laid over the fill (see shader.metal).

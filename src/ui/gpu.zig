@@ -60,6 +60,9 @@ pub const Kind = struct {
     /// the third to the first), the others shared with triangles beside it,
     /// cut sharp so the two meet without a seam. `rect` bounds it.
     pub const triangle: f32 = 7;
+    /// Shadow outside its original box only: uv.xy is the box centre
+    /// offset, uv.zw its size, border_color.x its original radius.
+    pub const shadow_out: f32 = 8;
 };
 
 /// Pixels the app gives a frame to show (`ui.texture`), changing as often
