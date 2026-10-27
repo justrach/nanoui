@@ -63,8 +63,10 @@ fn fontKey(style: types.TextStyle) FontKey {
 pub const TextSystem = struct {
     gpa: std.mem.Allocator,
     atlas: Atlas,
-    /// The pictures shown (`ui.image`).
+    /// The pictures shown (`ui.image`), color glyphs among them.
     images: @import("images.zig").Images,
+    /// Emoji and other color glyphs, drawn in their own colors.
+    color: @import("color_glyph.zig").Cache = .{},
     scale: f32 = 2,
     fonts: std.AutoHashMapUnmanaged(FontKey, Font) = .empty,
     /// Every font a run used, retained; glyphs refer to them by index.
@@ -94,6 +96,7 @@ pub const TextSystem = struct {
 
     pub fn deinit(self: *TextSystem) void {
         self.images.deinit();
+        self.color.deinit(self.gpa);
         var fit = self.fonts.valueIterator();
         while (fit.next()) |f| cf.CFRelease(f.ref);
         self.fonts.deinit(self.gpa);
@@ -326,6 +329,16 @@ pub const TextSystem = struct {
     pub fn glyph(self: *TextSystem, g: Glyph, bin: u8, dilation: u8) ?Sprite {
         if (g.font >= self.run_fonts.items.len) return null;
         return self.atlas.glyph(g.font, self.run_fonts.items[g.font], g.glyph, bin, dilation);
+    }
+
+    /// A glyph of a color font (an emoji) as a picture in the image atlas,
+    /// drawn untinted; null for every other glyph.
+    pub fn colorGlyph(self: *TextSystem, g: Glyph) ?Sprite {
+        if (g.font >= self.run_fonts.items.len) return null;
+        const f = self.run_fonts.items[g.font];
+        if (!self.color.isColor(self.gpa, g.font, f)) return null;
+        const sp = self.color.sprite(self.gpa, &self.images, g.font, f, g.glyph, self.scale) orelse return null;
+        return .{ .uv = sp.uv, .x = sp.x, .y = sp.y, .w = sp.w, .h = sp.h };
     }
 
     pub const dilationFor = @import("atlas.zig").dilationFor;

@@ -169,6 +169,7 @@ test {
     _ = @import("pacing.zig");
     _ = @import("svg.zig");
     _ = @import("tests_svg.zig");
+    _ = @import("tests_emoji.zig");
     _ = @import("tests_truncate.zig");
     _ = @import("tooltip.zig");
     _ = @import("tests_tooltip.zig");

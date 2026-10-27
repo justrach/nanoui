@@ -154,6 +154,21 @@ pub const Images = struct {
         return e;
     }
 
+    /// Picture `k` drawn by the caller (a color glyph): `d`'s pixels are
+    /// copied in the first time, and again after they were let go.
+    pub fn getDrawn(im: *Images, k: u64, d: Decoded) ?Entry {
+        if (im.entries.get(k)) |e| return e;
+        if (!im.decoded.contains(k)) {
+            const copy: Decoded = .{ .width = d.width, .height = d.height, .w = d.w, .h = d.h, .bgra = im.gpa.dupe(u8, d.bgra) catch return null };
+            im.decoded.put(im.gpa, k, copy) catch {
+                im.gpa.free(copy.bgra);
+                return null;
+            };
+            im.kept_bytes += copy.bgra.len;
+        }
+        return im.get(k, "");
+    }
+
     fn pack(im: *Images, d: Decoded) !Entry {
         if (!im.fits(d.w, d.h)) {
             // Twice the side while it can grow, else the same emptied:

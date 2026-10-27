@@ -318,6 +318,18 @@ fn textRunLimit(c: *Context, out: *std.ArrayList(metal.Instance), t: ctx_mod.Con
                 tone = sc;
             };
         }
+        // An emoji in its own colors, a picture faded with its text, on
+        // whole pixels like the glyphs it sits among.
+        if (c.text.colorGlyph(g)) |cg| {
+            push(c, out, .{
+                .rect = .{ px / scale + cg.x, baseline - g.y + cg.y, cg.w, cg.h },
+                .color = .{ 1, 1, 1, tone.a * opacity },
+                .uv = cg.uv,
+                .kind = metal.Kind.image,
+                .clip = if (limit) |l| .{ clip4[0], clip4[1], @min(clip4[2], l.end), clip4[3] } else clip4,
+            });
+            continue;
+        }
         // Lighter text is drawn with thicker strokes, as macOS draws it.
         const sp = c.text.glyph(g, bin, @TypeOf(c.text.*).dilationFor(tone.r, tone.g, tone.b)) orelse continue;
         push(c, out, .{

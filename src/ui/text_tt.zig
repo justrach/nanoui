@@ -261,6 +261,14 @@ pub const TextSystem = struct {
         return self.atlas.glyph(g.font, self.run_fonts.items[g.font], g.glyph, bin);
     }
 
+    /// Color fonts' own colors (CBDT, COLR) aren't read here yet: an
+    /// emoji draws in the text's color, from its outline if it has one.
+    pub fn colorGlyph(self: *TextSystem, g: Glyph) ?Sprite {
+        _ = self;
+        _ = g;
+        return null;
+    }
+
     pub fn dilationFor(r: f32, g: f32, b: f32) u8 {
         _ = .{ r, g, b };
         return 0;
