@@ -52,6 +52,12 @@ pub fn build(b: *std.Build) void {
         if (android.Sdk.find(b)) |sdk| if (sdk.libDir(b, target.result)) |dir| nanoui.addLibraryPath(.{ .cwd_relative = dir });
         for ([_][]const u8{ "android", "log", "EGL" }) |l| nanoui.linkSystemLibrary(l, .{});
     }
+    if (os == .windows) {
+        // The D3D11 renderer (`ui/d3d11.zig`): d3d11 and dxgi are the
+        // system's, and d3dcompiler_47 turns the HLSL into shaders at
+        // startup (it ships with Windows and every DirectX runtime).
+        for ([_][]const u8{ "d3d11", "dxgi", "d3dcompiler_47" }) |l| nanoui.linkSystemLibrary(l, .{});
+    }
     // Elsewhere GTK is loaded when the app starts (dlopen): nothing to link.
     // HTTP there is http-zig's (nanoui.http), fetched only for those targets.
     if (os != .macos and os != .ios) {

@@ -19,6 +19,7 @@ const Theme = @import("../ui/theme.zig").Theme;
 const Context = ctx_mod.Context;
 const Window = @import("window.zig").Window;
 const d3d = @import("d3d.zig");
+const d3d11 = @import("../ui/d3d11.zig");
 
 /// Posted for a frame requested from outside the view.
 pub const WM_FRAME = w.WM_APP + 1;
@@ -46,19 +47,40 @@ pub const Surface = struct {
     /// A UTF-16 high surrogate waiting for its other half.
     high: u16 = 0,
     chars: [8]u8 = undefined,
+    /// Where `NANOUI_DUMP` writes the frames it compares.
+    path_buf: [64]u8 = undefined,
     /// Frames go to the screen through this, once made; GDI if it can't be.
     presenter: ?d3d.Presenter = null,
     no_d3d: bool = false,
+    /// The frame drawn by the GPU, on the swap chain's own device. Absent
+    /// until the first frame, and after the device is lost.
+    gpu: ?d3d11.Renderer = null,
+    /// Set when there is no Direct3D 11 renderer to draw with, so that the
+    /// canvas is not kept trying.
+    no_gpu: bool = false,
+    /// `NANOUI_DUMP`: F12 writes the canvas beside the same frame drawn whole.
+    dump_enabled: bool = false,
+    dumps: usize = 0,
 
     pub fn create(window: *Window, view: ui.View, theme_override: ?Theme) !*Surface {
         const gpa = window.app.gpa;
         const self = try gpa.create(Surface);
         self.* = .{ .gpa = gpa, .window = window, .text = .init(gpa), .ctx = undefined, .view = view, .theme_override = theme_override, .start_time = clock.now() };
         self.ctx = .init(gpa, &self.text);
+        // Diagnostics, off unless asked for: which presenter draws the frame,
+        // how many threads draw it, and F12 dumping the canvas.
+        self.no_d3d = envFlag("NANOUI_NO_D3D");
+        self.dump_enabled = envFlag("NANOUI_DUMP");
+        if (envFlag("NANOUI_ONE_THREAD")) @import("../ui/raster.zig").threads = 1;
+        // Frames come from Direct3D 11 here (`paintGpu`), so the view names it
+        // from the first frame; if no device can be made, `paintGpu` says CPU
+        // and the next frame reads that instead.
+        if (!self.no_d3d) self.ctx.renderer = "Direct3D 11";
         return self;
     }
 
     pub fn destroy(self: *Surface) void {
+        if (self.gpu) |*g| g.deinit();
         if (self.presenter) |*p| p.deinit();
         self.instances.deinit(self.gpa);
         self.pixels.deinit(self.gpa);
@@ -82,8 +104,12 @@ pub const Surface = struct {
         const dt: f32 = if (self.last_frame_time > 0) @floatCast(@min(now - self.last_frame_time, 0.1)) else 1.0 / 60.0;
         self.last_frame_time = now;
         const r = frame_mod.run(c, self.view, &self.text, &self.instances, self.size, self.scale, self.theme(), dt, now - self.start_time);
-        // The client area is in pixels, as the damage is.
-        if (self.pixels.damage(self.shown())) |d| if (self.hwnd()) |h| {
+        // The whole client area is redrawn every frame: a GPU frame draws all
+        // of it, so there is no damage to work out (and no CPU pixels to keep
+        // for it). The CPU path still finds what changed.
+        if (self.gpu != null) {
+            if (self.hwnd()) |h| _ = w.InvalidateRect(h, null, 0);
+        } else if (self.pixels.damage(self.shown())) |d| if (self.hwnd()) |h| {
             const rect: w.RECT = .{ .left = @intCast(d[0]), .top = @intCast(d[1]), .right = @intCast(d[2]), .bottom = @intCast(d[3]) };
             _ = w.InvalidateRect(h, &rect, 0);
         };
@@ -115,6 +141,9 @@ pub const Surface = struct {
         var ps: w.PAINTSTRUCT = undefined;
         const dc = w.BeginPaint(h, &ps) orelse return;
         defer _ = w.EndPaint(h, &ps);
+        // The GPU first: it draws the whole frame, and no CPU rasterising
+        // happens at all. Without one, the canvas draws what changed.
+        if (self.paintGpu(h)) return;
         self.pixels.draw(self.gpa, self.shown());
         const px = &self.pixels;
         if (px.bytes.len == 0) return;
@@ -127,6 +156,88 @@ pub const Surface = struct {
 
     /// Presents the frame through the swap chain (made the first time);
     /// false to draw with GDI instead. A lost device is made again next frame.
+    /// The frame drawn by Direct3D 11 straight into the swap chain's back
+    /// buffer, from the instances `frame.zig` made. False when there is no
+    /// renderer: the canvas then draws the frame instead.
+    fn paintGpu(self: *Surface, h: w.HWND) bool {
+        if (self.no_d3d or self.no_gpu) return false;
+        const pw: u32 = @intFromFloat(@max(1, @round(self.size.w * self.scale)));
+        const ph: u32 = @intFromFloat(@max(1, @round(self.size.h * self.scale)));
+        if (self.presenter == null) {
+            self.presenter = d3d.Presenter.init(h, pw, ph) catch {
+                self.no_d3d = true;
+                self.nameCpu();
+                return false;
+            };
+        }
+        const p = &self.presenter.?;
+        p.resize(pw, ph) catch return false;
+        if (self.gpu == null) {
+            self.gpu = d3d11.Renderer.initOn(@ptrCast(d3d.Presenter.deviceOf(p)), @ptrCast(d3d.Presenter.contextOf(p))) catch {
+                self.no_gpu = true;
+                self.nameCpu();
+                return false;
+            };
+        }
+        const g = &self.gpu.?;
+        const bg = self.ctx.theme.background;
+        p.setBackground(bg.r, bg.g, bg.b);
+        g.sync(self.text.atlas.mask(), self.text.atlas.generation, self.text.images.pictures(), self.text.images.generation);
+        // The back buffer is a COM reference: released before the swap chain
+        // may be resized, or ResizeBuffers fails with DXGI_ERROR_INVALID_CALL
+        // (0x887A0001) because a reference is still held.
+        const back = p.backBuffer() catch return false;
+        defer back.release();
+        g.draw(self.instances.items, self.size, self.scale, bg, @ptrCast(back));
+        if (self.dump_enabled and self.dumps == 0) {
+            // NANOUI_DUMP: the first frame as the GPU drew it, beside the
+            // same frame drawn by the CPU, to see that they agree.
+            self.dumps += 1;
+            self.dumpGpuFrame(g, h);
+        }
+        if (!p.present()) {
+            // The device was lost: both go, and a new pair gets the frame.
+            self.gpu_release();
+            _ = w.InvalidateRect(h, null, 0);
+        }
+        return true;
+    }
+
+    /// Writes the GPU's frame and the CPU's of the same instances, for
+    /// `NANOUI_DUMP`, and says how far apart they are.
+    fn dumpGpuFrame(self: *Surface, g: *d3d11.Renderer, h: w.HWND) void {
+        _ = h;
+        const gpa = self.gpa;
+        const shot = g.read(gpa) catch return;
+        defer shot.deinit(gpa);
+        var whole: canvas.Canvas = .{};
+        defer whole.deinit(gpa);
+        whole.draw(gpa, self.shown());
+        const io = self.window.app.io;
+        std.log.info("nanoui: GPU frame {d}x{d}", .{ shot.width, shot.height });
+        @import("../ui/png.zig").writePng(gpa, io, std.fmt.bufPrint(&self.path_buf, "nanoui-gpu-{d}.png", .{self.dumps}) catch return, shot) catch |e| {
+            std.log.warn("nanoui: could not write the GPU frame: {t}", .{e});
+            return;
+        };
+        @import("../ui/png.zig").writePng(gpa, io, std.fmt.bufPrint(&self.path_buf, "nanoui-cpu-{d}.png", .{self.dumps}) catch return, .{ .bytes = whole.bytes, .width = whole.width, .height = whole.height }) catch {};
+    }
+
+    fn gpu_release(self: *Surface) void {
+        if (self.gpu) |*g| g.deinit();
+        self.gpu = null;
+        if (self.presenter) |*p| p.deinit();
+        self.presenter = null;
+    }
+
+    /// The frame the screen is given is drawn on the CPU: the view names that
+    /// from the next frame on.
+    fn nameCpu(self: *Surface) void {
+        if (std.mem.eql(u8, self.ctx.renderer, "CPU")) return;
+        self.ctx.renderer = "CPU";
+        self.ctx.changed = true;
+        self.requestFrame();
+    }
+
     fn present(self: *Surface, h: w.HWND) bool {
         if (self.no_d3d) return false;
         const pw: u32 = @intCast(self.pixels.width);
@@ -152,6 +263,38 @@ pub const Surface = struct {
             _ = w.InvalidateRect(h, null, 0);
         }
         return true;
+    }
+
+    /// `NANOUI_DUMP`, on F12: draws the frame whole beside what the canvas
+    /// holds and says whether they differ — the canvas is what the screen is
+    /// given, the whole redraw is what it should have been. Only ever run
+    /// when asked: it redraws the frame, so it costs a frame's worth of time.
+    fn verify(self: *Surface) void {
+        const gpa = self.gpa;
+        const px = &self.pixels;
+        if (px.bytes.len == 0) return;
+        const whole_bytes = gpa.alloc(u8, px.bytes.len) catch return;
+        defer gpa.free(whole_bytes);
+        const whole: gpu.Pixels = .{ .bytes = whole_bytes, .width = px.width, .height = px.height };
+        var pictures = self.text.images.pictures();
+        pictures.textures = self.ctx.textures.items;
+        @import("../ui/raster.zig").draw(whole, self.instances.items, self.text.atlas.mask(), pictures, self.scale, self.ctx.theme.background);
+        var differ: usize = 0;
+        for (whole_bytes, px.bytes) |a, b| {
+            if (a != b) differ += 1;
+        }
+        if (differ == 0 and self.dumps > 0) return;
+        const n = self.dumps;
+        self.dumps += 1;        const io = std.Io.Threaded.global_single_threaded.io();
+        const shot: gpu.Pixels = .{ .bytes = px.bytes, .width = px.width, .height = px.height };
+        var name: [128]u8 = undefined;
+        @import("../ui/png.zig").writePng(gpa, io, std.fmt.bufPrint(&name, "nanoui-canvas-{d}.png", .{n}) catch return, shot) catch |e| {
+            std.debug.print("nanoui: canvas dump failed: {t}\n", .{e});
+        };
+        @import("../ui/png.zig").writePng(gpa, io, std.fmt.bufPrint(&name, "nanoui-whole-{d}.png", .{n}) catch return, whole) catch |e| {
+            std.debug.print("nanoui: whole dump failed: {t}\n", .{e});
+        };
+        std.debug.print("nanoui: dumped {d}x{d} frame {d}: canvas vs whole redraw differ in {d} of {d} bytes\n", .{ px.width, px.height, n, differ, px.bytes.len });
     }
 
     fn updateCursor(self: *Surface) void {
@@ -275,7 +418,15 @@ pub const Surface = struct {
                     self.frame();
                 }
             },
-            w.WM_KEYDOWN, w.WM_SYSKEYDOWN => if (self.keyDown(@intCast(wp))) return 0 else return null,
+            w.WM_KEYDOWN, w.WM_SYSKEYDOWN => {
+                // F12, with NANOUI_DUMP set: what the canvas holds, and what
+                // drawing the same frame whole makes of it.
+                if (wp == 0x7B and self.dump_enabled) {
+                    self.verify();
+                    return 0;
+                }
+                if (self.keyDown(@intCast(wp))) return 0 else return null;
+            },
             w.WM_CHAR => self.char(@truncate(wp)),
             else => return null,
         }
@@ -396,3 +547,16 @@ pub const Surface = struct {
         return true;
     }
 };
+
+/// Whether the environment variable `name` is set to something but "0":
+/// `NANOUI_NO_D3D` (draw with GDI), `NANOUI_ONE_THREAD` (one raster thread),
+/// `NANOUI_DUMP` (F12 dumps the canvas). All off unless set.
+fn envFlag(name: []const u8) bool {
+    if (name.len == 0 or name.len > 120) return false;
+    var key: [128]u16 = undefined;
+    for (name, 0..) |ch, i| key[i] = ch;
+    key[name.len] = 0;
+    var value: [64]u16 = undefined;
+    const n = w.GetEnvironmentVariableW(@ptrCast(&key), &value, value.len);
+    return n > 0 and n <= value.len and value[0] != '0';
+}

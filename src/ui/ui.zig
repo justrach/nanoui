@@ -200,6 +200,7 @@ test {
     _ = @import("tests_svg.zig");
     _ = @import("tests_truncate.zig");
     if (@import("dwrite.zig").enabled) _ = @import("tests_dwrite.zig");
+    if (@import("builtin").os.tag == .windows) _ = @import("tests_d3d11.zig");
     _ = @import("icons.zig");
     _ = keys;
     _ = @import("tests_textedit.zig");

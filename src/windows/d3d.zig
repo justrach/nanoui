@@ -48,7 +48,10 @@ pub const Com = extern struct {
 };
 
 fn check(hr: HRESULT) !void {
-    if (hr < 0) return error.Direct3D;
+    if (hr < 0) {
+        std.log.err("nanoui: Direct3D failed: 0x{x:0>8}", .{@as(u32, @bitCast(hr))});
+        return error.Direct3D;
+    }
 }
 
 const SwapChainDesc1 = extern struct {
@@ -91,6 +94,15 @@ pub const Presenter = struct {
     swap: *Com,
     width: u32,
     height: u32,
+    /// The pixels go through this to reach the back buffer: a DYNAMIC
+    /// texture the frame is mapped into and written, copy-by-discard, so
+    /// the driver hands out fresh memory instead of waiting for the GPU to
+    /// finish with what it last read. Straight from the app's own pixels
+    /// (`UpdateSubresource`) is not safe: the runtime may still be reading
+    /// them when the next frame draws over them, which tears the frame
+    /// wherever the renderer got there first — and the faster the renderer,
+    /// the more of it tears.
+    upload_tex: ?*Com = null,
 
     /// A device (hardware, else WARP) and a flip-sequential swap chain for
     /// `hwnd`, `width` × `height` pixels.
@@ -125,6 +137,8 @@ pub const Presenter = struct {
     }
 
     pub fn deinit(p: *Presenter) void {
+        if (p.upload_tex) |t| t.release();
+        p.upload_tex = null;
         p.swap.release();
         p.context.release();
         p.device.release();
@@ -138,17 +152,44 @@ pub const Presenter = struct {
 
     /// Puts `pixels` (BGRA, `width` × `height`, rows from the top) in the
     /// back buffer, the buffers resized first if the window was.
+    /// Sizes the swap chain for a `width` × `height` frame: ResizeBuffers
+    /// keeping the count and format, then a new upload texture, which is the
+    /// window's too. A no-op when it is already that size.
+    pub fn resize(p: *Presenter, width: u32, height: u32) !void {
+        if (width == p.width and height == p.height) return;
+        try check(p.swap.slot(*const fn (*Com, u32, u32, u32, u32, u32) callconv(.winapi) HRESULT, 13)(p.swap, 0, width, height, 0, 0));
+        p.width = width;
+        p.height = height;
+        if (p.upload_tex) |t| t.release();
+        p.upload_tex = null;
+    }
+
     pub fn upload(p: *Presenter, pixels: []const u8, width: u32, height: u32) !void {
-        if (width != p.width or height != p.height) {
-            // ResizeBuffers: keep the count and format.
-            try check(p.swap.slot(*const fn (*Com, u32, u32, u32, u32, u32) callconv(.winapi) HRESULT, 13)(p.swap, 0, width, height, 0, 0));
-            p.width = width;
-            p.height = height;
-        }
+        try p.resize(width, height);
+        // Through a DYNAMIC texture, not straight from `pixels`: the renderer
+        // draws the next frame over those bytes, and may do it before the GPU
+        // has read them — the frame then tears where it got there first.
+        // WRITE_DISCARD hands out memory the GPU is not reading, so nothing
+        // waits; a staging texture would stall the frame instead.
+        const target = p.upload_tex orelse blk: {
+            // D3D11_USAGE_DYNAMIC, D3D11_CPU_ACCESS_WRITE.
+            const desc: Texture2DDesc = .{ .width = width, .height = height, .usage = 3, .cpu = 0x10000 };
+            var tex: ?*Com = null;
+            try check(p.device.slot(*const fn (*Com, *const Texture2DDesc, ?*const anyopaque, *?*Com) callconv(.winapi) HRESULT, 5)(p.device, &desc, null, &tex));
+            p.upload_tex = tex orelse return error.Direct3D;
+            break :blk p.upload_tex.?;
+        };
+        var mapped: Mapped = undefined;
+        // Map, D3D11_MAP_WRITE_DISCARD: memory the GPU is not reading.
+        try check(p.context.slot(*const fn (*Com, *Com, u32, u32, u32, *Mapped) callconv(.winapi) HRESULT, 14)(p.context, target, 0, 2, 0, &mapped));
+        const row: usize = @as(usize, width) * 4;
+        const pitch: usize = mapped.row_pitch;
+        var y: usize = 0;
+        while (y < height) : (y += 1) @memcpy(mapped.data[y * pitch ..][0..row], pixels[y * row ..][0..row]);
+        p.context.slot(*const fn (*Com, *Com, u32) callconv(.winapi) void, 15)(p.context, target, 0); // Unmap
         const buffer = try p.backBuffer();
         defer buffer.release();
-        // UpdateSubresource
-        p.context.slot(*const fn (*Com, *Com, u32, ?*const anyopaque, [*]const u8, u32, u32) callconv(.winapi) void, 48)(p.context, buffer, 0, null, pixels.ptr, width * 4, 0);
+        p.context.slot(*const fn (*Com, *Com, *Com) callconv(.winapi) void, 47)(p.context, buffer, target); // CopyResource
     }
 
     /// Shows the back buffer, at the next vertical blank. False when the
@@ -157,6 +198,17 @@ pub const Presenter = struct {
         const hr = p.swap.slot(*const fn (*Com, u32, u32) callconv(.winapi) HRESULT, 8)(p.swap, 1, 0); // Present
         const code: u32 = @bitCast(hr);
         return !(code == device_removed or code == device_reset);
+    }
+
+    /// The device and context the swap chain was made on, so that a
+    /// renderer can share them: D3D will not copy a texture from one device
+    /// to another, so the frame has to be drawn on the swap chain's own.
+    pub fn deviceOf(p: *Presenter) *Com {
+        return p.device;
+    }
+
+    pub fn contextOf(p: *Presenter) *Com {
+        return p.context;
     }
 
     pub fn backBuffer(p: *Presenter) !*Com {
