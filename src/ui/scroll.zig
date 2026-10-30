@@ -147,25 +147,30 @@ fn scrubTo(c: *Context, id: u64, g: ScrollbarGeom, thumb_top: f32) void {
 pub fn tryPressScrollbar(c: *Context) bool {
     if (c.input.button != .left or c.input.ctrl) return false;
     const m = c.input.mouse;
+    // The bar is drawn over the box's right edge and has no hit box of its own,
+    // so whatever is under the pointer there belongs to a row or to nothing:
+    // the pointer being on the track decides, not `hot`. Of the tracks under it
+    // the innermost wins, so a list inside a page scrolls itself, not the page.
+    var found: ?struct { id: u64, g: ScrollbarGeom } = null;
     var it = c.scrollbars.iterator();
     while (it.next()) |e| {
-        const id = e.key_ptr.*;
         const g = e.value_ptr.*;
-        if (c.hot != 0 and c.hot != id) continue;
         if (m.x >= g.track_x and m.x <= g.track_x + 10 and m.y >= g.track_y and m.y <= g.track_y + g.track_h) {
-            if (m.y >= g.thumb_y and m.y <= g.thumb_y + g.thumb_h) {
-                c.scrollbar_drag = .{ .id = id, .grab_dy = m.y - g.thumb_y };
-            } else {
-                const grab = g.thumb_h * 0.5;
-                c.scrollbar_drag = .{ .id = id, .grab_dy = grab };
-                scrubTo(c, id, g, m.y - grab);
-            }
-            c.hot = 0;
-            c.active = 0;
-            return true;
+            if (found == null or g.track_h < found.?.g.track_h) found = .{ .id = e.key_ptr.*, .g = g };
         }
     }
-    return false;
+    const f = found orelse return false;
+    if (m.y >= f.g.thumb_y and m.y <= f.g.thumb_y + f.g.thumb_h) {
+        c.scrollbar_drag = .{ .id = f.id, .grab_dy = m.y - f.g.thumb_y };
+    } else {
+        // A press on the track moves the thumb to the pointer, then drags.
+        const grab = f.g.thumb_h * 0.5;
+        c.scrollbar_drag = .{ .id = f.id, .grab_dy = grab };
+        scrubTo(c, f.id, f.g, m.y - grab);
+    }
+    c.hot = 0;
+    c.active = 0;
+    return true;
 }
 
 pub fn updateScrollbarDrag(c: *Context) void {

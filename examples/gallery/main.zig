@@ -227,12 +227,12 @@ const Gallery = struct {
         ui.heading(c, "List");
         ui.row(c, .{ .gap = 8, .align_items = .center });
         ui.icon(c, "magnifyingglass", .{ .color = th.muted });
-        _ = ui.textField(c, &g.filter, .{ .placeholder = "Filter 10 000 rows", .width = .{ .px = 280 } });
+        _ = ui.textField(c, &g.filter, .{ .placeholder = "Filter 100 000 rows", .width = .{ .px = 280 } });
         ui.end(c);
         // The rows that match, as indices into the 10 000.
-        var matches: std.ArrayList(u16) = .empty;
+        var matches: std.ArrayList(u32) = .empty;
         const f = g.filter.text();
-        for (0..10_000) |i| {
+        for (0..100_000) |i| {
             if (f.len == 0 or std.mem.indexOf(u8, c.print("Item {d}", .{i}), f) != null)
                 matches.append(c.alloc(), @intCast(i)) catch break;
         }
