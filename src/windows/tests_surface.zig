@@ -74,3 +74,54 @@ test "a motion click and its animated frames draw through a hidden Windows surfa
         });
     }
 }
+
+const Reenter = struct {
+    /// Set on the surface the view reaches for, so the view can call back into
+    /// it while it is building: what the shell's message pump does.
+    surface: ?*@import("surface.zig").Surface = null,
+    builds: u32 = 0,
+    reentered: bool = false,
+
+    fn view(r: *Reenter, c: *ui.Context) void {
+        r.builds += 1;
+        const root = ui.div(c).p(10);
+        defer root.end();
+        ui.text(c, "building", .{});
+        // The first build calls back: asking for a frame while one is building
+        // must be queued, not run inside it.
+        if (r.builds == 1 and !r.reentered) {
+            r.reentered = true;
+            if (r.surface) |s| s.frame();
+        }
+    }
+};
+
+test "a frame asked for while one is building is queued, not run inside it" {
+    const gpa = testing.allocator;
+    const app = try gpa.create(App);
+    app.* = .{
+        .gpa = gpa,
+        .io = std.Io.Threaded.global_single_threaded.io(),
+        .options = .{ .quit_on_last_window_closed = false },
+        .flags = .{ .hidden = true },
+        .gui = true,
+    };
+    defer app.destroy();
+    var r: Reenter = .{};
+    const win = try app.newWindow(.{
+        .title = "hidden reentry test",
+        .width = 200,
+        .height = 120,
+        .visible = false,
+        .content = .{ .view = .init(&r, Reenter.view) },
+    });
+    const s = win.surface.?;
+    r.surface = s;
+    // Builds once here, then twice more inside the call the view makes.
+    s.frame();
+    try testing.expect(r.reentered);
+    // The nested call was queued, not run inside the one that asked: the build
+    // it asked for came after, so the view built twice and never recursed.
+    try testing.expectEqual(@as(u32, 2), r.builds);
+    try testing.expect(!s.in_frame);
+}

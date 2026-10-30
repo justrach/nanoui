@@ -39,6 +39,13 @@ pub const Surface = struct {
     size: types.Size = .{},
     scale: f32 = 1,
     last_frame_time: f64 = 0,
+    /// A frame is being built: a second one asked for meanwhile is queued, not
+    /// run. Windows dispatches messages from inside calls the view makes
+    /// (`ShellExecuteW` pumps its own), so a timer can reach `frame` while the
+    /// view is still building the Context, and the Context is not re-entrant.
+    in_frame: bool = false,
+    /// A frame was asked for while one was building: run one more after it.
+    frame_again: bool = false,
     start_time: f64,
     ticking: bool = false,
     frame_posted: bool = false,
@@ -117,8 +124,25 @@ pub const Surface = struct {
     /// Builds the view for the current state and asks for it to be drawn: the
     /// one entry point for everything that changes what the window shows.
     pub fn frame(self: *Surface) void {
-        self.buildFrame();
-        self.invalidate();
+        if (self.in_frame) {
+            // Building the view called something that pumped messages (the
+            // shell, a dialog), and a timer or input arrived: the frame it asks
+            // for runs once the one being built is done.
+            self.frame_again = true;
+            return;
+        }
+        self.in_frame = true;
+        defer self.in_frame = false;
+        // A view that asks for a frame every time it builds one would spin
+        // here; a handful is what a queued timer or a click needs.
+        var passes: u8 = 0;
+        while (passes < 4) : (passes += 1) {
+            self.frame_again = false;
+            self.buildFrame();
+            self.invalidate();
+            if (!self.frame_again) break;
+        }
+        self.frame_again = false;
     }
 
     /// Asks Windows to paint the client area again. Called once per frame that
@@ -196,9 +220,15 @@ pub const Surface = struct {
         defer _ = w.EndPaint(h, &ps);
         // A size arrived since the last frame: build it now, once, however many
         // WM_SIZE messages asked for it. No invalidation: this paint is the
-        // drawing, and asking for another would draw every size twice.
-        if (self.size_dirty) {
+        // drawing, and asking for another would draw every size twice. A paint
+        // that arrives while a frame is building (from a message the view pumped)
+        // waits for it rather than building over it.
+        // A paint that arrives while a frame is building (from a message the view
+        // pumped) draws what that frame has so far rather than building over it.
+        if (self.size_dirty and !self.in_frame) {
             self.size_dirty = false;
+            self.in_frame = true;
+            defer self.in_frame = false;
             self.buildFrame();
         }
         // The GPU first: it draws the whole frame, and no CPU rasterising
