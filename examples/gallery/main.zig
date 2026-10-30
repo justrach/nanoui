@@ -23,11 +23,15 @@ const Gallery = struct {
     filter: ui.TextBuffer = .{},
     items: [64]Item = undefined,
     count: usize = 0,
-    /// Frames counted in the window that makes up `fps`, and the seconds they
-    /// took: a frame rate read once per half second, not from one frame's dt.
-    fps_frames: u32 = 0,
-    fps_seconds: f32 = 0,
+    /// The last few frames' times, and the rate read from them: `fps` follows
+    /// the frame as it is drawn, and falls when the app goes idle, because idle
+    /// frames really are slower coming.
+    fps_samples: [8]f32 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+    fps_at: usize = 0,
     fps: f32 = 0,
+    /// Wait for the display's refresh when presenting. Off, the frame rate is
+    /// the renderer's own.
+    vsync: bool = true,
     motion: @import("motion.zig").Demo = .{},
     kit: @import("kit.zig").Demo = .{},
     glass: @import("glass.zig").Demo = .{},
@@ -41,19 +45,17 @@ const Gallery = struct {
     }
 
     fn view(g: *Gallery, c: *ui.Context) void {
-        // The frame rate over half-second windows: the frames drawn and the
-        // time they took, so the number holds still enough to read. A frame
-        // that came back from idle is not one the rate counts: its gap is an
-        // idle wait, not the time a frame took.
-        if (c.dt < 0.1) {
-            g.fps_frames += 1;
-            g.fps_seconds += c.dt;
-        }
-        if (g.fps_seconds >= 0.5) {
-            g.fps = @as(f32, @floatFromInt(g.fps_frames)) / g.fps_seconds;
-            g.fps_frames = 0;
-            g.fps_seconds = 0;
-        }        if (phone.compact(c)) return phone.view(g, c);
+        // The rate from the last few frames' own gaps, refreshed every frame:
+        // a frame drawn now is in the number now. `c.dt` is the real gap
+        // between frames, and it reads low while the app sits idle, which is
+        // the truth of it.
+        g.fps_samples[g.fps_at] = c.frame_time;
+        g.fps_at = (g.fps_at + 1) % g.fps_samples.len;
+        var total: f32 = 0;
+        for (g.fps_samples) |s| total += s;
+        g.fps = if (total > 0) @as(f32, @floatFromInt(g.fps_samples.len)) / total else 0;
+        c.vsync = g.vsync;
+        if (phone.compact(c)) return phone.view(g, c);
         ui.row(c, .{ .width = .fill, .height = .fill });
         defer ui.end(c);
         g.sidebar(c);
@@ -105,9 +107,6 @@ const Gallery = struct {
         ui.spacer(c);
         ui.label(c, c.print("{d} frames", .{c.frame}));
         ui.label(c, c.print("{d:.0} fps", .{g.fps}));
-        // The rate is only true if frames keep coming: one more, half a second
-        // from now, so an idle app still says what it draws.
-        c.frameIn(0.5);
     }
 
     fn controls(g: *Gallery, c: *ui.Context) void {
@@ -137,6 +136,7 @@ const Gallery = struct {
             _ = ui.toggle(c, "Notifications", &g.notifications);
             _ = ui.toggle(c, "Sync over cellular", &g.sync);
             _ = ui.checkbox(c, "Remember me", &g.dark_glass);
+            _ = ui.checkbox(c, "V-Sync", &g.vsync);
         }
         ui.card(c, .{ .width = .fill, .gap = 12 });
         {

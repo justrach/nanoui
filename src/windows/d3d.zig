@@ -62,8 +62,15 @@ const SwapChainDesc1 = extern struct {
     sample_count: u32 = 1,
     sample_quality: u32 = 0,
     usage: u32 = 0x20, // DXGI_USAGE_RENDER_TARGET_OUTPUT
+    /// Two, the flip model's minimum. A deeper queue would let a drag resize
+    /// pile frames the compositor has yet to show, and `Present` then blocks on
+    /// a full queue: with two, each present waits for the one before it, which
+    /// is what keeps a resize in step with the pointer.
     buffers: u32 = 2,
-    scaling: u32 = 1, // DXGI_SCALING_NONE: anchored, never stretched
+    /// Nothing is stretched: a frame is its own size, anchored at the top
+    /// left, and a resize uncovers the background colour rather than a
+    /// blurred or bent copy of the last frame.
+    scaling: u32 = 1, // DXGI_SCALING_NONE
     effect: u32 = 3, // DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL
     alpha: u32 = 3, // DXGI_ALPHA_MODE_IGNORE
     flags: u32 = 0,
@@ -94,6 +101,16 @@ pub const Presenter = struct {
     swap: *Com,
     width: u32,
     height: u32,
+    /// Wait for the vertical blank when presenting. Off lets the renderer run
+    /// as fast as it can; the flip model still never shows a half frame.
+    vsync: bool = true,
+    /// A resize is under way: present at once instead of waiting for the
+    /// refresh, so a drag-resize is not one vblank plus one ResizeBuffers per
+    /// size it passes through, which is what makes it stutter.
+    resizing: bool = false,
+    /// The size a drag ended on, applied once it does.
+    want_w: u32 = 0,
+    want_h: u32 = 0,
     /// The pixels go through this to reach the back buffer: a DYNAMIC
     /// texture the frame is mapped into and written, copy-by-discard, so
     /// the driver hands out fresh memory instead of waiting for the GPU to
@@ -150,20 +167,52 @@ pub const Presenter = struct {
         _ = p.swap.slot(*const fn (*Com, *const Rgba) callconv(.winapi) HRESULT, 25)(p.swap, &color); // SetBackgroundColor
     }
 
-    /// Puts `pixels` (BGRA, `width` × `height`, rows from the top) in the
-    /// back buffer, the buffers resized first if the window was.
-    /// Sizes the swap chain for a `width` × `height` frame: ResizeBuffers
-    /// keeping the count and format, then a new upload texture, which is the
-    /// window's too. A no-op when it is already that size.
+    /// Sizes the swap chain for a `width` × `height` frame. A no-op when it is
+    /// already that size, and deferred while a drag is under way (`endResize`
+    /// then applies the size it stopped at).
     pub fn resize(p: *Presenter, width: u32, height: u32) !void {
         if (width == p.width and height == p.height) return;
+        // A drag asks for a new size every few pixels. `ResizeBuffers` waits for
+        // the GPU to finish with the buffers it is replacing, and doing that per
+        // size is what makes a drag hitch: the swap chain keeps its size until
+        // the drag ends, and `DXGI_SCALING_NONE` anchors the frame at the top
+        // left, so the strip the window gained shows the background colour (the
+        // frame is never stretched, and never bent).
+        if (p.resizing) {
+            p.want_w = width;
+            p.want_h = height;
+            return;
+        }
+        try p.resizeNow(width, height);
+    }
+
+    /// The drag is over: the swap chain takes the size the drag ended on, in one
+    /// `ResizeBuffers` rather than one per size the drag passed through.
+    pub fn endResize(p: *Presenter) void {
+        p.resizing = false;
+        if (p.want_w == 0 or p.want_h == 0) return;
+        const nw = p.want_w;
+        const nh = p.want_h;
+        p.want_w = 0;
+        p.want_h = 0;
+        if (nw != p.width or nh != p.height) p.resizeNow(nw, nh) catch {};
+    }
+
+    /// The swap chain at `width` × `height`: what `resize` calls once no drag
+    /// is in the way.
+    fn resizeNow(p: *Presenter, width: u32, height: u32) !void {
         try check(p.swap.slot(*const fn (*Com, u32, u32, u32, u32, u32) callconv(.winapi) HRESULT, 13)(p.swap, 0, width, height, 0, 0));
         p.width = width;
         p.height = height;
+        // The CPU path's upload texture goes with the old size; the GPU path
+        // never made one, and freeing nothing here keeps a resize to the one
+        // call that must happen.
         if (p.upload_tex) |t| t.release();
         p.upload_tex = null;
     }
 
+    /// Puts `pixels` (BGRA, `width` × `height`, rows from the top) in the back
+    /// buffer, sized for them first if the window was.
     pub fn upload(p: *Presenter, pixels: []const u8, width: u32, height: u32) !void {
         try p.resize(width, height);
         // Through a DYNAMIC texture, not straight from `pixels`: the renderer
@@ -192,10 +241,15 @@ pub const Presenter = struct {
         p.context.slot(*const fn (*Com, *Com, *Com) callconv(.winapi) void, 47)(p.context, buffer, target); // CopyResource
     }
 
-    /// Shows the back buffer, at the next vertical blank. False when the
-    /// device was lost: the caller drops this presenter and makes another.
+    /// Shows the back buffer, waiting for the next vertical blank when
+    /// `vsync` is set. False when the device was lost: the caller drops this
+    /// presenter and makes another.
     pub fn present(p: *Presenter) bool {
-        const hr = p.swap.slot(*const fn (*Com, u32, u32) callconv(.winapi) HRESULT, 8)(p.swap, 1, 0); // Present
+        // SyncInterval 1 waits for the refresh, 0 presents at once. A drag
+        // resize presents at once: the sizes it passes through are shown as
+        // they come, not one vblank each.
+        const sync: u32 = if (p.vsync and !p.resizing) 1 else 0;
+        const hr = p.swap.slot(*const fn (*Com, u32, u32) callconv(.winapi) HRESULT, 8)(p.swap, sync, 0); // Present
         const code: u32 = @bitCast(hr);
         return !(code == device_removed or code == device_reset);
     }

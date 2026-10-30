@@ -244,6 +244,16 @@ pub const Params = extern struct {
     pad1: i32 = 0,
 };
 
+/// The size a texture is made at to hold a `want`-tall or -wide frame that the
+/// last one of `had` did not: a quarter more, so a drag-resize passes many
+/// sizes before the texture is remade again. Stepping by a fixed number of
+/// pixels would remake it at every step of a drag; stepping by a share of it
+/// keeps the number of remakes logarithmic.
+fn stepSize(want: usize, had: usize) usize {
+    const grown = want + want / 4 + 64;
+    return if (grown > had) grown else had;
+}
+
 /// A texture with the views that draw into it and read it.
 pub const Target = struct {
     texture: ?*Com = null,
@@ -257,11 +267,21 @@ pub const Target = struct {
     pub fn reserve(t: *Target, device: *Com, w: usize, h: usize, exact: bool) void {
         if (t.texture != null) {
             const fits = if (exact) w == t.w and h == t.h else w <= t.w and h <= t.h;
-            if (fits) return;
+            // A texture well past what the frame needs is let go: a window
+            // dragged huge and then made small would otherwise keep that much
+            // video memory for as long as it lives.
+            const oversized = !exact and w * 4 < t.w and h * 4 < t.h;
+            if (fits and !oversized) return;
         }
         t.deinit();
-        const tw: u32 = @intCast(if (exact) w else @max(w, t.w));
-        const th: u32 = @intCast(if (exact) h else @max(h, t.h));
+        // Grown in steps, not to the exact size: a drag resize asks for a few
+        // more pixels a frame, and reallocating the texture (with its two views)
+        // for each of them is what made a resize stutter. A quarter more than
+        // is needed leaves room for the frames that follow.
+        const want_w = if (exact) w else @max(w, t.w);
+        const want_h = if (exact) h else @max(h, t.h);
+        const tw: u32 = @intCast(if (exact) want_w else stepSize(want_w, t.w));
+        const th: u32 = @intCast(if (exact) want_h else stepSize(want_h, t.h));
         if (tw == 0 or th == 0) return;
         const tex = texture2D(device, bgra8, tw, th, bind_render_target | bind_shader_resource) orelse return;
         var rtv: ?*Com = null;

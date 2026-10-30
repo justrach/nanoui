@@ -20,6 +20,7 @@ const Context = ctx_mod.Context;
 const Window = @import("window.zig").Window;
 const d3d = @import("d3d.zig");
 const d3d11 = @import("../ui/d3d11.zig");
+const gpu_side = @import("surface_gpu.zig");
 
 /// Posted for a frame requested from outside the view.
 pub const WM_FRAME = w.WM_APP + 1;
@@ -58,6 +59,10 @@ pub const Surface = struct {
     /// Set when there is no Direct3D 11 renderer to draw with, so that the
     /// canvas is not kept trying.
     no_gpu: bool = false,
+    /// A size arrived that no frame has been built for yet.
+    size_dirty: bool = false,
+    /// A drag is moving the window's edge (`WM_ENTERSIZEMOVE` .. `WM_EXITSIZEMOVE`).
+    dragging: bool = false,
     /// `NANOUI_DUMP`: F12 writes the canvas beside the same frame drawn whole.
     dump_enabled: bool = false,
     dumps: usize = 0,
@@ -80,8 +85,7 @@ pub const Surface = struct {
     }
 
     pub fn destroy(self: *Surface) void {
-        if (self.gpu) |*g| g.deinit();
-        if (self.presenter) |*p| p.deinit();
+        gpu_side.release(self);
         self.instances.deinit(self.gpa);
         self.pixels.deinit(self.gpa);
         self.ctx.deinit();
@@ -97,22 +101,43 @@ pub const Surface = struct {
         return self.theme_override orelse Theme.light;
     }
 
+    /// Builds the view for the current state and asks for it to be drawn: the
+    /// one entry point for everything that changes what the window shows.
     pub fn frame(self: *Surface) void {
+        self.buildFrame();
+        self.invalidate();
+    }
+
+    /// Asks Windows to paint the client area again. Called once per frame that
+    /// is built: a WM_SIZE that already invalidated must not add another, or
+    /// every size a drag passes through is drawn twice.
+    fn invalidate(self: *Surface) void {
+        const h = self.hwnd() orelse return;
+        // A GPU frame draws the whole client area, so there is no damage to work
+        // out (and no CPU pixels to keep for it). The CPU path still finds what
+        // changed.
+        if (self.gpu != null) {
+            _ = w.InvalidateRect(h, null, 0);
+        } else if (self.pixels.damage(self.shown())) |d| {
+            const rect: w.RECT = .{ .left = @intCast(d[0]), .top = @intCast(d[1]), .right = @intCast(d[2]), .bottom = @intCast(d[3]) };
+            _ = w.InvalidateRect(h, &rect, 0);
+        }
+    }
+
+    /// Builds one frame: layout, paint, and the timers animations and later
+    /// frames need, without asking for a paint. `frame` adds that; `paint` is
+    /// already drawing.
+    pub fn buildFrame(self: *Surface) void {
         if (self.size.w <= 0 or self.size.h <= 0) return;
         const c = &self.ctx;
         const now = clock.now();
+        const raw_dt: f32 = if (self.last_frame_time > 0) @floatCast(@min(now - self.last_frame_time, 1.0)) else 1.0 / 60.0;
         const dt: f32 = if (self.last_frame_time > 0) @floatCast(@min(now - self.last_frame_time, 0.1)) else 1.0 / 60.0;
         self.last_frame_time = now;
         const r = frame_mod.run(c, self.view, &self.text, &self.instances, self.size, self.scale, self.theme(), dt, now - self.start_time);
-        // The whole client area is redrawn every frame: a GPU frame draws all
-        // of it, so there is no damage to work out (and no CPU pixels to keep
-        // for it). The CPU path still finds what changed.
-        if (self.gpu != null) {
-            if (self.hwnd()) |h| _ = w.InvalidateRect(h, null, 0);
-        } else if (self.pixels.damage(self.shown())) |d| if (self.hwnd()) |h| {
-            const rect: w.RECT = .{ .left = @intCast(d[0]), .top = @intCast(d[1]), .right = @intCast(d[2]), .bottom = @intCast(d[3]) };
-            _ = w.InvalidateRect(h, &rect, 0);
-        };
+        // The real gap, for a view that reports its frame rate: `dt` above is
+        // clamped so an animation cannot jump, but the rate is what it is.
+        c.frame_time = raw_dt;
         self.updateCursor();
         const more = c.animating or r.hot_changed;
         if (more and !self.ticking) if (self.hwnd()) |h| {
@@ -123,7 +148,6 @@ pub const Surface = struct {
         if (!more) if (c.frame_in) |s| if (self.hwnd()) |h| {
             _ = w.SetTimer(h, later_timer, @intFromFloat(@max(1, s * 1000)), null);
         };
-        if (!c.animating) self.last_frame_time = 0;
     }
 
     pub fn requestFrame(self: *Surface) void {
@@ -133,7 +157,7 @@ pub const Surface = struct {
         _ = w.PostMessageW(h, WM_FRAME, 0, 0);
     }
 
-    fn shown(self: *Surface) canvas.Frame {
+    pub fn shown(self: *Surface) canvas.Frame {
         return .{ .instances = self.instances.items, .text = &self.text, .clear = self.ctx.theme.background, .size = self.size, .scale = self.scale, .textures = self.ctx.textures.items };
     }
 
@@ -141,13 +165,20 @@ pub const Surface = struct {
         var ps: w.PAINTSTRUCT = undefined;
         const dc = w.BeginPaint(h, &ps) orelse return;
         defer _ = w.EndPaint(h, &ps);
+        // A size arrived since the last frame: build it now, once, however many
+        // WM_SIZE messages asked for it. No invalidation: this paint is the
+        // drawing, and asking for another would draw every size twice.
+        if (self.size_dirty) {
+            self.size_dirty = false;
+            self.buildFrame();
+        }
         // The GPU first: it draws the whole frame, and no CPU rasterising
         // happens at all. Without one, the canvas draws what changed.
-        if (self.paintGpu(h)) return;
+        if (gpu_side.paintGpu(self, h)) return;
         self.pixels.draw(self.gpa, self.shown());
         const px = &self.pixels;
         if (px.bytes.len == 0) return;
-        if (self.present(h)) return;
+        if (gpu_side.present(self, h)) return;
         // A negative height: rows from the top, as the renderer writes them.
         // GDI copies only what was invalidated.
         const info: w.BITMAPINFOHEADER = .{ .biWidth = @intCast(px.width), .biHeight = -@as(i32, @intCast(px.height)) };
@@ -159,112 +190,6 @@ pub const Surface = struct {
     /// The frame drawn by Direct3D 11 straight into the swap chain's back
     /// buffer, from the instances `frame.zig` made. False when there is no
     /// renderer: the canvas then draws the frame instead.
-    fn paintGpu(self: *Surface, h: w.HWND) bool {
-        if (self.no_d3d or self.no_gpu) return false;
-        const pw: u32 = @intFromFloat(@max(1, @round(self.size.w * self.scale)));
-        const ph: u32 = @intFromFloat(@max(1, @round(self.size.h * self.scale)));
-        if (self.presenter == null) {
-            self.presenter = d3d.Presenter.init(h, pw, ph) catch {
-                self.no_d3d = true;
-                self.nameCpu();
-                return false;
-            };
-        }
-        const p = &self.presenter.?;
-        p.resize(pw, ph) catch return false;
-        if (self.gpu == null) {
-            self.gpu = d3d11.Renderer.initOn(@ptrCast(d3d.Presenter.deviceOf(p)), @ptrCast(d3d.Presenter.contextOf(p))) catch {
-                self.no_gpu = true;
-                self.nameCpu();
-                return false;
-            };
-        }
-        const g = &self.gpu.?;
-        const bg = self.ctx.theme.background;
-        p.setBackground(bg.r, bg.g, bg.b);
-        g.sync(self.text.atlas.mask(), self.text.atlas.generation, self.text.images.pictures(), self.text.images.generation);
-        // The back buffer is a COM reference: released before the swap chain
-        // may be resized, or ResizeBuffers fails with DXGI_ERROR_INVALID_CALL
-        // (0x887A0001) because a reference is still held.
-        const back = p.backBuffer() catch return false;
-        defer back.release();
-        g.draw(self.instances.items, self.size, self.scale, bg, @ptrCast(back));
-        if (self.dump_enabled and self.dumps == 0) {
-            // NANOUI_DUMP: the first frame as the GPU drew it, beside the
-            // same frame drawn by the CPU, to see that they agree.
-            self.dumps += 1;
-            self.dumpGpuFrame(g, h);
-        }
-        if (!p.present()) {
-            // The device was lost: both go, and a new pair gets the frame.
-            self.gpu_release();
-            _ = w.InvalidateRect(h, null, 0);
-        }
-        return true;
-    }
-
-    /// Writes the GPU's frame and the CPU's of the same instances, for
-    /// `NANOUI_DUMP`, and says how far apart they are.
-    fn dumpGpuFrame(self: *Surface, g: *d3d11.Renderer, h: w.HWND) void {
-        _ = h;
-        const gpa = self.gpa;
-        const shot = g.read(gpa) catch return;
-        defer shot.deinit(gpa);
-        var whole: canvas.Canvas = .{};
-        defer whole.deinit(gpa);
-        whole.draw(gpa, self.shown());
-        const io = self.window.app.io;
-        std.log.info("nanoui: GPU frame {d}x{d}", .{ shot.width, shot.height });
-        @import("../ui/png.zig").writePng(gpa, io, std.fmt.bufPrint(&self.path_buf, "nanoui-gpu-{d}.png", .{self.dumps}) catch return, shot) catch |e| {
-            std.log.warn("nanoui: could not write the GPU frame: {t}", .{e});
-            return;
-        };
-        @import("../ui/png.zig").writePng(gpa, io, std.fmt.bufPrint(&self.path_buf, "nanoui-cpu-{d}.png", .{self.dumps}) catch return, .{ .bytes = whole.bytes, .width = whole.width, .height = whole.height }) catch {};
-    }
-
-    fn gpu_release(self: *Surface) void {
-        if (self.gpu) |*g| g.deinit();
-        self.gpu = null;
-        if (self.presenter) |*p| p.deinit();
-        self.presenter = null;
-    }
-
-    /// The frame the screen is given is drawn on the CPU: the view names that
-    /// from the next frame on.
-    fn nameCpu(self: *Surface) void {
-        if (std.mem.eql(u8, self.ctx.renderer, "CPU")) return;
-        self.ctx.renderer = "CPU";
-        self.ctx.changed = true;
-        self.requestFrame();
-    }
-
-    fn present(self: *Surface, h: w.HWND) bool {
-        if (self.no_d3d) return false;
-        const pw: u32 = @intCast(self.pixels.width);
-        const ph: u32 = @intCast(self.pixels.height);
-        if (self.presenter == null) {
-            self.presenter = d3d.Presenter.init(h, pw, ph) catch {
-                self.no_d3d = true;
-                return false;
-            };
-        }
-        const p = &self.presenter.?;
-        const bg = self.ctx.theme.background;
-        p.setBackground(bg.r, bg.g, bg.b);
-        p.upload(self.pixels.bytes, pw, ph) catch {
-            p.deinit();
-            self.presenter = null;
-            return false;
-        };
-        if (!p.present()) {
-            // The device was lost: a new one gets the whole frame.
-            p.deinit();
-            self.presenter = null;
-            _ = w.InvalidateRect(h, null, 0);
-        }
-        return true;
-    }
-
     /// `NANOUI_DUMP`, on F12: draws the frame whole beside what the canvas
     /// holds and says whether they differ — the canvas is what the screen is
     /// given, the whole redraw is what it should have been. Only ever run
@@ -320,9 +245,16 @@ pub const Surface = struct {
         var r: w.RECT = .{};
         _ = w.GetClientRect(h, &r);
         const dpi = w.GetDpiForWindow(h);
-        self.scale = if (dpi > 0) @as(f32, @floatFromInt(dpi)) / 96 else 1;
+        const scale: f32 = if (dpi > 0) @as(f32, @floatFromInt(dpi)) / 96 else 1;
+        // A drag-resize sends WM_SIZE per pixel of movement, and the DPI does
+        // not change with the size: only a scale that changed is worth telling
+        // the text system about (it would empty the glyph atlas to re-raster
+        // every glyph at the new scale).
+        if (scale != self.scale) {
+            self.scale = scale;
+            self.text.setScale(scale);
+        }
         self.size = .{ .w = @as(f32, @floatFromInt(r.right - r.left)) / self.scale, .h = @as(f32, @floatFromInt(r.bottom - r.top)) / self.scale };
-        self.text.setScale(self.scale);
     }
 
     fn setMouse(self: *Surface, lp: w.LPARAM) void {
@@ -341,8 +273,27 @@ pub const Surface = struct {
             w.WM_PAINT => self.paint(h),
             w.WM_ERASEBKGND => return 1,
             w.WM_SIZE, w.WM_DPICHANGED => {
+                // A resize is many messages a second, and laying the view out
+                // for each of them is wasted work: the size is read now, and the
+                // frame is built once, when the message queue is empty.
                 self.updateSize(h);
-                self.frame();
+                self.size_dirty = true;
+                if (self.hwnd()) |hh| _ = w.InvalidateRect(hh, null, 0);
+            },
+            // A drag resize begins and ends: between them frames present at
+            // once instead of one per vblank, so the sizes the drag passes
+            // through are not each a refresh behind the pointer.
+            0x0231, 0x0232 => { // WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE
+                // The surface keeps it as well as the presenter: the drag may
+                // begin before the first frame made one.
+                const begin = msg == 0x0231;
+                self.dragging = begin;
+                if (self.presenter) |*p| {
+                    p.resizing = begin;
+                    // The size the drag ended on, in one ResizeBuffers.
+                    if (!begin) p.endResize();
+                }
+                if (!begin) self.requestFrame();
             },
             w.WM_TIMER => if (wp == later_timer) {
                 _ = w.KillTimer(h, later_timer);

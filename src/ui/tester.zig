@@ -90,6 +90,8 @@ pub const Tester = struct {
 
     pub fn frame(t: *Tester) void {
         _ = frame_mod.run(&t.ctx, t.view, &t.text, &t.instances, t.size, t.scale, t.theme, t.dt, t.time);
+        // The simulated clock is the real one here: a view reads its rate off it.
+        t.ctx.frame_time = t.dt;
         t.time += t.dt;
     }
 

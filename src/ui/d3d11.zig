@@ -124,6 +124,11 @@ pub const Renderer = struct {
     images_size: u32 = 0,
     images_generation: u64 = std.math.maxInt(u64),
     frame: Target = .{},
+    /// The size the last frame was drawn at, which the frame texture may be
+    /// larger than (it is grown, never shrunk): what `read` and the copy to
+    /// the swap chain use.
+    frame_w: usize = 0,
+    frame_h: usize = 0,
     /// The frame copied for the panes to read: Direct3D 11 leaves a texture's
     /// reads undefined while its render target view is still bound, so the
     /// backdrop is taken from this copy rather than from `frame` itself.
@@ -238,9 +243,16 @@ pub const Renderer = struct {
         const g = r.context;
         const w: usize = @intFromFloat(@max(1, @round(size.w * scale)));
         const h: usize = @intFromFloat(@max(1, @round(size.h * scale)));
-        r.frame.reserve(r.device, w, h, true);
+        // The frame texture is grown, never rebuilt: a diagonal resize changes
+        // the size every frame, and a texture remade every frame (with its views
+        // and a swap chain ResizeBuffers) is what made resizing stutter. What
+        // is drawn is the window's own `w` × `h`, and only that reaches the
+        // swap chain.
+        r.frame.reserve(r.device, w, h, false);
         const f = &r.frame;
         if (f.rtv == null or f.srv == null) return;
+        r.frame_w = w;
+        r.frame_h = h;
 
         setViewport(g, @floatFromInt(w), @floatFromInt(h));
         bindTarget(g, f.rtv.?);
@@ -261,13 +273,16 @@ pub const Renderer = struct {
             r.drawPane(instances, end, size, scale);
             first = end + 1;
         }
-        if (target) |t| g.slot(*const fn (*Com, *Com, *Com) callconv(.winapi) void, CopyResource)(g, t, f.texture.?);
+        if (target) |t| {
+            const src: Box = .{ .right = @intCast(w), .bottom = @intCast(h) };
+            g.slot(*const fn (*Com, *Com, u32, u32, u32, u32, *Com, u32, ?*const Box) callconv(.winapi) void, CopySubresourceRegion)(g, t, 0, 0, 0, 0, f.texture.?, 0, &src);
+        }
     }
 
     /// The last frame's pixels: BGRA, premultiplied, top row first.
     pub fn read(r: *Renderer, gpa: std.mem.Allocator) !gpu.Pixels {
-        const w = r.frame.w;
-        const h = r.frame.h;
+        const w = r.frame_w;
+        const h = r.frame_h;
         const bytes = try gpa.alloc(u8, w * h * 4);
         errdefer gpa.free(bytes);
         if (w == 0 or h == 0) return .{ .bytes = bytes, .width = w, .height = h };
@@ -276,7 +291,9 @@ pub const Renderer = struct {
         try must(r.device.slot(*const fn (*Com, *const Texture2DDesc, ?*const anyopaque, *?*Com) callconv(.winapi) HRESULT, CreateTexture2D)(r.device, &desc, null, &staging), "CreateTexture2D(staging)");
         defer staging.?.release();
         const g = r.context;
-        g.slot(*const fn (*Com, *Com, *Com) callconv(.winapi) void, CopyResource)(g, staging.?, r.frame.texture.?);
+        // The frame texture may be larger than this frame: copy its corner.
+        const src: Box = .{ .right = @intCast(w), .bottom = @intCast(h) };
+        g.slot(*const fn (*Com, *Com, u32, u32, u32, u32, *Com, u32, ?*const Box) callconv(.winapi) void, CopySubresourceRegion)(g, staging.?, 0, 0, 0, 0, r.frame.texture.?, 0, &src);
         var mapped: Mapped = undefined;
         try must(g.slot(*const fn (*Com, *Com, u32, u32, u32, *Mapped) callconv(.winapi) HRESULT, Map)(g, staging.?, 0, map_read, 0, &mapped), "Map(staging)");
         defer g.slot(*const fn (*Com, *Com, u32) callconv(.winapi) void, Unmap)(g, staging.?, 0);
@@ -335,13 +352,13 @@ pub const Renderer = struct {
         // drawn where no one sees it.
         const g = r.context;
         defer {
-            setViewport(g, @floatFromInt(r.frame.w), @floatFromInt(r.frame.h));
+            setViewport(g, @floatFromInt(r.frame_w), @floatFromInt(r.frame_h));
             bindTarget(g, r.frame.rtv.?);
             // The passes rebound the target, the vertex shader and its
             // resources: `setState` puts back what the next quad draw needs.
             r.setState();
         }
-        const b = glass.backdropOf(instances[at].rect, instances[at].border_width, scale, r.frame.w, r.frame.h) orelse return;
+        const b = glass.backdropOf(instances[at].rect, instances[at].border_width, scale, r.frame_w, r.frame_h) orelse return;
         const w: usize = @intCast(b.w);
         const h: usize = @intCast(b.h);
         r.a.reserve(r.device, w, h, false);
@@ -351,15 +368,16 @@ pub const Renderer = struct {
         // texture's reads undefined while its render target view is bound, so
         // the frame is copied first: `snap` is what `down_ps` samples. Its RTV
         // is never bound, only its SRV is read.
-        r.snap.reserve(r.device, r.frame.w, r.frame.h, true);
+        r.snap.reserve(r.device, r.frame_w, r.frame_h, false);
         if (r.snap.srv == null or r.snap.texture == null or r.frame.texture == null) return;
-        g.slot(*const fn (*Com, *Com, *Com) callconv(.winapi) void, CopyResource)(g, r.snap.texture.?, r.frame.texture.?);
+        const frame_box: Box = .{ .right = @intCast(r.frame_w), .bottom = @intCast(r.frame_h) };
+        g.slot(*const fn (*Com, *Com, u32, u32, u32, u32, *Com, u32, ?*const Box) callconv(.winapi) void, CopySubresourceRegion)(g, r.snap.texture.?, 0, 0, 0, 0, r.frame.texture.?, 0, &frame_box);
         // The passes read the frame's area in `down`-pixel squares and write
         // `size` texels: both are the backdrop's, not the frame's.
         const back: Params = .{
             .area = b.area,
             .down = @floatFromInt(b.down),
-            .frame_height = @intCast(r.frame.h),
+            .frame_height = @intCast(r.frame_h),
             .radius = b.radius,
             .sigma = b.sigma,
             .size = .{ @floatFromInt(b.w), @floatFromInt(b.h) },
@@ -374,7 +392,7 @@ pub const Renderer = struct {
             r.pass(r.blur_ps, r.b.srv.?, r.a.rtv.?, down_dir, b.w, b.h);
         }
         // The pane itself over the frame, reading `a` as its backdrop.
-        setViewport(g, @floatFromInt(r.frame.w), @floatFromInt(r.frame.h));
+        setViewport(g, @floatFromInt(r.frame_w), @floatFromInt(r.frame_h));
         bindTarget(g, r.frame.rtv.?);
         r.setBlend(true);
         r.drawRange(true, size, scale, at, 1, .{
