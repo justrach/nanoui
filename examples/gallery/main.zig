@@ -28,6 +28,19 @@ const Gallery = struct {
     filter: ui.TextBuffer = .{},
     items: [64]Item = undefined,
     count: usize = 0,
+    /// The rows of the List page that match `filter`, as indices into the
+    /// 100 000. Rebuilt only when the filter text changes: it used to be built
+    /// every frame, which is 100 000 `print` allocations and appends per frame,
+    /// and that is what made dragging the scrollbar stutter — the faster the
+    /// frames came, the more of them paid that cost.
+    matches: std.ArrayList(u32) = .empty,
+    /// The filter text `matches` was built from, so an unchanged one costs a
+    /// string compare instead of a rebuild.
+    matches_for: std.ArrayList(u8) = .empty,
+    /// Whether `matches` has ever been built. Without it the first frame
+    /// compares the empty filter against the empty `matches_for`, calls them
+    /// equal, and leaves the list at zero rows.
+    matches_built: bool = false,
     /// The last few frames' times, and the rate read from them: `fps` follows
     /// the frame as it is drawn, and falls when the app goes idle, because idle
     /// frames really are slower coming.
@@ -219,7 +232,49 @@ const Gallery = struct {
         if (g.count == 0) ui.text(c, "Nothing to do.", .{ .color = c.theme.muted });
     }
 
-    /// Ten thousand rows, filtered as you type: only those in view are built.
+    /// Rebuilds `matches` only when the filter text is not the one they were
+    /// built from. That comparison is the whole point: an unchanged filter costs
+    /// one `eql` per frame, and a changed one costs a single pass over the
+    /// 100 000 — which is what a keystroke deserves and a frame does not.
+    ///
+    /// The allocations come from `std.heap.c_allocator`, not `c.alloc()`: that
+    /// one is the frame's arena, reset at the start of every frame, so a list
+    /// kept in it is freed while the list still points at it — which is why the
+    /// count read zero on the second frame.
+    fn syncMatches(g: *Gallery, c: *ui.Context) void {
+        _ = c;
+        const f = g.filter.text();
+        if (g.matches_built and std.mem.eql(u8, g.matches_for.items, f)) return;
+        g.matches_built = true;
+
+        const gpa = std.heap.c_allocator;
+        g.matches_for.clearRetainingCapacity();
+        g.matches_for.appendSlice(gpa, f) catch return;
+        g.matches.clearRetainingCapacity();
+
+        // An empty filter is every row: no need to format 100 000 names to say
+        // so, and that is the common case — the page opens with it empty, and a
+        // scrollbar drag never touches it.
+        if (f.len == 0) {
+            g.matches.ensureTotalCapacity(gpa, 100_000) catch return;
+            for (0..100_000) |i| g.matches.appendAssumeCapacity(@intCast(i));
+            return;
+        }
+        // A filter is typed a character at a time, so this runs once per
+        // keystroke at most; the formatted name is built into a stack buffer,
+        // never allocated.
+        var buf: [32]u8 = undefined;
+        for (0..100_000) |i| {
+            const name = std.fmt.bufPrint(&buf, "Item {d}", .{i}) catch continue;
+            if (std.mem.indexOf(u8, name, f) != null) g.matches.append(gpa, @intCast(i)) catch return;
+        }
+    }
+
+    /// A hundred thousand rows, filtered as you type: only those in view are
+    /// built, and the matches themselves are rebuilt only when the filter text
+    /// changes. Building them every frame is 100 000 formatted strings and
+    /// 100 000 appends per frame, which is what made dragging the scrollbar
+    /// stutter: the faster the frames came, the more of them paid it.
     fn bigList(g: *Gallery, c: *ui.Context) void {
         const th = c.theme;
         ui.column(c, .{ .grow = 1, .height = .fill, .padding = .{ .top = 28, .left = 28, .right = 28 }, .gap = 12 });
@@ -229,17 +284,11 @@ const Gallery = struct {
         ui.icon(c, "magnifyingglass", .{ .color = th.muted });
         _ = ui.textField(c, &g.filter, .{ .placeholder = "Filter 100 000 rows", .width = .{ .px = 280 } });
         ui.end(c);
-        // The rows that match, as indices into the 10 000.
-        var matches: std.ArrayList(u32) = .empty;
-        const f = g.filter.text();
-        for (0..100_000) |i| {
-            if (f.len == 0 or std.mem.indexOf(u8, c.print("Item {d}", .{i}), f) != null)
-                matches.append(c.alloc(), @intCast(i)) catch break;
-        }
-        ui.label(c, c.print("{d} rows · a virtual list builds only those in view", .{matches.items.len}));
-        var rows = ui.list(c, .{ .count = matches.items.len, .row_height = 36, .gap = 0 });
+        g.syncMatches(c);
+        ui.label(c, c.print("{d} rows · a virtual list builds only those in view", .{g.matches.items.len}));
+        var rows = ui.list(c, .{ .count = g.matches.items.len, .row_height = 36, .gap = 0 });
         while (rows.next()) |i| {
-            const n = matches.items[i];
+            const n = g.matches.items[i];
             const row = ui.div(c).row().wFull().h(36).px(12).gap(10).itemsCenter().rounded(6).hover(th.surface_hover);
             defer row.end();
             ui.icon(c, if (n % 3 == 0) "star.fill" else "doc.text", .{ .size = 13, .frame = 18, .color = if (n % 3 == 0) th.accent else th.muted });
