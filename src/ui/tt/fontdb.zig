@@ -1,4 +1,4 @@
-//! The fonts installed: found in the system's font folders once, each
+﻿//! The fonts installed: found in the system's font folders once, each
 //! face known by its family, weight, italics and width, and loaded when
 //! first used. Matching a style picks the family's nearest face; a
 //! character a font lacks is found in the fallback families, then in any
@@ -30,8 +30,12 @@ const android = builtin.abi.isAndroid();
 /// Android's own first there.
 const sans = (if (android) [_][]const u8{"Roboto"} else [_][]const u8{}) ++ [_][]const u8{ "Inter", "Geist", "Segoe UI", "Noto Sans", "Cantarell", "Ubuntu", "DejaVu Sans", "Liberation Sans", "Arial", "Helvetica" };
 const monos = (if (android) [_][]const u8{ "Droid Sans Mono", "Cutive Mono" } else [_][]const u8{}) ++ [_][]const u8{ "JetBrains Mono", "Geist Mono", "Cascadia Mono", "Consolas", "Noto Sans Mono", "DejaVu Sans Mono", "Ubuntu Mono", "Liberation Mono", "Menlo", "Courier New" };
+/// Families a CJK string needs when the UI family has no glyph for it:
+/// Windows, macOS and Linux each name theirs. Kept ahead of the symbol
+/// fallbacks so a hanzi never lands in a partial-coverage font.
+const cjk = [_][]const u8{ "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", "SimSun", "MS Gothic" };
 /// Where characters a font lacks are looked for first.
-const fallbacks = [_][]const u8{ "Noto Sans", "DejaVu Sans", "Segoe UI Symbol", "Noto Sans Symbols", "Noto Sans Symbols2", "Arial Unicode MS", "Symbola" };
+const fallbacks = cjk ++ [_][]const u8{ "Noto Sans", "DejaVu Sans", "Segoe UI Symbol", "Noto Sans Symbols", "Noto Sans Symbols2", "Arial Unicode MS", "Symbola" };
 
 extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
 
