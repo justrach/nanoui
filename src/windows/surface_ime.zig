@@ -25,7 +25,12 @@ pub const State = struct {
     /// handler that placed again from there would recurse until the window
     /// stopped responding. That is exactly what happened once, and this guard
     /// makes it impossible whatever the handler does.
-    placing: bool = false,
+    ///
+    /// One flag per window, not one for both: the two calls are independent, and
+    /// a shared flag would make placing the composition silently skip placing
+    /// the list when they happen in sequence.
+    placing_composition: bool = false,
+    placing_candidate: bool = false,
     /// The caret the IME was last told about, in view points, so a frame that
     /// did not move it says nothing (taking a context costs a call each way).
     caret_x: f32 = -1e9,
@@ -213,9 +218,9 @@ fn caretOf(self: *Surface) ?Caret {
 /// means a future handler cannot turn the echo into a freeze again — the second
 /// call in returns without doing anything.
 pub fn placeCompositionWindow(self: *Surface, h: w.HWND) void {
-    if (self.ime.placing) return;
-    self.ime.placing = true;
-    defer self.ime.placing = false;
+    if (self.ime.placing_composition) return;
+    self.ime.placing_composition = true;
+    defer self.ime.placing_composition = false;
     const c = caretOf(self) orelse return;
     const himc = w.ImmGetContext(h) orelse return;
     defer _ = w.ImmReleaseContext(h, himc);
@@ -236,9 +241,9 @@ pub fn placeCompositionWindow(self: *Surface, h: w.HWND) void {
 /// still adjust, and gave it no line to avoid, so it had no reason to be under
 /// the text at all.
 pub fn placeCandidateWindow(self: *Surface, h: w.HWND) void {
-    if (self.ime.placing) return;
-    self.ime.placing = true;
-    defer self.ime.placing = false;
+    if (self.ime.placing_candidate) return;
+    self.ime.placing_candidate = true;
+    defer self.ime.placing_candidate = false;
     const c = caretOf(self) orelse return;
     const himc = w.ImmGetContext(h) orelse return;
     defer _ = w.ImmReleaseContext(h, himc);
@@ -276,28 +281,6 @@ fn readString(self: *Surface, himc: w.HIMC, index: u32) ?[]u8 {
     if (got <= 0) return null;
     const n: usize = @intCast(@divTrunc(got, 2));
     return std.unicode.utf16LeToUtf8Alloc(self.gpa, buf[0..n]) catch null;
-}
-
-/// WM_IME_SETCONTEXT when the window gains the keyboard: the IME may draw its
-/// own windows for this hwnd.
-///
-/// The `ISC_*` flags in `lParam` are the system's to read, so this looks at
-/// them and changes nothing: an app that draws the composition itself clears
-/// `ISC_SHOWUICOMPOSITIONWINDOW`, and this one does not. The caller hands the
-/// message on to `DefWindowProc` afterwards for that reason.
-///
-/// The IME used to be force-opened here with `ImmSetOpenStatus`. That is not the
-/// application's decision — Shift and the taskbar own it — and forcing it on
-/// every focus change is one explanation for a TSF-based IME (Doubao) that
-/// reported the wrong state and then refused to compose at all. The IME now
-/// keeps whatever state the user set.
-pub fn setContext(self: *Surface, h: w.HWND, wp: w.WPARAM) void {
-    _ = h;
-    // wParam is TRUE when the window is gaining the keyboard, FALSE when losing
-    // it. Nothing to do either way until the composition starts.
-    _ = wp;
-    // For a view that draws an IME indicator: whether this window owns the IME.
-    _ = self;
 }
 
 /// A character the keyboard or the IME produced, as a UTF-16 unit: `WM_CHAR`,
@@ -340,11 +323,10 @@ pub fn handle(self: *Surface, h: w.HWND, msg: u32, wp: w.WPARAM, lp: w.LPARAM) ?
         w.WM_IME_STARTCOMPOSITION => startComposition(self, h),
         w.WM_IME_COMPOSITION => composition(self, h, lp),
         w.WM_IME_ENDCOMPOSITION => endComposition(self, h),
-        w.WM_IME_SETCONTEXT => {
-            setContext(self, h, wp);
-            // Default processing, with the ISC_* bits as they arrived.
-            return null;
-        },
+        // Handed on to `DefWindowProc` so the ISC_* bits in lParam reach it.
+        // Answering 0 cleared them, which tells Windows the app draws the
+        // composition and candidate windows itself; it draws neither.
+        w.WM_IME_SETCONTEXT => return null,
         w.WM_IME_NOTIFY => notify(self, h, wp),
         w.WM_IME_REQUEST => return request(self, h, wp, lp),
         // A character the IME produced without a composition (a soft keyboard, a

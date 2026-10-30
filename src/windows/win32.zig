@@ -136,8 +136,6 @@ pub extern "imm32" fn ImmSetCandidateWindow(himc: HIMC, form: *const CANDIDATEFO
 /// The composition string (GCS_COMPSTR) or the committed one (GCS_RESULTSTR),
 /// as UTF-16 in `buf`; the length in bytes, or negative on error.
 pub extern "imm32" fn ImmGetCompositionStringW(himc: HIMC, index: u32, buf: ?*anyopaque, bytes: u32) callconv(.winapi) i32;
-pub extern "imm32" fn ImmGetOpenStatus(himc: HIMC) callconv(.winapi) BOOL;
-pub extern "imm32" fn ImmSetOpenStatus(himc: HIMC, open: BOOL) callconv(.winapi) BOOL;
 /// WM_IME_NOTIFY, and IMN_SETOPENSTATUS: the IME was opened or closed.
 pub const WM_IME_NOTIFY = 0x0282;
 /// WM_IME_CHAR: a character produced by the IME, when the IME did not go through
