@@ -21,6 +21,7 @@ const Window = @import("window.zig").Window;
 const d3d = @import("d3d.zig");
 const d3d11 = @import("../ui/d3d11.zig");
 const gpu_side = @import("surface_gpu.zig");
+const ime = @import("surface_ime.zig");
 
 /// Posted for a frame requested from outside the view.
 pub const WM_FRAME = w.WM_APP + 1;
@@ -60,6 +61,13 @@ pub const Surface = struct {
     cursor: ctx_mod.Cursor = .arrow,
     /// A UTF-16 high surrogate waiting for its other half.
     high: u16 = 0,
+    /// The text operations one IME message makes (`surface_ime.zig`), which a
+    /// frame runs: they outlive the call that built them.
+    text_scratch: [2]ctx_mod.TextOp = undefined,
+    /// The caret the IME was last told about, so a frame that did not move it
+    /// says nothing.
+    ime_caret_x: f32 = -1e9,
+    ime_caret_y: f32 = -1e9,
     chars: [8]u8 = undefined,
     /// Where `NANOUI_DUMP` writes the frames it compares.
     path_buf: [64]u8 = undefined,
@@ -184,6 +192,9 @@ pub const Surface = struct {
         // The real gap, for a view that reports its frame rate: `dt` above is
         // clamped so an animation cannot jump, but the rate is what it is.
         c.frame_time = raw_dt;
+        // The caret may have moved (typing, an arrow key, a click): the IME's
+        // windows follow it.
+        if (c.focused_text != null) if (self.hwnd()) |h| ime.placeWindows(self, h);
         self.updateCursor();
         const more = c.animating or r.hot_changed;
         if (more and !self.ticking) if (self.hwnd()) |h| {
@@ -449,6 +460,9 @@ pub const Surface = struct {
                 if (self.keyDown(@intCast(wp))) return 0 else return null;
             },
             w.WM_CHAR => self.char(@truncate(wp)),
+            w.WM_IME_STARTCOMPOSITION => ime.startComposition(self, h),
+            w.WM_IME_COMPOSITION => ime.composition(self, h, lp),
+            w.WM_IME_ENDCOMPOSITION => ime.endComposition(self, h),
             else => return null,
         }
         return 0;

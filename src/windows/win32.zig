@@ -125,6 +125,47 @@ pub extern "kernel32" fn GetEnvironmentVariableW(name: [*:0]const u16, buf: ?[*]
 pub extern "shell32" fn ShellExecuteW(hwnd: ?HWND, op: ?[*:0]const u16, file: [*:0]const u16, params: ?[*:0]const u16, dir: ?[*:0]const u16, show: i32) callconv(.winapi) ?*anyopaque;
 pub extern "comdlg32" fn GetOpenFileNameW(ofn: *OPENFILENAMEW) callconv(.winapi) BOOL;
 pub extern "comdlg32" fn GetSaveFileNameW(ofn: *OPENFILENAMEW) callconv(.winapi) BOOL;
+
+// The IME (IMM32): where the composition and candidate windows go. A window
+// gets a context from `ImmGetContext` while it handles an IME message.
+pub const HIMC = *opaque {};
+pub extern "imm32" fn ImmGetContext(hwnd: HWND) callconv(.winapi) ?HIMC;
+pub extern "imm32" fn ImmReleaseContext(hwnd: HWND, himc: HIMC) callconv(.winapi) BOOL;
+pub extern "imm32" fn ImmSetCompositionWindow(himc: HIMC, form: *const COMPOSITIONFORM) callconv(.winapi) BOOL;
+pub extern "imm32" fn ImmSetCandidateWindow(himc: HIMC, form: *const CANDIDATEFORM) callconv(.winapi) BOOL;
+/// The composition string (GCS_COMPSTR) or the committed one (GCS_RESULTSTR),
+/// as UTF-16 in `buf`; the length in bytes, or negative on error.
+pub extern "imm32" fn ImmGetCompositionStringW(himc: HIMC, index: u32, buf: ?*anyopaque, bytes: u32) callconv(.winapi) i32;
+
+/// CFS_POINT: the composition window's corner, at `pt`.
+pub const CFS_POINT = 0x0002;
+/// CFS_EXCLUDE: the candidate window keeps clear of `rc_area`.
+pub const CFS_EXCLUDE = 0x0080;
+/// The composition window's form: where it is, and what it keeps clear of.
+pub const COMPOSITIONFORM = extern struct {
+    style: u32 = CFS_POINT,
+    pt: POINT = .{},
+    rc_area: RECT = .{},
+};
+/// The candidate window's form.
+pub const CANDIDATEFORM = extern struct {
+    index: u32 = 0,
+    style: u32 = CFS_EXCLUDE,
+    pt: POINT = .{},
+    rc_area: RECT = .{},
+};
+/// WM_IME_STARTCOMPOSITION, WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION,
+/// WM_IME_SETCONTEXT.
+pub const WM_IME_STARTCOMPOSITION = 0x010D;
+pub const WM_IME_ENDCOMPOSITION = 0x010E;
+pub const WM_IME_COMPOSITION = 0x010F;
+pub const WM_IME_SETCONTEXT = 0x0281;
+/// GCS_COMPSTR: the composition string is in lParam of WM_IME_COMPOSITION.
+pub const GCS_COMPSTR = 0x0008;
+pub const GCS_CURSORPOS = 0x0080;
+pub const GCS_RESULTSTR = 0x0800;
+/// ISC_SHOWUICOMPOSITIONWINDOW: leave the IME's own windows to it.
+pub const ISC_SHOWUICOMPOSITIONWINDOW = 0x80000000;
 /// Reads a value from the registry: the system's light/dark preference lives
 /// under HKCU. `HKEY_CURRENT_USER` is 0x80000001; the rest are constants
 /// `RegGetValueW` needs.
