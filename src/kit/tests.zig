@@ -93,7 +93,8 @@ test "buttons, tabs, radios, the number input and pagination" {
     try testing.expectEqual(@as(usize, 1), a.radio);
     try t.clickText("3");
     try testing.expectEqual(@as(usize, 2), a.page);
-    try t.screenshot("/tmp/nanoui-kit.png");
+    var path_buf: [256]u8 = undefined;
+    try t.screenshot(try @import("../temp_path.zig").tempPath(&path_buf, "nanoui-kit.png"));
     try testing.expect(t.hasText("AL"));
 }
 
@@ -131,7 +132,8 @@ test "a dialog: Cancel, OK, Escape and the dimming close it" {
     try t.clickText("Ask");
     t.settle(1);
     try testing.expect(t.hasText("Delete it?") and t.hasText("Dialog body"));
-    try t.screenshot("/tmp/nanoui-kit-dialog.png");
+    var path_buf: [256]u8 = undefined;
+    try t.screenshot(try @import("../temp_path.zig").tempPath(&path_buf, "nanoui-kit-dialog.png"));
     try t.clickText("Cancel");
     t.settle(1);
     try testing.expect(!a.dialog and !t.hasText("Dialog body"));
@@ -161,7 +163,8 @@ test "a menu picks an item; a click elsewhere closes it; a tooltip waits" {
     try t.clickText("Menu");
     t.settle(1);
     try testing.expect(t.hasText("Copy") and t.hasText("⌘C"));
-    try t.screenshot("/tmp/nanoui-kit-menu.png");
+    var path_buf: [256]u8 = undefined;
+    try t.screenshot(try @import("../temp_path.zig").tempPath(&path_buf, "nanoui-kit-menu.png"));
     try t.clickText("Delete");
     t.settle(1);
     try testing.expectEqual(@as(?usize, 2), a.picked);
@@ -188,7 +191,8 @@ test "toasts come and go; a collapsible opens to its content's height; a select 
     try t.clickText("Toast");
     t.settle(0.5);
     try testing.expect(t.hasText("Saved") and t.hasText("All good."));
-    try t.screenshot("/tmp/nanoui-kit-toast.png");
+    var path_buf: [256]u8 = undefined;
+    try t.screenshot(try @import("../temp_path.zig").tempPath(&path_buf, "nanoui-kit-toast.png"));
     t.advance(2);
     t.settle(1);
     try testing.expect(!t.hasText("All good.") and a.toaster.items.items.len == 0);

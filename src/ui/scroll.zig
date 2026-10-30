@@ -151,6 +151,12 @@ pub fn tryPressScrollbar(c: *Context) bool {
     // so whatever is under the pointer there belongs to a row or to nothing:
     // the pointer being on the track decides, not `hot`. Of the tracks under it
     // the innermost wins, so a list inside a page scrolls itself, not the page.
+    //
+    // The exception is a control that reaches the edge: a button flush against
+    // the scroll box's right side is under the track, and the press is the
+    // button's. Without this the 10 points of track swallow it and the button
+    // never fires.
+    if (c.hot_index != none and c.hot_index < c.nodes.items.len and c.node(c.hot_index).interactive) return false;
     var found: ?struct { id: u64, g: ScrollbarGeom } = null;
     var it = c.scrollbars.iterator();
     while (it.next()) |e| {

@@ -47,6 +47,15 @@ struct Instance {
     float  border_width; // blur radius for shadows
     float  kind;
     float  clip_round;   // corners * 4096 + radius (gpu.zig's clipRound)
+    // These three are declared to keep the stride at 144 bytes, which is what
+    // gpu.zig's `Instance` is. Without them the structured buffer steps 96 bytes
+    // per element and every instance after the first reads another's fields --
+    // which showed up as the D3D11/CPU parity tests failing, not as an obvious
+    // misdraw. They are unused here; motion is animated on the CPU and arrives
+    // already baked into `rect`, `color` and `uv`.
+    float4 xf;           // angle0 rad, spin rad/s, pivot x, pivot y
+    float4 pulse;        // period s, scale_amp, alpha_low, unused
+    float4 vel;          // blur vector x, y in points, unused, unused
 };
 
 StructuredBuffer<Instance> instances : register(t0);

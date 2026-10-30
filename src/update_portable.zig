@@ -192,12 +192,15 @@ test "a staged program takes the running one's place, nothing left beside it" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     const cwd = std.Io.Dir.cwd();
-    const root = if (windows) "C:\\Windows\\Temp\\nanoui-test-swap" else "/tmp/nanoui-test-swap";
+    var root_buf: [256]u8 = undefined;
+    const root = try @import("temp_path.zig").tempPath(&root_buf, "nanoui-test-swap");
     cwd.deleteTree(io, root) catch {};
     defer cwd.deleteTree(io, root) catch {};
     try cwd.createDirPath(io, root);
-    const exe = root ++ std.fs.path.sep_str ++ "app";
-    const staged = root ++ std.fs.path.sep_str ++ "staged";
+    var exe_buf: [300]u8 = undefined;
+    var staged_buf: [300]u8 = undefined;
+    const exe = try std.fmt.bufPrint(&exe_buf, "{s}{s}app", .{ root, std.fs.path.sep_str });
+    const staged = try std.fmt.bufPrint(&staged_buf, "{s}{s}staged", .{ root, std.fs.path.sep_str });
     try cwd.writeFile(io, .{ .sub_path = exe, .data = "old" });
     try cwd.writeFile(io, .{ .sub_path = staged, .data = "new" });
     try swap(gpa, io, staged, exe);
@@ -222,7 +225,8 @@ test "an update from a feed: found, checked, unpacked, run, installed" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     const cwd = std.Io.Dir.cwd();
-    const root = "/tmp/nanoui-test-portable";
+    var root_buf: [256]u8 = undefined;
+    const root = try @import("temp_path.zig").tempPath(&root_buf, "nanoui-test-portable");
     cwd.deleteTree(io, root) catch {};
     defer cwd.deleteTree(io, root) catch {};
     var arena_state: std.heap.ArenaAllocator = .init(gpa);
@@ -277,7 +281,8 @@ test "a newer release while one waits takes its place; the same one isn't fetche
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     const cwd = std.Io.Dir.cwd();
-    const root = "/tmp/nanoui-test-portable-newer";
+    var root_buf: [256]u8 = undefined;
+    const root = try @import("temp_path.zig").tempPath(&root_buf, "nanoui-test-portable-newer");
     cwd.deleteTree(io, root) catch {};
     defer cwd.deleteTree(io, root) catch {};
     var arena_state: std.heap.ArenaAllocator = .init(gpa);

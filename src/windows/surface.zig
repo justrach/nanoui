@@ -355,9 +355,20 @@ pub const Surface = struct {
                 // A resize is many messages a second, and laying the view out
                 // for each of them is wasted work: the size is read now, and the
                 // frame is built once, when the message queue is empty.
+                //
+                // Except when no frame has been built yet: a hidden window (a
+                // test's, or one made with `hidden`) never receives WM_PAINT, so
+                // deferring the first frame to a paint that never comes leaves
+                // it with no layout at all — every rect zero, and clicks land
+                // nowhere. The first size builds it here instead.
                 self.updateSize(h);
-                self.size_dirty = true;
-                if (self.hwnd()) |hh| _ = w.InvalidateRect(hh, null, 0);
+                if (self.last_frame_time == 0) {
+                    self.buildFrame();
+                    self.requestFrame();
+                } else {
+                    self.size_dirty = true;
+                    if (self.hwnd()) |hh| _ = w.InvalidateRect(hh, null, 0);
+                }
             },
             // A drag resize begins and ends: between them frames present at
             // once instead of one per vblank, so the sizes the drag passes

@@ -142,13 +142,27 @@ pub const Renderer = struct {
 
     /// A hardware device (WARP when there is none), every shader, and the
     /// state one frame is drawn with.
+    ///
+    /// `error.NoDevice` is the only error that means "this machine has no
+    /// Direct3D 11", and it is the only one a caller should skip on. Everything
+    /// after the device is made — a shader that will not compile, a state object
+    /// that will not be created — reports its own error, and is a bug in this
+    /// repository.
+    ///
+    /// They used to share one name: every failure from here was
+    /// `error.Direct3D`, so a broken shader looked exactly like a machine
+    /// without a GPU. Four parity tests skipped on a machine with Direct3D 11
+    /// and a shader whose `Instance` was 96 bytes instead of 144, and printed
+    /// numbers from an earlier, working build while doing it.
     pub fn init() !Renderer {
         var device: ?*Com = null;
         var context: ?*Com = null;
-        if (D3D11CreateDevice(null, 1, null, bgra_support, null, 0, sdk_version, &device, null, &context) < 0)
-            try check(D3D11CreateDevice(null, 5, null, bgra_support, null, 0, sdk_version, &device, null, &context));
-        const dev = device orelse return error.Direct3D;
-        const ctx = context orelse return error.Direct3D;
+        if (D3D11CreateDevice(null, 1, null, bgra_support, null, 0, sdk_version, &device, null, &context) < 0) {
+            if (D3D11CreateDevice(null, 5, null, bgra_support, null, 0, sdk_version, &device, null, &context) < 0)
+                return error.NoDevice;
+        }
+        const dev = device orelse return error.NoDevice;
+        const ctx = context orelse return error.NoDevice;
         errdefer {
             ctx.release();
             dev.release();

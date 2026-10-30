@@ -123,7 +123,8 @@ test "nanoui's PNG decoder reads what ImageIO writes (compressed), pixel for pix
     try t.init(gpa, .init(&s, Scene.view), .{ .width = 200, .height = 120 });
     defer t.deinit();
     t.settle(1);
-    const path = "/tmp/nanoui-test-imageio.png";
+    var path_buf: [256]u8 = undefined;
+    const path = try @import("../temp_path.zig").tempPath(&path_buf, "nanoui-test-imageio.png");
     try t.screenshot(path);
     const bytes = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, gpa, .limited(8 << 20));
     defer gpa.free(bytes);

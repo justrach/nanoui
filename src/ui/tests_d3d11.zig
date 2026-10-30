@@ -1,13 +1,23 @@
-//! The Direct3D 11 renderer against the CPU renderer, with no window at
-//! all: the same scenes drawn by both must come out the same, to rounding.
-//! Creating the renderer also compiles every HLSL entry point, so a syntax
-//! error in `shader.hlsl` fails these tests. Skipped where there is no
-//! Direct3D 11.
+//! Direct3D 11 against the CPU renderer: the same instances must come out as
+//! the same pixels.
 //!
-//! The glyph atlas the GPU gets is the CPU atlas' scalar coverage, not the
-//! ClearType texels beside them (Windows' DirectWrite path draws glyphs in
-//! colour), so text here is compared with the tolerance that difference
-//! needs: shapes and pictures are held much tighter.
+//! Two things made these tests weaker than they looked, and both are fixed here:
+//!
+//! 1. **A broken renderer was reported as a missing one.** `Renderer.init()`
+//!    returned `error.Direct3D` whether the machine had no GPU or a shader would
+//!    not compile, and every test skipped on that error. A shader with the wrong
+//!    struct size skipped four parity tests on a machine with Direct3D 11 and
+//!    printed numbers from an earlier, working build. Now only `error.NoDevice`
+//!    skips; anything else fails.
+//!
+//! 2. **`Renderer.draw` returns `void`, so a frame that failed to draw is a
+//!    blank frame, not an error.** A test comparing two blank frames passes. So
+//!    `drawThenRead` checks that something was actually drawn before comparing:
+//!    a clear-only frame is a failure, not a match.
+//!
+//! The struct-size test at the end is the one that catches the Direct3D/CPU
+//! layout drift directly, without needing a device at all.
+
 const std = @import("std");
 const testing = std.testing;
 const ui = @import("ui.zig");
@@ -16,23 +26,89 @@ const d3d11 = @import("d3d11.zig");
 
 const Limits = struct { mean: f64, worst: u8, off_in: usize };
 
-/// Draws the Tester's last frame with Direct3D 11 and with the CPU
-/// renderer, and expects them within `limits`.
+/// A renderer for a parity test, or `null` when this machine has no Direct3D 11
+/// at all.
+///
+/// The distinction is the point: `error.NoDevice` means there is no device to
+/// test with, and a skip is honest. Every other error — a shader that will not
+/// compile, a buffer that will not be made — is a bug in this repository and
+/// must fail the test. Sharing one error name between the two is what let a
+/// broken shader look like a machine without a GPU.
+fn renderer() !?d3d11.Renderer {
+    return d3d11.Renderer.init() catch |e| {
+        if (e == error.NoDevice) {
+            std.debug.print("no Direct3D 11 here: {t} ", .{e});
+            return null;
+        }
+        std.debug.print("[d3d11] Renderer.init failed: {t}\n", .{e});
+        return e;
+    };
+}
+
+/// How many pixels differ from the clear colour: a frame that drew nothing is
+/// the same colour everywhere.
+fn drawnPixels(px: gpu.Pixels, clear: ui.Color) usize {
+    const c: [4]u8 = .{
+        @intFromFloat(clear.b * 255),
+        @intFromFloat(clear.g * 255),
+        @intFromFloat(clear.r * 255),
+        @intFromFloat(clear.a * 255),
+    };
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i + 4 <= px.bytes.len) : (i += 4) {
+        // BGRA, premultiplied: a differing pixel is one where any channel is off
+        // by more than rounding.
+        var off = false;
+        for (0..4) |k| {
+            const a = px.bytes[i + k];
+            const b = c[k];
+            if ((if (a > b) a - b else b - a) > 2) off = true;
+        }
+        if (off) n += 1;
+    }
+    return n;
+}
+
+/// Draws with Direct3D 11 and reads the result back, failing if the frame is
+/// nothing but the clear colour.
+///
+/// `Renderer.draw` returns `void`: a draw that fails part way leaves a cleared
+/// target, which is indistinguishable from a correct frame that happened to be
+/// empty. Comparing that against the CPU renderer would fail — but comparing it
+/// against a CPU frame that is also mostly background can pass while the GPU
+/// drew nothing at all, which is exactly what a wrong `Instance` stride does.
+/// So the frame has to have content before it is compared.
+fn drawThenRead(r: *d3d11.Renderer, t: *ui.Tester, clear: ui.Color) !gpu.Pixels {
+    const gpa = testing.allocator;
+    r.sync(t.text.atlas.mask(), t.text.atlas.generation, t.text.images.pictures(), t.text.images.generation);
+    r.draw(t.instances.items, t.size, t.scale, clear, null);
+    const px = try r.read(gpa);
+    if (drawnPixels(px, clear) == 0) {
+        px.deinit(gpa);
+        std.debug.print("[d3d11] the frame is the clear colour: nothing was drawn. ", .{});
+        return error.NothingDrawn;
+    }
+    return px;
+}
+
+/// Draws the Tester's last frame with Direct3D 11 and with the CPU renderer, and
+/// expects them within `limits`.
 fn compare(t: *ui.Tester, limits: Limits) !void {
     const gpa = testing.allocator;
-    var r = d3d11.Renderer.init() catch |e| {
-        std.debug.print("no Direct3D 11 here: {t} ", .{e});
-        return error.SkipZigTest;
-    };
+    var maybe = try renderer();
+    if (maybe == null) return error.SkipZigTest;
+    var r = &maybe.?;
     defer r.deinit();
-    r.sync(t.text.atlas.mask(), t.text.atlas.generation, t.text.images.pictures(), t.text.images.generation);
-    r.draw(t.instances.items, t.size, t.scale, t.theme.background, null);
-    const ours = try r.read(gpa);
+
+    const ours = try drawThenRead(r, t, t.theme.background);
     defer ours.deinit(gpa);
     const cpu = try t.render(gpa);
     defer cpu.deinit(gpa);
+
     try testing.expectEqual(cpu.width, ours.width);
     try testing.expectEqual(cpu.height, ours.height);
+
     var total: u64 = 0;
     var worst: u8 = 0;
     var off: usize = 0;
@@ -42,60 +118,14 @@ fn compare(t: *ui.Tester, limits: Limits) !void {
         worst = @max(worst, d);
         if (d > 8) off += 1;
     }
-    // Where the differences are: a bug in one shape shows as a tight box,
-    // ClearType's colour fringes as a scatter over the text.
-    var x0 = cpu.width;
-    var y0 = cpu.height;
-    var x1: usize = 0;
-    var y1: usize = 0;
-    var n: usize = 0;
-    for (0..cpu.height) |y| for (0..cpu.width) |x| {
-        const at = (y * cpu.width + x) * 4;
-        var differ = false;
-        for (0..4) |k| {
-            const a = ours.bytes[at + k];
-            const b = cpu.bytes[at + k];
-            if ((if (a > b) a - b else b - a) > 8) differ = true;
-        }
-        if (differ) {
-            x0 = @min(x0, x);
-            y0 = @min(y0, y);
-            x1 = @max(x1, x);
-            y1 = @max(y1, y);
-            n += 1;
-        }
-    };
-    if (n > 0) std.debug.print("  differing pixels: {d}, box {d},{d}..{d},{d} ", .{ n, x0, y0, x1, y1 });
-    // Split the difference in two: inside a glyph run's box (where the GPU's
-    // grey coverage meets the CPU's ClearType) and outside it (where nothing
-    // but the same maths should have run).
-    {
-        var shown: usize = 0;
-        const rows = [_]usize{ 5, 10, 30, 60, 75, 150 };
-        var ri: usize = 0;
-        while (ri < rows.len and rows[ri] < cpu.height) : (ri += 1) {
-            const sy = rows[ri];
-            var sx: usize = 400;
-            while (sx < cpu.width and shown < 12) : (sx += 97) {
-                const at = (sy * cpu.width + sx) * 4;
-                var d2: u8 = 0;
-                for (0..4) |k| {
-                    const a = ours.bytes[at + k];
-                    const b = cpu.bytes[at + k];
-                    d2 = @max(d2, if (a > b) a - b else b - a);
-                }
-                if (d2 > 8) {
-                    std.debug.print("({d},{d}) gpu b{d} g{d} r{d} a{d} cpu b{d} g{d} r{d} a{d}  ", .{ sx, sy, ours.bytes[at], ours.bytes[at + 1], ours.bytes[at + 2], ours.bytes[at + 3], cpu.bytes[at], cpu.bytes[at + 1], cpu.bytes[at + 2], cpu.bytes[at + 3] });
-                    shown += 1;
-                }
-            }
-        }
-    }
-    const mean = @as(f64, @floatFromInt(total)) / @as(f64, @floatFromInt(cpu.bytes.len));
-    std.debug.print("d3d11 vs cpu: mean {d:.4}, worst {d}, {d} of {d} off\n", .{ mean, worst, off, cpu.bytes.len });
-    try testing.expect(mean < limits.mean);
+    const mean = @as(f64, @floatFromInt(total)) / @as(f64, @floatFromInt(ours.bytes.len));
+    std.debug.print("d3d11 vs cpu: mean {d:.4}, worst {d}, {d} of {d} off ", .{ mean, worst, off, ours.bytes.len });
+    try testing.expect(mean <= limits.mean);
     try testing.expect(worst <= limits.worst);
-    try testing.expect(off * limits.off_in < cpu.bytes.len);
+    // `off_in` is "one differing pixel per this many are allowed", not a count:
+    // ClearType's colour fringes on text differ by design, and how many is the
+    // text's business, not the renderer's.
+    try testing.expect(off * limits.off_in < ours.bytes.len);
 }
 
 test "d3d11: shapes match the CPU renderer" {
@@ -109,8 +139,8 @@ test "d3d11: shapes match the CPU renderer" {
 }
 
 test "d3d11: glass matches the CPU renderer" {
+    const Scene = @import("tests_glass.zig").Scene;
     for ([_]ui.Theme{ .light, .dark_theme }) |theme| {
-        const Scene = @import("tests_glass.zig").Scene;
         var s: Scene = .{};
         var t: ui.Tester = undefined;
         try t.init(testing.allocator, .init(&s, Scene.view), .{ .width = 360, .height = 290, .theme = theme });
@@ -120,7 +150,7 @@ test "d3d11: glass matches the CPU renderer" {
     }
 }
 
-test "d3d11: canvas matches the CPU renderer" {
+test "d3d11: a canvas matches the CPU renderer" {
     const Scene = @import("tests_canvas.zig").Scene;
     var s: Scene = .{};
     var t: ui.Tester = undefined;
@@ -132,20 +162,23 @@ test "d3d11: canvas matches the CPU renderer" {
 
 test "d3d11: a coloured quad keeps its channels" {
     const gpa = testing.allocator;
-    var r = d3d11.Renderer.init() catch |e| {
-        std.debug.print("no Direct3D 11 here: {t} ", .{e});
-        return error.SkipZigTest;
-    };
+    var maybe = try renderer();
+    if (maybe == null) return error.SkipZigTest;
+    var r = &maybe.?;
     defer r.deinit();
-    // Red, green and blue side by side over a known clear.
+
+    // Three quads side by side: this is the test that notices a wrong
+    // `Instance` stride, because only the first is at offset 0.
+    const clear: ui.Color = .{ .r = 0, .g = 0, .b = 0, .a = 1 };
     const quads = [3]gpu.Instance{
         .{ .rect = .{ 0, 0, 10, 30 }, .color = .{ 1, 0, 0, 1 } },
         .{ .rect = .{ 10, 0, 10, 30 }, .color = .{ 0, 1, 0, 1 } },
         .{ .rect = .{ 20, 0, 10, 30 }, .color = .{ 0, 0, 1, 1 } },
     };
-    r.draw(&quads, .{ .w = 30, .h = 30 }, 1, .{ .r = 0, .g = 0, .b = 0, .a = 1 }, null);
+    r.draw(&quads, .{ .w = 30, .h = 30 }, 1, clear, null);
     const px = try r.read(gpa);
     defer px.deinit(gpa);
+
     const at = struct {
         fn f(p2: gpu.Pixels, x: usize, y: usize) [4]u8 {
             const i = (y * p2.width + x) * 4;
@@ -153,8 +186,51 @@ test "d3d11: a coloured quad keeps its channels" {
         }
     }.f;
     // BGRA in memory: red is B=0 G=0 R=255.
-    std.debug.print("[quads] red {any} green {any} blue {any} ", .{ at(px, 5, 15), at(px, 15, 15), at(px, 25, 15) });
-    try testing.expectEqual([4]u8{ 0, 0, 255, 255 }, at(px, 5, 15));
-    try testing.expectEqual([4]u8{ 0, 255, 0, 255 }, at(px, 15, 15));
-    try testing.expectEqual([4]u8{ 255, 0, 0, 255 }, at(px, 25, 15));
+    const red = at(px, 5, 15);
+    const green = at(px, 15, 15);
+    const blue = at(px, 25, 15);
+    std.debug.print("[quads] red {any} green {any} blue {any} ", .{ red, green, blue });
+    try testing.expectEqual([4]u8{ 0, 0, 255, 255 }, red);
+    try testing.expectEqual([4]u8{ 0, 255, 0, 255 }, green);
+    try testing.expectEqual([4]u8{ 255, 0, 0, 255 }, blue);
+}
+
+// `shader.hlsl`'s `Instance` must be the same size as `gpu.zig`'s, because the
+// vertex shader walks the structured buffer by that stride: a shader struct that
+// is smaller steps too little and every instance after the first reads another's
+// fields. That is not a misdraw that looks wrong, it is a misdraw that looks
+// plausible — the parity tests above only caught it as a number, and only once
+// they were taught to fail. This needs no device: it reads the shader source.
+test "d3d11: shader.hlsl's Instance is the same size gpu.zig's is" {
+    const source = @embedFile("shader.hlsl");
+    const start = std.mem.indexOf(u8, source, "struct Instance {") orelse return error.NoInstanceStruct;
+    const end = std.mem.indexOfPos(u8, source, start, "};") orelse return error.NoInstanceStruct;
+    const body = source[start..end];
+
+    var bytes: usize = 0;
+    var lines = std.mem.splitScalar(u8, body, '\n');
+    while (lines.next()) |line| {
+        const t = std.mem.trim(u8, line, " \t\r");
+        if (t.len == 0 or t[0] == '/' or std.mem.startsWith(u8, t, "struct")) continue;
+        if (std.mem.startsWith(u8, t, "float4")) bytes += 16 else if (std.mem.startsWith(u8, t, "float ")) bytes += 4;
+    }
+    try testing.expectEqual(@sizeOf(gpu.Instance), bytes);
+}
+
+// The same for the Metal shader: it is the other implementation of the same
+// struct, and it is not exercised by this machine's tests at all.
+test "d3d11: shader.metal's Instance is the same size gpu.zig's is" {
+    const source = @embedFile("shader.metal");
+    const start = std.mem.indexOf(u8, source, "struct Instance {") orelse return error.NoInstanceStruct;
+    const end = std.mem.indexOfPos(u8, source, start, "};") orelse return error.NoInstanceStruct;
+    const body = source[start..end];
+
+    var bytes: usize = 0;
+    var lines = std.mem.splitScalar(u8, body, '\n');
+    while (lines.next()) |line| {
+        const t = std.mem.trim(u8, line, " \t\r");
+        if (t.len == 0 or t[0] == '/' or std.mem.startsWith(u8, t, "struct")) continue;
+        if (std.mem.startsWith(u8, t, "float4")) bytes += 16 else if (std.mem.startsWith(u8, t, "float ")) bytes += 4;
+    }
+    try testing.expectEqual(@sizeOf(gpu.Instance), bytes);
 }

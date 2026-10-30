@@ -65,7 +65,9 @@ fn lightness(c: [4]u8) f32 {
 test "glass: the CPU draws what Metal draws, and it frosts" {
     if (@import("text.zig").portable) return error.SkipZigTest;
     const gpa = testing.allocator;
-    for ([_]ui.Theme{ .light, .dark_theme }, [_][]const u8{ "/tmp/nanoui-glass-light.png", "/tmp/nanoui-glass-dark.png" }) |theme, path| {
+    for ([_]ui.Theme{ .light, .dark_theme }, 0..) |theme, i| {
+        var path_buf: [256]u8 = undefined;
+        const path = try @import("../temp_path.zig").tempPath(&path_buf, if (i == 0) "nanoui-glass-light.png" else "nanoui-glass-dark.png");
         const r = try render(gpa, theme);
         defer r.metal.deinit(gpa);
         defer gpa.free(r.cpu.bytes);
