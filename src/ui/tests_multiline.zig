@@ -111,3 +111,21 @@ test "past its most lines a multiline field scrolls, by the caret and the wheel"
     try testing.expect(one.y >= field.y - 0.5);
     try testing.expectEqual(@as(usize, 6), k.last.line);
 }
+
+test "the caret moves as a space is typed, and the next character after it" {
+    var k: Composer = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&k, Composer.view), .{ .width = 400, .height = 300 });
+    defer t.deinit();
+    t.settle(1);
+    t.typeText("ab");
+    const two = t.ctx.focused_text.?.caret_rect.x;
+    t.typeText(" ");
+    // A trailing space isn't drawn, but the caret still moves past it.
+    const spaced = t.ctx.focused_text.?.caret_rect.x;
+    try testing.expect(spaced > two + 1);
+    t.typeText("c");
+    const three = t.ctx.focused_text.?.caret_rect.x;
+    try testing.expect(three > spaced + 1);
+    try testing.expectEqualStrings("ab c", k.buf.text());
+}

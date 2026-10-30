@@ -36,10 +36,12 @@ pub fn lineOf(lines: []const Line, at: usize) usize {
     return k;
 }
 
-/// The caret's x in its line.
+/// The caret's x in its line. A line's `end` leaves its trailing spaces out
+/// (nothing of them is drawn), but the caret can sit among and after them, up
+/// to `stop`: measure through them to it.
 pub fn caretX(c: *Context, s: []const u8, style: types.TextStyle, l: Line, at: usize) f32 {
-    const to = @min(@max(at, l.start), l.end);
-    return c.text.caretX(s[l.start..l.end], style, to - l.start);
+    const to = @min(@max(at, l.start), l.stop);
+    return c.text.caretX(s[l.start..to], style, to - l.start);
 }
 
 /// The byte nearest to `x` on line `l`.
