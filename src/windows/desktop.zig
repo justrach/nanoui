@@ -100,8 +100,16 @@ pub fn path(gpa: std.mem.Allocator, dir: Directory, app_name: []const u8) ![]u8 
     }
 }
 
+/// Whether the system shows dark mode: Windows' "Choose your default app
+/// mode" under Personalization > Colors, which apps read from HKCU.
 pub fn isDark() bool {
-    return false;
+    const sub = std.unicode.utf8ToUtf16LeStringLiteral("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize");
+    const value = std.unicode.utf8ToUtf16LeStringLiteral("AppsUseLightTheme");
+    var app_mode: u32 = 1; // Light, the Windows default.
+    var bytes: u32 = @sizeOf(u32);
+    const status = w.RegGetValueW(w.HKEY_CURRENT_USER, sub, value, w.RRF_RT_REG_DWORD, null, &app_mode, &bytes);
+    if (status != 0 or bytes != @sizeOf(u32)) return false;
+    return app_mode == 0;
 }
 
 pub fn accentColor() [3]f32 {

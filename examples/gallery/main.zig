@@ -8,12 +8,17 @@ const phone = @import("phone.zig");
 
 const Item = struct { title: [64]u8, len: usize, done: bool };
 
+/// Which theme the gallery draws in: its own light or dark, or the system's.
+pub const Appearance = enum { light, dark, system };
+
 const Gallery = struct {
     page: usize = 0,
     /// On a phone: the page is open, pushed over the list of pages.
     open: bool = false,
     notifications: bool = true,
-    dark_glass: bool = false,
+    /// Light, dark, or whatever the system shows (`c.theme_chosen`): the
+    /// system's is the default, as the rest of the desktop has it.
+    appearance: Appearance = .system,
     sync: bool = true,
     volume: f32 = 0.6,
     speed: f32 = 3,
@@ -55,6 +60,11 @@ const Gallery = struct {
         for (g.fps_samples) |s| total += s;
         g.fps = if (total > 0) @as(f32, @floatFromInt(g.fps_samples.len)) / total else 0;
         c.vsync = g.vsync;
+        c.theme_chosen = switch (g.appearance) {
+            .light => ui.Theme.light,
+            .dark => ui.Theme.dark_theme,
+            .system => null,
+        };
         if (phone.compact(c)) return phone.view(g, c);
         ui.row(c, .{ .width = .fill, .height = .fill });
         defer ui.end(c);
@@ -67,7 +77,7 @@ const Gallery = struct {
         if (g.page == 3) return g.bigList(c);
         if (g.page == 4) return g.glass.view(c);
         if (g.page == 5) return g.motion.page(c);
-        if (g.page == 6) return g.kit.view(c);
+        if (g.page == 6) return g.kit.view(c, &g.appearance);
         ui.scroll(c, .{ .grow = 1, .width = .fill, .height = .fill, .padding = .all(if (phone.compact(c)) 16 else 28), .gap = 20 });
         defer ui.end(c);
         switch (g.page) {
@@ -135,8 +145,17 @@ const Gallery = struct {
             ui.text(c, "Toggles", .{ .weight = .semibold });
             _ = ui.toggle(c, "Notifications", &g.notifications);
             _ = ui.toggle(c, "Sync over cellular", &g.sync);
-            _ = ui.checkbox(c, "Remember me", &g.dark_glass);
             _ = ui.checkbox(c, "V-Sync", &g.vsync);
+            ui.row(c, .{ .gap = 8, .align_items = .center });
+            {
+                defer ui.end(c);
+                ui.text(c, "Theme", .{ .color = c.theme.muted });
+                var choice: usize = @intFromEnum(g.appearance);
+                if (ui.segmented(c, &.{ "Light", "Dark", "System" }, &choice)) {
+                    g.appearance = @enumFromInt(choice);
+                    c.changed = true;
+                }
+            }
         }
         ui.card(c, .{ .width = .fill, .gap = 12 });
         {

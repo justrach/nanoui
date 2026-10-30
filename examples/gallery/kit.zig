@@ -3,6 +3,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const kit = nanoui.kit;
+const Appearance = @import("main.zig").Appearance;
 
 pub const Demo = struct {
     toaster: kit.Toaster = undefined,
@@ -24,8 +25,12 @@ pub const Demo = struct {
     notes: ui.TextBuffer = .{},
     alert: bool = true,
     progress: f32 = 0.42,
+    /// The gallery's theme choice, which the sheet's radios set: the gallery
+    /// owns it, so the sheet and the Toggles page cannot disagree.
+    appearance: ?*Appearance = null,
 
-    pub fn view(d: *Demo, c: *ui.Context) void {
+    pub fn view(d: *Demo, c: *ui.Context, appearance: *Appearance) void {
+        d.appearance = appearance;
         if (!d.ready) {
             d.toaster = .{ .gpa = std.heap.page_allocator };
             d.ready = true;
@@ -230,7 +235,20 @@ pub const Demo = struct {
         if (kit.sheet(c, "sheet", &d.sheet, .{ .title = "Settings" })) |sh| {
             defer sh.end();
             ui.text(c, "Sheets slide in from an edge.", .{ .color = c.theme.muted });
-            _ = kit.radioGroup(c, &.{ "System", "Light", "Dark" }, &d.plan, .{});
+            // The same choice the Toggles page offers, in the sheet's own words.
+            var picked: usize = switch (d.appearance.?.*) {
+                .system => 0,
+                .light => 1,
+                .dark => 2,
+            };
+            if (kit.radioGroup(c, &.{ "System", "Light", "Dark" }, &picked, .{})) {
+                d.appearance.?.* = switch (picked) {
+                    0 => .system,
+                    1 => .light,
+                    else => .dark,
+                };
+                c.changed = true;
+            }
         }
     }
 };

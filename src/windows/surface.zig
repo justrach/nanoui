@@ -44,6 +44,12 @@ pub const Surface = struct {
     frame_posted: bool = false,
     tracking: bool = false,
     theme_override: ?Theme = null,
+    /// The system's appearance as last read: a window that names no theme of
+    /// its own follows it, and `WM_SETTINGCHANGE` says when it changed.
+    system_theme_dark: bool = false,
+    /// The theme the view asked for with `c.theme`, which outranks the system's
+    /// appearance until the view resets it to null.
+    theme_chosen: ?Theme = null,
     cursor: ctx_mod.Cursor = .arrow,
     /// A UTF-16 high surrogate waiting for its other half.
     high: u16 = 0,
@@ -81,6 +87,9 @@ pub const Surface = struct {
         // from the first frame; if no device can be made, `paintGpu` says CPU
         // and the next frame reads that instead.
         if (!self.no_d3d) self.ctx.renderer = "Direct3D 11";
+        // The system's appearance now, and again if it changes while the app
+        // runs (a window without a theme of its own follows it).
+        self.system_theme_dark = @import("desktop.zig").isDark();
         return self;
     }
 
@@ -97,8 +106,12 @@ pub const Surface = struct {
         return self.window.hwnd;
     }
 
+    /// The theme the frame is drawn with: a window's own when it named one,
+    /// else the one the view chose (`c.theme`), else the system's appearance.
     fn theme(self: *Surface) Theme {
-        return self.theme_override orelse Theme.light;
+        if (self.theme_override) |t| return t;
+        if (self.theme_chosen) |t| return t;
+        return if (self.system_theme_dark) Theme.dark_theme else Theme.light;
     }
 
     /// Builds the view for the current state and asks for it to be drawn: the
@@ -134,7 +147,16 @@ pub const Surface = struct {
         const raw_dt: f32 = if (self.last_frame_time > 0) @floatCast(@min(now - self.last_frame_time, 1.0)) else 1.0 / 60.0;
         const dt: f32 = if (self.last_frame_time > 0) @floatCast(@min(now - self.last_frame_time, 0.1)) else 1.0 / 60.0;
         self.last_frame_time = now;
-        const r = frame_mod.run(c, self.view, &self.text, &self.instances, self.size, self.scale, self.theme(), dt, now - self.start_time);
+        // The theme the view picked last frame, and the one it picks now: a
+        // view that picks a theme has the frame rebuilt with it in this same
+        // frame, so a change shows at once and the first frame is right too.
+        var drawn_theme = self.theme();
+        var r = frame_mod.run(c, self.view, &self.text, &self.instances, self.size, self.scale, drawn_theme, dt, now - self.start_time);
+        if (!sameChoice(self.theme_chosen, c.theme_chosen)) {
+            self.theme_chosen = c.theme_chosen;
+            drawn_theme = self.theme();
+            r = frame_mod.run(c, self.view, &self.text, &self.instances, self.size, self.scale, drawn_theme, dt, now - self.start_time);
+        }
         // The real gap, for a view that reports its frame rate: `dt` above is
         // clamped so an animation cannot jump, but the rate is what it is.
         c.frame_time = raw_dt;
@@ -148,6 +170,13 @@ pub const Surface = struct {
         if (!more) if (c.frame_in) |s| if (self.hwnd()) |h| {
             _ = w.SetTimer(h, later_timer, @intFromFloat(@max(1, s * 1000)), null);
         };
+    }
+
+    /// Whether two theme choices pick the same theme (both null: the system's).
+    fn sameChoice(a: ?Theme, b: ?Theme) bool {
+        const an = a orelse return b == null;
+        const bn = b orelse return false;
+        return std.meta.eql(an, bn);
     }
 
     pub fn requestFrame(self: *Surface) void {
@@ -272,6 +301,17 @@ pub const Surface = struct {
         switch (msg) {
             w.WM_PAINT => self.paint(h),
             w.WM_ERASEBKGND => return 1,
+            w.WM_SETTINGCHANGE => {
+                // The system's appearance may have changed under
+                // Personalization > Colors: a window that follows it is redrawn.
+                if (self.theme_override == null) {
+                    const dark = @import("desktop.zig").isDark();
+                    if (dark != self.system_theme_dark) {
+                        self.system_theme_dark = dark;
+                        self.frame();
+                    }
+                }
+            },
             w.WM_SIZE, w.WM_DPICHANGED => {
                 // A resize is many messages a second, and laying the view out
                 // for each of them is wasted work: the size is read now, and the

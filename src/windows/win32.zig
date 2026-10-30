@@ -125,10 +125,19 @@ pub extern "kernel32" fn GetEnvironmentVariableW(name: [*:0]const u16, buf: ?[*]
 pub extern "shell32" fn ShellExecuteW(hwnd: ?HWND, op: ?[*:0]const u16, file: [*:0]const u16, params: ?[*:0]const u16, dir: ?[*:0]const u16, show: i32) callconv(.winapi) ?*anyopaque;
 pub extern "comdlg32" fn GetOpenFileNameW(ofn: *OPENFILENAMEW) callconv(.winapi) BOOL;
 pub extern "comdlg32" fn GetSaveFileNameW(ofn: *OPENFILENAMEW) callconv(.winapi) BOOL;
+/// Reads a value from the registry: the system's light/dark preference lives
+/// under HKCU. `HKEY_CURRENT_USER` is 0x80000001; the rest are constants
+/// `RegGetValueW` needs.
+pub extern "advapi32" fn RegGetValueW(hkey: usize, sub_key: [*:0]const u16, value: ?[*:0]const u16, flags: u32, kind: ?*u32, data: ?*anyopaque, bytes: ?*u32) callconv(.winapi) i32;
+pub const HKEY_CURRENT_USER: usize = 0x80000001;
+/// RRF_RT_REG_DWORD: the value is read as a DWORD, whatever else the key holds.
+pub const RRF_RT_REG_DWORD = 0x00000010;
 
 // Messages.
 pub const WM_DESTROY = 0x0002;
 pub const WM_SIZE = 0x0005;
+/// A system setting changed: the appearance, among others.
+pub const WM_SETTINGCHANGE = 0x001A;
 pub const WM_SETFOCUS = 0x0007;
 pub const WM_PAINT = 0x000F;
 pub const WM_CLOSE = 0x0010;

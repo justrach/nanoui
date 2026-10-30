@@ -148,6 +148,7 @@ pub const Context = struct {
     arena: std.heap.ArenaAllocator,
     text: *text.TextSystem,
     theme: Theme = .light,
+    theme_chosen: ?Theme = null, // the view's own choice; null: the system's
     size: types.Size = .{},
     scale: f32 = 2,
     /// What draws the frames: Metal, OpenGL, or nanoui's own CPU renderer.
@@ -565,7 +566,6 @@ pub const Context = struct {
     pub fn frameIn(c: *Context, seconds: f32) void {
         c.frame_in = if (c.frame_in) |f| @min(f, seconds) else seconds;
     }
-
 
     pub const addHit = hooks.addHit;
     pub const commitHits = hooks.commitHits;
