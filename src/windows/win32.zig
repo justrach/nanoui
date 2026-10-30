@@ -136,11 +136,76 @@ pub extern "imm32" fn ImmSetCandidateWindow(himc: HIMC, form: *const CANDIDATEFO
 /// The composition string (GCS_COMPSTR) or the committed one (GCS_RESULTSTR),
 /// as UTF-16 in `buf`; the length in bytes, or negative on error.
 pub extern "imm32" fn ImmGetCompositionStringW(himc: HIMC, index: u32, buf: ?*anyopaque, bytes: u32) callconv(.winapi) i32;
+pub extern "imm32" fn ImmGetOpenStatus(himc: HIMC) callconv(.winapi) BOOL;
+pub extern "imm32" fn ImmSetOpenStatus(himc: HIMC, open: BOOL) callconv(.winapi) BOOL;
+/// WM_IME_NOTIFY, and IMN_SETOPENSTATUS: the IME was opened or closed.
+pub const WM_IME_NOTIFY = 0x0282;
+pub const IMN_SETOPENSTATUS = 0x0008;
+/// IMN_SETCANDIDATEPOS: the IME computed where its candidate window goes.
+pub const IMN_SETCANDIDATEPOS = 0x0009;
+/// IMN_SETCOMPOSITIONWINDOW: the same for the composition window.
+pub const IMN_SETCOMPOSITIONWINDOW = 0x000B;
+/// IMN_SETCOMPOSITIONFONT, IMN_CLOSECANDIDATE, IMN_OPENCANDIDATE.
+pub const IMN_SETCOMPOSITIONFONT = 0x000A;
+pub const IMN_CLOSECANDIDATE = 0x0004;
+pub const IMN_OPENCANDIDATE = 0x0005;
+/// WM_IME_REQUEST, and the composition-font query the IME asks for.
+pub const WM_IME_REQUEST = 0x0288;
+pub const IMR_COMPOSITIONFONT = 0x000A;
+
+// UI Automation: how an assistive tool — and, since Windows 8, an IME —
+// learns that a window holds a text field and where its caret is. Without a
+// provider the IME treats the window as "not an input" and never shows its
+// candidate list; Doubao never takes the keyboard at all.
+pub const WM_GETOBJECT = 0x003D;
+/// lParam of WM_GETOBJECT: the UI Automation provider is being asked for.
+pub const UiaRootObjectId: i32 = -25;
+pub extern "uiautomationcore" fn UiaReturnRawElementProvider(hwnd: HWND, wp: WPARAM, lp: LPARAM, el: ?*anyopaque) callconv(.winapi) LRESULT;
+pub extern "uiautomationcore" fn UiaHostProviderFromHwnd(hwnd: HWND, out: *?*anyopaque) callconv(.winapi) i32;
+pub extern "ole32" fn CoCreateInstance(clsid: *const Guid, outer: ?*anyopaque, ctx: u32, iid: *const Guid, out: *?*anyopaque) callconv(.winapi) i32;
+pub extern "oleaut32" fn SysAllocString(str: [*:0]const u16) callconv(.winapi) ?*anyopaque;
+pub extern "oleaut32" fn SysFreeString(str: ?*anyopaque) callconv(.winapi) void;
+/// A SAFEARRAY of `count` values of type `vt`, one dimension: what UIA takes a
+/// set of ranges or of doubles (a rectangle) in.
+pub extern "oleaut32" fn SafeArrayCreateVector(vt: u16, low: i32, count: u32) callconv(.winapi) ?*anyopaque;
+pub extern "oleaut32" fn SafeArrayPutElement(arr: *anyopaque, index: *const i32, value: *const anyopaque) callconv(.winapi) i32;
+pub extern "oleaut32" fn SafeArrayDestroy(arr: ?*anyopaque) callconv(.winapi) i32;
+
+pub const Guid = extern struct { a: u32, b: u16, c: u16, d: [8]u8 };
+/// The provider's vtable is called through these slots, as COM objects are.
+pub const Uia = struct {
+    /// The property ids UIA asks for, from `uiautomationclient.idl`.
+    /// UIA_IsTextPatternAvailablePropertyId (30040) is what an IME checks
+    /// before it asks for the caret; a wrong id silently answers nothing.
+    pub const is_text_pattern_available: i32 = 30040;
+    /// UIA_IsControlElementPropertyId and UIA_IsContentElementPropertyId: a
+    /// provider that answers nothing here is left out of the tree, and nothing
+    /// deeper — the text pattern an IME needs — is ever asked for.
+    pub const is_control_element: i32 = 30016;
+    pub const is_content_element: i32 = 30017;
+    pub const control_type: i32 = 30003;
+    pub const name: i32 = 30005;
+    pub const value_value: i32 = 30045;
+    pub const is_enabled: i32 = 30010;
+    pub const has_keyboard_focus: i32 = 30008;
+    /// UIA_TextPatternId: the pattern an IME reads the caret from.
+    pub const text_pattern: i32 = 10014;
+    /// UIA_EditControlTypeId: what a text field is.
+    pub const edit_control: i32 = 50004;
+    pub const button_control: i32 = 50000;
+};
+pub extern "imm32" fn ImmGetConversionStatus(himc: HIMC, conversion: *u32, sentence: *u32) callconv(.winapi) BOOL;
+pub extern "imm32" fn ImmIsIME(hkl: ?*anyopaque) callconv(.winapi) BOOL;
+pub extern "user32" fn GetKeyboardLayout(thread: u32) callconv(.winapi) ?*anyopaque;
+pub extern "kernel32" fn GetCurrentThreadId() callconv(.winapi) u32;
 
 /// CFS_POINT: the composition window's corner, at `pt`.
 pub const CFS_POINT = 0x0002;
 /// CFS_EXCLUDE: the candidate window keeps clear of `rc_area`.
 pub const CFS_EXCLUDE = 0x0080;
+/// CFS_CANDIDATEPOS: the candidate window's own corner, at `pt`, in client
+/// coordinates of the window that owns it.
+pub const CFS_CANDIDATEPOS = 0x0040;
 /// The composition window's form: where it is, and what it keeps clear of.
 pub const COMPOSITIONFORM = extern struct {
     style: u32 = CFS_POINT,
