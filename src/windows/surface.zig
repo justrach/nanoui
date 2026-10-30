@@ -62,9 +62,11 @@ pub const Surface = struct {
     /// A UTF-16 high surrogate waiting for its other half.
     high: u16 = 0,
     text_scratch: [2]ctx_mod.TextOp = undefined,
-    ime_composing: bool = false,
-    ime_caret_x: f32 = -1e9,
-    ime_caret_y: f32 = -1e9,
+    /// The IME's state for this window: whether a composition is running, the
+    /// re-entrancy guard that keeps a placement from echoing into a freeze, and
+    /// the caret it was last told about. Grouped in `surface_ime.zig` so the
+    /// reason each one exists lives with the code that uses it.
+    ime: ime.State = .{},
     chars: [8]u8 = undefined,
     /// Where `NANOUI_DUMP` writes the frames it compares.
     path_buf: [64]u8 = undefined,
@@ -189,7 +191,9 @@ pub const Surface = struct {
         // The real gap, for a view that reports its frame rate: `dt` above is
         // clamped so an animation cannot jump, but the rate is what it is.
         c.frame_time = raw_dt;
-        // The caret may have moved: the IME's windows follow it.
+        // The caret may have moved: the IME's windows follow it. Only with a
+        // field focused — a window with no text has nothing to place, and taking
+        // the IME's context costs a call each way.
         if (c.focused_text != null) if (self.hwnd()) |h| ime.placeWindows(self, h);
         self.updateCursor();
         const more = c.animating or r.hot_changed;
@@ -257,9 +261,7 @@ pub const Surface = struct {
     /// buffer, from the instances `frame.zig` made. False when there is no
     /// renderer: the canvas then draws the frame instead.
     /// `NANOUI_DUMP`, on F12: draws the frame whole beside what the canvas
-    /// holds and says whether they differ — the canvas is what the screen is
-    /// given, the whole redraw is what it should have been. Only ever run
-    /// when asked: it redraws the frame, so it costs a frame's worth of time.
+    /// holds and says whether they differ. Only when asked: it costs a frame.
     fn verify(self: *Surface) void {
         const gpa = self.gpa;
         const px = &self.pixels;
@@ -461,7 +463,7 @@ pub const Surface = struct {
                 }
                 return null;
             },
-            w.WM_CHAR => self.char(@truncate(wp)),
+            w.WM_CHAR => ime.char(self, @truncate(wp)),
             else => if (ime.handle(self, h, msg, wp, lp)) |r| return r else return null,
         }
         return 0;
@@ -535,27 +537,6 @@ pub const Surface = struct {
             return true;
         }
         return false;
-    }
-
-    fn char(self: *Surface, unit: u16) void {
-        // Composing: the letters arrive here as well as through the composition,
-        // and only the composition counts (else the pinyin precedes the text).
-        if (self.ime_composing) return;
-        if (unit >= 0xD800 and unit <= 0xDBFF) {
-            self.high = unit;
-            return;
-        }
-        var cp: u21 = unit;
-        if (unit >= 0xDC00 and unit <= 0xDFFF) {
-            if (self.high == 0) return;
-            cp = 0x10000 + ((@as(u21, self.high) - 0xD800) << 10) + (unit - 0xDC00);
-            self.high = 0;
-        }
-        // Controls (Ctrl+letters, Enter, Tab, Backspace) came as keys.
-        if (cp < 0x20 or cp == 0x7f) return;
-        const n = std.unicode.utf8Encode(cp, &self.chars) catch return;
-        self.ctx.input.chars = self.chars[0..n];
-        self.frame();
     }
 
     /// Ctrl+C, X, V and A in a text field: copy, cut, paste, select all.

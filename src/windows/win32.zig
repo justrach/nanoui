@@ -140,6 +140,11 @@ pub extern "imm32" fn ImmGetOpenStatus(himc: HIMC) callconv(.winapi) BOOL;
 pub extern "imm32" fn ImmSetOpenStatus(himc: HIMC, open: BOOL) callconv(.winapi) BOOL;
 /// WM_IME_NOTIFY, and IMN_SETOPENSTATUS: the IME was opened or closed.
 pub const WM_IME_NOTIFY = 0x0282;
+/// WM_IME_CHAR: a character produced by the IME, when the IME did not go through
+/// WM_IME_COMPOSITION for it (a soft keyboard, a direct commit). Its wParam is
+/// UTF-16, and it is delivered instead of WM_CHAR — which is why an IME that
+/// only ever speaks this way typed nothing at all.
+pub const WM_IME_CHAR = 0x0286;
 pub const IMN_SETOPENSTATUS = 0x0008;
 /// IMN_SETCANDIDATEPOS: the IME computed where its candidate window goes.
 pub const IMN_SETCANDIDATEPOS = 0x0009;
@@ -149,9 +154,22 @@ pub const IMN_SETCOMPOSITIONWINDOW = 0x000B;
 pub const IMN_SETCOMPOSITIONFONT = 0x000A;
 pub const IMN_CLOSECANDIDATE = 0x0004;
 pub const IMN_OPENCANDIDATE = 0x0005;
-/// WM_IME_REQUEST, and the composition-font query the IME asks for.
+/// IMN_CHANGECANDIDATE: the list's contents changed (a page of candidates).
+pub const IMN_CHANGECANDIDATE = 0x0003;
+
+/// WM_IME_REQUEST, and the queries the IME asks through it. The values are
+/// Microsoft's, checked against zigwin32's generated bindings: these are
+/// `WM_IME_REQUEST`'s wParam, not message numbers, and `IMR_COMPOSITIONFONT`
+/// was written as 0x000A here once, which is `IMN_SETCOMPOSITIONFONT` — every
+/// branch of the handler was off by one query.
 pub const WM_IME_REQUEST = 0x0288;
-pub const IMR_COMPOSITIONFONT = 0x000A;
+/// The IME asks where its composition window goes: the answer is a POINT, in
+/// the window's client coordinates.
+pub const IMR_COMPOSITIONWINDOW = 0x0001;
+/// The same for the candidate list, and the answer is a CANDIDATEFORM.
+pub const IMR_CANDIDATEWINDOW = 0x0002;
+/// The font the composition string is drawn in: a LOGFONTW.
+pub const IMR_COMPOSITIONFONT = 0x0003;
 
 // UI Automation: how an assistive tool — and, since Windows 8, an IME —
 // learns that a window holds a text field and where its caret is. Without a
@@ -201,6 +219,9 @@ pub extern "kernel32" fn GetCurrentThreadId() callconv(.winapi) u32;
 
 /// CFS_POINT: the composition window's corner, at `pt`.
 pub const CFS_POINT = 0x0002;
+/// CFS_FORCE_POSITION: the composition window's corner at exactly `pt`, which
+/// the IME may not adjust. `CFS_POINT` lets it move the window elsewhere.
+pub const CFS_FORCE_POSITION = 0x0020;
 /// CFS_EXCLUDE: the candidate window keeps clear of `rc_area`.
 pub const CFS_EXCLUDE = 0x0080;
 /// CFS_CANDIDATEPOS: the candidate window's own corner, at `pt`, in client
