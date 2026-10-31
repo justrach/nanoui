@@ -6,8 +6,8 @@ const Channel = @import("channel.zig").Channel;
 const Transition = @import("channel.zig").Transition;
 
 /// The channels of a target: x, y, scale, opacity, width, height, radius,
-/// and the background's red, green, blue and alpha.
-pub const channels = 11;
+/// the background's red, green, blue and alpha, then rotation and turn.
+pub const channels = 13;
 
 pub const State = struct {
     ch: [channels]Channel = @splat(.{}),

@@ -203,6 +203,24 @@ pub const Div = struct {
     pub fn scale(d: Div, v: f32) Div {
         return d.set("scale", v);
     }
+    /// Turned in the plane by `v` radians (clockwise).
+    pub fn rotate(d: Div, v: f32) Div {
+        return d.set("rotation", v);
+    }
+    /// Turned `v` radians about the vertical axis through its pivot, seen
+    /// from `perspective` points away (0: flat), as a card turns over.
+    pub fn turn(d: Div, v: f32, perspective: f32) Div {
+        _ = d.set("perspective", perspective);
+        return d.set("turn", v);
+    }
+    /// Where `rotate` and `turn` pivot, in fractions of its rect.
+    pub fn pivot(d: Div, x: f32, y: f32) Div {
+        return d.set("rotation_anchor", types.Point{ .x = x, .y = y });
+    }
+    /// Drawn on one side of a turned plane only (`Style.face`).
+    pub fn face(d: Div, v: types.Face) Div {
+        return d.set("face", v);
+    }
     /// Takes a `ui.motion` frame: its offset, scale and opacity, and the
     /// size, radius and background it animates. Last, so what it animates
     /// wins over what was set before.

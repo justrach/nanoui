@@ -64,6 +64,17 @@ test "rounded is its own face where the system has one" {
         try testing.expect(@abs(w - t.text.width("Return ⌘", .{ .size = 12 })) > 0.01);
 }
 
+test "serif is its own face where the system has one" {
+    var r: Row = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&r, Row.view), .{});
+    defer t.deinit();
+    const w = t.text.width("Know when your bus come.", .{ .size = 40, .serif = true });
+    try testing.expect(w > 0);
+    if (!@import("text.zig").portable)
+        try testing.expect(@abs(w - t.text.width("Know when your bus come.", .{ .size = 40 })) > 0.5);
+}
+
 test "a quarter turn sets xf rotation on the same centre" {
     var r: Row = .{};
     var t: ui.Tester = undefined;

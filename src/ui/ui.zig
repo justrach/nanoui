@@ -50,6 +50,7 @@ pub const clock = @import("clock.zig");
 pub const png = @import("png.zig");
 
 pub const Point = types.Point;
+pub const Face = types.Face;
 pub const Fade = types.Fade;
 pub const Size = types.Size;
 pub const Rect = types.Rect;
@@ -168,6 +169,7 @@ test {
     _ = @import("tests_shadow_x.zig");
     _ = @import("tests_text_style.zig");
     _ = @import("tests_text_extras.zig");
+    _ = @import("tests_turn.zig");
     _ = @import("tests_settle.zig");
     _ = types;
     _ = device;
