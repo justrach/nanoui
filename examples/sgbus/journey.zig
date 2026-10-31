@@ -156,14 +156,22 @@ pub const Journey = struct {
         return &j.om[i];
     }
 
+    /// The clock, the day and the live boards, for the planner.
+    pub fn planNow(j: *const Journey) raptor.Now {
+        const s = j.app;
+        var n: raptor.Now = .{ .ctx = s, .look = look, .clock = s.live.clock() };
+        if (s.live.date) |d| n.weekday = weekday(&d);
+        return n;
+    }
+
     /// Plans again with the live boards as they are now.
     pub fn replan(j: *Journey) void {
         const s = j.app;
         const dest = j.dest orelse return;
         j.planned = s.live.answers;
         const kept = if (j.chosen) |i| j.trips[i] else null;
-        var now: raptor.Now = .{ .ctx = s, .look = look, .obs = j.observe(), .clock = s.live.clock() };
-        if (s.live.date) |d| now.weekday = weekday(&d);
+        var now = j.planNow();
+        now.obs = j.observe();
         const got = raptor.plan(s.d, s.gpa, s.here, dest.at, now, &j.trips) catch j.trips[0..0];
         j.n_trips = got.len;
         // The way you opened stays open, with its new numbers.
@@ -182,6 +190,8 @@ pub const Journey = struct {
         if (j.dest == null) return;
         for (j.trips[0..j.n_trips]) |t| for (0..t.n) |i| {
             const r = t.rides[i];
+            // Trains have no live board.
+            if (s.d.services[r.svc].rail != null) continue;
             _ = s.live.want(s.d.stops[raptor.stopAt(s.d, r.svc, r.dir, r.from)].code);
         };
         if (s.live.answers != j.planned) j.replan();
@@ -252,12 +262,23 @@ pub const Journey = struct {
             const r = t.rides[i];
             for ([2]u16{ r.from, r.to }) |pos| {
                 const st = raptor.stopAt(s.d, r.svc, r.dir, pos);
-                out[n] = .{ .id = st, .at = s.d.stops[st].at, .label = s.d.stops[st].code, .selected = i == 0 and pos == r.from };
+                out[n] = .{ .id = st, .at = s.d.stops[st].at, .label = raptor.rail.codeOn(s.d, st, r.svc), .selected = i == 0 and pos == r.from };
                 n += 1;
             }
         }
         out[n] = .{ .id = 200000, .at = j.dest.?.at, .label = "To here", .style = .bus };
         return out[0 .. n + 1];
+    }
+
+    /// The route line's colour: the line of the longest train ride, else bus green.
+    pub fn lineColor(j: *const Journey, t: raptor.Option) nanoui.ui.Color {
+        var best: f64 = 0;
+        var col: nanoui.ui.Color = cards.green;
+        for (0..t.n) |i| if (j.app.d.services[t.rides[i].svc].rail) |l| if (t.ride_min[i] > best) {
+            best = t.ride_min[i];
+            col = .hex(l.color);
+        };
+        return col;
     }
 
     pub fn camera(j: *const Journey) map.Camera {

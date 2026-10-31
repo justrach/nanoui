@@ -9,6 +9,7 @@ const Coord = @import("nanoui").map.Coord;
 
 test {
     _ = @import("onemap.zig");
+    _ = @import("tests_rail.zig");
 }
 
 test "fares follow LTA's table from 27 December 2025" {
@@ -22,7 +23,7 @@ test "fares follow LTA's table from 27 December 2025" {
     try std.testing.expect(raptor.express("10e") and raptor.express("502") and !raptor.express("14"));
 }
 
-const Trip = struct { name: []const u8, from: Coord, to: Coord };
+pub const Trip = struct { name: []const u8, from: Coord, to: Coord };
 
 const trips = [_]Trip{
     .{ .name = "Joo Chiat (Joo Chiat Pl) to Suntec City", .from = .{ .lat = 1.31451, .lng = 103.90998 }, .to = .{ .lat = 1.29504, .lng = 103.85846 } },
@@ -30,7 +31,7 @@ const trips = [_]Trip{
     .{ .name = "Ang Mo Kio Int to Orchard (ION)", .from = .{ .lat = 1.36916, .lng = 103.84825 }, .to = .{ .lat = 1.30400, .lng = 103.83200 } },
 };
 
-fn show(d: *const data.Data, t: Trip, got: []const raptor.Option) void {
+pub fn show(d: *const data.Data, t: Trip, got: []const raptor.Option) void {
     std.debug.print("\n{s}\n", .{t.name});
     for (got) |o| {
         std.debug.print("  {d:>5.1} min  {d} change(s)  walk {d:>4.0} m  {d:>4.1} km  fare ", .{ o.arrive, o.n - 1, o.walk_m, o.km });
@@ -38,7 +39,7 @@ fn show(d: *const data.Data, t: Trip, got: []const raptor.Option) void {
         std.debug.print("  ", .{});
         for (0..o.n) |i| {
             const rd = o.rides[i];
-            std.debug.print("{s}{s} ({s}>{s}, {d} stops, wait {d:.1}{s}, ride {d:.1})", .{ if (i > 0) " + " else "", d.services[rd.svc].no, d.stops[raptor.stopAt(d, rd.svc, rd.dir, rd.from)].code, d.stops[raptor.stopAt(d, rd.svc, rd.dir, rd.to)].code, rd.to - rd.from, o.waits[i], if (o.live[i]) " live" else "", o.ride_min[i] });
+            std.debug.print("{s}{s} ({s}>{s}, {d} stops, wait {d:.1}{s}, ride {d:.1})", .{ if (i > 0) " + " else "", d.services[rd.svc].no, raptor.rail.codeOn(d, raptor.stopAt(d, rd.svc, rd.dir, rd.from), rd.svc), raptor.rail.codeOn(d, raptor.stopAt(d, rd.svc, rd.dir, rd.to), rd.svc), rd.to - rd.from, o.waits[i], if (o.live[i]) " live" else "", o.ride_min[i] });
         }
         if (o.tags.fastest) std.debug.print("  [fastest]", .{});
         if (o.tags.fewest) std.debug.print("  [fewest changes]", .{});
@@ -91,10 +92,15 @@ test "live waits are used, and a service not on the board is not boarded" {
     var fake: Fake = .{ .first = 20, .gap = 12 };
     const late = try raptor.plan(d, gpa, t.from, t.to, .{ .ctx = &fake, .look = Fake.look }, &out);
     try std.testing.expect(late.len > 0);
-    try std.testing.expect(late[0].live[0]);
-    // The first bus is 20 minutes out: no way gets there before it.
-    for (late) |o| try std.testing.expect(o.arrive > 20);
-    const first = late[0].rides[0].svc;
+    // With every bus 20 minutes out a train may win; look at the ways by bus.
+    var by_bus: ?raptor.Option = null;
+    for (late) |o| if (d.services[o.rides[0].svc].rail == null) {
+        if (by_bus == null) by_bus = o;
+        // The first bus is 20 minutes out: no bus way gets there before it.
+        try std.testing.expect(o.arrive > 20);
+    };
+    try std.testing.expect(by_bus.?.live[0]);
+    const first = by_bus.?.rides[0].svc;
     fake = .{ .first = 2, .gap = 8, .gone = first };
     const without = try raptor.plan(d, gpa, t.from, t.to, .{ .ctx = &fake, .look = Fake.look }, &out);
     for (without) |o| for (0..o.n) |i| try std.testing.expect(o.rides[i].svc != first);

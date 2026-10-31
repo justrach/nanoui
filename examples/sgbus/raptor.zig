@@ -1,6 +1,6 @@
 //! The journey planner on the phone: RAPTOR (Delling, Pajor and Werneck,
 //! "Round-Based Public Transit Routing", 2012) over the bundled stop
-//! lists. Round k finds the earliest arrival at every stop with k buses;
+//! lists. Round k finds the earliest arrival at every stop with k rides;
 //! between rounds you may walk up to 300 m to another stop. Without a
 //! timetable, a bus is boarded at its expected time: the live arrivals
 //! at that stop when the app has them (LTA through arrivelah), else half
@@ -12,13 +12,19 @@
 //! the fastest, the fewest changes and the least walking always kept, and
 //! ranked by arrival plus a penalty for each change and each minute on foot.
 //! Fares are LTA's distance fares (adult card, from 27 December 2025).
+//! Trains (rail.zig) are services too: their stretches are timed from
+//! track length, speed and dwell, their waits are half the headway, and
+//! you reach a station by walking to its nearest exit, up to 800 m.
 const std = @import("std");
 const data = @import("data.zig");
+pub const rail = @import("rail.zig");
 const Coord = @import("nanoui").map.Coord;
 
 pub const walk_radius = 450;
 pub const transfer_radius = 300;
-pub const rounds = 3;
+pub const rail_radius = 800;
+/// Bus, train, train, bus is four.
+pub const rounds = 4;
 const dwell_min = 0.33;
 
 pub const Ride = struct { svc: u16, dir: u8, from: u16, to: u16 };
@@ -65,6 +71,8 @@ pub const Now = struct {
     /// Seconds since midnight, and whether it's a weekday: for peak-only services.
     clock: ?f64 = null,
     weekday: bool = true,
+    /// False plans with buses only.
+    trains: bool = true,
 
     fn of(n: Now, stop: u16, svc: u16) Look {
         const f = n.look orelse return .unknown;
@@ -79,6 +87,7 @@ pub fn walkMin(m: f64) f64 {
 
 /// Modelled minutes from position `p` to `p + 1` of a direction.
 pub fn segMin(d: *const data.Data, svc: u16, dir: u8, p: usize) f64 {
+    if (d.services[svc].rail) |l| return rail.hopMin(l, l.km[dir][p]);
     const st = d.services[svc].dirs[dir];
     const m = data.meters(d.stops[st[p]].at, d.stops[st[p + 1]].at);
     // Short stretches are town roads; long ones are arterials or expressways.
@@ -107,13 +116,16 @@ fn peakOnly(no: []const u8) bool {
     return cityDirect(no) or (no.len > 1 and no[no.len - 1] == 'e');
 }
 
-fn isPeak(now: Now) bool {
+pub fn isPeak(now: Now) bool {
     const t = now.clock orelse return true;
     const h = t / 3600;
     return now.weekday and ((h >= 6.5 and h < 9.5) or (h >= 17 and h < 20));
 }
 
 const basic = [_]u16{ 128, 138, 149, 159, 168, 175, 182, 186, 190, 194, 198, 202, 207, 211, 215, 220, 224, 227, 230, 233, 236, 238, 240, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257 };
+
+/// Tapping in for a train before 7:45am on a weekday: 50 cents off (LTA).
+pub const early_rail_off = 50;
 
 /// LTA's adult card fare for a journey of `km` (bus and train, all rides
 /// together), cents: up to 3.2 km, then a step each 1 km to over 40.2.
@@ -129,6 +141,11 @@ pub const waitPublic = waitFor;
 
 /// Minutes from `ready` to the next bus of `svc` at `stop`; null if it isn't running.
 fn waitFor(d: *const data.Data, now: Now, stop: u16, svc: u16, ready: f64) ?Wait {
+    if (d.services[svc].rail) |l| {
+        if (!now.trains) return null;
+        if (now.clock) |c| if (!rail.open(@mod(c / 60 + ready, 24 * 60))) return null;
+        return .{ .w = rail.headway(l, isPeak(now)) / 2, .live = false };
+    }
     const no = d.services[svc].no;
     switch (now.of(stop, svc)) {
         .absent => return null,
@@ -181,7 +198,7 @@ pub const Pace = struct {
             std.mem.sort(f32, all.items, {}, std.sort.asc(f32));
             p.all = all.items[all.items.len / 2];
         }
-        for (sums, 0..) |s, i| by[i] = if (s[1] > 0) std.math.clamp(s[0] / s[1], 0.6, 2.0) else p.all;
+        for (sums, 0..) |s, i| by[i] = if (d.services[i].rail != null) 1 else if (s[1] > 0) std.math.clamp(s[0] / s[1], 0.6, 2.0) else p.all;
         return p;
     }
 

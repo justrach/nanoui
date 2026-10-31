@@ -131,10 +131,11 @@ fn ours(s: *App, c: *ui.Context, ti: usize, tag: ?[]const u8) void {
     for (0..t.n) |i| {
         c.next_key_int = i;
         if (i > 0) label(c, "›");
-        cards.badge(c, s.d.services[t.rides[i].svc].no);
+        svcBadge(s, c, t.rides[i].svc);
     }
     row.end();
-    const when = if (t.live[0]) c.print("bus in {d} min", .{@as(u32, @intFromFloat(@round(t.waits[0])))}) else c.print("no live time, about {d} min wait", .{@as(u32, @intFromFloat(@round(t.waits[0])))});
+    const train = s.d.services[t.rides[0].svc].rail != null;
+    const when = if (t.live[0]) c.print("bus in {d} min", .{@as(u32, @intFromFloat(@round(t.waits[0])))}) else if (train) c.print("train in about {d} min", .{@as(u32, @intFromFloat(@round(t.waits[0])))}) else c.print("no live time, about {d} min wait", .{@as(u32, @intFromFloat(@round(t.waits[0])))});
     const changes = t.n -| 1;
     const fare = if (t.fare) |f| c.print(" · ${d}.{d:0>2}", .{ f / 100, f % 100 }) else "";
     const head = if (journey.clockText(c, s, t.arrive)) |at| c.print("Arrive {s} · ", .{at}) else "";
@@ -155,18 +156,20 @@ fn legs(s: *App, c: *ui.Context, t: raptor.Option) void {
     var n: usize = 0;
     for (0..t.n) |i| {
         const r = t.rides[i];
-        const a = s.d.stops[raptor.stopAt(s.d, r.svc, r.dir, r.from)];
-        const b = s.d.stops[raptor.stopAt(s.d, r.svc, r.dir, r.to)];
-        if (t.walks[i] >= 30) step(c, &n, null, c.print("Walk {d} m to {s}", .{ @as(u32, @intFromFloat(t.walks[i])), a.name }), c.print("{d} min", .{@as(u32, @intFromFloat(@ceil(raptor.walkMin(t.walks[i]))))}));
+        const ia = raptor.stopAt(s.d, r.svc, r.dir, r.from);
+        const ib = raptor.stopAt(s.d, r.svc, r.dir, r.to);
+        const a = s.d.stops[ia];
+        const b = s.d.stops[ib];
+        if (t.walks[i] >= 30) step(s, c, &n, null, c.print("Walk {d} m to {s}", .{ @as(u32, @intFromFloat(t.walks[i])), a.name }), c.print("{d} min", .{@as(u32, @intFromFloat(@ceil(raptor.walkMin(t.walks[i]))))}));
         const w: u32 = @intFromFloat(@round(t.waits[i]));
         // After the first bus, the wait is from when you get to the stop.
-        const wait = if (i == 0)
+        const wait = if (s.d.services[r.svc].rail) |l| trainWait(s, c, r, l, w) else if (i == 0)
             (if (t.live[i]) c.print("in {d} min, live", .{w}) else c.print("about {d} min, no live time", .{w}))
         else if (t.live[i]) c.print("{d} min wait when you get there, live", .{w}) else c.print("about {d} min wait there, no live time", .{w});
-        step(c, &n, s.d.services[r.svc].no, c.print("From {s} ({s})", .{ a.name, a.code }), wait);
-        step(c, &n, null, c.print("Get off at {s} ({s})", .{ b.name, b.code }), c.print("{d} stops, about {d} min", .{ r.to - r.from, @as(u32, @intFromFloat(@round(t.ride_min[i]))) }));
+        step(s, c, &n, r.svc, c.print("From {s} ({s})", .{ a.name, raptor.rail.codeOn(s.d, ia, r.svc) }), wait);
+        step(s, c, &n, null, c.print("Get off at {s} ({s})", .{ b.name, raptor.rail.codeOn(s.d, ib, r.svc) }), c.print("{d} stop{s}, about {d} min", .{ r.to - r.from, if (r.to - r.from == 1) "" else "s", @as(u32, @intFromFloat(@round(t.ride_min[i]))) }));
     }
-    if (t.walks[t.n] >= 30) step(c, &n, null, c.print("Walk {d} m to {s}", .{ @as(u32, @intFromFloat(t.walks[t.n])), j.dest.?.name() }), c.print("{d} min", .{@as(u32, @intFromFloat(@ceil(raptor.walkMin(t.walks[t.n]))))}));
+    if (t.walks[t.n] >= 30) step(s, c, &n, null, c.print("Walk {d} m to {s}", .{ @as(u32, @intFromFloat(t.walks[t.n])), j.dest.?.name() }), c.print("{d} min", .{@as(u32, @intFromFloat(@ceil(raptor.walkMin(t.walks[t.n]))))}));
     card.end();
     if (t.fare) |f| para(c, c.print("Adult card fare ${d}.{d:0>2}, {d:.1} km, by LTA's distance fares.", .{ f / 100, f % 100, t.km })) else para(c, "City Direct has its own fares.");
     const go = ui.div(c).row().wFull().justifyCenter().itemsCenter().h(56).roundedFull().bg(if (j.going) cards.yellow else ink);
@@ -178,12 +181,26 @@ fn legs(s: *App, c: *ui.Context, t: raptor.Option) void {
     go.end();
 }
 
-fn step(c: *ui.Context, n: *usize, svc: ?[]const u8, what: []const u8, detail: []const u8) void {
+/// A train's wait and which way: "EWL towards Tuas Link, about 3 min wait, every 5".
+fn trainWait(s: *App, c: *ui.Context, r: raptor.Ride, l: *const @import("data.zig").Line, w: u32) []const u8 {
+    const dir = s.d.services[r.svc].dirs[r.dir];
+    const end = s.d.stops[dir[dir.len - 1]].name;
+    const h: u32 = @intFromFloat(@round(raptor.rail.headway(l, raptor.isPeak(s.journey.planNow()))));
+    return c.print("{s} towards {s}, about {d} min wait, a train every {d} min", .{ l.name, end, w, h });
+}
+
+/// A bus number on ink, or a train line on its colour.
+fn svcBadge(s: *App, c: *ui.Context, svc: u16) void {
+    const sv = s.d.services[svc];
+    if (sv.rail) |l| cards.lineBadge(c, l.id, l.color) else cards.badge(c, sv.no);
+}
+
+fn step(s: *App, c: *ui.Context, n: *usize, svc: ?u16, what: []const u8, detail: []const u8) void {
     c.next_key_int = n.*;
     n.* += 1;
     const row = ui.div(c).row().wFull().gap(12).itemsCenter();
     defer row.end();
-    if (svc) |no| cards.badge(c, no) else {
+    if (svc) |v| svcBadge(s, c, v) else {
         const dot = ui.div(c).w(44).justifyCenter().row();
         ui.div(c).size(10, 10).roundedFull().bg(.hex(0xC7C7CC)).end();
         dot.end();

@@ -23,6 +23,13 @@ pub fn chip(c: *ui.Context, code: []const u8, on: bool) void {
     d.end();
 }
 
+/// A train line's badge: its id on the line's colour.
+pub fn lineBadge(c: *ui.Context, id: []const u8, color: u24) void {
+    const d = ui.div(c).minW(44).px(8).py(4).rounded(8).bg(.hex(color)).justifyCenter().itemsCenter();
+    ui.text(c, id, .{ .size = 17, .weight = .semibold, .color = .white });
+    d.end();
+}
+
 pub fn badge(c: *ui.Context, no: []const u8) void {
     const d = ui.div(c).minW(44).px(8).py(4).rounded(8).bg(ink).justifyCenter().itemsCenter();
     ui.text(c, no, .{ .size = 17, .weight = .semibold, .tabular = true, .color = .white });

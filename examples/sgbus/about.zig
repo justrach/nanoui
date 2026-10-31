@@ -6,8 +6,9 @@ const cards = @import("cards.zig");
 const credits = [_][2][]const u8{
     .{ "Bus arrivals", "Contains information from LTA DataMall's Bus Arrival API, accessed live, made available under the terms of the Singapore Open Data Licence version 1.0. Passed through by arrivelah (arrivelah2.busrouter.sg)." },
     .{ "Stops, services and routes", "Contains information from LTA DataMall made available under the terms of the Singapore Open Data Licence version 1.0, as compiled by busrouter.sg (data.busrouter.sg/v1) and bundled with the app." },
+    .{ "MRT and LRT", "Stations and their exits contain information from LTA DataMall and data.gov.sg, made available under the terms of the Singapore Open Data Licence version 1.0, as compiled by sgraildata (github.com/cheeaun/sgraildata). Track lengths are measured on its line shapes (CityMapper, © OpenStreetMap contributors). Train times and waits are our estimates, not a timetable." },
     .{ "Place search and transit routing", "OneMap, Singapore Land Authority. Results © SLA, under the OneMap terms of use." },
-    .{ "Ways there", "Bus and MRT ways from OneMap when it has a token; otherwise planned on this phone over the stop lists above, buses only, with estimated ride times. Bus waits are live when LTA has them." },
+    .{ "Ways there", "Bus and MRT ways from OneMap when it has a token; otherwise planned on this phone over the stop and station lists above, bus and train, with estimated ride times. Bus waits are live when LTA has them." },
     .{ "Map", "Apple Maps (MapKit)." },
     .{ "Built with", "nanoui: Zig, Metal and UIKit, no Swift." },
 };

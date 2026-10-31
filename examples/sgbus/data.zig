@@ -1,11 +1,31 @@
 //! The static data, bundled: every bus stop, every service's stops in
 //! each direction, and each direction's line, from busrouter.sg's
 //! data.busrouter.sg/v1 (itself from LTA DataMall), parsed once at start.
+//! The MRT and LRT stations and lines come after the bus stops and
+//! services, from `data/rail.min.json` (rail.zig).
 const std = @import("std");
 const nanoui = @import("nanoui");
-const Coord = nanoui.map.Coord;
+pub const Coord = nanoui.map.Coord;
 
-pub const Stop = struct { code: []const u8, name: []const u8, road: []const u8, at: Coord };
+pub const Stop = struct {
+    code: []const u8,
+    name: []const u8,
+    road: []const u8,
+    at: Coord,
+    /// A station's exits (none for a bus stop): walks are measured to these.
+    exits: []const Coord = &.{},
+};
+
+/// An MRT or LRT line, on the services that are trains.
+pub const Line = struct {
+    id: []const u8,
+    name: []const u8,
+    color: u24,
+    /// Top speed, km/h.
+    vmax: f32,
+    /// Each direction's hops, km along the track.
+    km: []const []const f32,
+};
 
 pub const Service = struct {
     no: []const u8,
@@ -14,6 +34,8 @@ pub const Service = struct {
     dirs: []const []const u16,
     /// Each direction's line, Google-encoded.
     lines: []const []const u8,
+    /// Set for a train line; null for a bus.
+    rail: ?*const Line = null,
 };
 
 /// A service calling at a stop: which, in which direction, how far along.
@@ -23,6 +45,9 @@ pub const Data = struct {
     arena: std.heap.ArenaAllocator,
     stops: []Stop,
     services: []Service,
+    /// `stops[0..n_bus]` are bus stops, the rest stations; the same for services.
+    n_bus: usize = 0,
+    n_bus_svc: usize = 0,
     /// Per stop, the services that call there.
     visits: []const []const Visit,
     /// Stops by grid cell (`cell` degrees, about 450 m), for `near`.
@@ -70,8 +95,11 @@ pub const Data = struct {
         const visits = try a.alloc([]const Visit, d.stops.len);
         for (lists, 0..) |l, i| visits[i] = l.items;
         d.visits = visits;
+        d.n_bus = d.stops.len;
+        d.n_bus_svc = d.services.len;
+        try @import("rail.zig").extend(d, a);
         d.grid = .empty;
-        for (d.stops, 0..) |st, i| {
+        for (d.stops[0..d.n_bus], 0..) |st, i| {
             const g = try d.grid.getOrPut(a, cellOf(st.at, 0, 0));
             if (!g.found_existing) g.value_ptr.* = .empty;
             try g.value_ptr.append(a, @intCast(i));
@@ -95,11 +123,15 @@ pub const Data = struct {
         return null;
     }
 
-    /// The `out.len` nearest stops within `radius` meters, nearest first.
+    pub fn isRail(d: *const Data, stop: u16) bool {
+        return stop >= d.n_bus;
+    }
+
+    /// The `out.len` nearest bus stops within `radius` meters, nearest first.
     pub fn nearest(d: *const Data, at: Coord, radius: f64, out: []u16) []u16 {
         var dist: [32]f64 = undefined;
         var n: usize = 0;
-        for (d.stops, 0..) |s, i| {
+        for (d.stops[0..d.n_bus], 0..) |s, i| {
             const m = meters(at, s.at);
             if (m > radius) continue;
             var j = n;
@@ -133,6 +165,39 @@ pub const Data = struct {
         return out[0..n];
     }
 
+    /// Stations with an exit within `radius` meters, the meters to the nearest exit.
+    pub fn nearRail(d: *const Data, at: Coord, radius: f64, out: []Near) []Near {
+        var n: usize = 0;
+        for (d.stops[d.n_bus..], d.n_bus..) |st, i| {
+            if (n == out.len) break;
+            // Exits are within about 400 m of the station's point.
+            if (meters(at, st.at) > radius + 450) continue;
+            const m = exitMeters(st, at);
+            if (m > radius) continue;
+            out[n] = .{ .stop = @intCast(i), .m = m };
+            n += 1;
+        }
+        return out[0..n];
+    }
+
+    /// Bus stops within `radius` meters of any of station `stop`'s exits, the nearest exit's meters.
+    pub fn nearExits(d: *const Data, stop: u16, radius: f64, out: []Near) []Near {
+        const st = d.stops[stop];
+        if (st.exits.len == 0) return d.near(st.at, radius, out);
+        var n: usize = 0;
+        var buf: [96]Near = undefined;
+        for (st.exits) |e| next: for (d.near(e, radius, &buf)) |x| {
+            for (out[0..n]) |*o| if (o.stop == x.stop) {
+                o.m = @min(o.m, x.m);
+                continue :next;
+            };
+            if (n == out.len) break;
+            out[n] = x;
+            n += 1;
+        };
+        return out[0..n];
+    }
+
     /// Stops whose name has `q` in it (any case), up to `out.len`.
     pub fn search(d: *const Data, q: []const u8, out: []u16) []u16 {
         var n: usize = 0;
@@ -155,6 +220,14 @@ fn contains(hay: []const u8, q: []const u8) bool {
 }
 
 pub const Near = struct { stop: u16, m: f64 };
+
+/// Meters from `at` to a station's nearest exit (its point if it has none).
+pub fn exitMeters(st: Stop, at: Coord) f64 {
+    if (st.exits.len == 0) return meters(st.at, at);
+    var best: f64 = std.math.inf(f64);
+    for (st.exits) |e| best = @min(best, meters(e, at));
+    return best;
+}
 
 const cell = 0.004;
 

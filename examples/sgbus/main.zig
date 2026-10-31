@@ -50,7 +50,7 @@ pub const App = struct {
     fn view(s: *App, c: *ui.Context) void {
         s.live.frame(c.time);
         s.located();
-        if (s.m.takeTap()) |id| if (id < s.d.stops.len) s.choose(@intCast(id));
+        if (s.m.takeTap()) |id| if (id < s.d.n_bus) s.choose(@intCast(id));
         if (s.refreshing and s.live.answers != s.answers_seen) {
             s.refreshing = false;
             nanoui.haptics.impact(.light);
@@ -107,7 +107,7 @@ pub const App = struct {
             s.journey.line(t, &s.line);
             s.line_for = null;
             opts.pins = s.journey.pins(t, &pins);
-            opts.line = .{ .points = s.line.items, .color = cards.green };
+            opts.line = .{ .points = s.line.items, .color = s.journey.lineColor(t) };
             opts.camera = s.journey.camera();
         } else {
             const list = if (s.tab == .starred) s.stars.items else s.near;
