@@ -19,6 +19,7 @@ const ui = @import("../ui/ui.zig");
 const Window = @import("window.zig").Window;
 const touch = @import("touch.zig");
 const keys = @import("keys.zig");
+const fold = @import("fold.zig");
 
 extern "c" fn UIAccessibilityIsReduceMotionEnabled() bool;
 extern "c" const NSRunLoopCommonModes: objc.Object;
@@ -59,6 +60,11 @@ pub const Surface = struct {
     dead: bool = false,
     /// The view's size changed during a frame: the next frame takes it.
     stale_geometry: bool = false,
+    /// The UIHingeInteraction (iOS 27.1 foldables), if the system has one.
+    hinge: ?objc.Object = null,
+    /// UIKit moves the fold's reserved regions a little after the hinge
+    /// reports, with no event of its own: frames read them until then.
+    fold_until: f64 = 0,
 
     /// The surface of `obj`, for one event: pair with `leave`. After a
     /// frame, a handler checks `dead` before touching it again.
@@ -105,6 +111,7 @@ pub const Surface = struct {
         const layer = objc.msg(objc.Object, uiview, "layer", .{});
         objc.msg(void, layer, "addSublayer:", .{renderer.layer});
         keys.attach(self);
+        self.hinge = fold.attach(self);
 
         const link = objc.retain(objc.msg(objc.Object, objc.class("CADisplayLink"), "displayLinkWithTarget:selector:", .{ uiview, objc.sel("displayLinkFired:") }));
         objc.msg(void, link, "setPaused:", .{objc.YES});
@@ -121,6 +128,8 @@ pub const Surface = struct {
     pub fn destroy(self: *Surface) void {
         objc.setZig(self.uiview, null);
         keys.detach(self);
+        if (self.hinge) |h| fold.detach(self, h);
+        self.hinge = null;
         if (self.display_link) |link| {
             // The link retains its target, the view: break the cycle.
             objc.msg(void, link, "invalidate", .{});
@@ -169,6 +178,24 @@ pub const Surface = struct {
         objc.msg(void, tx, "commit", .{});
         self.text.setScale(self.scale);
         self.renderer.resize(self.size, self.scale);
+        fold.read(self);
+    }
+
+    /// The screen changed (a fold, a tilt): reads it again and draws.
+    pub fn geometryChanged(self: *Surface) void {
+        self.updateGeometry();
+        self.requestFrame();
+    }
+
+    /// The hinge moved: reads the screen now, and again each frame for a
+    /// moment, as UIKit moves the fold's regions after it.
+    pub fn hingeMoved(self: *Surface) void {
+        self.fold_until = cf.CACurrentMediaTime() + 0.75;
+        self.geometryChanged();
+    }
+
+    fn foldSettling(self: *Surface) bool {
+        return self.fold_until > 0 and cf.CACurrentMediaTime() < self.fold_until;
     }
 
     /// What the system covers: the safe area, and the keyboard over it.
@@ -193,7 +220,7 @@ pub const Surface = struct {
     /// Builds, lays out, paints and draws one frame.
     pub fn frame(self: *Surface) void {
         if (self.dead) return;
-        if (self.stale_geometry) self.updateGeometry();
+        if (self.stale_geometry) self.updateGeometry() else if (self.foldSettling()) fold.read(self);
         if (self.in_frame or !self.canDraw()) {
             // Waits: the frame running (a dialog's run loop is inside it)
             // restarts the display link for it as it ends, the return to
@@ -214,6 +241,8 @@ pub const Surface = struct {
         const root: ui.View = if (self.full_bleed) self.view else .init(self, insideSafeArea);
         const r = frame_mod.run(c, root, &self.text, &self.instances, self.size, self.scale, self.theme(), dt, now - self.start_time);
         @import("../play.zig").paint(self.gpa, &self.instances);
+        c.device.rotated = false;
+        c.device.posture_changed = false;
         if (self.dead) {
             // The view closed its window: nothing left to draw into.
             pool.pop();
@@ -230,7 +259,7 @@ pub const Surface = struct {
         pool.pop();
         self.in_frame = false;
         // No hover on a touch screen: what changed under a finger already drew.
-        const more = c.animating or r.hot_changed or self.touch.flinging();
+        const more = c.animating or r.hot_changed or self.touch.flinging() or self.foldSettling();
         self.setRate(if (more or self.pending) null else c.frame_in);
         self.setPaced(more or c.frame_in != null or self.pending);
         if (!c.animating) self.last_frame_time = 0;

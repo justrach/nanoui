@@ -33,7 +33,7 @@ pub fn app(b: *std.Build, exe: *std.Build.Step.Compile, opts: Options) std.Build
 /// libraries, and where to find them.
 pub fn executable(b: *std.Build, exe: *std.Build.Step.Compile) std.Build.LazyPath {
     const target = exe.root_module.resolved_target.?.result;
-    if (target.abi == .simulator) return stripped(b, exe, exe.getEmittedBin());
+    if (target.abi == .simulator) return stamped(b, exe, stripped(b, exe, exe.getEmittedBin()));
     const obj = b.addObject(.{ .name = exe.name, .root_module = exe.root_module, .use_llvm = exe.use_llvm, .zig_lib_dir = exe.zig_lib_dir });
     obj.bundle_compiler_rt = true;
     const min = target.os.version_range.semver.min;
@@ -62,6 +62,23 @@ pub fn executable(b: *std.Build, exe: *std.Build.Step.Compile) std.Build.LazyPat
     if (exe.link_gc_sections orelse true) link.addArg("-Wl,-dead_strip");
     link.addArg("-o");
     return stripped(b, exe, link.addOutputFileArg(exe.name));
+}
+
+/// The Simulator's program, marked as built with the installed SDK, and
+/// signed again. Zig's linker writes its own idea of the SDK (27.0 with
+/// Zig 0.17.0), and UIKit keeps what is new in a later SDK from a program
+/// built with an earlier one: on iOS 27.1, the iPhone Duo's full inner
+/// screen (a narrower window without it) and its fold's reserved regions.
+fn stamped(b: *std.Build, exe: *std.Build.Step.Compile, bin: std.Build.LazyPath) std.Build.LazyPath {
+    const min = exe.root_module.resolved_target.?.result.os.version_range.semver.min;
+    const run = b.addSystemCommand(&.{ "sh", "-c",
+        \\set -e
+        \\sdk="$(xcrun --sdk iphonesimulator --show-sdk-version)"
+        \\xcrun vtool -set-build-version iossim "$1" "$sdk" -replace -output "$3" "$2" 2>/dev/null
+        \\codesign -f -s - "$3" 2>/dev/null
+    , "stamp", b.fmt("{d}.{d}", .{ min.major, min.minor }) });
+    run.addFileArg(bin);
+    return run.addOutputFileArg(exe.name);
 }
 
 /// A release's program without its local symbols (about a tenth of it),

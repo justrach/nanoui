@@ -63,6 +63,14 @@ pub const Truncate = types.Truncate;
 pub const Shadow = types.Shadow;
 pub const Glass = types.Glass;
 pub const Weight = types.Weight;
+/// Foldables: posture, hinge, fold band and occlusions (`Context.device`).
+pub const device = @import("device.zig");
+pub const Device = device.Device;
+pub const Posture = device.Posture;
+/// Two panes that keep clear of a fold (`panes.zig`).
+pub const panes = @import("panes.zig").panes;
+pub const Panes = @import("panes.zig").Panes;
+pub const PanesOptions = @import("panes.zig").Options;
 
 pub const key = widgets.key;
 pub const keyInt = widgets.keyInt;
@@ -161,6 +169,8 @@ test {
     _ = @import("tests_text_extras.zig");
     _ = @import("tests_settle.zig");
     _ = types;
+    _ = device;
+    _ = @import("panes.zig");
     _ = @import("layout.zig");
     _ = textfield;
     _ = @import("tests.zig");
