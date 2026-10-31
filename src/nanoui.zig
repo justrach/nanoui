@@ -81,6 +81,12 @@ pub const objc = if (mac or builtin.os.tag == .ios) @import("objc.zig") else str
 pub const ui = @import("ui/ui.zig");
 /// HTTP requests answered on the main thread (http.zig).
 pub const http = @import("http.zig");
+/// Haptic taps (iOS; nothing elsewhere).
+pub const haptics = @import("basics/haptics.zig");
+/// The device's location (iOS, Core Location).
+pub const location = @import("basics/location.zig");
+/// Small values kept between launches (NSUserDefaults on Apple platforms).
+pub const kv = @import("basics/kv.zig");
 /// Components after GPUI Kit: buttons, overlays, tabs, forms, toasts.
 pub const kit = @import("kit/kit.zig");
 pub const tsgen = @import("tsgen.zig");
@@ -132,6 +138,9 @@ test {
     _ = @import("menu_types.zig");
     _ = @import("update.zig");
     _ = @import("http.zig");
+    _ = haptics;
+    _ = location;
+    _ = kv;
     // The updater is for desktop apps; iOS updates through the App Store.
     if (builtin.os.tag != .ios) _ = @import("update_portable.zig");
     if (is_android) {
