@@ -13,11 +13,19 @@ Singapore bus arrivals in nanoui: Zig, Metal and UIKit, no Swift.
   marked.
 - **Starred**: star a stop and it is kept here between launches
   (`nanoui.kv`).
+- **Welcome** (first launch only): four cards that turn like pages
+  about a ring on their left edge (`Style.turn`, a spring, a light tap
+  of haptics): live times, every stop, the fare, and then the real
+  location ask, with "Not now". Your answer is kept (`nanoui.kv`,
+  `onboarded`). Open flat, the words are left of the fold and the card
+  right of it. The card pictures in `assets/` were generated for the
+  mockups, not photos.
 - **Journey**: To searches OneMap's places and the bundled stop names.
-  You then get up to three ways there, and a way's legs on the map with a
-  Go button. With a OneMap token they are OneMap's, bus and MRT, with MRT
-  lines in their colours and live waits for the buses. Without one, or
-  when OneMap fails, they are planned on the phone, by bus.
+  You then get the ways there, tagged Fastest, Fewest changes and Least
+  walking, with the arrival, live wait, walk and fare, and a way's legs
+  on the map with a Go button. The bus ways are planned on the phone
+  (below). With a OneMap token its bus and MRT ways join the same list,
+  ranked the same way.
 - **About**: the credits that the data's licences ask for.
 - **Foldables** (`ui.panes`): folded, the map sits above the list. Open
   flat or held like a book, the map is in one pane and the times in the
@@ -48,21 +56,36 @@ zig build $(sh tools/ios/zig-lib.sh) -Dtarget=aarch64-ios-simulator run-sgbus
   `AccountKey`, calls DataMall's `BusArrivalv2`, and caches each stop for
   about 15 seconds. The app then calls that server, so the key never
   ships in the app.
-- **Routing.** The ways there are planned on the phone (`router.zig`),
-  buses only: one bus, or two with a walk between. The stop lists have no
-  timetable, so a ride's time is an estimate: its length at 20 km/h plus
-  24 seconds a stop. Waits are live when LTA has them. OneMap's routing
-  (`routingsvc`, transit with MRT, `onemap.zig`) needs an account token.
+- **Routing.** The bus ways are planned on the phone (`raptor.zig`,
+  `raptor_plan.zig`) with RAPTOR: rounds of up to three buses, from every
+  stop within 450 m of you, with walks of up to 300 m between stops (so
+  the stop across the road counts), to every stop within 450 m of where
+  you're going. The stop lists have no timetable, so:
+  - a ride's time is each stretch's length at a speed for its length
+    (18 to 45 km/h, so expressways are quicker) plus 20 s a stop, then
+    scaled by how fast that service's buses are really going, worked out
+    from where LTA last saw them;
+  - a wait is the live time when the stop's board has the service,
+    else about 3.5 min at peak or 5 off it; a service missing from a
+    live board isn't boarded; express (`e`) and City Direct (6xx) run
+    only at weekday peaks unless a live board shows them;
+  - each change adds a minute's slack; ways are ranked by arrival plus
+    5 min a change and half a minute a minute walked, and only ways not
+    beaten on all of arrival, changes and walking are kept;
+  - fares are LTA's adult card distance fares (from 27 Dec 2025), over
+    the whole journey, $1 more on an express. City Direct shows none.
+  Walking is a straight line times 1.3 at 80 m a minute, with no
+  footpath map. `zig build test-sgbus` plans three real trips.
+  OneMap's routing (`routingsvc`, transit with MRT, `onemap.zig`) needs
+  an account token.
   For a test run, the app reads `ONEMAP_TOKEN` from its environment at
   launch (on the simulator, `SIMCTL_CHILD_ONEMAP_TOKEN`) and keeps it in
   memory only; it is never in the repo or the bundle. Like the DataMall
   key, a shipped app's token belongs on our server, not in the app.
-- `SGBUS_FRESH=1` starts with no starred stops, for a scripted run.
+- `SGBUS_FRESH=1` starts as a first launch: no starred stops, and the
+  welcome again.
 - `SGBUS_ONEMAP_SAMPLE=1` shows OneMap's documented sample answer
   (`fixtures/onemap-docs-sample.json`, Farrer Park to Labrador Park by NE
   and CC) for any destination, labelled as a sample on screen, so the MRT
   views can be seen without a token. It is trimmed from OneMap's docs, not
   a recording.
-- **First launch.** `needsOnboarding` in `main.zig` holds the place for a
-  welcome and the location ask. It is not designed yet, so it is never
-  shown.

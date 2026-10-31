@@ -3,7 +3,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
-const router = @import("router.zig");
+const raptor = @import("raptor.zig");
 const cards = @import("cards.zig");
 const journey = @import("journey.zig");
 const omv = @import("onemap_view.zig");
@@ -18,12 +18,8 @@ pub fn view(s: *App, c: *ui.Context) void {
         backRow(s, c, "‹ Ways there", false);
         return omv.legs(s, c, it);
     }
+    j.keep();
     if (j.trip()) |t| return legs(s, c, t);
-    if (j.dest != null and j.usingOneMap()) {
-        backRow(s, c, "‹ Go where?", true);
-        ui.text(c, c.print("To {s}", .{j.dest.?.name()}), .{ .size = 28, .weight = .semibold, .color = ink, .wrap = true });
-        return omv.options(s, c);
-    }
     if (j.dest != null) return options(s, c);
     form(s, c);
 }
@@ -55,7 +51,7 @@ fn form(s: *App, c: *ui.Context) void {
         c.next_key_int = i;
         const card = ui.div(c).column().wFull().rounded(22).bg(.white).p(16).gap(2);
         ui.text(c, p.name(), .{ .size = 17, .weight = .semibold, .color = ink, .truncate = .ellipsis });
-        const near = s.d.nearest(p.at, router.walk_radius, s.scratch[0..1]);
+        const near = s.d.nearest(p.at, raptor.walk_radius, s.scratch[0..1]);
         label(c, if (near.len > 0) c.print("OneMap · near {s}", .{s.d.stops[near[0]].name}) else "OneMap · no stop within 450 m");
         if (card.clicked()) j.go(p.*);
         card.end();
@@ -89,84 +85,81 @@ fn options(s: *App, c: *ui.Context) void {
     const j = &s.journey;
     backRow(s, c, "‹ Go where?", true);
     ui.text(c, c.print("To {s}", .{j.dest.?.name()}), .{ .size = 28, .weight = .semibold, .color = ink, .wrap = true });
-    if (j.n_trips == 0) {
-        label(c, "No bus there within a walk leh. Try a place nearer a stop.");
-        return;
-    }
-    var evals: [3]journey.Eval = undefined;
-    var order: [3]usize = .{ 0, 1, 2 };
-    for (j.trips[0..j.n_trips], 0..) |t, i| evals[i] = j.evaluate(t);
-    std.mem.sort(usize, order[0..j.n_trips], &evals, struct {
-        fn lt(e: *const [3]journey.Eval, a: usize, b: usize) bool {
-            return e[a].total < e[b].total;
-        }
-    }.lt);
-    for (order[0..j.n_trips], 0..) |ti, rank| {
-        const t = j.trips[ti];
-        const e = evals[ti];
-        c.next_key_int = ti;
-        const card = ui.div(c).column().wFull().rounded(22).bg(.white).p(16).gap(10);
-        defer card.end();
-        if (card.clicked()) {
-            j.chosen = ti;
-            nanoui.haptics.selection();
-        }
-        {
-            const top = ui.div(c).row().wFull().gap(8).itemsCenter();
-            defer top.end();
-            ui.motion.roll(c, "total", c.print("{d}", .{@as(u32, @intFromFloat(@round(e.total)))}), .{ .size = 28, .weight = .semibold, .color = ink }, .{});
-            ui.text(c, "min", .{ .size = 17, .color = ink });
-            const sp = ui.div(c).grow();
-            sp.end();
-            if (rank == 0) {
-                const tag = ui.div(c).px(10).py(4).rounded(10).bg(cards.yellow);
-                ui.text(c, "Fastest leh", .{ .size = 13, .weight = .semibold, .color = ink });
-                tag.end();
-            }
-        }
-        const row = ui.div(c).row().wFull().gap(6).itemsCenter();
-        if (t.walks[0] >= 30) label(c, c.print("Walk {d} ›", .{@as(u32, @intFromFloat(@ceil(router.walkMin(t.walks[0]))))}));
-        for (0..t.n) |i| {
-            c.next_key_int = i;
-            if (i > 0) label(c, "›");
-            cards.badge(c, s.d.services[t.rides[i].svc].no);
-        }
-        row.end();
-        const wait = e.waits[0];
-        const when = if (e.live[0]) c.print("next bus in {d} min", .{@as(u32, @intFromFloat(@round(wait)))}) else "no live time, about 8 min wait";
-        if (journey.clockText(c, s, e.total)) |at| label(c, c.print("Arrive {s} · {s}", .{ at, when })) else label(c, when);
+    var buf: [12]journey.Way = undefined;
+    const ways = j.ways(&buf);
+    if (ways.len == 0 and j.om_state != .asking) label(c, "No bus there within a walk leh. Try a place nearer a stop.");
+    for (ways, 0..) |w, i| {
+        c.next_key_int = i;
+        if (w.om) omv.wayCard(s, c, w.i, w.tag) else ours(s, c, w.i, w.tag);
     }
     label(c, switch (j.om_state) {
         .asking => "Asking OneMap for bus and MRT ways...",
         .failed => c.print("OneMap answered {d}, so these are bus only, planned on this phone. Ride times are estimates.", .{j.om_status}),
-        else => if (j.token == null) "Bus only, planned on this phone from LTA stop lists: OneMap's bus and MRT routing needs a token. Ride times are estimates." else "Bus only, planned on this phone. Ride times are estimates.",
+        else => if (j.token == null) "Bus only, planned on this phone from LTA stop lists: OneMap's MRT ways need a token. Ride times are estimates, sharpened by live buses." else "Ranked by arrival, with 5 min per change and half a minute per minute walked. Bus ride times are estimates.",
     });
 }
 
-fn legs(s: *App, c: *ui.Context, t: router.Trip) void {
+fn ours(s: *App, c: *ui.Context, ti: usize, tag: ?[]const u8) void {
     const j = &s.journey;
-    const e = j.evaluate(t);
+    const t = j.trips[ti];
+    const card = ui.div(c).column().wFull().rounded(22).bg(.white).p(16).gap(10);
+    defer card.end();
+    if (card.clicked()) {
+        j.chosen = ti;
+        j.om_chosen = null;
+        nanoui.haptics.selection();
+    }
+    {
+        const top = ui.div(c).row().wFull().gap(8).itemsCenter();
+        defer top.end();
+        ui.motion.roll(c, "total", c.print("{d}", .{@as(u32, @intFromFloat(@round(t.arrive)))}), .{ .size = 28, .weight = .semibold, .color = ink }, .{});
+        ui.text(c, "min", .{ .size = 17, .color = ink });
+        ui.div(c).grow().end();
+        if (tag) |g| {
+            const chip = ui.div(c).px(10).py(4).rounded(10).bg(cards.yellow);
+            ui.text(c, g, .{ .size = 13, .weight = .semibold, .color = ink });
+            chip.end();
+        }
+    }
+    const row = ui.div(c).row().wFull().gap(6).itemsCenter();
+    if (t.walks[0] >= 30) label(c, c.print("Walk {d} ›", .{@as(u32, @intFromFloat(@ceil(raptor.walkMin(t.walks[0]))))}));
+    for (0..t.n) |i| {
+        c.next_key_int = i;
+        if (i > 0) label(c, "›");
+        cards.badge(c, s.d.services[t.rides[i].svc].no);
+    }
+    row.end();
+    const when = if (t.live[0]) c.print("bus in {d} min", .{@as(u32, @intFromFloat(@round(t.waits[0])))}) else c.print("no live time, about {d} min wait", .{@as(u32, @intFromFloat(@round(t.waits[0])))});
+    const changes = t.n -| 1;
+    const fare = if (t.fare) |f| c.print(" · ${d}.{d:0>2}", .{ f / 100, f % 100 }) else "";
+    const head = if (journey.clockText(c, s, t.arrive)) |at| c.print("Arrive {s} · ", .{at}) else "";
+    label(c, c.print("{s}{s} · walk {d} m · {d} change{s}{s}", .{ head, when, @as(u32, @intFromFloat(t.walk_m)), changes, if (changes == 1) "" else "s", fare }));
+}
+
+fn legs(s: *App, c: *ui.Context, t: raptor.Option) void {
+    const j = &s.journey;
     backRow(s, c, "‹ Ways there", false);
     {
         const top = ui.div(c).row().wFull().gap(8).itemsCenter();
         defer top.end();
-        ui.motion.roll(c, "trip", c.print("{d}", .{@as(u32, @intFromFloat(@round(e.total)))}), .{ .size = 28, .weight = .semibold, .color = ink }, .{});
+        ui.motion.roll(c, "trip", c.print("{d}", .{@as(u32, @intFromFloat(@round(t.arrive)))}), .{ .size = 28, .weight = .semibold, .color = ink }, .{});
         ui.text(c, "min", .{ .size = 17, .color = ink });
-        if (journey.clockText(c, s, e.total)) |at| label(c, c.print("· arrive {s}", .{at}));
+        if (journey.clockText(c, s, t.arrive)) |at| label(c, c.print("· arrive {s}", .{at}));
     }
     const card = ui.div(c).column().wFull().rounded(22).bg(.white).p(16).gap(14);
     var n: usize = 0;
     for (0..t.n) |i| {
         const r = t.rides[i];
-        const a = s.d.stops[router.stopAt(s.d, r.svc, r.dir, r.from)];
-        const b = s.d.stops[router.stopAt(s.d, r.svc, r.dir, r.to)];
-        if (t.walks[i] >= 30) step(c, &n, null, c.print("Walk {d} m to {s}", .{ @as(u32, @intFromFloat(t.walks[i])), a.name }), c.print("{d} min", .{@as(u32, @intFromFloat(@ceil(router.walkMin(t.walks[i]))))}));
-        const wait = if (e.live[i]) c.print("in {d} min, live", .{@as(u32, @intFromFloat(@round(e.waits[i])))}) else "about 8 min, no live time";
+        const a = s.d.stops[raptor.stopAt(s.d, r.svc, r.dir, r.from)];
+        const b = s.d.stops[raptor.stopAt(s.d, r.svc, r.dir, r.to)];
+        if (t.walks[i] >= 30) step(c, &n, null, c.print("Walk {d} m to {s}", .{ @as(u32, @intFromFloat(t.walks[i])), a.name }), c.print("{d} min", .{@as(u32, @intFromFloat(@ceil(raptor.walkMin(t.walks[i]))))}));
+        const wait = if (t.live[i]) c.print("in {d} min, live", .{@as(u32, @intFromFloat(@round(t.waits[i])))}) else c.print("about {d} min, no live time", .{@as(u32, @intFromFloat(@round(t.waits[i])))});
         step(c, &n, s.d.services[r.svc].no, c.print("From {s} ({s})", .{ a.name, a.code }), wait);
-        step(c, &n, null, c.print("Get off at {s} ({s})", .{ b.name, b.code }), c.print("{d} stops, about {d} min", .{ r.to - r.from, @as(u32, @intFromFloat(@round(e.rides[i]))) }));
+        step(c, &n, null, c.print("Get off at {s} ({s})", .{ b.name, b.code }), c.print("{d} stops, about {d} min", .{ r.to - r.from, @as(u32, @intFromFloat(@round(t.ride_min[i]))) }));
     }
-    if (t.walks[t.n] >= 30) step(c, &n, null, c.print("Walk {d} m to {s}", .{ @as(u32, @intFromFloat(t.walks[t.n])), j.dest.?.name() }), c.print("{d} min", .{@as(u32, @intFromFloat(@ceil(router.walkMin(t.walks[t.n]))))}));
+    if (t.walks[t.n] >= 30) step(c, &n, null, c.print("Walk {d} m to {s}", .{ @as(u32, @intFromFloat(t.walks[t.n])), j.dest.?.name() }), c.print("{d} min", .{@as(u32, @intFromFloat(@ceil(raptor.walkMin(t.walks[t.n]))))}));
     card.end();
+    if (t.fare) |f| label(c, c.print("Adult card fare ${d}.{d:0>2}, {d:.1} km, by LTA's distance fares.", .{ f / 100, f % 100, t.km })) else label(c, "City Direct has its own fares.");
     const go = ui.div(c).row().wFull().justifyCenter().itemsCenter().h(56).roundedFull().bg(if (j.going) cards.yellow else ink);
     ui.text(c, if (j.going) "Going. Watch for the bus" else "Go", .{ .size = 17, .weight = .semibold, .color = if (j.going) ink else .white });
     if (go.clicked()) {

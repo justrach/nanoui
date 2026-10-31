@@ -2,18 +2,20 @@
 //! bundled stop names), then up to three ways there by bus, each with the
 //! waits for its buses from live arrivals, and a trip's legs on the map.
 //!
-//! Ways there come from OneMap's transit routing, bus and MRT, when a
-//! token is given at run time (onemap.zig). Without one, or when OneMap
-//! fails or rate-limits, they come from this app's own bus-only planner
-//! (router.zig), which needs no network but the live waits.
+//! Ways there come from this app's own bus planner (raptor.zig), which
+//! needs no network but the live boards, merged with OneMap's bus and MRT
+//! ways when a token is given at run time (onemap.zig), and all ranked
+//! the same way: arrival, plus a penalty per change and per minute walked.
+//! As live boards for the boarding stops come in, it plans again.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const map = nanoui.map;
 const data = @import("data.zig");
-const router = @import("router.zig");
+const raptor = @import("raptor.zig");
 const cards = @import("cards.zig");
 const onemap = @import("onemap.zig");
+const live = @import("live.zig");
 const App = @import("main.zig").App;
 
 pub const Place = struct {
@@ -33,13 +35,8 @@ pub const Place = struct {
     }
 };
 
-/// A trip as of now: waits from live arrivals where there are some.
-pub const Eval = struct {
-    total: f64,
-    waits: [2]f64 = .{ 0, 0 },
-    live: [2]bool = .{ false, false },
-    rides: [2]f64 = .{ 0, 0 },
-};
+/// One entry of the merged list: one of ours, or OneMap's way `i`.
+pub const Way = struct { om: bool, i: u8, score: f64, tag: ?[]const u8 = null };
 
 pub const Journey = struct {
     to: ui.TextBuffer = .{},
@@ -49,7 +46,10 @@ pub const Journey = struct {
     places: [6]Place = undefined,
     n_places: usize = 0,
     dest: ?Place = null,
-    trips: [3]router.Trip = undefined,
+    trips: [4]raptor.Option = undefined,
+    /// `Live.answers` when it last planned.
+    planned: u32 = 0,
+    obs: [192]raptor.Obs = undefined,
     n_trips: usize = 0,
     chosen: ?usize = null,
     going: bool = false,
@@ -65,8 +65,8 @@ pub const Journey = struct {
     om_status: u16 = 0,
     om_chosen: ?usize = null,
 
-    pub fn trip(j: *const Journey) ?router.Trip {
-        if (j.usingOneMap()) return null;
+    pub fn trip(j: *const Journey) ?raptor.Option {
+        if (j.om_chosen != null) return null;
         const i = j.chosen orelse return null;
         return j.trips[i];
     }
@@ -109,8 +109,7 @@ pub const Journey = struct {
         j.chosen = null;
         j.going = false;
         j.om_chosen = null;
-        const got = router.plan(s.d, s.gpa, s.here, p.at, &j.trips) catch &.{};
-        j.n_trips = got.len;
+        j.replan();
         nanoui.haptics.selection();
         j.n_om = 0;
         j.om_state = .off;
@@ -157,30 +156,85 @@ pub const Journey = struct {
         return &j.om[i];
     }
 
-    /// Minutes for `t`, with each bus's wait from live arrivals.
-    pub fn evaluate(j: *const Journey, t: router.Trip) Eval {
+    /// Plans again with the live boards as they are now.
+    pub fn replan(j: *Journey) void {
         const s = j.app;
-        var e: Eval = .{ .total = router.walkMin(t.walks[0]) };
-        for (0..t.n) |i| {
-            const r = t.rides[i];
-            const code = s.d.stops[router.stopAt(s.d, r.svc, r.dir, r.from)].code;
-            e.waits[i] = 8;
-            if (s.live.want(code)) |b| if (b.find(s.d.services[r.svc].no)) |sv| for (sv.buses) |nb| if (nb) |bus| {
-                const at = (@as(f64, @floatFromInt(bus.ms)) / 1000 - (s.live.now - b.at)) / 60;
-                if (at >= e.total - 0.01) {
-                    e.waits[i] = at - e.total;
-                    e.live[i] = bus.monitored;
-                    break;
-                }
+        const dest = j.dest orelse return;
+        j.planned = s.live.answers;
+        const kept = if (j.chosen) |i| j.trips[i] else null;
+        var now: raptor.Now = .{ .ctx = s, .look = look, .obs = j.observe(), .clock = s.live.clock() };
+        if (s.live.date) |d| now.weekday = weekday(&d);
+        const got = raptor.plan(s.d, s.gpa, s.here, dest.at, now, &j.trips) catch j.trips[0..0];
+        j.n_trips = got.len;
+        // The way you opened stays open, with its new numbers.
+        if (kept) |k| {
+            j.chosen = null;
+            for (got, 0..) |t, i| if (samePlan(t, k)) {
+                j.chosen = i;
             };
-            e.rides[i] = router.rideMin(s.d, r);
-            e.total += e.waits[i] + e.rides[i] + router.walkMin(t.walks[i + 1]);
         }
-        return e;
+    }
+
+    /// Each frame on the Journey tab: keeps the boarding stops' boards
+    /// coming, and plans again when one answers.
+    pub fn keep(j: *Journey) void {
+        const s = j.app;
+        if (j.dest == null) return;
+        for (j.trips[0..j.n_trips]) |t| for (0..t.n) |i| {
+            const r = t.rides[i];
+            _ = s.live.want(s.d.stops[raptor.stopAt(s.d, r.svc, r.dir, r.from)].code);
+        };
+        if (s.live.answers != j.planned) j.replan();
+    }
+
+    /// Ours and OneMap's ways in one list, best first.
+    pub fn ways(j: *const Journey, out: []Way) []Way {
+        var n: usize = 0;
+        for (j.trips[0..j.n_trips], 0..) |t, i| {
+            if (n == out.len) break;
+            const tag: ?[]const u8 = if (t.tags.fastest) "Fastest leh" else if (t.tags.fewest) "Fewest changes" else if (t.tags.least_walk) "Least walking" else null;
+            out[n] = .{ .om = false, .i = @intCast(i), .score = t.score, .tag = tag };
+            n += 1;
+        }
+        if (j.usingOneMap()) for (j.om[0..j.n_om], 0..) |it, i| {
+            if (n == out.len) break;
+            // OneMap's minutes already count its waits and walks.
+            const mins = it.seconds / 60;
+            out[n] = .{ .om = true, .i = @intCast(i), .score = mins + 5 * @as(f64, @floatFromInt(it.transfers)) + 0.5 * raptor.walkMin(it.walk_m / 1.3) };
+            n += 1;
+        };
+        std.mem.sort(Way, out[0..n], {}, struct {
+            fn lt(_: void, a: Way, b: Way) bool {
+                return a.score < b.score;
+            }
+        }.lt);
+        // A OneMap way faster than all of ours takes the "Fastest" tag.
+        if (n > 0 and out[0].om) for (out[1..n]) |*w| {
+            if (w.tag != null and std.mem.eql(u8, w.tag.?, "Fastest leh")) w.tag = null;
+        };
+        if (n > 0 and out[0].om) out[0].tag = "Fastest leh";
+        return out[0..n];
+    }
+
+    /// The live buses on the boards in, for the planner's pace.
+    fn observe(j: *Journey) []const raptor.Obs {
+        const s = j.app;
+        var n: usize = 0;
+        for (s.live.boards.items) |b| if (b.state == .ok) {
+            const stop = s.d.find(b.code()) orelse continue;
+            for (b.svcs.items) |*sv| {
+                const svc = s.d.service(sv.no()) orelse continue;
+                for (sv.buses) |nb| if (nb) |bus| if (n < j.obs.len and bus.lat != 0) {
+                    j.obs[n] = .{ .stop = stop, .svc = svc, .eta = etaMin(s, b, bus), .at = .{ .lat = bus.lat, .lng = bus.lng } };
+                    n += 1;
+                };
+            }
+        };
+        return j.obs[0..n];
     }
 
     /// The trip's line: here, the stops it rides through, the place.
-    pub fn line(j: *const Journey, t: router.Trip, out: *std.ArrayList(map.Coord)) void {
+    pub fn line(j: *const Journey, t: raptor.Option, out: *std.ArrayList(map.Coord)) void {
         const s = j.app;
         out.clearRetainingCapacity();
         out.append(s.gpa, s.here) catch return;
@@ -191,13 +245,13 @@ pub const Journey = struct {
         out.append(s.gpa, j.dest.?.at) catch return;
     }
 
-    pub fn pins(j: *const Journey, t: router.Trip, out: []map.Pin) []map.Pin {
+    pub fn pins(j: *const Journey, t: raptor.Option, out: []map.Pin) []map.Pin {
         const s = j.app;
         var n: usize = 0;
         for (0..t.n) |i| {
             const r = t.rides[i];
             for ([2]u16{ r.from, r.to }) |pos| {
-                const st = router.stopAt(s.d, r.svc, r.dir, pos);
+                const st = raptor.stopAt(s.d, r.svc, r.dir, pos);
                 out[n] = .{ .id = st, .at = s.d.stops[st].at, .label = s.d.stops[st].code, .selected = i == 0 and pos == r.from };
                 n += 1;
             }
@@ -213,6 +267,43 @@ pub const Journey = struct {
         return .{ .center = .{ .lat = (a.lat + b.lat) / 2, .lng = (a.lng + b.lng) / 2 }, .span = span };
     }
 };
+
+fn samePlan(a: raptor.Option, b: raptor.Option) bool {
+    if (a.n != b.n) return false;
+    for (0..a.n) |i| if (a.rides[i].svc != b.rides[i].svc) return false;
+    return true;
+}
+
+fn etaMin(s: *const App, b: *const live.Board, bus: live.Bus) f64 {
+    return (@as(f64, @floatFromInt(bus.ms)) / 1000 - (s.live.now - b.at)) / 60;
+}
+
+/// The planner asks what the live board says of a service at a stop.
+fn look(ctx: ?*const anyopaque, stop: u16, svc: u16) raptor.Look {
+    const s: *const App = @ptrCast(@alignCast(ctx.?));
+    const code = s.d.stops[stop].code;
+    for (s.live.boards.items) |b| if (std.mem.eql(u8, b.code(), code)) {
+        if (b.state != .ok) return .unknown;
+        const sv = b.find(s.d.services[svc].no) orelse return .absent;
+        var etas: [3]?f64 = .{ null, null, null };
+        for (sv.buses, 0..) |nb, i| if (nb) |bus| {
+            etas[i] = etaMin(s, b, bus);
+        };
+        return .{ .seen = etas };
+    };
+    return .unknown;
+}
+
+/// Monday to Friday, from "MM-DD-YYYY" (Sakamoto's method).
+fn weekday(date: *const [10]u8) bool {
+    const m = std.fmt.parseInt(u32, date[0..2], 10) catch return true;
+    const d = std.fmt.parseInt(u32, date[3..5], 10) catch return true;
+    var y = std.fmt.parseInt(u32, date[6..10], 10) catch return true;
+    const t = [_]u32{ 0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4 };
+    if (m < 3) y -= 1;
+    const dow = (y + y / 4 - y / 100 + y / 400 + t[(m - 1) % 12] + d) % 7;
+    return dow != 0 and dow != 6;
+}
 
 fn str(v: std.json.Value, k: []const u8) []const u8 {
     const x = v.object.get(k) orelse return "";

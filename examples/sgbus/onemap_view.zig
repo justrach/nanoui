@@ -41,41 +41,43 @@ fn liveWait(s: *App, leg: *const onemap.Leg) ?i64 {
     return b.minutes(bus);
 }
 
-pub fn options(s: *App, c: *ui.Context) void {
+/// OneMap's way `i` as a card in the merged list, with `tag` if any.
+pub fn wayCard(s: *App, c: *ui.Context, i: usize, tag: ?[]const u8) void {
     const j = &s.journey;
-    for (j.om[0..j.n_om], 0..) |*it, i| {
-        c.next_key_int = i;
-        const card = ui.div(c).column().wFull().rounded(22).bg(.white).p(16).gap(10);
-        defer card.end();
-        if (card.clicked()) {
-            j.om_chosen = i;
-            nanoui.haptics.selection();
-        }
-        {
-            const top = ui.div(c).row().wFull().gap(8).itemsCenter();
-            defer top.end();
-            ui.text(c, c.print("{d}", .{minutes(it.seconds)}), .{ .size = 28, .weight = .semibold, .color = ink, .tabular = true });
-            ui.text(c, "min", .{ .size = 17, .color = ink });
-            ui.div(c).grow().end();
-            if (i == 0) {
-                const tag = ui.div(c).px(10).py(4).rounded(10).bg(cards.yellow);
-                ui.text(c, "Fastest leh", .{ .size = 13, .weight = .semibold, .color = ink });
-                tag.end();
-            }
-        }
-        const row = ui.div(c).row().wFull().gap(6).itemsCenter();
-        var first = true;
-        for (it.legs[0..it.n], 0..) |*leg, k| {
-            c.next_key_int = k;
-            if (leg.mode == .walk) continue;
-            if (!first) label(c, "›");
-            first = false;
-            badge(c, leg);
-        }
-        row.end();
-        const fare = if (it.fare_len > 0) c.print("${s}", .{it.fareOf()}) else "";
-        label(c, c.print("Walk {d} m · {d} transfer{s} {s}", .{ @as(u32, @intFromFloat(it.walk_m)), it.transfers, if (it.transfers == 1) "" else "s", fare }));
+    const it = &j.om[i];
+    const box = ui.div(c).column().wFull().rounded(22).bg(.white).p(16).gap(10);
+    defer box.end();
+    if (box.clicked()) {
+        j.om_chosen = i;
+        nanoui.haptics.selection();
     }
+    {
+        const top = ui.div(c).row().wFull().gap(8).itemsCenter();
+        defer top.end();
+        ui.text(c, c.print("{d}", .{minutes(it.seconds)}), .{ .size = 28, .weight = .semibold, .color = ink, .tabular = true });
+        ui.text(c, "min", .{ .size = 17, .color = ink });
+        ui.div(c).grow().end();
+        if (tag) |t| {
+            const chip = ui.div(c).px(10).py(4).rounded(10).bg(cards.yellow);
+            ui.text(c, t, .{ .size = 13, .weight = .semibold, .color = ink });
+            chip.end();
+        }
+    }
+    const row = ui.div(c).row().wFull().gap(6).itemsCenter();
+    var first = true;
+    for (it.legs[0..it.n], 0..) |*leg, k| {
+        c.next_key_int = k;
+        if (leg.mode == .walk) continue;
+        if (!first) label(c, "›");
+        first = false;
+        badge(c, leg);
+    }
+    row.end();
+    const fare = if (it.fare_len > 0) c.print("· ${s}", .{it.fareOf()}) else "";
+    label(c, c.print("OneMap · walk {d} m · {d} change{s} {s}", .{ @as(u32, @intFromFloat(it.walk_m)), it.transfers, if (it.transfers == 1) "" else "s", fare }));
+}
+
+pub fn noteOf(c: *ui.Context, j: *const journey.Journey) void {
     note(c, j);
 }
 

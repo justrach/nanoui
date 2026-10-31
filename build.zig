@@ -123,6 +123,14 @@ pub fn build(b: *std.Build) void {
         _ = android.linkNdk(b, tests, sdk);
     };
     b.step("test", "Run unit tests").dependOn(&b.addRunArtifact(tests).step);
+    // The SG bus example's planner, on its real stop lists (prints what it plans).
+    const sg_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("examples/sgbus/tests.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "nanoui", .module = nanoui }},
+    }) });
+    b.step("test-sgbus", "Test the SG bus example's journey planner").dependOn(&b.addRunArtifact(sg_tests).step);
     // The tests as a program, for another machine (Linux in a container).
     const test_bin = b.addInstallArtifact(tests, .{ .dest_sub_path = if (os == .windows) "nanoui-tests.exe" else "nanoui-tests" });
     b.step("test-bin", "Install the unit tests as zig-out/bin/nanoui-tests").dependOn(&test_bin.step);

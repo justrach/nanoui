@@ -14,6 +14,7 @@ const route = @import("route.zig");
 const journey = @import("journey.zig");
 const about = @import("about.zig");
 const omv = @import("onemap_view.zig");
+const onboarding = @import("onboarding.zig");
 
 pub const Tab = enum { nearby, starred, journey, about };
 
@@ -41,6 +42,10 @@ pub const App = struct {
     refreshing: bool = false,
     journey: journey.Journey = .{},
     ticks: u32 = 0,
+    /// The first-launch welcome, while it is shown.
+    welcome: ?onboarding.Onboarding = null,
+    /// Core Location, once you've said yes (or on a later launch).
+    where: ?*nanoui.location.Location = null,
 
     fn view(s: *App, c: *ui.Context) void {
         s.live.frame(c.time);
@@ -49,6 +54,12 @@ pub const App = struct {
         if (s.refreshing and s.live.answers != s.answers_seen) {
             s.refreshing = false;
             nanoui.haptics.impact(.light);
+        }
+        if (s.welcome) |*o| {
+            if (s.near.len > 0) o.nearest = s.d.stops[s.near[0]].code;
+            o.view(c);
+            if (o.answer != .none) s.welcomed(o.answer);
+            return;
         }
         const root = ui.div(c).column().sizeFull().bg(cards.ground);
         defer root.end();
@@ -141,6 +152,12 @@ pub const App = struct {
     fn stopList(s: *App, c: *ui.Context, title: []const u8, list: []const u16) void {
         ui.text(c, title, .{ .size = 28, .weight = .semibold, .color = cards.ink });
         ui.text(c, s.updated(c), .{ .size = 13, .color = cards.gray });
+        if (s.tab == .nearby and s.where == null) {
+            const b = ui.div(c).row().px(14).py(10).rounded(18).bg(.white).gap(8).itemsCenter();
+            ui.text(c, "Show the stops around me", .{ .size = 15, .weight = .semibold, .color = cards.ink });
+            if (b.clicked()) s.locate();
+            b.end();
+        }
         if (list.len == 0) ui.text(c, if (s.tab == .starred) "Star a stop and it shows up here." else "No stop within 600 m leh.", .{ .size = 17, .color = cards.gray });
         for (list) |i| cards.stopCard(s, c, i, s.chosen == i);
     }
@@ -212,6 +229,20 @@ pub const App = struct {
         while (it.next()) |code| if (s.d.find(code)) |i| s.stars.append(s.gpa, i) catch {};
     }
 
+    /// The welcome is done: remembered, and the location asked for if you said yes.
+    fn welcomed(s: *App, answer: onboarding.Answer) void {
+        s.welcome = null;
+        s.kv.set("onboarded", if (answer == .allow) "1" else "later") catch {};
+        if (answer == .allow) s.locate();
+        nanoui.haptics.impact(.light);
+    }
+
+    /// Asks for the location (the first time) and follows it.
+    fn locate(s: *App) void {
+        if (s.where != null) return;
+        s.where = nanoui.location.start(s.gpa, s, moved) catch null;
+    }
+
     fn refresh(s: *App) void {
         s.refreshing = true;
         s.answers_seen = s.live.answers;
@@ -241,13 +272,6 @@ pub const App = struct {
     }
 };
 
-/// Room for a first-launch welcome (what the app does, the location ask):
-/// not designed yet, so it is never shown.
-fn needsOnboarding(kv: nanoui.kv.Store) bool {
-    _ = kv;
-    return false;
-}
-
 pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;
     const app = try nanoui.App.create(init, .{ .name = "SG Bus" });
@@ -265,10 +289,16 @@ pub fn main(init: std.process.Init) !void {
     s.journey.sample = init.environ_map.get("SGBUS_ONEMAP_SAMPLE") != null;
     // SGBUS_FRESH: start with no stars, as on a first launch (for a
     // scripted playthrough that stars a stop itself).
-    if (init.environ_map.get("SGBUS_FRESH") != null) s.kv.set("starred", "") catch {} else s.loadStars();
-    _ = needsOnboarding(s.kv);
-    const where = nanoui.location.start(gpa, &s, moved) catch null;
-    defer if (where) |l| l.stop();
+    // It also shows the welcome again.
+    const fresh = init.environ_map.get("SGBUS_FRESH") != null;
+    if (fresh) {
+        s.kv.set("starred", "") catch {};
+        s.kv.set("onboarded", "") catch {};
+    } else s.loadStars();
+    const seen = (s.kv.get(gpa, "onboarded") catch null) orelse "";
+    defer if (seen.len > 0) gpa.free(seen);
+    if (fresh or seen.len == 0) s.welcome = .{} else if (std.mem.eql(u8, seen, "1")) s.locate();
+    defer if (s.where) |l| l.stop();
     s.window = try app.newWindow(.{ .title = "SG Bus", .width = 420, .height = 860, .full_bleed = true, .content = .{ .view = .init(&s, App.view) } });
     s.live.window = s.window;
     nanoui.App.after(5000, &s, App.tick);

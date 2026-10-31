@@ -4,7 +4,7 @@
 //! is given at run time (ONEMAP_TOKEN in the environment, for a test run;
 //! a server of ours, for a shipped app) and never stores or prints it.
 //! Without one, or when OneMap answers anything but 200 (a 429 when rate
-//! limited), the Journey tab plans by bus on the phone (router.zig).
+//! limited), the Journey tab plans by bus on the phone (raptor.zig).
 const std = @import("std");
 /// Its own (lat, lng), the same as nanoui.map.Coord, so this file tests alone:
 /// `zig test examples/sgbus/onemap.zig`.
