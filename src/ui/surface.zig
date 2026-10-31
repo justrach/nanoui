@@ -76,7 +76,7 @@ pub const Surface = struct {
     after_frame_ctx: ?*anyopaque = null,
     after_frame: ?*const fn (ctx: ?*anyopaque, s: *Surface) bool = null,
     keys_released: ?KeysReleased = null,
-    a11y_cache: std.AutoHashMapUnmanaged(u64, objc.Object) = .empty,
+    a11y_cache: a11y.State = .{},
     /// Behind a stage (`attachBackdrop`): presents in a transaction when
     /// native views or geometry move.
     hosted: bool = false,
@@ -298,15 +298,15 @@ pub const Surface = struct {
         self.last_frame_time = now;
         self.frame_kind = kind;
         self.ctx.transparent_root = self.transparent;
-        c.reduce_motion = self.reduce_motion;
-        c.reduced_motion = self.reduce_motion;
+        a11y.beforeFrame(self);
         c.window_focused = if (vis) self.window.isFocused() else true;
         self.pacing_log.note(now);
         // What scrolling gathered since the last frame, applied at once.
         const dy = self.scroll.take();
         if (dy != 0 and !c.applyScroll(dy) and c.wants_wheel) c.input.scroll = .{ .y = dy };
-        const r = frame_mod.run(c, self.view, &self.text, &self.instances, self.size, self.scale, self.theme(), dt, now - self.start_time);
+        const r = frame_mod.run(c, self.view, &self.text, &self.instances, self.size, self.scale, a11y.themed(self, self.theme()), dt, now - self.start_time);
         if (self.dead) return;
+        a11y.afterFrame(self);
         @import("../play.zig").paint(self.gpa, &self.instances);
         self.frame_in_due = if (c.frame_in) |fi| now + @as(f64, fi) else 0;
         const t_af0 = if (self.frame_log != null) cf.CACurrentMediaTime() else 0;

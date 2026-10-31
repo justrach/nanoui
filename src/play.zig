@@ -10,6 +10,7 @@
 //!   key:NAME      a key: enter, backspace, escape, tab, …
 //!   scroll:DY     drag DY points under the finger (negative: up, to what's below)
 //!   wait:SECONDS  pause
+//!   ax:PATH       (macOS) write what VoiceOver reads to PATH; axpress:LABEL press it
 //!
 //! For example: `--nanoui-play="wait:1;tap:Tasks;tap:Something to do;type:Hello;key:enter"`.
 const std = @import("std");
@@ -17,6 +18,7 @@ const objc = @import("objc.zig");
 const types = @import("ui/types.zig");
 const gpu = @import("ui/gpu.zig");
 const Key = @import("ui/input.zig").Key;
+const mac = @import("builtin").os.tag == .macos;
 
 /// The finger's dot: where it is, and how far it has faded once lifted.
 const Dot = struct { at: types.Point, fade: f32 = 0, lifted: bool = false };
@@ -118,6 +120,11 @@ fn Player(comptime App: type) type {
                 p.scroll_at = p.finger orelse .{ .x = s.ctx.size.w / 2, .y = s.ctx.size.h * 0.6 };
                 dot = .{ .at = p.scroll_at };
                 p.scrollStep();
+            } else if (mac and (std.mem.eql(u8, op, "ax") or std.mem.eql(u8, op, "axpress"))) {
+                const ax = @import("ui/axdump.zig");
+                const ok = if (op.len == 2) ax.dump(s.nsview, arg) else ax.press(s.nsview, arg);
+                if (!ok) return p.missing(step);
+                after(0.5, p, next);
             } else if (std.mem.eql(u8, op, "wait")) {
                 after(std.fmt.parseFloat(f64, arg) catch 0, p, next);
             } else p.missing(step);
