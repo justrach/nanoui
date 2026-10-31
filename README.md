@@ -345,8 +345,8 @@ Android's SDK and NDK). On a Mac, `zig build -Dtarget=x86_64-linux-gnu` or
 | pages (webview) | WKWebView | not yet | not yet | not yet | not yet |
 | menus | the menu bar | a keyboard's shortcuts | a keyboard's shortcuts | accelerators | accelerators |
 | HTTP (`nanoui.http`) | NSURLSession | NSURLSession | http-zig, names looked up by Android | [http-zig](https://github.com/justrach/http-zig): HTTP/2 over TLS, a thread per request | the same |
-| input methods that compose text | NSTextInputClient: marked text, the edit menu | UITextInput: marked text (pinyin), autocorrect, ⌘C ⌘X ⌘V | not yet: a software keyboard types keys | GTK's input method, its preedit | not yet: only what arrives as `WM_CHAR` |
-| accessibility | VoiceOver: buttons, checkboxes, toggles, sliders, segmented controls, text fields (not static text or `nanoui.kit`) | VoiceOver: controls, text, headings, boxes that take clicks (`ui.access`); Dynamic Type, Increase Contrast | not yet | not yet | not yet |
+| input methods that compose text | NSTextInputClient: marked text, the text around the caret, the edit menu | UITextInput: marked text (pinyin), autocorrect, ⌘C ⌘X ⌘V | not yet: a software keyboard types keys | GTK's input method, its preedit | not yet: only what arrives as `WM_CHAR` |
+| accessibility | VoiceOver: the same tree as iOS (`ui.access`): controls, text, headings, boxes that take clicks, `nanoui.kit`; announcements, Increase Contrast | VoiceOver: controls, text, headings, boxes that take clicks (`ui.access`); Dynamic Type, Increase Contrast | not yet | not yet | not yet |
 
 The CPU renderer matches the Metal one pixel for pixel, and a test compares
 them; others compare the OpenGL renderer with the CPU one, with OpenGL 3.3

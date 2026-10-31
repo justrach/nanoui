@@ -143,8 +143,27 @@ fn validAttributes(_: objc.Object, _: objc.SEL) callconv(.c) objc.Object {
     return objc.msg(objc.Object, objc.class("NSArray"), "array", .{});
 }
 
-fn attributedSubstring(_: objc.Object, _: objc.SEL, _: NSRange, _: ?*NSRange) callconv(.c) ?objc.Object {
-    return null;
+/// The field's text in `r` (UTF-16), as input methods read around the
+/// caret to reconvert or to pick the next candidate; `actual` gets the part
+/// that exists.
+fn attributedSubstring(obj: objc.Object, _: objc.SEL, r: NSRange, actual: ?*NSRange) callconv(.c) ?objc.Object {
+    const s = objc.getZig(Surface, obj) orelse return null;
+    const f = s.ctx.focused_text orelse return null;
+    const b = clampRange(f.text, r) orelse return null;
+    if (actual) |a| a.* = range16(f.text, b[0], b[1]);
+    const str = objc.nsString(f.text[b[0]..b[1]]);
+    const as = objc.msg(objc.Object, objc.class("NSAttributedString"), "alloc", .{});
+    return objc.msg(objc.Object, objc.msg(objc.Object, as, "initWithString:", .{str}), "autorelease", .{});
+}
+
+/// A UTF-16 range in `text` as byte offsets, cut to the text; null when it
+/// starts past the end.
+pub fn clampRange(text: []const u8, r: NSRange) ?[2]usize {
+    if (r.location == not_found) return null;
+    const n: usize = @intCast(cf.utf16Offset(text, text.len));
+    if (r.location > n) return null;
+    const end = @min(n, r.location +| r.length);
+    return .{ cf.byteOffset(text, @intCast(r.location)), cf.byteOffset(text, @intCast(end)) };
 }
 
 /// Where the input method's candidate window goes: under the caret, in
