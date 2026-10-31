@@ -46,6 +46,7 @@ pub const Renderer = struct {
     device: objc.Object,
     queue: objc.Object,
     pipeline: objc.Object,
+    hole: objc.Object,
     glass: metal_glass.Glass,
     layer: objc.Object,
     framebuffer_only: bool = true,
@@ -85,9 +86,12 @@ pub const Renderer = struct {
             return error.ShaderCompile;
         };
         defer objc.release(library);
-        const pipeline = try makePipeline(device, library, "fs");
+        const pipeline = try makePipeline(device, library, "fs", 1);
         errdefer objc.release(pipeline);
-        const glass = try metal_glass.Glass.init(device, library, try makePipeline(device, library, "fs_glass"));
+        // Holes (`ui.hole`) keep what's under them only where they're not.
+        const hole = try makePipeline(device, library, "fs", 0);
+        errdefer objc.release(hole);
+        const glass = try metal_glass.Glass.init(device, library, try makePipeline(device, library, "fs_glass", 1));
 
         const layer = objc.new("CAMetalLayer");
         objc.msg(void, layer, "setDevice:", .{device});
@@ -107,7 +111,7 @@ pub const Renderer = struct {
             defer cf.CGColorSpaceRelease(srgb);
             objc.msg(void, layer, "setColorspace:", .{srgb});
         };
-        return .{ .device = device, .queue = queue, .pipeline = pipeline, .glass = glass, .layer = layer, .in_flight = objc.dispatch_semaphore_create(frames_in_flight) };
+        return .{ .device = device, .queue = queue, .pipeline = pipeline, .hole = hole, .glass = glass, .layer = layer, .in_flight = objc.dispatch_semaphore_create(frames_in_flight) };
     }
 
     /// Brings the GPU's copy of the image atlas up to date (made on the
@@ -161,6 +165,7 @@ pub const Renderer = struct {
         objc.release(self.layer);
         self.glass.deinit();
         objc.release(self.pipeline);
+        objc.release(self.hole);
         objc.release(self.queue);
         objc.release(self.device);
     }
@@ -244,7 +249,6 @@ pub const Renderer = struct {
             .presented = true,
         };
     }
-
 
     fn frameDone(slot: *DoneSlot, cmd: objc.Object) void {
         if (slot.log) |log| {
@@ -419,14 +423,20 @@ pub const Renderer = struct {
     }
 
     /// Draws instances [first, end) with the main pipeline, a texture's
-    /// quad (`ui.texture`) alone, its texture bound.
+    /// quad (`ui.texture`) alone, its texture bound, and a hole alone with
+    /// the pipeline that cuts it.
     fn drawRun(self: *Renderer, enc: objc.Object, buffer: objc.Object, atlas: objc.Object, size: types.Size, instances: []const Instance, first: usize, end: usize, held: *std.ArrayList(*anyopaque)) void {
         var from = first;
         var i = first;
         while (i < end) : (i += 1) {
-            if (instances[i].kind != Kind.texture) continue;
+            const k = instances[i].kind;
+            if (k != Kind.texture and k != Kind.hole) continue;
             if (i > from) self.drawRange(enc, self.pipeline, buffer, atlas, atlas, size, from, i - from);
             from = i + 1;
+            if (k == Kind.hole) {
+                self.drawRange(enc, self.hole, buffer, atlas, atlas, size, i, 1);
+                continue;
+            }
             const slot: usize = @intFromFloat(instances[i].border_width);
             if (slot >= self.textures.len) continue;
             const tex = self.frame_textures.get(self.device, self.textures[slot], slot, held) orelse continue;
@@ -521,7 +531,9 @@ pub const Renderer = struct {
     }
 };
 
-fn makePipeline(device: objc.Object, library: objc.Object, comptime fragment: []const u8) !objc.Object {
+/// `src` is the source's blend factor: 1 (one) to lay a color over the
+/// frame, 0 (zero) to cut its shape out of it.
+fn makePipeline(device: objc.Object, library: objc.Object, comptime fragment: []const u8, src: objc.NSUInteger) !objc.Object {
     const vs = objc.msg(objc.Object, library, "newFunctionWithName:", .{objc.nsString("vs")});
     defer objc.release(vs);
     const fs = objc.msg(objc.Object, library, "newFunctionWithName:", .{objc.nsString(fragment)});
@@ -535,8 +547,8 @@ fn makePipeline(device: objc.Object, library: objc.Object, comptime fragment: []
     objc.msg(void, ca, "setPixelFormat:", .{pixel_format});
     objc.msg(void, ca, "setBlendingEnabled:", .{objc.YES});
     // Premultiplied alpha: one, one minus source alpha.
-    objc.msg(void, ca, "setSourceRGBBlendFactor:", .{@as(objc.NSUInteger, 1)});
-    objc.msg(void, ca, "setSourceAlphaBlendFactor:", .{@as(objc.NSUInteger, 1)});
+    objc.msg(void, ca, "setSourceRGBBlendFactor:", .{src});
+    objc.msg(void, ca, "setSourceAlphaBlendFactor:", .{src});
     objc.msg(void, ca, "setDestinationRGBBlendFactor:", .{@as(objc.NSUInteger, 5)});
     objc.msg(void, ca, "setDestinationAlphaBlendFactor:", .{@as(objc.NSUInteger, 5)});
     var err: ?objc.Object = null;

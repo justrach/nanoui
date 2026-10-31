@@ -8,6 +8,33 @@ const std = @import("std");
 const gpu = @import("gpu.zig");
 const raster = @import("raster.zig");
 
+/// A line, a triangle, or a hole (`gpu.Kind`).
+pub fn draw(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize) void {
+    if (i.kind == gpu.Kind.segment) return segment(out, i, scale, b);
+    if (i.kind == gpu.Kind.triangle) return triangle(out, i, scale, b);
+    hole(out, i, scale, b);
+}
+
+/// Cuts a rounded box out of the frame, as the hole pipeline does: every
+/// channel scaled by one minus its coverage.
+fn hole(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize) void {
+    const hw = i.rect[2] * 0.5;
+    const hh = i.rect[3] * 0.5;
+    const r = @min(@abs(i.radius), @min(hw, hh));
+    const inv = 1 / scale;
+    for (b[1]..b[3]) |y| {
+        const py = (@as(f32, @floatFromInt(y)) + 0.5) * inv - (i.rect[1] + hh);
+        for (b[0]..b[2]) |x| {
+            const px = (@as(f32, @floatFromInt(x)) + 0.5) * inv - (i.rect[0] + hw);
+            const sd = raster.cornerSdf(px, py, hw, hh, r);
+            const aa = @max(sd[1] * inv, 0.0001) * 0.5;
+            const keep = raster.smoothstep(-aa, aa, sd[0]);
+            const at = (y * out.width + x) * 4;
+            for (out.bytes[at .. at + 4]) |*ch| ch.* = @intFromFloat(@round(@as(f32, @floatFromInt(ch.*)) * keep));
+        }
+    }
+}
+
 /// The x (points) between which row `wy` crosses the convex polygon `v`
 /// (either way round); null when it misses it.
 fn span(v: []const [2]f32, wy: f32) ?[2]f32 {
