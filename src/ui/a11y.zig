@@ -178,6 +178,7 @@ fn elemRole(obj: objc.Object, _: objc.SEL) callconv(.c) objc.Object {
         .image => "AXImage",
         .menu_button => "AXMenuButton",
         .popover => "AXPopover",
+        .link => "AXLink",
     });
 }
 

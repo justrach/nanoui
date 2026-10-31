@@ -219,6 +219,9 @@ pub const Input = struct {
     drop: ?Drop = null,
     /// VoiceOver's AXIncrement (+1) / AXDecrement (−1) on box `id`.
     a11y_step: ?struct { id: u64, dir: i8 } = null,
+    /// VoiceOver activated box `id` (a double tap): its `interact` reports
+    /// a click wherever the pointer is.
+    a11y_press: u64 = 0,
     /// A pinch in this event (two fingers on a touch screen, a trackpad's
     /// magnify): how much it scaled by (1: none), about `mouse`.
     zoom: f32 = 1,
@@ -252,6 +255,7 @@ pub const Input = struct {
         i.mods_changed = false;
         i.drop = null;
         i.a11y_step = null;
+        i.a11y_press = 0;
         i.zoom = 1;
         i.pan = .{};
         i.key = null;

@@ -42,6 +42,8 @@ pub const Cursor = ctx_mod.Cursor;
 pub const Theme = @import("theme.zig").Theme;
 pub const A11yRole = ctx_mod.A11yRole;
 pub const A11yItem = ctx_mod.A11yItem;
+/// Accessibility: labels, headings, announcements, Dynamic Type (`access.zig`).
+pub const access = @import("access.zig");
 /// Key combinations as the platform writes them: `ui.keys.label("⌘P")`.
 pub const keys = @import("keys.zig");
 /// A monotonic clock in seconds.
@@ -156,6 +158,7 @@ test {
     _ = @import("tests_effects.zig");
     _ = @import("tests_scroll_x.zig");
     _ = @import("tests_a11y_adjust.zig");
+    _ = @import("tests_access.zig");
     _ = @import("tests_shadow_x.zig");
     _ = @import("tests_text_style.zig");
     _ = @import("tests_text_extras.zig");

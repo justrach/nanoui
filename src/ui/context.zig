@@ -116,18 +116,8 @@ pub const Interaction = struct {
 };
 pub const Hit = struct { id: u64, index: u32, rect: types.Rect, scroll: bool };
 pub const Cursor = enum { arrow, hand, text, resize_left_right, resize_up_down, open_hand, closed_hand, not_allowed, crosshair };
-pub const A11yRole = enum { button, tab, text_field, splitter, slider, checkbox, switch_toggle, radio_button, group, static_text, list, row, image, menu_button, popover };
-pub const A11yItem = struct {
-    id: u64,
-    node_index: u32,
-    role: A11yRole,
-    label: []const u8,
-    value: []const u8 = "",
-    selected: bool = false,
-    enabled: bool = true,
-    /// Takes AXIncrement / AXDecrement (`Context.adjustable`).
-    adjustable: bool = false,
-};
+pub const A11yRole = @import("access.zig").Role;
+pub const A11yItem = @import("access.zig").Item;
 
 /// What the last frame cost, for profiling and the hill-climb benchmarks.
 pub const FrameStats = struct {
@@ -180,6 +170,8 @@ pub const Context = struct {
     motion_store: @import("motion/store.zig").Store = .{},
     /// The system asks for reduced motion: `ui.motion` moves at once.
     reduced_motion: bool = false,
+    /// Dynamic Type, contrast, announcements (`access.zig`).
+    access: @import("access.zig").Access = .{},
     /// Boxes of a higher layer met while painting, drawn after the page;
     /// and the one being drawn so.
     layers: std.ArrayList(u32) = .empty,
@@ -330,7 +322,8 @@ pub const Context = struct {
     /// Memory that lives until the end of the frame, for formatted text.
     /// Scales every text by `z` (1 is as written): an app's zoom, ⌘= ⌘-.
     pub fn setZoom(c: *Context, z: f32) void {
-        c.text.setZoom(std.math.clamp(z, 0.5, 3));
+        c.access.zoom = z;
+        @import("access.zig").applyZoom(c);
     }
 
     pub fn alloc(c: *Context) std.mem.Allocator {
@@ -537,6 +530,7 @@ pub const Context = struct {
     pub const addA11y = hooks.addA11y;
     pub const adjustable = hooks.adjustable;
     pub const a11yStep = hooks.a11yStep;
+    pub const a11yPress = hooks.a11yPress;
     pub const shortcut = hooks.shortcut;
     pub const state = hooks.state;
     pub const animate = hooks.animate;

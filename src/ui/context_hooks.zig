@@ -125,6 +125,11 @@ pub fn a11yStep(c: *Context, id: u64, dir: i8) void {
     c.input.a11y_step = .{ .id = id, .dir = dir };
 }
 
+/// VoiceOver activated box `id`: the next frame's `interact` of it clicks.
+pub fn a11yPress(c: *Context, id: u64) void {
+    c.input.a11y_press = id;
+}
+
 pub fn addStageHole(c: *Context, r: types.Rect) void {
     if (c.stage_count < c.stage_rects.len) {
         c.stage_rects[c.stage_count] = r;
@@ -210,7 +215,10 @@ pub fn interact(c: *Context, index: u32, opts: struct { focusable: bool = false 
         if (opts.focusable and c.input.button != .right and !c.input.secondary) c.focus = id else if (left_press) c.focus = 0;
     }
     const released = c.input.released and c.active == id and top and !c.selection.moved;
-    const clicked = released and c.input.button == .left and !c.input.ctrl;
+    // VoiceOver's activation: a click on this box, not on what is under the pointer.
+    const a11y_press = id != 0 and c.input.a11y_press == id;
+    if (a11y_press and opts.focusable) c.focus = id;
+    const clicked = (released and c.input.button == .left and !c.input.ctrl) or a11y_press;
     if (top and c.hand_cursor) c.cursor_hand = true;
     return .{
         .id = id,
