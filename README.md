@@ -140,7 +140,9 @@ the state.
   end in an ellipsis or fade out (`.truncate`); fonts an app bundles are
   found by family like installed ones (`ui.registerFont`).
 - **Controls:** buttons, checkboxes, toggles, sliders, progress bars,
-  segmented controls, badges, and text fields with IME support.
+  segmented controls, badges, and text fields. Input methods that compose
+  text (Chinese, Japanese) work in them on macOS and Linux only so far; see
+  the platforms table.
 - **Images:** pictures decoded once and packed into an atlas.
 - **SVG:** icons and marks from SVG files (`ui.svg`), drawn by nanoui at
   the screen's density on every platform and tinted to follow the theme:
@@ -345,6 +347,8 @@ Android's SDK and NDK). On a Mac, `zig build -Dtarget=x86_64-linux-gnu` or
 | pages (webview) | WKWebView | not yet | not yet | not yet | not yet |
 | menus | the menu bar | a keyboard's shortcuts | a keyboard's shortcuts | accelerators | accelerators |
 | HTTP (`nanoui.http`) | NSURLSession | NSURLSession | http-zig, names looked up by Android | [http-zig](https://github.com/justrach/http-zig): HTTP/2 over TLS, a thread per request | the same |
+| input methods that compose text | NSTextInputClient: marked text, the edit menu | not yet: a software keyboard types keys | not yet: a software keyboard types keys | GTK's input method, its preedit | not yet: only what arrives as `WM_CHAR` |
+| accessibility | VoiceOver: buttons, checkboxes, toggles, sliders, radio buttons, text fields (not static text or `nanoui.kit`) | not yet | not yet | not yet | not yet |
 
 The CPU renderer matches the Metal one pixel for pixel, and a test compares
 them; others compare the OpenGL renderer with the CPU one, with OpenGL 3.3
@@ -431,7 +435,8 @@ later: `-Dtarget=aarch64-ios.15.0` (or `aarch64-ios.15.0-simulator`)
 reaches those devices.
 
 Not on iOS yet: pages, input methods that compose text (Japanese,
-Chinese), keys repeating while held, and more than one window on an iPad.
+Chinese), autocorrect, VoiceOver, keys repeating while held, and more than
+one window on an iPad.
 
 ### Android
 
@@ -557,7 +562,8 @@ Rules for working here, by hand or with an agent, are in
 [AGENTS.md](AGENTS.md).
 
 nanoui is a subset of what full frameworks offer. Pages work only on macOS so
-far, and there's no accessibility, notifications, channels or plugins yet,
+far, accessibility reaches only macOS's built-in controls, and there are no
+notifications, channels or plugins yet,
 and bundling only for iOS and Android. Apps update themselves from GitHub releases on macOS
 (`nanoui.Updater`). Bound methods run on the main thread.
 
