@@ -217,3 +217,91 @@ test "deinit leaves nothing behind, twice over" {
     // A second deinit is a no-op, not a double free: `deinit` resets the state.
     st.deinit(gpa);
 }
+
+/// A stand-in for the surface, with just what `ime.handle` reaches: the state,
+/// the context (held the way `Surface` holds it, by value), the scale, the
+/// allocator, and a frame that records the ops it was handed rather than
+/// building a view.
+const FakeSurface = struct {
+    ime: ime.State = .{},
+    ts: @import("../ui/text.zig").TextSystem,
+    ctx: ctx_mod.Context,
+    gpa: std.mem.Allocator,
+    scale: f32 = 2,
+    frames: u32 = 0,
+    seen_first: ?ctx_mod.TextOp = null,
+    seen_len: usize = 0,
+
+    pub fn frame(self: *FakeSurface) void {
+        self.frames += 1;
+        self.seen_len = self.ctx.input.ops.len;
+        // Copied, not pointed at: the ops live in the caller's stack frame,
+        // which is gone by the time the test looks.
+        if (self.seen_len > 0) self.seen_first = self.ctx.input.ops[0];
+    }
+};
+
+test "losing the keyboard (WM_IME_SETCONTEXT, wParam 0) ends a marked composition" {
+    const w = @import("win32.zig");
+    const gpa = std.testing.allocator;
+    var fs: FakeSurface = .{ .ts = undefined, .ctx = undefined, .gpa = gpa };
+    fs.ts = .init(gpa);
+    fs.ctx = .init(gpa, &fs.ts);
+    defer {
+        fs.ctx.deinit();
+        fs.ts.deinit();
+    }
+    fs.ime.composing = true;
+    fs.ime.marked = true;
+    const class = std.unicode.utf8ToUtf16LeStringLiteral("STATIC");
+    const hwnd = w.CreateWindowExW(0, class, class, 0, 0, 0, 8, 8, null, null, null, null) orelse return error.SkipZigTest;
+    defer _ = w.DestroyWindow(hwnd);
+    _ = ime.handle(&fs, hwnd, w.WM_IME_SETCONTEXT, 0, 0);
+    // A field left `composing` would swallow the next keystroke; one left
+    // `marked` keeps its underline for nothing. Both go.
+    try testing.expect(!fs.ime.composing);
+    try testing.expect(!fs.ime.marked);
+    try testing.expectEqual(@as(u32, 1), fs.frames);
+    try testing.expectEqual(@as(usize, 1), fs.seen_len);
+    try testing.expect(fs.seen_first.? == .unmark);
+}
+
+test "WM_IME_REQUEST answers a whole COMPOSITIONFORM at the caret" {
+    const ui = @import("../ui/ui.zig");
+    const gpa = std.testing.allocator;
+    var s: Field = .{};
+    var t: ui.Tester = undefined;
+    try t.init(gpa, .init(&s, Field.view), .{});
+    defer t.deinit();
+    try t.clickText("Type");
+    // The buffer is the form, not eight bytes of it: the style, the point and
+    // the area all arrive, or the IME reads garbage where they were.
+    var form: ime.COMPOSITIONFORM = undefined;
+    const r = ime.request(&t.ctx, 2, ime.IMR_COMPOSITIONWINDOW, @bitCast(@intFromPtr(&form)));
+    try testing.expectEqual(@as(isize, 1), r);
+    const f = t.ctx.focused_text.?;
+    try testing.expectEqual(@as(u32, ime.CFS_FORCE_POSITION), form.dwStyle);
+    try testing.expectEqual(@as(i32, @intFromFloat(f.caret_rect.x * 2)), form.ptCurrentPos.x);
+    try testing.expectEqual(@as(i32, @intFromFloat(f.caret_rect.y * 2)), form.ptCurrentPos.y);
+    // The caret's own line, not a square the size of the caret.
+    try testing.expect(form.rcArea.bottom > form.rcArea.top);
+}
+
+test "WM_IME_REQUEST keeps the candidate list the query was about" {
+    const ui = @import("../ui/ui.zig");
+    const gpa = std.testing.allocator;
+    var s: Field = .{};
+    var t: ui.Tester = undefined;
+    try t.init(gpa, .init(&s, Field.view), .{});
+    defer t.deinit();
+    try t.clickText("Type");
+    // The index of the list lives in the form the IME hands over, preset;
+    // filling the answer must not take it back out, or list 3's window goes
+    // where list 0's belonged.
+    var form: ime.CANDIDATEFORM = .{ .dwIndex = 3 };
+    const r = ime.request(&t.ctx, 2, ime.IMR_CANDIDATEWINDOW, @bitCast(@intFromPtr(&form)));
+    try testing.expectEqual(@as(isize, 1), r);
+    try testing.expectEqual(@as(u32, 3), form.dwIndex);
+    try testing.expectEqual(@as(u32, ime.CFS_EXCLUDE), form.dwStyle);
+    try testing.expect(form.rcArea.bottom > form.rcArea.top);
+}

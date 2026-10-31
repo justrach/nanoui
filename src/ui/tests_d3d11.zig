@@ -234,3 +234,47 @@ test "d3d11: shader.metal's Instance is the same size gpu.zig's is" {
     }
     try testing.expectEqual(@sizeOf(gpu.Instance), bytes);
 }
+
+test "d3d11: the sizes a drag passes through keep every glass target alive" {
+    const gpa = testing.allocator;
+    var maybe = try renderer();
+    if (maybe == null) return error.SkipZigTest;
+    var r = &maybe.?;
+    defer r.deinit();
+    const clear: ui.Color = .{ .r = 0.1, .g = 0.1, .b = 0.1, .a = 1 };
+    // The Glass page's shape — boxes and a glass bar over them — drawn at
+    // the pixel sizes a 2x window drag passes through, down and up again.
+    // A CreateTexture2D that fails leaves its target null, and the pane
+    // path then retries (and fails) every frame: the window turns to a
+    // per-second error spill and the page crawls. Every draw below must
+    // leave all four targets made.
+    var instances: std.ArrayList(gpu.Instance) = .empty;
+    defer instances.deinit(gpa);
+    for ([_][2]f32{ .{ 900, 640 }, .{ 700, 500 }, .{ 400, 300 }, .{ 1000, 700 }, .{ 320, 200 }, .{ 200, 150 }, .{ 900, 640 } }) |s| {
+        instances.clearRetainingCapacity();
+        instances.append(gpa, .{ .rect = .{ 0, 0, s[0], 48 }, .color = .{ 1, 1, 1, 1 } }) catch return;
+        instances.append(gpa, .{ .rect = .{ 16, 64, s[0] - 32, s[1] - 80 }, .color = .{ 0.2, 0.4, 0.9, 1 } }) catch return;
+        // The glass bar: over the middle, rounded, the way the page draws it.
+        instances.append(gpa, .{
+            .rect = .{ 16, 64, @max(8, s[0] - 32), 64 },
+            .color = .{ 1, 1, 1, 0.6 },
+            .radius = 26,
+            .border_width = 1,
+            .kind = gpu.Kind.glass,
+        }) catch return;
+        // A pane against the window's corner, where the backdrop meets the
+        // frame's edge.
+        instances.append(gpa, .{
+            .rect = .{ 0, s[1] - 40, @max(8, s[0] / 2), 40 },
+            .color = .{ 1, 1, 1, 0.5 },
+            .radius = 12,
+            .border_width = 1,
+            .kind = gpu.Kind.glass,
+        }) catch return;
+        r.draw(instances.items, .{ .w = s[0], .h = s[1] }, 2, clear, null);
+        try testing.expect(r.frame.texture != null and r.frame.rtv != null and r.frame.srv != null);
+        try testing.expect(r.a.texture != null and r.a.rtv != null and r.a.srv != null);
+        try testing.expect(r.b.texture != null and r.b.rtv != null and r.b.srv != null);
+        try testing.expect(r.snap.texture != null and r.snap.rtv != null and r.snap.srv != null);
+    }
+}

@@ -17,8 +17,14 @@ pub const clipboard = struct {
 
     pub fn writeText(text: []const u8) void {
         const n = std.unicode.calcUtf16LeLen(text) catch return;
-        // GMEM_MOVEABLE: the clipboard owns it once set.
+        // GMEM_MOVEABLE: the clipboard owns the block once `SetClipboardData`
+        // has taken it. Until then — a lock that fails, a clipboard that will
+        // not open, a set that fails — it is ours to free.
         const mem = w.GlobalAlloc(0x0002, (n + 1) * 2) orelse return;
+        var owned = true;
+        defer if (owned) {
+            _ = w.GlobalFree(mem);
+        };
         const p: [*]u16 = @ptrCast(@alignCast(w.GlobalLock(mem) orelse return));
         _ = std.unicode.utf8ToUtf16Le(p[0..n], text) catch {};
         p[n] = 0;
@@ -26,7 +32,8 @@ pub const clipboard = struct {
         if (w.OpenClipboard(null) == 0) return;
         defer _ = w.CloseClipboard();
         _ = w.EmptyClipboard();
-        _ = w.SetClipboardData(CF_UNICODETEXT, mem);
+        if (w.SetClipboardData(CF_UNICODETEXT, mem) == null) return;
+        owned = false;
     }
 
     pub fn changeCount() isize {
@@ -114,4 +121,20 @@ pub fn isDark() bool {
 
 pub fn accentColor() [3]f32 {
     return .{ 0, 0.47, 0.84 };
+}
+
+test "paths come out for every directory, and the theme reads" {
+    const testing = std.testing;
+    const gpa = std.testing.allocator;
+    // Every directory a desktop app asks for: each is an environment
+    // variable or a folder under the home one, and an empty or relative
+    // answer would send app data to the wrong place.
+    inline for ([_]Directory{ .data, .cache, .home, .documents, .downloads, .desktop, .temp }) |dir| {
+        const p = try path(gpa, dir, "nanoui-tests");
+        defer gpa.free(p);
+        try testing.expect(p.len > 0);
+        try testing.expect(std.fs.path.isAbsolute(p));
+    }
+    // The theme is a bool, whatever the registry has: never a crash.
+    _ = isDark();
 }

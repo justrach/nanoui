@@ -22,7 +22,6 @@ const iid_dxgi_factory2: Guid = .{ .a = 0x50c83a1c, .b = 0xe072, .c = 0x4c48, .d
 const iid_texture2d: Guid = .{ .a = 0x6f15aaf2, .b = 0xd208, .c = 0x4e89, .d = .{ 0x9a, 0xb4, 0x48, 0x95, 0x35, 0xd3, 0x4f, 0x9c } };
 
 const format_bgra8: u32 = 87; // DXGI_FORMAT_B8G8R8A8_UNORM, as the renderer writes
-const occluded: HRESULT = 0x087A0001; // DXGI_STATUS_OCCLUDED: presented, not visible
 const device_removed: u32 = 0x887A0005;
 const device_reset: u32 = 0x887A0007;
 
@@ -169,7 +168,9 @@ pub const Presenter = struct {
 
     /// Sizes the swap chain for a `width` × `height` frame. A no-op when it is
     /// already that size, and deferred while a drag is under way (`endResize`
-    /// then applies the size it stopped at).
+    /// then applies the size it stopped at) — the deferral the GPU's drawing
+    /// wants; the CPU's `upload` resizes directly, the pixels it carries
+    /// being the size the window already is.
     pub fn resize(p: *Presenter, width: u32, height: u32) !void {
         if (width == p.width and height == p.height) return;
         // A drag asks for a new size every few pixels. `ResizeBuffers` waits for
@@ -204,6 +205,10 @@ pub const Presenter = struct {
         try check(p.swap.slot(*const fn (*Com, u32, u32, u32, u32, u32) callconv(.winapi) HRESULT, 13)(p.swap, 0, width, height, 0, 0));
         p.width = width;
         p.height = height;
+        // A drag's deferred size has been applied by hand, or never was one:
+        // nothing left for `endResize` to do.
+        p.want_w = 0;
+        p.want_h = 0;
         // The CPU path's upload texture goes with the old size; the GPU path
         // never made one, and freeing nothing here keeps a resize to the one
         // call that must happen.
@@ -214,15 +219,21 @@ pub const Presenter = struct {
     /// Puts `pixels` (BGRA, `width` × `height`, rows from the top) in the back
     /// buffer, sized for them first if the window was.
     pub fn upload(p: *Presenter, pixels: []const u8, width: u32, height: u32) !void {
-        try p.resize(width, height);
+        // Not `resize`: the drag's deferral belongs to the GPU's drawing (which
+        // draws into a buffer that may lag a size). The pixels in hand here are
+        // the size the window is now, and mapping the old texture with them
+        // would write past it — so this path sizes the swap chain at once.
+        if (width != p.width or height != p.height) try p.resizeNow(width, height);
         // Through a DYNAMIC texture, not straight from `pixels`: the renderer
         // draws the next frame over those bytes, and may do it before the GPU
         // has read them — the frame then tears where it got there first.
         // WRITE_DISCARD hands out memory the GPU is not reading, so nothing
         // waits; a staging texture would stall the frame instead.
         const target = p.upload_tex orelse blk: {
-            // D3D11_USAGE_DYNAMIC, D3D11_CPU_ACCESS_WRITE.
-            const desc: Texture2DDesc = .{ .width = width, .height = height, .usage = 3, .cpu = 0x10000 };
+            // D3D11_USAGE_DYNAMIC, D3D11_CPU_ACCESS_WRITE, and a bind flag:
+            // a dynamic texture must name one (0 is staging's), and the
+            // shader-resource bind is the one a copy source may carry.
+            const desc: Texture2DDesc = .{ .width = width, .height = height, .usage = 2, .bind = 0x8, .cpu = 0x10000 };
             var tex: ?*Com = null;
             try check(p.device.slot(*const fn (*Com, *const Texture2DDesc, ?*const anyopaque, *?*Com) callconv(.winapi) HRESULT, 5)(p.device, &desc, null, &tex));
             p.upload_tex = tex orelse return error.Direct3D;
@@ -230,7 +241,7 @@ pub const Presenter = struct {
         };
         var mapped: Mapped = undefined;
         // Map, D3D11_MAP_WRITE_DISCARD: memory the GPU is not reading.
-        try check(p.context.slot(*const fn (*Com, *Com, u32, u32, u32, *Mapped) callconv(.winapi) HRESULT, 14)(p.context, target, 0, 2, 0, &mapped));
+        try check(p.context.slot(*const fn (*Com, *Com, u32, u32, u32, *Mapped) callconv(.winapi) HRESULT, 14)(p.context, target, 0, 4, 0, &mapped));
         const row: usize = @as(usize, width) * 4;
         const pitch: usize = mapped.row_pitch;
         var y: usize = 0;
@@ -315,4 +326,45 @@ test "pixels reach the flip swap chain's back buffer, before and after a resize"
     try p.readBack(&back2);
     try std.testing.expectEqualSlices(u8, &big, &back2);
     try std.testing.expect(p.present());
+}
+
+test "an upload during a drag sizes the swap chain instead of writing past the old texture" {
+    const class = std.unicode.utf8ToUtf16LeStringLiteral("STATIC");
+    const hwnd = w.CreateWindowExW(0, class, class, 0, 0, 0, 64, 64, null, null, null, null) orelse return error.SkipZigTest;
+    defer _ = w.DestroyWindow(hwnd);
+    var p = Presenter.init(hwnd, 4, 3) catch |e| {
+        std.debug.print("no Direct3D 11 here: {t}\n", .{e});
+        return error.SkipZigTest;
+    };
+    defer p.deinit();
+    var small: [4 * 3 * 4]u8 = undefined;
+    @memset(&small, 0x11);
+    try p.upload(&small, 4, 3);
+    // A drag begins, and the window grows: the pixels in hand are the new
+    // size, and `upload` must size the swap chain for them, not map the old
+    // texture and run past it.
+    p.resizing = true;
+    var big: [8 * 6 * 4]u8 = undefined;
+    for (0..big.len / 4) |i| big[i * 4 ..][0..4].* = .{ @intCast(i & 0xff), 0x40, 0x80, 0xff };
+    try p.upload(&big, 8, 6);
+    var back: [8 * 6 * 4]u8 = undefined;
+    try p.readBack(&back);
+    try std.testing.expectEqualSlices(u8, &big, &back);
+    // The drag ends with nothing deferred over the size already taken.
+    p.resizing = false;
+    p.endResize();
+    try std.testing.expectEqual(@as(u32, 8), p.width);
+    try std.testing.expectEqual(@as(u32, 6), p.height);
+    // A real frame's size, odd on purpose (a row no alignment rounds up):
+    // the dynamic upload texture has to take it and read back the same.
+    const fw: u32 = 901;
+    const fh: u32 = 641;
+    const frame_px = try std.testing.allocator.alloc(u8, fw * fh * 4);
+    defer std.testing.allocator.free(frame_px);
+    for (0..frame_px.len / 4) |i| frame_px[i * 4 ..][0..4].* = .{ @intCast(i % 256), 0x40, 0x80, 0xff };
+    try p.upload(frame_px, fw, fh);
+    const back3 = try std.testing.allocator.alloc(u8, fw * fh * 4);
+    defer std.testing.allocator.free(back3);
+    try p.readBack(back3);
+    try std.testing.expectEqualSlices(u8, frame_px, back3);
 }

@@ -194,6 +194,9 @@ pub const Renderer = struct {
             .sampler = undefined,
             .params = undefined,
         };
+        // The six shaders are in `r` already: if a state object or the params
+        // buffer cannot be made, they go with it.
+        errdefer for ([_]*Com{ r.quad_vs, r.quad_ps, r.glass_ps, r.pass_vs, r.down_ps, r.blur_ps }) |s| s.release();
         const bd: BlendDesc = .{};
         try check(dev.slot(*const fn (*Com, *const BlendDesc, *?*Com) callconv(.winapi) HRESULT, CreateBlendState)(dev, &bd, @ptrCast(&r.blend)));
         const rd: RasterizerDesc = .{};

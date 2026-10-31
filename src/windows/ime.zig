@@ -256,6 +256,7 @@ pub fn follow(h: w.HWND, c: *ctx_mod.Context, scale: f32, s: *State) void {
     const left: i32 = @intFromFloat(r.x * scale);
     const top: i32 = @intFromFloat(r.y * scale);
     const line_h: i32 = @intFromFloat(@max(1, r.h * scale));
+    const caret_w: i32 = @intFromFloat(@max(1, r.w * scale));
     const bottom = top + line_h;
 
     // `CFS_FORCE_POSITION`, not `CFS_POINT`: with the latter the IME may move
@@ -266,7 +267,7 @@ pub fn follow(h: w.HWND, c: *ctx_mod.Context, scale: f32, s: *State) void {
     const cand: CANDIDATEFORM = .{
         .dwStyle = CFS_EXCLUDE,
         .ptCurrentPos = .{ .x = left, .y = bottom },
-        .rcArea = .{ .left = left, .top = top, .right = left + line_h, .bottom = bottom },
+        .rcArea = .{ .left = left, .top = top, .right = left + caret_w, .bottom = bottom },
     };
     _ = ImmSetCandidateWindow(himc, &cand);
 }
@@ -308,21 +309,28 @@ pub fn request(c: *ctx_mod.Context, scale: f32, wp: w.WPARAM, lp: w.LPARAM) w.LR
     const left: i32 = @intFromFloat(r.x * scale);
     const top: i32 = @intFromFloat(r.y * scale);
     const line_h: i32 = @intFromFloat(@max(1, r.h * scale));
+    const caret_w: i32 = @intFromFloat(@max(1, r.w * scale));
     switch (@as(u32, @intCast(wp))) {
         IMR_COMPOSITIONWINDOW => {
-            // A POINT: where the composition window's upper left goes.
-            const out: *w.POINT = @ptrFromInt(@as(usize, @bitCast(lp)));
-            out.* = .{ .x = left, .y = top };
+            // A whole COMPOSITIONFORM: the buffer is the form, not a point —
+            // writing eight bytes of it left the style and the area to chance.
+            const out: *COMPOSITIONFORM = @ptrFromInt(@as(usize, @bitCast(lp)));
+            out.* = .{
+                .dwStyle = CFS_FORCE_POSITION,
+                .ptCurrentPos = .{ .x = left, .y = top },
+                .rcArea = .{ .left = left, .top = top, .right = left + caret_w, .bottom = top + line_h },
+            };
             return 1;
         },
         IMR_CANDIDATEWINDOW => {
-            // A CANDIDATEFORM, filled the way `follow` fills it.
+            // A CANDIDATEFORM, filled the way `follow` fills it. The list it
+            // is about is already in the form — `dwIndex`, which the IME
+            // preset with the index of the list it is asking about — and is
+            // not ours to overwrite.
             const out: *CANDIDATEFORM = @ptrFromInt(@as(usize, @bitCast(lp)));
-            out.* = .{
-                .dwStyle = CFS_EXCLUDE,
-                .ptCurrentPos = .{ .x = left, .y = top + line_h },
-                .rcArea = .{ .left = left, .top = top, .right = left + line_h, .bottom = top + line_h },
-            };
+            out.dwStyle = CFS_EXCLUDE;
+            out.ptCurrentPos = .{ .x = left, .y = top + line_h };
+            out.rcArea = .{ .left = left, .top = top, .right = left + caret_w, .bottom = top + line_h };
             return 1;
         },
         else => return 0,
@@ -401,9 +409,13 @@ pub fn handle(surface: anytype, h: w.HWND, msg: u32, wp: w.WPARAM, lp: w.LPARAM)
             // for the result string, which would put the committed text in a
             // second time.
             if (compose(s, h, @intCast(lp), surface.gpa)) |made| {
+                // Restored, not cleared: a frame can pump messages (the shell
+                // does), and whatever ops those messages set must survive this
+                // one ending.
+                const prev = c.input.ops;
                 c.input.ops = made;
                 surface.frame();
-                c.input.ops = &.{};
+                c.input.ops = prev;
             }
             follow(h, c, surface.scale, s);
         },
@@ -411,15 +423,26 @@ pub fn handle(surface: anytype, h: w.HWND, msg: u32, wp: w.WPARAM, lp: w.LPARAM)
             var op: [1]ctx_mod.TextOp = undefined;
             const unmark = end(s, &op);
             if (unmark.len > 0) {
+                const prev = c.input.ops;
                 c.input.ops = unmark;
                 surface.frame();
-                c.input.ops = &.{};
+                c.input.ops = prev;
             }
         },
         w.WM_IME_SETCONTEXT => {
-            // Losing the keyboard ends any composition: a field left `composing`
-            // would swallow the next keystroke.
-            if (wp == 0) s.composing = false;
+            // Losing the keyboard ends the composition: a field left
+            // `composing` would swallow the next keystroke, and one left
+            // `marked` keeps its underline for nothing.
+            if (wp == 0) {
+                var op: [1]ctx_mod.TextOp = undefined;
+                const unmark = end(s, &op);
+                if (unmark.len > 0) {
+                    const prev = c.input.ops;
+                    c.input.ops = unmark;
+                    surface.frame();
+                    c.input.ops = prev;
+                }
+            }
             return setContext(h, msg, wp, lp);
         },
         w.WM_IME_NOTIFY => notify(h, c, surface.scale, s, wp),
@@ -428,4 +451,3 @@ pub fn handle(surface: anytype, h: w.HWND, msg: u32, wp: w.WPARAM, lp: w.LPARAM)
     }
     return 0;
 }
-

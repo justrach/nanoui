@@ -347,7 +347,8 @@ pub const Context = struct {
     }
     /// Starts building a frame: the root fills the window.
     pub fn begin(c: *Context) void {
-        if (c.frame == 0 and c.nodes.capacity == 0) c.warmMaps();        if (c.input.key == .tab and c.focus == 0 and c.last_focusable_ids.items.len > 0) {
+        if (c.frame == 0 and c.nodes.capacity == 0) c.warmMaps();
+        if (c.input.key == .tab and c.focus == 0 and c.last_focusable_ids.items.len > 0) {
             hooks.focusCycle(c, c.input.shift);
             c.input.key = null;
         }
@@ -379,14 +380,13 @@ pub const Context = struct {
         c.stack.append(c.gpa, 0) catch @panic("OOM");
     }
 
-    /// A frame whose interactions changed state is built again: the edges
-    /// of the input (the press, the key) are consumed by the first build.
+    /// A frame whose interactions changed state is built again, the input's
+    /// edges spent. `close_request` is not an edge: a one-shot ask survives.
     pub fn rebuild(c: *Context) void {
         c.input.clearEdges();
         c.undo_op = .none;
         c.paste_op = false;
         c.changed = false;
-        c.close_request = false;
         c.begin();
     }
     pub fn finish(c: *Context) void {

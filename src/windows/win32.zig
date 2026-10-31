@@ -86,6 +86,7 @@ pub extern "user32" fn GetMessageW(msg: *MSG, hwnd: ?HWND, min: u32, max: u32) c
 pub extern "user32" fn PeekMessageW(msg: *MSG, hwnd: ?HWND, min: u32, max: u32, remove: u32) callconv(.winapi) BOOL;
 pub extern "user32" fn TranslateMessage(msg: *const MSG) callconv(.winapi) BOOL;
 pub extern "user32" fn DispatchMessageW(msg: *const MSG) callconv(.winapi) LRESULT;
+pub extern "user32" fn SendMessageW(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) callconv(.winapi) LRESULT;
 pub extern "user32" fn PostQuitMessage(code: i32) callconv(.winapi) void;
 pub extern "user32" fn PostMessageW(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) callconv(.winapi) BOOL;
 pub extern "user32" fn BeginPaint(hwnd: HWND, ps: *PAINTSTRUCT) callconv(.winapi) ?HDC;
@@ -109,7 +110,35 @@ pub extern "user32" fn KillTimer(hwnd: ?HWND, id: usize) callconv(.winapi) BOOL;
 pub extern "user32" fn LoadCursorW(inst: ?HINSTANCE, name: usize) callconv(.winapi) ?HCURSOR;
 pub extern "user32" fn SetCursor(cursor: ?HCURSOR) callconv(.winapi) ?HCURSOR;
 pub extern "user32" fn GetDpiForWindow(hwnd: HWND) callconv(.winapi) u32;
+/// Per-monitor v2 DPI awareness: every window follows the DPI of the monitor
+/// it is on (`WM_DPICHANGED` says when that changed). The context handle is
+/// a small negative constant; `DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2`
+/// is -4. Windows 10 1703 and later; fails earlier, or when the process's
+/// awareness was already set (a manifest, a previous call) — the caller
+/// falls back. Must come before any window is made, and it does.
+pub extern "user32" fn SetProcessDpiAwarenessContext(context: isize) callconv(.winapi) BOOL;
 pub extern "user32" fn SetProcessDPIAware() callconv(.winapi) BOOL;
+/// The monitor a window is mostly on, or a default when it is on none:
+/// `MONITOR_DEFAULTTONEAREST` is 2.
+pub extern "user32" fn MonitorFromWindow(hwnd: HWND, flags: u32) callconv(.winapi) ?*anyopaque;
+pub const MONITORINFO = extern struct {
+    cbSize: u32 = @sizeOf(MONITORINFO),
+    /// The whole monitor, in screen coordinates.
+    rc_monitor: RECT = .{},
+    /// The monitor minus the taskbar and the docked bars: where windows go.
+    rc_work: RECT = .{},
+    dwFlags: u32 = 0,
+};
+pub extern "user32" fn GetMonitorInfoW(monitor: *anyopaque, info: *MONITORINFO) callconv(.winapi) BOOL;
+/// What `WM_GETMINMAXINFO` hands the window: the maximized size and place,
+/// and the tracking limits. `ptMaxPosition` is monitor-relative.
+pub const MINMAXINFO = extern struct {
+    pt_reserved: POINT = .{},
+    pt_max_size: POINT = .{},
+    pt_max_position: POINT = .{},
+    pt_min_track_size: POINT = .{},
+    pt_max_track_size: POINT = .{},
+};
 pub extern "user32" fn MessageBoxW(hwnd: ?HWND, text: [*:0]const u16, caption: [*:0]const u16, kind: u32) callconv(.winapi) i32;
 pub extern "user32" fn OpenClipboard(hwnd: ?HWND) callconv(.winapi) BOOL;
 pub extern "user32" fn CloseClipboard() callconv(.winapi) BOOL;
@@ -121,21 +150,27 @@ pub extern "kernel32" fn GetModuleHandleW(name: ?[*:0]const u16) callconv(.winap
 pub extern "kernel32" fn GlobalAlloc(flags: u32, bytes: usize) callconv(.winapi) ?*anyopaque;
 pub extern "kernel32" fn GlobalLock(mem: *anyopaque) callconv(.winapi) ?*anyopaque;
 pub extern "kernel32" fn GlobalUnlock(mem: *anyopaque) callconv(.winapi) BOOL;
+/// Frees a block `GlobalAlloc` made that the clipboard did not take.
+pub extern "kernel32" fn GlobalFree(mem: *anyopaque) callconv(.winapi) ?*anyopaque;
 pub extern "kernel32" fn GetEnvironmentVariableW(name: [*:0]const u16, buf: ?[*]u16, size: u32) callconv(.winapi) u32;
 pub extern "shell32" fn ShellExecuteW(hwnd: ?HWND, op: ?[*:0]const u16, file: [*:0]const u16, params: ?[*:0]const u16, dir: ?[*:0]const u16, show: i32) callconv(.winapi) ?*anyopaque;
 pub extern "comdlg32" fn GetOpenFileNameW(ofn: *OPENFILENAMEW) callconv(.winapi) BOOL;
 pub extern "comdlg32" fn GetSaveFileNameW(ofn: *OPENFILENAMEW) callconv(.winapi) BOOL;
+/// OFN_NOCHANGEDIR: a file dialog does not move the process's working
+/// directory to wherever the user browsed. (0x0008, not OFN_EXPLORER's
+/// 0x00080000 — the two were fused here once, and the directory then
+/// followed the user around anyway.)
+pub const OFN_NOCHANGEDIR = 0x00000008;
+/// OFN_EXPLORER: the modern dialog, not the Windows 95 one.
+pub const OFN_EXPLORER = 0x00080000;
+/// OFN_FILEMUSTEXIST: an open dialog hands back files that are there.
+pub const OFN_FILEMUSTEXIST = 0x00001000;
+/// OFN_OVERWRITEPROMPT: a save dialog asks before replacing a file.
+pub const OFN_OVERWRITEPROMPT = 0x00000002;
 
-// The IME (IMM32): where the composition and candidate windows go. A window
-// gets a context from `ImmGetContext` while it handles an IME message.
-pub const HIMC = *opaque {};
-pub extern "imm32" fn ImmGetContext(hwnd: HWND) callconv(.winapi) ?HIMC;
-pub extern "imm32" fn ImmReleaseContext(hwnd: HWND, himc: HIMC) callconv(.winapi) BOOL;
-pub extern "imm32" fn ImmSetCompositionWindow(himc: HIMC, form: *const COMPOSITIONFORM) callconv(.winapi) BOOL;
-pub extern "imm32" fn ImmSetCandidateWindow(himc: HIMC, form: *const CANDIDATEFORM) callconv(.winapi) BOOL;
-/// The composition string (GCS_COMPSTR) or the committed one (GCS_RESULTSTR),
-/// as UTF-16 in `buf`; the length in bytes, or negative on error.
-pub extern "imm32" fn ImmGetCompositionStringW(himc: HIMC, index: u32, buf: ?*anyopaque, bytes: u32) callconv(.winapi) i32;
+// The IME's message numbers. The IMM32 functions, the GCS_/CFS_/IMN_/IMR_
+// constants and the COMPOSITIONFORM/CANDIDATEFORM structs live in `ime.zig`,
+// the only place that uses them.
 /// WM_IME_NOTIFY, and IMN_SETOPENSTATUS: the IME was opened or closed.
 pub const WM_IME_NOTIFY = 0x0282;
 /// WM_IME_CHAR: a character produced by the IME, when the IME did not go through
@@ -143,36 +178,15 @@ pub const WM_IME_NOTIFY = 0x0282;
 /// UTF-16, and it is delivered instead of WM_CHAR — which is why an IME that
 /// only ever speaks this way typed nothing at all.
 pub const WM_IME_CHAR = 0x0286;
-pub const IMN_SETOPENSTATUS = 0x0008;
-/// IMN_SETCANDIDATEPOS: the IME computed where its candidate window goes.
-pub const IMN_SETCANDIDATEPOS = 0x0009;
-/// IMN_SETCOMPOSITIONWINDOW: the same for the composition window.
-pub const IMN_SETCOMPOSITIONWINDOW = 0x000B;
-/// IMN_SETCOMPOSITIONFONT, IMN_CLOSECANDIDATE, IMN_OPENCANDIDATE.
-pub const IMN_SETCOMPOSITIONFONT = 0x000A;
-pub const IMN_CLOSECANDIDATE = 0x0004;
-pub const IMN_OPENCANDIDATE = 0x0005;
-/// IMN_CHANGECANDIDATE: the list's contents changed (a page of candidates).
-pub const IMN_CHANGECANDIDATE = 0x0003;
-
-/// WM_IME_REQUEST, and the queries the IME asks through it. The values are
-/// Microsoft's, checked against zigwin32's generated bindings: these are
-/// `WM_IME_REQUEST`'s wParam, not message numbers, and `IMR_COMPOSITIONFONT`
-/// was written as 0x000A here once, which is `IMN_SETCOMPOSITIONFONT` — every
-/// branch of the handler was off by one query.
+/// WM_IME_REQUEST: the IME asking where its windows go; the query is in
+/// wParam (an IMR_*), the answer goes through lParam.
 pub const WM_IME_REQUEST = 0x0288;
-/// The IME asks where its composition window goes: the answer is a POINT, in
-/// the window's client coordinates.
-pub const IMR_COMPOSITIONWINDOW = 0x0001;
-/// The same for the candidate list, and the answer is a CANDIDATEFORM.
-pub const IMR_CANDIDATEWINDOW = 0x0002;
-/// The font the composition string is drawn in: a LOGFONTW.
-pub const IMR_COMPOSITIONFONT = 0x0003;
 
 // UI Automation: how an assistive tool — and, since Windows 8, an IME —
-// learns that a window holds a text field and where its caret is. Without a
-// provider the IME treats the window as "not an input" and never shows its
-// candidate list; Doubao never takes the keyboard at all.
+// learns that a window holds a text field and where its caret is. These
+// declarations are kept for that work; nothing calls them yet, so a window
+// today answers WM_GETOBJECT the default way. The IMM32 composition and
+// candidate placement (ime.zig) is what the input method uses for now.
 pub const WM_GETOBJECT = 0x003D;
 /// lParam of WM_GETOBJECT: the UI Automation provider is being asked for.
 pub const UiaRootObjectId: i32 = -25;
@@ -210,46 +224,13 @@ pub const Uia = struct {
     pub const edit_control: i32 = 50004;
     pub const button_control: i32 = 50000;
 };
-pub extern "imm32" fn ImmGetConversionStatus(himc: HIMC, conversion: *u32, sentence: *u32) callconv(.winapi) BOOL;
-pub extern "imm32" fn ImmIsIME(hkl: ?*anyopaque) callconv(.winapi) BOOL;
-pub extern "user32" fn GetKeyboardLayout(thread: u32) callconv(.winapi) ?*anyopaque;
-pub extern "kernel32" fn GetCurrentThreadId() callconv(.winapi) u32;
 
-/// CFS_POINT: the composition window's corner, at `pt`.
-pub const CFS_POINT = 0x0002;
-/// CFS_FORCE_POSITION: the composition window's corner at exactly `pt`, which
-/// the IME may not adjust. `CFS_POINT` lets it move the window elsewhere.
-pub const CFS_FORCE_POSITION = 0x0020;
-/// CFS_EXCLUDE: the candidate window keeps clear of `rc_area`.
-pub const CFS_EXCLUDE = 0x0080;
-/// CFS_CANDIDATEPOS: the candidate window's own corner, at `pt`, in client
-/// coordinates of the window that owns it.
-pub const CFS_CANDIDATEPOS = 0x0040;
-/// The composition window's form: where it is, and what it keeps clear of.
-pub const COMPOSITIONFORM = extern struct {
-    style: u32 = CFS_POINT,
-    pt: POINT = .{},
-    rc_area: RECT = .{},
-};
-/// The candidate window's form.
-pub const CANDIDATEFORM = extern struct {
-    index: u32 = 0,
-    style: u32 = CFS_EXCLUDE,
-    pt: POINT = .{},
-    rc_area: RECT = .{},
-};
 /// WM_IME_STARTCOMPOSITION, WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION,
 /// WM_IME_SETCONTEXT.
 pub const WM_IME_STARTCOMPOSITION = 0x010D;
 pub const WM_IME_ENDCOMPOSITION = 0x010E;
 pub const WM_IME_COMPOSITION = 0x010F;
 pub const WM_IME_SETCONTEXT = 0x0281;
-/// GCS_COMPSTR: the composition string is in lParam of WM_IME_COMPOSITION.
-pub const GCS_COMPSTR = 0x0008;
-pub const GCS_CURSORPOS = 0x0080;
-pub const GCS_RESULTSTR = 0x0800;
-/// ISC_SHOWUICOMPOSITIONWINDOW: leave the IME's own windows to it.
-pub const ISC_SHOWUICOMPOSITIONWINDOW = 0x80000000;
 /// Reads a value from the registry: the system's light/dark preference lives
 /// under HKCU. `HKEY_CURRENT_USER` is 0x80000001; the rest are constants
 /// `RegGetValueW` needs.
@@ -261,14 +242,23 @@ pub const RRF_RT_REG_DWORD = 0x00000010;
 // Messages.
 pub const WM_DESTROY = 0x0002;
 pub const WM_SIZE = 0x0005;
+/// The window took, or gave up, the keyboard.
+pub const WM_KILLFOCUS = 0x0008;
 /// A system setting changed: the appearance, among others.
 pub const WM_SETTINGCHANGE = 0x001A;
 pub const WM_SETFOCUS = 0x0007;
-pub const WM_PAINT = 0x000F;
+pub const WM_QUIT = 0x0012;
 pub const WM_CLOSE = 0x0010;
+pub const WM_PAINT = 0x000F;
 pub const WM_ERASEBKGND = 0x0014;
 pub const WM_SETCURSOR = 0x0020;
 pub const WM_GETMINMAXINFO = 0x0024;
+/// A mouse press on the non-client area: `HTCAPTION` in wParam starts the
+/// system's move loop, which is how a borderless window's `window_drag`
+/// handle moves the window.
+pub const WM_NCLBUTTONDOWN = 0x00A1;
+/// HTCAPTION: the window's caption bar, for `WM_NCLBUTTONDOWN`.
+pub const HTCAPTION = 2;
 pub const WM_KEYDOWN = 0x0100;
 pub const WM_CHAR = 0x0102;
 pub const WM_SYSKEYDOWN = 0x0104;
@@ -278,7 +268,13 @@ pub const WM_LBUTTONDOWN = 0x0201;
 pub const WM_LBUTTONUP = 0x0202;
 pub const WM_LBUTTONDBLCLK = 0x0203;
 pub const WM_MOUSEWHEEL = 0x020A;
+/// The sideways wheel (a tilt, a trackpad's two-finger sideways slide).
+pub const WM_MOUSEHWHEEL = 0x020E;
 pub const WM_MOUSELEAVE = 0x02A3;
+/// A move or a resize the user is driving begins and ends; between the two
+/// the window is in its modal sizing loop.
+pub const WM_ENTERSIZEMOVE = 0x0231;
+pub const WM_EXITSIZEMOVE = 0x0232;
 pub const WM_DPICHANGED = 0x02E0;
 pub const WM_APP = 0x8000;
 
@@ -294,6 +290,8 @@ pub const WS_SYSMENU = 0x00080000;
 /// Extended styles: `CreateWindowExW`'s first argument.
 /// WS_EX_TOOLWINDOW keeps the window out of the taskbar and out of Alt-Tab.
 pub const WS_EX_TOOLWINDOW = 0x00000080;
+/// WS_EX_TOPMOST: the window stays above the non-topmost ones.
+pub const WS_EX_TOPMOST = 0x00000008;
 pub const WS_EX_APPWINDOW = 0x00040000;
 /// WS_EX_LAYERED is what `SetLayeredWindowAttributes` needs.
 pub const WS_EX_LAYERED = 0x00080000;
@@ -312,10 +310,54 @@ pub const CS_DBLCLKS = 0x0008;
 pub const CW_USEDEFAULT: i32 = @bitCast(@as(u32, 0x80000000));
 pub const GWLP_USERDATA = -21;
 
-/// UTF-16 of `s`, null-terminated, in `buf` (truncated to fit).
+/// UTF-16 of `s`, null-terminated, in `buf` (truncated to fit, at a code
+/// point): a title that will not fit whole loses its tail, and one with
+/// bytes the decoder rejects loses those bytes — it never comes out empty.
 pub fn wide(buf: []u16, s: []const u8) [*:0]const u16 {
     // A UTF-8 byte makes at most one UTF-16 unit.
-    const n = std.unicode.utf8ToUtf16Le(buf[0 .. buf.len - 1], s[0..@min(s.len, buf.len - 1)]) catch 0;
-    buf[@min(n, buf.len - 1)] = 0;
+    const cap = buf.len - 1;
+    const n = std.unicode.utf8ToUtf16Le(buf[0..cap], s[0..@min(s.len, cap)]) catch lossyUtf16(buf[0..cap], s);
+    buf[@min(n, cap)] = 0;
     return @ptrCast(buf.ptr);
+}
+
+/// UTF-16 of `s` with undecodable bytes dropped, in `buf` (truncated to fit).
+fn lossyUtf16(buf: []u16, s: []const u8) usize {
+    var i: usize = 0;
+    var n: usize = 0;
+    while (i < s.len and n < buf.len) {
+        const len = std.unicode.utf8ByteSequenceLength(s[i]) catch {
+            i += 1;
+            continue;
+        };
+        if (i + len > s.len) break;
+        const cp = std.unicode.utf8Decode(s[i .. i + len]) catch {
+            i += 1;
+            continue;
+        };
+        if (cp < 0x10000) {
+            buf[n] = @intCast(cp);
+            n += 1;
+        } else if (n + 1 < buf.len) {
+            buf[n] = 0xD800 | @as(u16, @intCast((cp - 0x10000) >> 10));
+            buf[n + 1] = 0xDC00 | @as(u16, @intCast((cp - 0x10000) & 0x3FF));
+            n += 2;
+        }
+        i += len;
+    }
+    return n;
+}
+
+test "wide truncates to whole code points, never to nothing" {
+    var buf: [8]u16 = undefined;
+    // Fits whole.
+    try std.testing.expectEqual(@as(usize, 2), std.mem.len(wide(&buf, "hi")));
+    // CJK does not fit in eight units at this length: cut at a code point,
+    // never empty.
+    _ = wide(&buf, "一二三四五六七八九十");
+    const cut = std.mem.len(@as([*:0]const u16, @ptrCast(&buf)));
+    try std.testing.expect(cut > 0 and cut <= 7);
+    // An invalid byte is dropped; what surrounds it stays.
+    _ = wide(&buf, "a\xffb");
+    try std.testing.expectEqual(@as(usize, 2), std.mem.len(@as([*:0]const u16, @ptrCast(&buf))));
 }

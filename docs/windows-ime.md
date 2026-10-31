@@ -4,7 +4,8 @@ What was found, what is still open, and where the evidence for each claim is.
 Written down because this ground was covered several times without a record, and
 every attempt started from scratch because of it.
 
-Symbols are `src/windows/surface_ime.zig` unless said otherwise.
+Symbols are `src/windows/ime.zig` (this note once said `surface_ime.zig`, a
+file that never shipped; the IME has always landed in `ime.zig`).
 
 ## The symptom
 
@@ -100,11 +101,20 @@ declared as `0x000A`, which is `IMN_SETCOMPOSITIONFONT`, not an `IMR_*` at all.
       a text editor uses.
 - [ ] **`WM_IME_SETCONTEXT` did not hand `lParam` back.** The `ISC_*` bits were
       cleared, which tells the system the app draws the composition window — it
-      does not.
+      does not. *(Superseded: the shipped code clears exactly
+      `ISC_SHOWUICOMPOSITIONWINDOW` and lets `DefWindowProc` see the rest,
+      because nanoui **does** draw the composition, underlined, in its own
+      field — `ime.zig`'s `clearCompositionBit`.)*
 - [ ] **`WM_IME_NOTIFY` was empty.** `IMN_OPENCANDIDATE`,
       `IMN_CHANGECANDIDATE`, `IMN_SETCANDIDATEPOS` and
       `IMN_SETCOMPOSITIONWINDOW` were ignored, so a list that opened was never
       known about and a position the IME chose was never corrected.
+      *(Superseded: the shipped `notify` re-places on
+      `IMN_OPENCANDIDATE`/`IMN_CHANGECANDIDATE` and ignores
+      `IMN_SETCANDIDATEPOS`/`IMN_SETCOMPOSITIONWINDOW` on purpose — those two
+      arrive synchronously from inside `ImmSetCandidateWindow`/
+      `ImmSetCompositionWindow`, and answering them with another placement is
+      the freeze.)*
 - [ ] **`WM_IME_REQUEST` was not handled.** `IMR_CANDIDATEWINDOW` is a direct
       question from the IME — "give me a `CANDIDATEFORM` for this list" — and
       answering nothing makes a modern IME fall back to a default position or

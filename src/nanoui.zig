@@ -145,10 +145,19 @@ test {
         return;
     }
     if (!mac) {
-        inline for (.{ plat.app, plat.window, plat.menu, plat.dialog, plat.desktop, plat.fdwatch, }) |m| std.testing.refAllDecls(m);
+        inline for (.{
+            plat.app,
+            plat.window,
+            plat.menu,
+            plat.dialog,
+            plat.desktop,
+            plat.fdwatch,
+        }) |m| std.testing.refAllDecls(m);
         if (builtin.os.tag == .windows) {
             _ = @import("windows/d3d.zig");
             _ = @import("windows/tests_surface.zig");
+            // The window's own: styles, sizes, the close veto, the timers.
+            _ = @import("windows/tests_window.zig");
             // The input method: its own tests, and the file itself for the
             // decode/mapping units.
             _ = @import("windows/ime.zig");

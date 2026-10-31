@@ -3,7 +3,6 @@
 //! sizes checked at compile time. `d3d11.zig` draws the frame with them.
 const std = @import("std");
 
-
 pub const HRESULT = i32;
 pub const Guid = extern struct { a: u32, b: u16, c: u16, d: [8]u8 };
 pub const iid_texture2d: Guid = .{ .a = 0x6f15aaf2, .b = 0xd208, .c = 0x4e89, .d = .{ 0x9a, 0xb4, 0x48, 0x95, 0x35, 0xd3, 0x4f, 0x9c } };
@@ -277,7 +276,10 @@ pub const Target = struct {
         // Grown in steps, not to the exact size: a drag resize asks for a few
         // more pixels a frame, and reallocating the texture (with its two views)
         // for each of them is what made a resize stutter. A quarter more than
-        // is needed leaves room for the frames that follow.
+        // is needed leaves room for the frames that follow. (An oversized
+        // texture above was let go on purpose: the next one grows from the
+        // need, not from what was just released, or a window held small after
+        // being big would remake the big texture every frame.)
         const want_w = if (exact) w else @max(w, t.w);
         const want_h = if (exact) h else @max(h, t.h);
         const tw: u32 = @intCast(if (exact) want_w else stepSize(want_w, t.w));
@@ -328,4 +330,3 @@ pub fn textureSrv(device: *Com, texture: *Com) ?*Com {
     must(device.slot(*const fn (*Com, *Com, ?*const anyopaque, *?*Com) callconv(.winapi) HRESULT, CreateShaderResourceView)(device, texture, null, &srv), "textureSrv") catch return null;
     return srv;
 }
-

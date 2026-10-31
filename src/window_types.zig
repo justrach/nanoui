@@ -61,19 +61,21 @@ pub fn Options(comptime Window: type) type {
         resizable: bool = true,
         title_bar: TitleBar = .default,
         /// Whether the window has a title bar and a resizable frame at all.
-        /// `false` is a borderless window (`WS_POPUP` on Windows, no style mask
-        /// on macOS, undecorated on GTK): no title bar, no border, no system
-        /// shadow, and no drag-to-resize — the application draws or moves it.
+        /// `false` is a borderless window on Windows (`WS_POPUP`: no title bar,
+        /// no border, no system shadow, and no drag-to-resize — the
+        /// application draws or moves it, `ui.Context.window_drag` moves one).
+        /// macOS and GTK do not honor it yet.
         ///
         /// Independent of `title_bar`, which is about what the title bar looks
         /// like when there is one.
         decorations: bool = true,
-        /// Window opacity, 0 to 1. 1 is opaque and the normal path. Below 1 the
-        /// window is translucent, and on Windows that costs the GPU renderer:
-        /// `SetLayeredWindowAttributes` has no effect on a DXGI flip-model swap
-        /// chain, so the frame is drawn by GDI while the window is translucent
-        /// and the GPU is picked up again at 1. One CPU copy per frame while
-        /// translucent is the price; see `src/windows/surface.zig`.
+        /// Window opacity, 0 to 1. 1 is opaque and the normal path. Windows
+        /// only for now. Below 1 the window is translucent, and that costs the
+        /// GPU renderer there: `SetLayeredWindowAttributes` has no effect on a
+        /// DXGI flip-model swap chain, so the frame is drawn by GDI while the
+        /// window is translucent and the GPU is picked up again at 1. One CPU
+        /// copy per frame while translucent is the price; see
+        /// `src/windows/surface_gpu.zig`.
         ///
         /// At 0 the window is invisible, which is a way to fade one out
         /// (`setOpacity`) but not a way to hide it — use `show`/`hide`.
