@@ -140,9 +140,7 @@ the state.
   end in an ellipsis or fade out (`.truncate`); fonts an app bundles are
   found by family like installed ones (`ui.registerFont`).
 - **Controls:** buttons, checkboxes, toggles, sliders, progress bars,
-  segmented controls, badges, and text fields. Input methods that compose
-  text (Chinese, Japanese) work in them on macOS and Linux only so far; see
-  the platforms table.
+  segmented controls, badges, and text fields (IME on macOS and Linux).
 - **Images:** pictures decoded once and packed into an atlas.
 - **SVG:** icons and marks from SVG files (`ui.svg`), drawn by nanoui at
   the screen's density on every platform and tinted to follow the theme:
@@ -382,19 +380,18 @@ scroll, wait) and plays them in the running app at a person's pace, with a
 dot where each finger lands. It works on macOS too. The Simulator can record
 its screen but can't tap, so this is how you make demo videos.
 
-Native UI runs on iOS with the Mac's renderer and text, Metal and
-CoreText; `src/ios/` puts them on UIKit. The first window fills the
-screen, and windows shown after it cover it until they close or hide; a
-window over another needs its own way to close (no swipe down). A finger
-is the pointer: it presses and drags, and scrolls what it moves up or
-down over, flinging as iOS's scroll views do. Two fingers pinch: their
-spread and movement come to the view as `input.zoom` and `input.pan` (a
-trackpad's pinch does on the Mac). A hardware keyboard's
-keys and shortcuts work as on the Mac, and a focused text field brings
-up the software keyboard. Views are laid out inside the safe area,
-clear of the status bar, the home indicator and the keyboard; a window
-made with `.full_bleed = true` spans the screen and keeps its content
-clear itself with `ui.div(c).safeArea()`.
+Native UI runs on iOS with the Mac's renderer and text, Metal and CoreText;
+`src/ios/` puts them on UIKit. The first window fills the screen, and
+windows shown after it cover it until they close or hide; a window over
+another needs its own way to close (no swipe down). A finger is the
+pointer: it presses and drags, and scrolls what it moves up or down over,
+flinging as iOS's scroll views do. Two fingers pinch: their spread and
+movement come to the view as `input.zoom` and `input.pan` (a trackpad's
+pinch does on the Mac). A hardware keyboard's keys and shortcuts work as on
+the Mac, and a focused text field brings up the software keyboard. Views
+are laid out inside the safe area, clear of the status bar, the home
+indicator and the keyboard; a window made with `.full_bleed = true` spans
+the screen and keeps its content clear itself with `ui.div(c).safeArea()`.
 
 ```sh
 zig build $(sh tools/ios/zig-lib.sh) -Dtarget=aarch64-ios-simulator               # zig-out/ios/Counter.app, Gallery.app
@@ -434,9 +431,8 @@ one, and the app's Info.plist follows it. nanoui runs on iOS 15 and
 later: `-Dtarget=aarch64-ios.15.0` (or `aarch64-ios.15.0-simulator`)
 reaches those devices.
 
-Not on iOS yet: pages, input methods that compose text (Japanese,
-Chinese), autocorrect, VoiceOver, keys repeating while held, and more than
-one window on an iPad.
+Not on iOS yet: pages, input methods that compose Chinese or Japanese,
+autocorrect, VoiceOver, keys repeating while held, or iPad multiwindow.
 
 ### Android
 
@@ -562,17 +558,15 @@ Rules for working here, by hand or with an agent, are in
 [AGENTS.md](AGENTS.md).
 
 nanoui is a subset of what full frameworks offer. Pages work only on macOS so
-far, accessibility reaches only macOS's built-in controls, and there are no
-notifications, channels or plugins yet,
-and bundling only for iOS and Android. Apps update themselves from GitHub releases on macOS
-(`nanoui.Updater`). Bound methods run on the main thread.
+far, accessibility reaches only macOS's built-in controls, there are no
+notifications, channels or plugins yet, and bundling is only for iOS and Android.
+Apps update themselves from GitHub releases on macOS (`nanoui.Updater`). Bound methods run on the main thread.
 
 ## License
 
 nanoui is licensed under the [MIT License](LICENSE). Material from mygo (MIT),
 GPUI (Apache 2.0), gpui-motion (MIT) and GPUI Kit (Apache 2.0) keeps its own
-notices; see
-[third-party notices](THIRD_PARTY_NOTICES.md).
+notices; see [third-party notices](THIRD_PARTY_NOTICES.md).
 
 ## Credits
 
