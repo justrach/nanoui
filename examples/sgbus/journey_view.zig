@@ -28,6 +28,11 @@ fn label(c: *ui.Context, t: []const u8) void {
     ui.text(c, t, .{ .size = 13, .color = gray });
 }
 
+/// A gray line that wraps, for the longer ones.
+fn para(c: *ui.Context, t: []const u8) void {
+    ui.text(c, t, .{ .size = 13, .color = gray, .wrap = true });
+}
+
 fn form(s: *App, c: *ui.Context) void {
     const j = &s.journey;
     ui.text(c, "Go where?", .{ .size = 28, .weight = .semibold, .color = ink });
@@ -92,7 +97,7 @@ fn options(s: *App, c: *ui.Context) void {
         c.next_key_int = i;
         if (w.om) omv.wayCard(s, c, w.i, w.tag) else ours(s, c, w.i, w.tag);
     }
-    label(c, switch (j.om_state) {
+    para(c, switch (j.om_state) {
         .asking => "Asking OneMap for bus and MRT ways...",
         .failed => c.print("OneMap answered {d}, so these are bus only, planned on this phone. Ride times are estimates.", .{j.om_status}),
         else => if (j.token == null) "Bus only, planned on this phone from LTA stop lists: OneMap's MRT ways need a token. Ride times are estimates, sharpened by live buses." else "Ranked by arrival, with 5 min per change and half a minute per minute walked. Bus ride times are estimates.",
@@ -133,7 +138,7 @@ fn ours(s: *App, c: *ui.Context, ti: usize, tag: ?[]const u8) void {
     const changes = t.n -| 1;
     const fare = if (t.fare) |f| c.print(" · ${d}.{d:0>2}", .{ f / 100, f % 100 }) else "";
     const head = if (journey.clockText(c, s, t.arrive)) |at| c.print("Arrive {s} · ", .{at}) else "";
-    label(c, c.print("{s}{s} · walk {d} m · {d} change{s}{s}", .{ head, when, @as(u32, @intFromFloat(t.walk_m)), changes, if (changes == 1) "" else "s", fare }));
+    para(c, c.print("{s}{s} · walk {d} m · {d} change{s}{s}", .{ head, when, @as(u32, @intFromFloat(t.walk_m)), changes, if (changes == 1) "" else "s", fare }));
 }
 
 fn legs(s: *App, c: *ui.Context, t: raptor.Option) void {
@@ -153,13 +158,17 @@ fn legs(s: *App, c: *ui.Context, t: raptor.Option) void {
         const a = s.d.stops[raptor.stopAt(s.d, r.svc, r.dir, r.from)];
         const b = s.d.stops[raptor.stopAt(s.d, r.svc, r.dir, r.to)];
         if (t.walks[i] >= 30) step(c, &n, null, c.print("Walk {d} m to {s}", .{ @as(u32, @intFromFloat(t.walks[i])), a.name }), c.print("{d} min", .{@as(u32, @intFromFloat(@ceil(raptor.walkMin(t.walks[i]))))}));
-        const wait = if (t.live[i]) c.print("in {d} min, live", .{@as(u32, @intFromFloat(@round(t.waits[i])))}) else c.print("about {d} min, no live time", .{@as(u32, @intFromFloat(@round(t.waits[i])))});
+        const w: u32 = @intFromFloat(@round(t.waits[i]));
+        // After the first bus, the wait is from when you get to the stop.
+        const wait = if (i == 0)
+            (if (t.live[i]) c.print("in {d} min, live", .{w}) else c.print("about {d} min, no live time", .{w}))
+        else if (t.live[i]) c.print("{d} min wait when you get there, live", .{w}) else c.print("about {d} min wait there, no live time", .{w});
         step(c, &n, s.d.services[r.svc].no, c.print("From {s} ({s})", .{ a.name, a.code }), wait);
         step(c, &n, null, c.print("Get off at {s} ({s})", .{ b.name, b.code }), c.print("{d} stops, about {d} min", .{ r.to - r.from, @as(u32, @intFromFloat(@round(t.ride_min[i]))) }));
     }
     if (t.walks[t.n] >= 30) step(c, &n, null, c.print("Walk {d} m to {s}", .{ @as(u32, @intFromFloat(t.walks[t.n])), j.dest.?.name() }), c.print("{d} min", .{@as(u32, @intFromFloat(@ceil(raptor.walkMin(t.walks[t.n]))))}));
     card.end();
-    if (t.fare) |f| label(c, c.print("Adult card fare ${d}.{d:0>2}, {d:.1} km, by LTA's distance fares.", .{ f / 100, f % 100, t.km })) else label(c, "City Direct has its own fares.");
+    if (t.fare) |f| para(c, c.print("Adult card fare ${d}.{d:0>2}, {d:.1} km, by LTA's distance fares.", .{ f / 100, f % 100, t.km })) else para(c, "City Direct has its own fares.");
     const go = ui.div(c).row().wFull().justifyCenter().itemsCenter().h(56).roundedFull().bg(if (j.going) cards.yellow else ink);
     ui.text(c, if (j.going) "Going. Watch for the bus" else "Go", .{ .size = 17, .weight = .semibold, .color = if (j.going) ink else .white });
     if (go.clicked()) {
