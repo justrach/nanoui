@@ -37,6 +37,9 @@ pub const shareId = @import("share.zig").idOf;
 pub const letters = @import("text.zig").text;
 pub const TextUnit = @import("text.zig").Unit;
 pub const TextOptions = @import("text.zig").Options;
+pub const roll = @import("roll.zig").roll;
+pub const RollOptions = @import("roll.zig").Options;
+pub const Pull = @import("pull.zig").Pull;
 const Color = types.Color;
 
 /// Where a box is headed; what's left null is left alone.
@@ -283,4 +286,6 @@ test {
     _ = @import("drag.zig");
     _ = @import("share.zig");
     _ = @import("text.zig");
+    _ = @import("roll.zig");
+    _ = @import("pull.zig");
 }

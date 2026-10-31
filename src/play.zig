@@ -8,7 +8,8 @@
 //!   move:TEXT     put the finger on it, for the scroll that follows
 //!   type:TEXT     type it, a character at a time
 //!   key:NAME      a key: enter, backspace, escape, tab, …
-//!   scroll:DY     drag DY points under the finger (negative: up, to what's below)
+//!   scroll:DY     drag DY points under the finger (negative: up, to what's below);
+//!                 held past an end it rubber-bands, so `scroll:200` at the top pulls to refresh
 //!   wait:SECONDS  pause
 //!
 //! For example: `--nanoui-play="wait:1;tap:Tasks;tap:Something to do;type:Hello;key:enter"`.
@@ -160,12 +161,17 @@ fn Player(comptime App: type) type {
             const eased = if (t < 0.5) 2 * t * t else 1 - std.math.pow(f32, -2 * t + 2, 2) / 2;
             const to = p.scroll_dy * eased;
             s.ctx.input.mouse = p.scroll_at;
+            // Held as a finger holds: past an end it rubber-bands.
+            s.ctx.scroll_holding = true;
             _ = s.ctx.applyScroll(to - p.scroll_done);
             s.ctx.input.mouse = away;
             p.scroll_done = to;
             if (dot) |*d| d.at = .{ .x = p.scroll_at.x, .y = p.scroll_at.y + to };
             s.frame();
             if (p.scroll_t < 1) return after(1.0 / 60.0, p, scrollStep);
+            // Let go: it springs back (and a pull past its threshold refreshes).
+            s.ctx.scroll_holding = false;
+            s.frame();
             p.lift();
             after(0.5, p, next);
         }
