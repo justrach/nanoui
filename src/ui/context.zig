@@ -256,6 +256,7 @@ pub const Context = struct {
     /// `full_bleed` (laid out inside it already). `ui.div(c).safeArea()`
     /// pads by it.
     safe_area: types.Edges = .{},
+    device: @import("device.zig").Device = .{},
     /// Set by a view that follows the pointer inside one box (a graph's
     /// column under it, a crosshair): every move draws a frame while it is
     /// set, not only moves onto another box. Cleared each frame.
