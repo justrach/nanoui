@@ -223,6 +223,9 @@ pub const Surface = struct {
         }
         self.renderer.syncImages(&self.text.images);
         self.renderer.textures = c.textures.items;
+        // The renderer draws into the drawable it is given (on the Mac, the
+        // CAMetalDisplayLink's): here, the layer's next one.
+        self.renderer.given_drawable = objc.msg(?objc.Object, self.renderer.layer, "nextDrawable", .{});
         self.renderer.draw(self.instances.items, self.text.texture(), self.size, c.theme.background);
         pool.pop();
         self.in_frame = false;
