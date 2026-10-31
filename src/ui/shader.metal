@@ -23,7 +23,8 @@ struct Instance {
     float clip_round;    // corners * 4096 + radius (gpu.zig's clipRound)
     float4 xf;           // angle0 rad, spin rad/s, pivot x, pivot y
     float4 pulse;        // period s, scale_amp, alpha_low, unused
-    float4 vel;          // blur vector x, y in points, unused, unused
+    float4 vel;          // blur vector x, y in points, face (0 both, 1 front, 2 back), mirror x
+    float4 turn;         // angle about the vertical axis rad, eye distance pt (0 flat), pivot x, pivot y
 };
 
 struct VOut {
@@ -56,6 +57,8 @@ vertex VOut vs(uint vid [[vertex_id]], uint iid [[instance_id]],
     float2 p = p_unrot;
     float pulse_alpha = 1.0;
     float angle = i.xf.x + i.xf.y * time;
+    // The reverse of a card is seen through it: mirrored across its middle.
+    if (i.vel.z == 2.0) p.x = 2.0 * i.vel.w - p.x;
     if (i.kind == 6.0) {
         // A box along the line, a point past its round ends.
         float2 a = i.uv.xy, b = i.uv.zw;
@@ -82,8 +85,25 @@ vertex VOut vs(uint vid [[vertex_id]], uint iid [[instance_id]],
         }
         p = i.xf.zw + d;
     }
+    // A turn about the vertical axis through the pivot, seen in perspective
+    // from the pivot: w carries the depth, so the rounded box, its picture
+    // and its clip are interpolated perspective-correct.
+    float2 seen = p;
+    float w = 1.0;
+    float ct = cos(i.turn.x);
+    bool hidden = (i.vel.z == 1.0 && ct < 0.0) || (i.vel.z == 2.0 && ct >= 0.0);
+    if (i.turn.x != 0.0) {
+        float dx = p.x - i.turn.z;
+        float z = -dx * sin(i.turn.x);
+        seen = float2(i.turn.z + dx * ct, p.y);
+        if (i.turn.y > 0.0) {
+            w = max(1.0 - z / i.turn.y, 0.1);
+            seen = i.turn.zw + (seen - i.turn.zw) / w;
+        }
+    }
     VOut o;
-    o.pos = float4(p / viewport * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
+    // A face turned away: every corner at one point, nothing drawn.
+    o.pos = hidden ? float4(0.0, 0.0, 0.0, 1.0) : float4((seen / viewport * float2(2.0, -2.0) + float2(-1.0, 1.0)) * w, 0.0, w);
     o.local = p_unrot - i.rect.xy;
     o.world = p;
     o.uv = has_blur ? (i.uv.xy + (p_unrot - i.rect.xy) / max(i.rect.zw, float2(1e-4)) * (i.uv.zw - i.uv.xy)) : mix(i.uv.xy, i.uv.zw, corner);

@@ -19,10 +19,15 @@ pub const Instance = extern struct {
     clip_round: f32 = 0,
     xf: [4]f32 = .{ 0, 0, 0, 0 },
     pulse: [4]f32 = .{ 0, 0, 1, 0 },
+    /// Motion blur's vector (x, y), and the face it is on (`Style.face`:
+    /// 0 both, 1 front, 2 back) with the x a back face mirrors about.
     vel: [4]f32 = .{ 0, 0, 0, 0 },
+    /// A turn about the vertical axis (`Style.turn`): the angle (radians),
+    /// the eye's distance (points, 0 flat), and the pivot's x, y.
+    turn: [4]f32 = .{ 0, 0, 0, 0 },
 };
 comptime {
-    std.debug.assert(@sizeOf(Instance) == 144);
+    std.debug.assert(@sizeOf(Instance) == 160);
 }
 
 /// The clip rectangle's corners rounded by `radius`: those in `corners`

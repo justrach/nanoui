@@ -1,6 +1,9 @@
 //! Geometry, colors and styles of native UI. Units are points.
 const std = @import("std");
 
+/// The side of a turned plane a box is on (`Style.face`).
+pub const Face = enum(u2) { both = 0, front = 1, back = 2 };
+
 pub const Point = struct {
     x: f32 = 0,
     y: f32 = 0,
@@ -239,7 +242,24 @@ pub const Style = struct {
     /// it is, as SwiftUI animates a stack's rows; its ancestors' offsets
     /// and scrolling aside.
     settle_y: ?Spring = null,
+    /// A turn in the plane (radians, clockwise), about `rotation_anchor`.
     rotation: f32 = 0,
+    /// The point `rotation` and `turn` pivot about, in fractions of the
+    /// rect (a card's ring near its corner, a door's hinge at its edge).
+    rotation_anchor: Point = .{ .x = 0.5, .y = 0.5 },
+    /// A turn about the vertical axis through `rotation_anchor` (radians):
+    /// positive swings the right edge away, negative toward the viewer, as
+    /// a page turns. The box and everything in it turn as one plane.
+    turn: f32 = 0,
+    /// How far the eye is from the screen (points) for `turn`, as Core
+    /// Animation's m34 = -1/perspective: nearer is stronger. 0 is a flat
+    /// projection, the turned box only narrowing.
+    perspective: f32 = 0,
+    /// Which side of a turned plane the box is drawn on: `front` hides
+    /// once the turn shows its back (past a quarter turn), `back` shows
+    /// only then, drawn mirrored, as the reverse of a card. A card with a
+    /// front child and a back child turns over.
+    face: Face = .both,
     spin: f32 = 0,
     pulse: ?Pulse = null,
     motion_blur: bool = false,

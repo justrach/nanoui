@@ -215,9 +215,19 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip:
     if (st.spin != 0) c.time_driven = .fast;
     const pulse = if (c.reduce_motion) null else st.pulse;
     if (pulse != null and c.time_driven == .none) c.time_driven = .slow;
+    if (st.face != .both) for (out.items[start..]) |*inst| {
+        if (inst.vel[2] == 0) inst.vel = .{ inst.vel[0], inst.vel[1], @floatFromInt(@backingInt(st.face)), r.x + r.w * 0.5 };
+    };
+    if (st.turn != 0) {
+        const t4: [4]f32 = .{ st.turn, @max(st.perspective, 0), r.x + r.w * st.rotation_anchor.x, r.y + r.h * st.rotation_anchor.y };
+        for (out.items[start..]) |*inst| {
+            if (inst.kind == metal.Kind.layer_begin or inst.kind == metal.Kind.layer_end) continue;
+            if (std.mem.eql(f32, &inst.turn, &.{ 0, 0, 0, 0 })) inst.turn = t4;
+        }
+    }
     if (st.rotation != 0 or st.spin != 0 or pulse != null) {
-        const px = r.x + r.w * 0.5;
-        const py = r.y + r.h * 0.5;
+        const px = r.x + r.w * st.rotation_anchor.x;
+        const py = r.y + r.h * st.rotation_anchor.y;
         const p4: [4]f32 = if (pulse) |p| .{ p.period, p.scale_amp, p.alpha_low, 0 } else .{ 0, 0, 1, 0 };
         for (out.items[start..]) |*inst| {
             if (inst.kind == metal.Kind.layer_begin or inst.kind == metal.Kind.layer_end) continue;
@@ -234,7 +244,7 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip:
             if (@sqrt(vx * vx + vy * vy) > 2) {
                 for (out.items[start..]) |*inst| {
                     if (inst.kind == metal.Kind.quad or inst.kind == metal.Kind.text or inst.kind == metal.Kind.image) {
-                        inst.vel = .{ vx * 0.5, vy * 0.5, 0, 0 };
+                        inst.vel = .{ vx * 0.5, vy * 0.5, inst.vel[2], inst.vel[3] };
                     }
                 }
             }
@@ -254,6 +264,11 @@ fn scaleItems(items: []metal.Instance, box: types.Rect, s: f32, anchor: types.Po
             i.xf[2] = ax + (i.xf[2] - ax) * s;
             i.xf[3] = ay + (i.xf[3] - ay) * s;
         }
+        if (i.turn[0] != 0) {
+            i.turn[2] = ax + (i.turn[2] - ax) * s;
+            i.turn[3] = ay + (i.turn[3] - ay) * s;
+        }
+        if (i.vel[2] != 0) i.vel[3] = ax + (i.vel[3] - ax) * s;
         i.clip = .{
             @max(outer[0], ax + (i.clip[0] - ax) * s), @max(outer[1], ay + (i.clip[1] - ay) * s),
             @min(outer[2], ax + (i.clip[2] - ax) * s), @min(outer[3], ay + (i.clip[3] - ay) * s),

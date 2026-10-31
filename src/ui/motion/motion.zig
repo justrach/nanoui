@@ -54,6 +54,10 @@ pub const Target = struct {
     height: ?f32 = null,
     radius: ?f32 = null,
     background: ?Color = null,
+    /// Turned in the plane, and about the vertical axis (`Style.rotation`,
+    /// `Style.turn`), radians, about `Style.rotation_anchor`.
+    rotation: ?f32 = null,
+    turn: ?f32 = null,
 
     /// `base` with what `patch` sets put over it.
     pub fn overlay(base: Target, patch: Target) Target {
@@ -78,6 +82,8 @@ pub const Target = struct {
             8 => if (t.background) |c| c.g else null,
             9 => if (t.background) |c| c.b else null,
             10 => if (t.background) |c| c.a else null,
+            11 => t.rotation,
+            12 => t.turn,
             else => null,
         };
     }
@@ -86,7 +92,7 @@ pub const Target = struct {
 /// Where a channel rests when no target names it: in place, full size, seen.
 fn rest(i: usize) ?f32 {
     return switch (i) {
-        0, 1 => 0,
+        0, 1, 11, 12 => 0,
         2, 3 => 1,
         else => null,
     };
@@ -118,6 +124,8 @@ pub const Frame = struct {
     height: ?f32 = null,
     radius: ?f32 = null,
     background: ?Color = null,
+    rotation: f32 = 0,
+    turn: f32 = 0,
     /// Something is still moving.
     animating: bool = false,
     /// It has hover or press targets: its box must take the pointer.
@@ -134,6 +142,8 @@ pub const Frame = struct {
         if (f.height) |h| s.height = .{ .px = @max(0, h) };
         if (f.radius) |r| s.radius = @max(0, r);
         if (f.background) |b| s.background = b;
+        s.rotation += f.rotation;
+        s.turn += f.turn;
         if (f.layout != 0) s.layout_motion = f.layout;
     }
 };
@@ -229,6 +239,8 @@ pub fn setChannel(f: *Frame, i: usize, v: f32) void {
             }
             f.background = b;
         },
+        11 => f.rotation = v,
+        12 => f.turn = v,
         else => {},
     }
 }

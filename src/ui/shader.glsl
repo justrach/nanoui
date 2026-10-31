@@ -14,7 +14,8 @@ layout(location = 4) in vec4 a_clip;   // x0, y0, x1, y1
 layout(location = 5) in vec4 a_misc;   // radius, border width, kind, clip_round
 layout(location = 6) in vec4 a_xf;     // angle, spin, pivot x, pivot y
 layout(location = 7) in vec4 a_pulse;  // period, scale amplitude, alpha low
-layout(location = 8) in vec4 a_vel;    // motion blur vector in points
+layout(location = 8) in vec4 a_vel;    // motion blur vector in points, face, mirror x
+layout(location = 9) in vec4 a_turn;   // angle about the vertical axis, eye distance, pivot x, pivot y
 uniform vec2 viewport;
 uniform float time;
 out vec2 v_local;
@@ -45,6 +46,8 @@ void main() {
     vec2 p = p_unrot;
     float pulse_alpha = 1.0;
     float angle = a_xf.x + a_xf.y * time;
+    // The reverse of a card is seen through it: mirrored across its middle.
+    if (a_vel.z == 2.0) p.x = 2.0 * a_vel.w - p.x;
     if (a_misc.z == 6.0) {
         // A box along the line, a point past its round ends.
         vec2 a = a_uv.xy, b = a_uv.zw;
@@ -70,7 +73,21 @@ void main() {
         }
         p = a_xf.zw + d;
     }
-    gl_Position = vec4(p / viewport * vec2(2.0, -2.0) + vec2(-1.0, 1.0), 0.0, 1.0);
+    // A turn about the vertical axis through the pivot, in perspective.
+    vec2 seen = p;
+    float w = 1.0;
+    float ct = cos(a_turn.x);
+    bool hidden = (a_vel.z == 1.0 && ct < 0.0) || (a_vel.z == 2.0 && ct >= 0.0);
+    if (a_turn.x != 0.0) {
+        float dx = p.x - a_turn.z;
+        float z = -dx * sin(a_turn.x);
+        seen = vec2(a_turn.z + dx * ct, p.y);
+        if (a_turn.y > 0.0) {
+            w = max(1.0 - z / a_turn.y, 0.1);
+            seen = a_turn.zw + (seen - a_turn.zw) / w;
+        }
+    }
+    gl_Position = hidden ? vec4(0.0, 0.0, 0.0, 1.0) : vec4((seen / viewport * vec2(2.0, -2.0) + vec2(-1.0, 1.0)) * w, 0.0, w);
     v_local = p_unrot - a_rect.xy;
     v_world = p;
     v_uv = has_blur ? a_uv.xy + (p_unrot - a_rect.xy) / max(a_rect.zw, vec2(1e-4)) * (a_uv.zw - a_uv.xy) : mix(a_uv.xy, a_uv.zw, corner);
