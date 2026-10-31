@@ -1,13 +1,13 @@
 //! The to-do list's state and its view: nanoui's own components on a
-//! phone. Liquid Glass for the bars that float over the list (filter tabs
-//! with a sliding lens, a menu, the tab bar and the + button) and for the
-//! sheet a new task comes in on; kit tags on each card, a progress ring
-//! and bar for the day, switches and pill tabs in the sheet; and springs
-//! for every press, check and move.
+//! phone. Liquid Glass only for what floats over the list: the tab bar,
+//! the + button, the round menu button, and the menu it opens. The list
+//! scrolls under them, so the glass has the cards to bend; everything
+//! that is content stays solid. Kit tags on each card, a progress ring
+//! and bar for the day, a segmented filter, switches in the sheet, and
+//! springs for every press, check and move.
 //!
-//! Light, quiet and roomy: an off-white canvas with a soft wash of color
-//! for the glass to bend, white cards with a soft shadow, a 24-point
-//! gutter, tabular digits, 44-point targets, and corners that nest.
+//! Light, quiet and roomy: a plain off-white canvas, flat white cards, a
+//! 24-point gutter, tabular digits, 44-point targets, and corners that nest.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
@@ -54,10 +54,9 @@ pub const Task = struct {
 /// The palette, after the design's.
 pub const ink = ui.Color.hex(0x111214);
 pub const muted = ui.Color.hex(0x9a9ca3);
-pub const canvas = ui.Color.hex(0xf8f9fa);
+pub const canvas = ui.Color.hex(0xf2f2f5);
 pub const green = ui.Color.hex(0x34c759);
 const line = ui.Color.hex(0xd5d7dc);
-const soft = ui.Color.hex(0xeeeff1);
 
 const gutter = 24;
 const card_radius = 24;
@@ -173,9 +172,8 @@ pub const Todo = struct {
         const safe = c.safe_area;
         const root = ui.div(c).sizeFull().clip().bg(canvas);
         defer root.end();
-        wash(c);
         {
-            const sc = ui.div(c).column().sizeFull().scrollY().scrollbar(.{ .overlay = ink.alpha(0.35) }).pt(safe.top + 84).pb(safe.bottom + 112);
+            const sc = ui.div(c).column().sizeFull().scrollY().scrollbar(.{ .overlay = ink.alpha(0.35) }).pt(safe.top + 14).pb(safe.bottom + 112);
             defer sc.end();
             {
                 const head = ui.div(c).column().wFull().px(gutter).gap(16);
@@ -187,19 +185,17 @@ pub const Todo = struct {
             t.planHeader(c);
             t.cards(c);
         }
-        t.topBar(c);
+        t.moreButton(c);
         t.tabBar(c);
         t.addSheet(c);
     }
 
-    /// The top bar: glass, floating over the list as it scrolls under.
-    /// Filter tabs whose tinted lens slides, and a menu of glass.
-    fn topBar(t: *Todo, c: *ui.Context) void {
-        const f = motion.frame(c, .{ .initial = .{ .y = -24, .opacity = 0, .scale = 0.96 }, .transition = .{ .spring = motion.Spring.bouncy } });
-        const bar = ui.div(c).absolute().offset(16, c.safe_area.top + 8).w(c.size.w - 32).h(60).row().itemsCenter().gap(10).px(8).rounded(30).glass(.{}).motion(f);
-        defer bar.end();
-        _ = kit.tabs(c, &filters, &t.filter, .{ .variant = .glass });
-        ui.spacer(c);
+    /// The one control at the top: a small round button of glass that
+    /// floats by the title, over the list as it scrolls under, and opens
+    /// a menu of glass.
+    fn moreButton(t: *Todo, c: *ui.Context) void {
+        const at = ui.div(c).absolute().offset(c.size.w - gutter - 44, c.safe_area.top + 10).w(44).h(44).center();
+        defer at.end();
         const m = kit.iconButton(c, "ellipsis", .{ .glass = true, .pill = true });
         if (m.clicked) t.menu = !t.menu;
         t.menu_at = m.rect;
@@ -232,7 +228,7 @@ pub const Todo = struct {
     fn today(t: *Todo, c: *ui.Context) void {
         const wrap = ui.div(c).wFull().px(gutter).pt(20);
         defer wrap.end();
-        const card = ui.div(c).column().wFull().p(18).gap(14).rounded(28).bg(.white).shadow(.{ .color = .{ .a = 0.05 }, .blur = 20, .y = 6 });
+        const card = ui.div(c).column().wFull().p(18).gap(14).rounded(28).bg(.white);
         defer card.end();
         const d = t.done();
         const share: f32 = if (t.count == 0) 0 else @as(f32, @floatFromInt(d)) / @as(f32, @floatFromInt(t.count));
@@ -270,15 +266,8 @@ pub const Todo = struct {
         ui.text(c, "Today\u{2019}s plan", .{ .size = 20, .weight = .bold, .color = ink });
         kit.tag(c, c.print("{d}", .{t.count - t.done()}), .{ .pill = true });
         ui.spacer(c);
-        // A 32-point pill in a 44-point target.
-        const give = motion.frame(c, .{ .press = .{ .scale = 0.94 }, .transition = .{ .spring = motion.Spring.bouncy } });
-        const hit = ui.div(c).h(44).itemsCenter().control().motion(give);
-        defer hit.end();
-        if (hit.clicked()) t.sheet = true;
-        const pill = ui.div(c).row().h(32).px(12).gap(4).roundedFull().bg(soft).itemsCenter();
-        defer pill.end();
-        ui.text(c, "Add", .{ .size = 14, .weight = .semibold, .color = ui.Color.hex(0x6b6e76) });
-        ui.icon(c, "plus", .{ .size = 12, .weight = .bold, .color = ui.Color.hex(0x6b6e76) });
+        // Solid, in the content: what the list shows.
+        _ = kit.tabs(c, &filters, &t.filter, .{ .variant = .segmented, .size = .sm });
     }
 
     fn cards(t: *Todo, c: *ui.Context) void {
@@ -299,8 +288,7 @@ pub const Todo = struct {
                 .layout = true,
                 .transition = .{ .spring = glide() },
             });
-            const card = ui.div(c).row().wFull().h(84).pl(card_pad).pr(4).gap(14).itemsCenter().rounded(card_radius).bg(.white)
-                .shadow(.{ .color = .{ .a = 0.045 }, .blur = 18, .y = 4 }).motion(f);
+            const card = ui.div(c).row().wFull().h(84).pl(card_pad).pr(4).gap(14).itemsCenter().rounded(card_radius).bg(.white).motion(f);
             defer card.end();
             // Grey, over a quarter of a second, once checked.
             const grey = motion.number(c, "grey", if (k.done) 1 else 0, .{ .tween = .{ .duration = 0.25, .ease = .ease_out } });
@@ -365,16 +353,16 @@ pub const Todo = struct {
         ui.icon(c, "plus", .{ .size = 24, .weight = .semibold, .color = .white });
     }
 
-    /// The sheet a new task comes in on: a pane of glass from the bottom,
-    /// with pill tabs for its kind, switches, and the button that adds it.
+    /// The sheet a new task comes in on: solid, from the bottom, with pill
+    /// tabs for its kind, switches, and the button that adds it.
     fn addSheet(t: *Todo, c: *ui.Context) void {
         const size = 430 + c.safe_area.bottom;
         const sh = kit.sheet(c, "new-task", &t.sheet, .{ .side = .bottom, .size = size, .title = "New task" }) orelse return;
-        const s = sh.rounded(32).glass(.{}).px(24).pt(24).pb(c.safe_area.bottom + 16).gap(18);
+        const s = sh.rounded(32).bg(canvas).px(24).pt(24).pb(c.safe_area.bottom + 16).gap(18);
         defer s.end();
         const k = t.next();
         {
-            const r = ui.div(c).row().wFull().h(72).px(12).gap(14).itemsCenter().rounded(22).bg(ui.Color.white.alpha(0.75));
+            const r = ui.div(c).row().wFull().h(72).px(12).gap(14).itemsCenter().rounded(22).bg(.white);
             defer r.end();
             {
                 const tile = ui.div(c).w(48).h(48).rounded(14).bg(ui.Color.hex(k.hue).alpha(0.14)).center();
@@ -388,7 +376,7 @@ pub const Todo = struct {
         }
         _ = kit.tabs(c, &kinds, &t.draft_kind, .{ .variant = .pill });
         {
-            const box = ui.div(c).column().wFull().px(16).py(6).rounded(22).bg(ui.Color.white.alpha(0.75));
+            const box = ui.div(c).column().wFull().px(16).py(6).rounded(22).bg(.white);
             defer box.end();
             switchRow(c, "flame.fill", .hex(0xff3b30), "Urgent", &t.draft_urgent);
             kit.separator(c, .{});
@@ -409,23 +397,6 @@ fn switchRow(c: *ui.Context, icon: []const u8, col: ui.Color, label: []const u8,
     ui.text(c, label, .{ .size = 16, .weight = .medium, .color = ink });
     ui.spacer(c);
     _ = ui.toggle(c, "", on);
-}
-
-/// A soft wash of color behind the top of the page, for the glass to
-/// bend: three blurred discs.
-fn wash(c: *ui.Context) void {
-    const w = c.size.w;
-    const blobs = [_]struct { x: f32, y: f32, r: f32, hue: u24 }{
-        .{ .x = -40, .y = -60, .r = 90, .hue = 0xff8a65 },
-        .{ .x = w - 160, .y = -40, .r = 90, .hue = 0x7c83ff },
-        .{ .x = w * 0.3, .y = 40, .r = 60, .hue = 0x5ad1a5 },
-    };
-    for (blobs) |b| {
-        const col = ui.Color.hex(b.hue);
-        const d = ui.div(c).absolute().offset(b.x, b.y).w(2 * b.r).h(2 * b.r).roundedFull().bg(col.alpha(0))
-            .shadow(.{ .color = col.alpha(0.45), .blur = 70 });
-        d.end();
-    }
 }
 
 /// A round box with a 44-point target: grey ring, or green with a white
