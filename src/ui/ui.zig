@@ -159,6 +159,7 @@ test {
     _ = @import("tests_scroll_x.zig");
     _ = @import("tests_a11y_adjust.zig");
     _ = @import("tests_access.zig");
+    _ = @import("tests_text_select.zig");
     _ = @import("tests_shadow_x.zig");
     _ = @import("tests_text_style.zig");
     _ = @import("tests_text_extras.zig");

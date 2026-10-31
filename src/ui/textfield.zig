@@ -182,6 +182,11 @@ pub fn apply(buffer: *TextBuffer, e: *EditState, op: ctx_mod.TextOp, opts: Optio
             result.changed = true;
         },
         .unmark => e.marked = null,
+        .select => |r| {
+            e.anchor = @min(r.anchor, s.len);
+            e.caret = @min(r.caret, s.len);
+            e.marked = null;
+        },
         .command => |cmd| {
             const collapse = struct {
                 fn to(st: *EditState, at: usize) void {

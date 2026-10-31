@@ -77,6 +77,8 @@ pub const TextOp = union(enum) {
     /// Text being composed (underlined), with the selection inside it.
     set_marked: struct { text: []const u8, sel_start: usize, sel_len: usize },
     unmark,
+    /// A selection set from outside (iOS's text input): byte offsets.
+    select: struct { anchor: usize, caret: usize },
     command: Command,
 };
 

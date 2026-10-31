@@ -249,3 +249,31 @@ fn paintScrollbarX(c: *Context, out: *std.ArrayList(metal.Instance), n: ctx_mod.
         .clip = metal.clip4(visible),
     }) catch {};
 }
+
+/// Scrolls the box that scrolls around the focused text field until its
+/// caret is above `bottom` (in view points: what iOS's keyboard leaves),
+/// as a UIScrollView does for its field. True when it scrolled: draw
+/// another frame.
+pub fn revealCaret(c: *Context, bottom: f32) bool {
+    const f = c.focused_text orelse return false;
+    const r = f.caret_rect;
+    const over = r.y + r.h + 12 - bottom;
+    if (r.h <= 0 or over <= 0.5) return false;
+    var i: u32 = none;
+    for (c.nodes.items, 0..) |n, k| if (n.id == f.id) {
+        i = @intCast(k);
+        break;
+    };
+    while (i != none) : (i = c.nodes.items[i].parent) {
+        const n = c.nodes.items[i];
+        if (!n.style.scroll) continue;
+        const max = c.scroll_max.get(n.id) orelse 0;
+        const s = c.scroll.getOrPut(c.gpa, n.id) catch return false;
+        if (!s.found_existing) s.value_ptr.* = 0;
+        const want = @min(max, s.value_ptr.* + over);
+        if (want <= s.value_ptr.* + 0.5) continue;
+        s.value_ptr.* = want;
+        return true;
+    }
+    return false;
+}

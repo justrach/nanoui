@@ -140,7 +140,7 @@ the state.
   end in an ellipsis or fade out (`.truncate`); fonts an app bundles are
   found by family like installed ones (`ui.registerFont`).
 - **Controls:** buttons, checkboxes, toggles, sliders, progress bars,
-  segmented controls, badges, and text fields (IME on macOS and Linux).
+  segmented controls, badges, and text fields (IME on macOS, iOS and Linux).
 - **Images:** pictures decoded once and packed into an atlas.
 - **SVG:** icons and marks from SVG files (`ui.svg`), drawn by nanoui at
   the screen's density on every platform and tinted to follow the theme:
@@ -345,7 +345,7 @@ Android's SDK and NDK). On a Mac, `zig build -Dtarget=x86_64-linux-gnu` or
 | pages (webview) | WKWebView | not yet | not yet | not yet | not yet |
 | menus | the menu bar | a keyboard's shortcuts | a keyboard's shortcuts | accelerators | accelerators |
 | HTTP (`nanoui.http`) | NSURLSession | NSURLSession | http-zig, names looked up by Android | [http-zig](https://github.com/justrach/http-zig): HTTP/2 over TLS, a thread per request | the same |
-| input methods that compose text | NSTextInputClient: marked text, the edit menu | not yet: a software keyboard types keys | not yet: a software keyboard types keys | GTK's input method, its preedit | not yet: only what arrives as `WM_CHAR` |
+| input methods that compose text | NSTextInputClient: marked text, the edit menu | UITextInput: marked text (pinyin), autocorrect, ⌘C ⌘X ⌘V | not yet: a software keyboard types keys | GTK's input method, its preedit | not yet: only what arrives as `WM_CHAR` |
 | accessibility | VoiceOver: buttons, checkboxes, toggles, sliders, segmented controls, text fields (not static text or `nanoui.kit`) | VoiceOver: controls, text, headings, boxes that take clicks (`ui.access`); Dynamic Type, Increase Contrast | not yet | not yet | not yet |
 
 The CPU renderer matches the Metal one pixel for pixel, and a test compares
@@ -431,8 +431,8 @@ one, and the app's Info.plist follows it. nanoui runs on iOS 15 and
 later: `-Dtarget=aarch64-ios.15.0` (or `aarch64-ios.15.0-simulator`)
 reaches those devices.
 
-Not on iOS yet: pages, input methods that compose Chinese or Japanese,
-autocorrect, keys repeating while held, or iPad multiwindow.
+Not on iOS yet: pages, the selection's handles and loupe, keys repeating
+while held, or iPad multiwindow.
 
 ### Android
 
