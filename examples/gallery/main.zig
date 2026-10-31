@@ -416,16 +416,47 @@ const Gallery = struct {
             if (w.surface) |s| s.requestFrame();
         }
     }
-
     /// The demo window's own content: it says what it is, so it is obvious which
-    /// window the options applied to.
+    /// window the options applied to, and it closes itself.
+    ///
+    /// The Close button is not decoration. A borderless window has no title bar
+    /// and no system menu, and `skip_taskbar` keeps it out of the taskbar and
+    /// Alt-Tab, so without a button of its own the window could not be closed at
+    /// all — the first version of this demo could not be.
+    ///
+    /// Dragging: a borderless window cannot be moved by its title bar either.
+    /// The header below is a drag handle (`ui.drag` moves the window), except
+    /// when `decorations` is on, where the system's own title bar does it.
     fn demoView(g: *Gallery, c: *ui.Context) void {
-        ui.column(c, .{ .padding = .all(18), .gap = 10, .width = .fill, .height = .fill, .justify = .center });
+        ui.column(c, .{ .padding = .all(16), .gap = 10, .width = .fill, .height = .fill });
         defer ui.end(c);
+
+        // The header drags the window, and holds the Close button.
+        const header = ui.div(c).row().wFull().gap(10).itemsCenter().h(30);
+        defer header.end();
+        // A borderless window has no title bar to drag, so the header is the
+        // handle. A decorated one keeps its own title bar, and making this a
+        // handle too would move the window twice.
+        _ = c.leaf(.{ .grow = 1, .window_drag = g.demo_borderless }, .{ .text = .{
+            .str = "Drag here to move",
+            .style = .{ .size = 11 },
+            .color = c.theme.muted,
+        } }, null);
+        if (ui.button(c, "Close", .{ .variant = .secondary, .size = 12 }).clicked) g.closeDemo();
+
         ui.text(c, "This window", .{ .size = 18, .weight = .bold });
         ui.text(c, if (g.demo_borderless) "borderless: no title bar, no frame." else "decorated: drag the title bar.", .{});
         ui.text(c, if (g.demo_skip_taskbar) "Out of the taskbar and Alt-Tab." else "In the taskbar and Alt-Tab.", .{});
         ui.textf(c, .{ .color = c.theme.muted }, "opacity {d:.0}%", .{g.demo_opacity * 100});
+    }
+
+    /// Closes the demo window and lets the page know, so the button goes back to
+    /// "Open" and the controls that only apply to a live window go away.
+    fn closeDemo(g: *Gallery) void {
+        if (g.demo_window) |w| {
+            g.demo_window = null;
+            w.close();
+        }
     }
 
     fn typography(_: *Gallery, c: *ui.Context) void {
