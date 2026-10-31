@@ -348,7 +348,7 @@ Android's SDK and NDK). On a Mac, `zig build -Dtarget=x86_64-linux-gnu` or
 | menus | the menu bar | a keyboard's shortcuts | a keyboard's shortcuts | accelerators | accelerators |
 | HTTP (`nanoui.http`) | NSURLSession | NSURLSession | http-zig, names looked up by Android | [http-zig](https://github.com/justrach/http-zig): HTTP/2 over TLS, a thread per request | the same |
 | input methods that compose text | NSTextInputClient: marked text, the edit menu | not yet: a software keyboard types keys | not yet: a software keyboard types keys | GTK's input method, its preedit | not yet: only what arrives as `WM_CHAR` |
-| accessibility | VoiceOver: buttons, checkboxes, toggles, sliders, radio buttons, text fields (not static text or `nanoui.kit`) | not yet | not yet | not yet | not yet |
+| accessibility | VoiceOver: buttons, checkboxes, toggles, sliders, segmented controls, text fields (not static text or `nanoui.kit`) | not yet | not yet | not yet | not yet |
 
 The CPU renderer matches the Metal one pixel for pixel, and a test compares
 them; others compare the OpenGL renderer with the CPU one, with OpenGL 3.3
