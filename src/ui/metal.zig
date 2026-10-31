@@ -2,6 +2,7 @@
 //! CAMetalLayer the native view hosts. Panes of glass split the frame:
 //! each reads what was drawn before it (`metal_glass.zig`).
 const std = @import("std");
+const builtin = @import("builtin");
 const objc = @import("../objc.zig");
 const cf = @import("cf.zig");
 const types = @import("types.zig");
@@ -206,7 +207,9 @@ pub const Renderer = struct {
         if (objc.dispatch_semaphore_wait(self.in_flight, dispatch_time(0, std.time.ns_per_s)) != 0) {
             return .{ .drawable_wait_ms = (cf.CACurrentMediaTime() - t0) * 1000, .sync = self.live_resize };
         }
-        const drawable = given orelse {
+        // macOS's CAMetalDisplayLink hands each frame its drawable; iOS's
+        // CADisplayLink doesn't, so there the frame asks the layer.
+        const drawable = given orelse (if (builtin.os.tag == .ios) objc.msg(?objc.Object, self.layer, "nextDrawable", .{}) else null) orelse {
             _ = objc.dispatch_semaphore_signal(self.in_flight);
             return .{ .drawable_wait_ms = (cf.CACurrentMediaTime() - t0) * 1000, .sync = self.live_resize };
         };
