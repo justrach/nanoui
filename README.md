@@ -346,7 +346,7 @@ Android's SDK and NDK). On a Mac, `zig build -Dtarget=x86_64-linux-gnu` or
 | menus | the menu bar | a keyboard's shortcuts | a keyboard's shortcuts | accelerators | accelerators |
 | HTTP (`nanoui.http`) | NSURLSession | NSURLSession | http-zig, names looked up by Android | [http-zig](https://github.com/justrach/http-zig): HTTP/2 over TLS, a thread per request | the same |
 | input methods that compose text | NSTextInputClient: marked text, the edit menu | not yet: a software keyboard types keys | not yet: a software keyboard types keys | GTK's input method, its preedit | not yet: only what arrives as `WM_CHAR` |
-| accessibility | VoiceOver: buttons, checkboxes, toggles, sliders, segmented controls, text fields (not static text or `nanoui.kit`) | not yet | not yet | not yet | not yet |
+| accessibility | VoiceOver: buttons, checkboxes, toggles, sliders, segmented controls, text fields (not static text or `nanoui.kit`) | VoiceOver: controls, text, headings, boxes that take clicks (`ui.access`); Dynamic Type, Increase Contrast | not yet | not yet | not yet |
 
 The CPU renderer matches the Metal one pixel for pixel, and a test compares
 them; others compare the OpenGL renderer with the CPU one, with OpenGL 3.3
@@ -432,7 +432,7 @@ later: `-Dtarget=aarch64-ios.15.0` (or `aarch64-ios.15.0-simulator`)
 reaches those devices.
 
 Not on iOS yet: pages, input methods that compose Chinese or Japanese,
-autocorrect, VoiceOver, keys repeating while held, or iPad multiwindow.
+autocorrect, keys repeating while held, or iPad multiwindow.
 
 ### Android
 
@@ -558,7 +558,7 @@ Rules for working here, by hand or with an agent, are in
 [AGENTS.md](AGENTS.md).
 
 nanoui is a subset of what full frameworks offer. Pages work only on macOS so
-far, accessibility reaches only macOS's built-in controls, there are no
+far, accessibility is only on iOS and macOS's built-in controls, there are no
 notifications, channels or plugins yet, and bundling is only for iOS and Android.
 Apps update themselves from GitHub releases on macOS (`nanoui.Updater`). Bound methods run on the main thread.
 
