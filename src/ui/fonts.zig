@@ -132,15 +132,26 @@ pub fn tabular(base: cf.CTFontRef) cf.CTFontRef {
 
 extern "c" const NSFontDescriptorSystemDesignRounded: objc.Object;
 extern "c" const UIFontDescriptorSystemDesignRounded: objc.Object;
+extern "c" const NSFontDescriptorSystemDesignSerif: objc.Object;
+extern "c" const UIFontDescriptorSystemDesignSerif: objc.Object;
 
 /// `base` in the system's rounded design (SF Rounded), released; `base`
 /// itself where the face has none (a named family).
 pub fn rounded(base: cf.CTFontRef) cf.CTFontRef {
+    return withDesign(base, if (builtin.os.tag == .ios) UIFontDescriptorSystemDesignRounded else NSFontDescriptorSystemDesignRounded);
+}
+
+/// `base` in the system's serif design (New York), released; `base`
+/// itself where the face has none.
+pub fn serif(base: cf.CTFontRef) cf.CTFontRef {
+    return withDesign(base, if (builtin.os.tag == .ios) UIFontDescriptorSystemDesignSerif else NSFontDescriptorSystemDesignSerif);
+}
+
+fn withDesign(base: cf.CTFontRef, design: objc.Object) cf.CTFontRef {
     const pool = objc.Pool.push();
     defer pool.pop();
     const font: objc.Object = @ptrCast(base);
     const desc = objc.msg(objc.Object, font, "fontDescriptor", .{});
-    const design = if (builtin.os.tag == .ios) UIFontDescriptorSystemDesignRounded else NSFontDescriptorSystemDesignRounded;
     const round = objc.msg(?objc.Object, desc, "fontDescriptorWithDesign:", .{design}) orelse return base;
     // Size 0: the descriptor's own.
     const made = objc.msg(?objc.Object, objc.class(objc.font_class), "fontWithDescriptor:size:", .{ round, @as(f64, 0) }) orelse return base;

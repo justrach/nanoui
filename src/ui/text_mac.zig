@@ -55,10 +55,10 @@ pub const Layout = struct { width: f32, glyphs: []const Glyph };
 /// A line of wrapped text: a byte range and its width.
 pub const Line = struct { start: usize, end: usize, width: f32 };
 
-const FontKey = struct { size_bits: u32, weight: types.Weight, mono: bool, italic: bool, tabular: bool, rounded: bool };
+const FontKey = struct { size_bits: u32, weight: types.Weight, mono: bool, italic: bool, tabular: bool, rounded: bool, serif: bool };
 
 fn fontKey(style: types.TextStyle) FontKey {
-    return .{ .size_bits = @bitCast(style.size), .weight = style.weight, .mono = style.mono, .italic = style.italic, .tabular = style.tabular, .rounded = style.rounded and !style.mono };
+    return .{ .size_bits = @bitCast(style.size), .weight = style.weight, .mono = style.mono, .italic = style.italic, .tabular = style.tabular, .rounded = style.rounded and !style.mono, .serif = style.serif and !style.mono };
 }
 
 pub const TextSystem = struct {
@@ -193,6 +193,7 @@ pub const TextSystem = struct {
         var ref = fonts.create(if (style.mono) self.mono_family else self.family, style.size * self.zoom, style.weight, style.italic, style.mono);
         if (style.tabular) ref = fonts.tabular(ref);
         if (fontKey(style).rounded) ref = fonts.rounded(ref);
+        if (fontKey(style).serif) ref = fonts.serif(ref);
         const f: Font = .{
             .ref = ref,
             .ascent = @floatCast(CTFontGetAscent(ref)),
@@ -208,7 +209,7 @@ pub const TextSystem = struct {
         h.update(s);
         h.update(std.mem.asBytes(&style.size));
         h.update(std.mem.asBytes(&style.mono_scale));
-        h.update(&.{ @backingInt(style.weight), @intFromBool(style.mono), @intFromBool(style.italic), @intFromBool(style.tabular), @intFromBool(style.rounded) });
+        h.update(&.{ @backingInt(style.weight), @intFromBool(style.mono), @intFromBool(style.italic), @intFromBool(style.tabular), @intFromBool(style.rounded), @intFromBool(style.serif) });
         h.update(std.mem.asBytes(&style.tracking));
         return h.final();
     }

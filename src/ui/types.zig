@@ -320,6 +320,9 @@ pub const TextStyle = struct {
     tracking: f32 = 0,
     /// The system face's rounded design (SF Rounded); others keep their own.
     rounded: bool = false,
+    /// The system face's serif design (New York on Apple systems); others
+    /// keep their own.
+    serif: bool = false,
 
     /// Cut to one line that fits, at its end or in its middle.
     pub fn cuts(s: TextStyle) bool {
