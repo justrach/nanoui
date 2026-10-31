@@ -13,6 +13,7 @@ const ctx_mod = @import("../ui/context.zig");
 const ui = @import("../ui/ui.zig");
 const Surface = @import("surface.zig").Surface;
 const Key = @import("../ui/input.zig").Key;
+const textinput = @import("textinput.zig");
 
 extern "c" const UIKeyboardWillChangeFrameNotification: objc.Object;
 extern "c" const UIKeyboardFrameEndUserInfoKey: objc.Object;
@@ -22,9 +23,12 @@ pub const State = struct {
     input: ?objc.Object = null,
     /// The text field the keyboard was brought up for (0: none).
     keyboard_for: u64 = 0,
+    /// The keyboard's height when the caret was last scrolled above it.
+    revealed_over: f32 = 0,
     ops: std.ArrayList(ctx_mod.TextOp) = .empty,
     arena: std.heap.ArenaAllocator,
     pasted: std.ArrayList(u8) = .empty,
+    text: textinput.State = .{},
 
     pub fn init(gpa: std.mem.Allocator) State {
         return .{ .arena = .init(gpa) };
@@ -33,6 +37,7 @@ pub const State = struct {
     pub fn deinit(st: *State, gpa: std.mem.Allocator) void {
         st.ops.deinit(gpa);
         st.pasted.deinit(gpa);
+        st.text.deinit();
         st.arena.deinit();
     }
 };
@@ -54,20 +59,19 @@ const input_methods = [_]objc.Method{
     .{ .name = "hasText", .imp = &hasText, .types = "B@:" },
     .{ .name = "insertText:", .imp = &insertText, .types = "v@:@" },
     .{ .name = "deleteBackward", .imp = &deleteBackward, .types = "v@:" },
-    // Fields edit text themselves: no corrections they wouldn't see.
-    .{ .name = "autocorrectionType", .imp = &traitNo, .types = "q@:" },
-    .{ .name = "spellCheckingType", .imp = &traitNo, .types = "q@:" },
-    .{ .name = "smartQuotesType", .imp = &traitNo, .types = "q@:" },
-    .{ .name = "smartDashesType", .imp = &traitNo, .types = "q@:" },
-    .{ .name = "smartInsertDeleteType", .imp = &traitNo, .types = "q@:" },
-    .{ .name = "autocapitalizationType", .imp = &traitNone, .types = "q@:" },
-};
+    // Corrections replace what they correct (UITextInput), but not in a
+    // password, which is also hidden from screenshots and dictation.
+    .{ .name = "autocorrectionType", .imp = &traitNoInPassword, .types = "q@:" },
+    .{ .name = "spellCheckingType", .imp = &traitNoInPassword, .types = "q@:" },
+    .{ .name = "autocapitalizationType", .imp = &capitalization, .types = "q@:" },
+    .{ .name = "isSecureTextEntry", .imp = &secure, .types = "B@:" },
+} ++ textinput.methods;
 
 pub fn attach(s: *Surface) void {
     const cls = objc.defineClass(.{
         .name = "NanoUIKeyInput",
         .superclass = "UIView",
-        .protocols = &.{ "UIKeyInput", "UITextInputTraits" },
+        .protocols = &.{ "UIKeyInput", "UITextInputTraits", "UITextInput" },
         .methods = &input_methods,
     });
     const v = objc.msg(objc.Object, objc.msg(objc.Object, cls, "alloc", .{}), "initWithFrame:", .{objc.CGRect{}});
@@ -83,6 +87,7 @@ pub fn detach(s: *Surface) void {
     const center = objc.msg(objc.Object, objc.class("NSNotificationCenter"), "defaultCenter", .{});
     objc.msg(void, center, "removeObserver:", .{s.uiview});
     const v = s.keys.input orelse return;
+    s.keys.text.delegate = null;
     objc.setZig(v, null);
     if (objc.msg(objc.BOOL, v, "isFirstResponder", .{})) _ = objc.msg(objc.BOOL, v, "resignFirstResponder", .{});
     objc.msg(void, v, "removeFromSuperview", .{});
@@ -100,23 +105,42 @@ pub fn takeKeys(s: *Surface) void {
 /// After a frame: a newly focused field brings up the keyboard, and the
 /// keyboard goes when no field has the focus.
 pub fn syncFocus(s: *Surface) void {
+    textinput.afterFrame(s);
+    reveal(s);
     const want: u64 = if (s.ctx.focused_text) |f| f.id else 0;
     if (want == s.keys.keyboard_for) return;
+    const was = s.keys.keyboard_for;
     s.keys.keyboard_for = want;
     const v = s.keys.input orelse return;
     if (want != 0) {
+        // Another field: its traits (a password's) come with the keyboard.
+        if (was != 0 and objc.msg(objc.BOOL, v, "isFirstResponder", .{})) objc.msg(void, v, "reloadInputViews", .{});
         _ = objc.msg(objc.BOOL, v, "becomeFirstResponder", .{});
     } else if (objc.msg(objc.BOOL, v, "isFirstResponder", .{})) {
         _ = objc.msg(objc.BOOL, s.uiview, "becomeFirstResponder", .{});
     }
 }
 
+/// The keyboard coming up, or typing, scrolls the caret above it; a finger
+/// scrolling the field away under it otherwise stays.
+fn reveal(s: *Surface) void {
+    const st = &s.keys;
+    const f = s.ctx.focused_text orelse return;
+    const kb = s.keyboard;
+    if (f.id == st.keyboard_for and kb == st.revealed_over and !st.text.editing) return;
+    st.revealed_over = kb;
+    if (kb <= 0) return;
+    if (@import("../ui/scroll.zig").revealCaret(&s.ctx, s.size.h - s.safeArea().bottom)) s.requestFrame();
+}
+
 fn push(s: *Surface, op: ctx_mod.TextOp) void {
     const st = &s.keys;
     st.ops.append(s.gpa, op) catch return;
     s.ctx.input.ops = st.ops.items;
+    st.text.editing = true;
     s.frame();
     if (s.dead) return;
+    st.text.editing = false;
     s.ctx.input.ops = &.{};
     st.ops.clearRetainingCapacity();
     _ = st.arena.reset(.retain_capacity);
@@ -130,12 +154,23 @@ fn yes(_: objc.Object, _: objc.SEL) callconv(.c) objc.BOOL {
     return objc.YES;
 }
 
-fn traitNo(_: objc.Object, _: objc.SEL) callconv(.c) objc.NSInteger {
-    return 1;
+fn password(obj: objc.Object) bool {
+    const s = objc.getZig(Surface, obj) orelse return false;
+    return !s.dead and s.ctx.focused_password;
 }
 
-fn traitNone(_: objc.Object, _: objc.SEL) callconv(.c) objc.NSInteger {
-    return 0;
+/// UITextAutocorrectionType, UITextSpellCheckingType: default 0, no 1.
+fn traitNoInPassword(obj: objc.Object, _: objc.SEL) callconv(.c) objc.NSInteger {
+    return if (password(obj)) 1 else 0;
+}
+
+/// UITextAutocapitalizationType: none 0, sentences 2.
+fn capitalization(obj: objc.Object, _: objc.SEL) callconv(.c) objc.NSInteger {
+    return if (password(obj)) 0 else 2;
+}
+
+fn secure(obj: objc.Object, _: objc.SEL) callconv(.c) objc.BOOL {
+    return password(obj);
 }
 
 fn hasText(obj: objc.Object, _: objc.SEL) callconv(.c) objc.BOOL {
@@ -344,14 +379,9 @@ fn editShortcut(s: *Surface, key: u21) bool {
         'c' => push(s, .{ .command = .copy }),
         'x' => if (focused) push(s, .{ .command = .cut }) else return false,
         'a' => if (focused) push(s, .{ .command = .select_all }) else return false,
-        'v' => {
-            if (!focused) return false;
-            const pool = objc.Pool.push();
-            defer pool.pop();
-            const pb = objc.msg(objc.Object, objc.class("UIPasteboard"), "generalPasteboard", .{});
-            const text = objc.fromNSString(objc.msg(?objc.Object, pb, "string", .{}));
-            push(s, .{ .insert = dupe(s, text) });
-        },
+        // Not read here: iOS lets an app read what another put on the
+        // pasteboard only for the system's own paste (UIKit's ⌘V calls
+        // the field's `paste:`, `textinput.zig`).
         else => return false,
     }
     return true;
