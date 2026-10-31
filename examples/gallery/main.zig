@@ -60,6 +60,9 @@ const Gallery = struct {
     /// because a borderless or translucent window is the only way to see what
     /// those options do.
     app: ?*nanoui.App = null,
+    /// The gallery's own window, so the demo window can be placed beside it
+    /// rather than over the controls that change it.
+    window: ?*nanoui.Window = null,
     /// The window the Windows page made, if it is open: one at a time, and the
     /// opacity slider writes to it.
     demo_window: ?*nanoui.Window = null,
@@ -415,22 +418,48 @@ const Gallery = struct {
 
     fn openDemo(g: *Gallery, c: *ui.Context) void {
         const app = g.app orelse return;
+        // Beside the gallery, not over it. The point of the demo is to be looked
+        // at while the page's controls change it, so it must not cover them: it
+        // goes to the right of the window, and above it when there is no room
+        // there.
+        const at = g.demoPlacement(c);
         const opts = nanoui.WindowOptions{
             .title = "Borderless demo",
-            .width = 380,
-            .height = 220,
+            .width = demo_w,
+            .height = demo_h,
+            .x = at[0],
+            .y = at[1],
             .decorations = !g.demo_borderless,
             .skip_taskbar = g.demo_skip_taskbar,
             .opacity = g.demo_opacity,
             .title_bar = .hidden,
-            // `always_on_top` and a corner position: the point of the demo is to
-            // watch it while changing the controls beside it, so it must not sit
-            // over the page that changes it.
+            // Above other windows so it stays visible while the gallery has the
+            // keyboard: changing a slider must not hide the thing being
+            // changed.
             .always_on_top = true,
             .content = .{ .view = .init(g, Gallery.demoView) },
         };
         g.demo_window = app.newWindow(opts) catch null;
         c.changed = true;
+    }
+
+    const demo_w: f64 = 320;
+    const demo_h: f64 = 180;
+
+    /// Where the demo window goes: to the right of the gallery when there is
+    /// room, else to its left, else below it. The gallery's own frame decides,
+    /// so a window the user moved gets the demo beside it rather than over it.
+    fn demoPlacement(g: *Gallery, c: *ui.Context) [2]f64 {
+        const gap: f64 = 12;
+        const win = g.window orelse return .{ c.size.w + gap, 80 };
+        const f = win.frame();
+        const m = win.monitorSize();
+        const right = f.x + f.width + gap;
+        if (right + demo_w <= m[0]) return .{ right, f.y };
+        const left = f.x - demo_w - gap;
+        if (left >= 0) return .{ left, f.y };
+        // No room beside it: below, which still leaves the page visible.
+        return .{ f.x, f.y + f.height + gap };
     }
 
     fn reopenDemo(g: *Gallery, c: *ui.Context) void {
@@ -448,25 +477,27 @@ const Gallery = struct {
             if (w.surface) |s| s.requestFrame();
         }
     }
-    /// The demo window's own content: it says what it is, and it closes itself.
+    /// The demo window's own content: it says what it is.
     ///
-    /// `close` is deferred to the message loop, so closing from here does not
-    /// destroy the `Context` this frame is building in — which is what made the
-    /// first version crash on the Close button.
+    /// No Close button: the page's own "Close it" button does that, and it is the
+    /// one being watched — a button in here would be a second way to do the same
+    /// thing, in the window that is meant to be looked at. Nor does it close on
+    /// losing the keyboard, which would make it impossible to drag a slider and
+    /// watch the result.
+    ///
+    /// A borderless window cannot be moved by its title bar, so the header is a
+    /// `window_drag` handle — only when borderless, because a decorated window
+    /// already moves by its own title bar and would be moved twice.
     fn demoView(g: *Gallery, c: *ui.Context) void {
         ui.column(c, .{ .padding = .all(16), .gap = 10, .width = .fill, .height = .fill });
         defer ui.end(c);
-        const drag = ui.div(c).row().wFull().itemsCenter().h(26);
+        const drag = ui.div(c).row().wFull().itemsCenter().h(24);
         defer drag.end();
         _ = c.leaf(.{ .grow = 1, .window_drag = g.demo_borderless }, .{ .text = .{
             .str = if (g.demo_borderless) "Drag here to move" else "",
             .style = .{ .size = 11 },
             .color = c.theme.muted,
         } }, null);
-        if (ui.button(c, "Close", .{ .variant = .secondary, .size = 12 }).clicked) {
-            g.demo_window = null;
-            c.requestClose();
-        }
 
         ui.text(c, "This window", .{ .size = 18, .weight = .bold });
         ui.text(c, if (g.demo_borderless) "borderless: no title bar, no frame." else "decorated: drag the title bar.", .{});
@@ -500,7 +531,7 @@ pub fn main(init: std.process.Init) !void {
     g.add("Draw it with Metal");
     g.add("Ship it");
     g.items[1].done = true;
-    _ = try app.newWindow(.{
+    const win = try app.newWindow(.{
         .title = "Gallery",
         .width = 900,
         .height = 640,
@@ -509,5 +540,6 @@ pub fn main(init: std.process.Init) !void {
         .title_bar = .hidden,
         .content = .{ .view = .init(&g, Gallery.view) },
     });
+    g.window = win;
     try app.run();
 }

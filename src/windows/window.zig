@@ -186,6 +186,16 @@ pub const Window = struct {
         return .{ .x = @as(f64, @floatFromInt(r.left)) / s, .y = @as(f64, @floatFromInt(r.top)) / s, .width = @as(f64, @floatFromInt(r.right - r.left)) / s, .height = @as(f64, @floatFromInt(r.bottom - r.top)) / s };
     }
 
+    /// The screen's size in points, so a caller can work out whether there is
+    /// room to put another window beside this one.
+    pub fn monitorSize(self: *Window) [2]f64 {
+        const s = self.dpiScale();
+        return .{
+            @as(f64, @floatFromInt(w.GetSystemMetrics(0))) / s,
+            @as(f64, @floatFromInt(w.GetSystemMetrics(1))) / s,
+        };
+    }
+
     pub fn contentSize(self: *Window) [2]f64 {
         const s = self.surface orelse return .{ self.width, self.height };
         return .{ s.size.w, s.size.h };
