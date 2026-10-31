@@ -14,8 +14,9 @@ pub const pages = [_][2][]const u8{
     .{ "Glass", "sparkles" },
     .{ "Motion", "wand.and.stars" },
     .{ "Kit", "square.stack.3d.up" },
+    .{ "Windows", "macwindow" },
 };
-const tiles = [pages.len]u24{ 0x0a84ff, 0x30d158, 0xff9f0a, 0x5e5ce6, 0x64d2ff, 0xff375f, 0xbf5af2 };
+const tiles = [pages.len]u24{ 0x0a84ff, 0x30d158, 0xff9f0a, 0x5e5ce6, 0x64d2ff, 0xff375f, 0xbf5af2, 0x8e8e93 };
 
 /// Narrow enough for the phone's layout.
 pub fn compact(c: *ui.Context) bool {

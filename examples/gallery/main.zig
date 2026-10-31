@@ -53,6 +53,19 @@ const Gallery = struct {
     motion: @import("motion.zig").Demo = .{},
     kit: @import("kit.zig").Demo = .{},
     glass: @import("glass.zig").Demo = .{},
+    /// The app, so a page can make a window of its own: the Windows page does,
+    /// because a borderless or translucent window is the only way to see what
+    /// those options do.
+    app: ?*nanoui.App = null,
+    /// The window the Windows page made, if it is open: one at a time, and the
+    /// opacity slider writes to it.
+    demo_window: ?*nanoui.Window = null,
+    /// The demo window's options, as the page's controls set them. A slider is
+    /// `f32` and a window's opacity is `f64`, so this is the slider's type and
+    /// the window reads it converted.
+    demo_opacity: f32 = 0.85,
+    demo_borderless: bool = true,
+    demo_skip_taskbar: bool = true,
 
     fn add(g: *Gallery, title: []const u8) void {
         if (g.count == g.items.len or title.len == 0) return;
@@ -91,6 +104,7 @@ const Gallery = struct {
         if (g.page == 4) return g.glass.view(c);
         if (g.page == 5) return g.motion.page(c);
         if (g.page == 6) return g.kit.view(c, &g.appearance);
+        if (g.page == 7) return g.windowsContent(c);
         ui.scroll(c, .{ .grow = 1, .width = .fill, .height = .fill, .padding = .all(if (phone.compact(c)) 16 else 28), .gap = 20 });
         defer ui.end(c);
         switch (g.page) {
@@ -299,6 +313,121 @@ const Gallery = struct {
         rows.end();
     }
 
+    /// The Windows page's whole body, in the same scrolling column the other
+    /// pages use: the three cards stack, they do not sit side by side.
+    fn windowsContent(g: *Gallery, c: *ui.Context) void {
+        ui.scroll(c, .{ .grow = 1, .width = .fill, .height = .fill, .padding = .all(if (phone.compact(c)) 16 else 28), .gap = 20 });
+        defer ui.end(c);
+        g.windowsPage(c);
+        g.windowsOpacityCard(c);
+        g.windowsNotesCard(c);
+    }
+
+    /// The window options only Windows can show: a borderless window, one that
+    /// stays out of the taskbar, and one whose opacity a slider changes.
+    ///
+    /// The point of the page is that a person can see the result. Nothing about
+    /// `decorations`, `skip_taskbar` or `opacity` is visible from the main
+    /// window, so the page makes a second one and changes it live.
+    fn windowsPage(g: *Gallery, c: *ui.Context) void {
+        const th = c.theme;
+        ui.heading(c, "Windows");
+        ui.text(c, "A second window, made with the options below.", .{ .color = th.muted });
+        ui.card(c, .{ .width = .fill, .gap = 12 });
+        defer ui.end(c);
+        ui.text(c, "Window", .{ .weight = .semibold });
+        ui.textf(c, .{ .size = 12, .color = th.muted }, "decorations = {s}   skip_taskbar = {s}   opacity = {d:.2}", .{
+            if (g.demo_borderless) "false (borderless)" else "true",
+            if (g.demo_skip_taskbar) "true" else "false",
+            g.demo_opacity,
+        });
+        if (ui.button(c, if (g.demo_window == null) "Open" else "Close", .{ .variant = .primary }).clicked) g.toggleDemoWindow(c);
+        if (g.demo_window != null) {
+            if (ui.checkbox(c, "Borderless", &g.demo_borderless)) g.reopenDemo(c);
+            if (ui.checkbox(c, "Out of the taskbar", &g.demo_skip_taskbar)) g.reopenDemo(c);
+        }
+    }
+
+    /// The opacity slider is its own card, so it can come and go with the demo
+    /// window without closing the one above it.
+    fn windowsOpacityCard(g: *Gallery, c: *ui.Context) void {
+        if (g.demo_window == null) return;
+        ui.card(c, .{ .width = .fill, .gap = 10 });
+        defer ui.end(c);
+        ui.text(c, "Opacity", .{ .weight = .semibold });
+        if (ui.slider(c, &g.demo_opacity, .{ .min = 0.2, .max = 1, .width = .{ .px = 200 } })) g.applyDemoOpacity();
+        ui.textf(c, .{ .mono = true, .size = 12 }, "{d:.0}%", .{g.demo_opacity * 100});
+    }
+
+    /// What the three options become on Windows: the page says it, so the demo
+    /// does not have to be read alongside the source to make sense.
+    fn windowsNotesCard(_: *Gallery, c: *ui.Context) void {
+        const th = c.theme;
+        ui.card(c, .{ .width = .fill, .gap = 8 });
+        defer ui.end(c);
+        ui.text(c, "What each one asks Windows for", .{ .weight = .semibold });
+        for ([_][]const u8{
+            "decorations = false  ->  WS_POPUP: no title bar, no frame, no drag-to-resize",
+            "skip_taskbar = true  ->  WS_EX_TOOLWINDOW: out of the taskbar and Alt-Tab",
+            "opacity < 1          ->  WS_EX_LAYERED + SetLayeredWindowAttributes",
+        }) |line| ui.text(c, line, .{ .size = 12, .mono = true, .color = th.muted });
+        ui.text(c, "While the window is translucent it is drawn by the canvas and presented with GDI: " ++
+            "SetLayeredWindowAttributes does nothing on a DXGI flip-model swap chain. At 100% the GPU comes back.", .{ .size = 12, .color = th.muted, .wrap = true });
+    }
+
+    /// Makes the demo window with the current options, or remakes it: some of
+    /// them (`WS_POPUP`, `WS_EX_LAYERED`) are fixed when a window is created and
+    /// cannot be changed afterwards.
+    fn toggleDemoWindow(g: *Gallery, c: *ui.Context) void {
+        if (g.demo_window) |w| {
+            w.close();
+            g.demo_window = null;
+        } else g.openDemo(c);
+    }
+
+    fn openDemo(g: *Gallery, c: *ui.Context) void {
+        const app = g.app orelse return;
+        const opts = nanoui.WindowOptions{
+            .title = "Borderless demo",
+            .width = 380,
+            .height = 220,
+            .decorations = !g.demo_borderless,
+            .skip_taskbar = g.demo_skip_taskbar,
+            .opacity = g.demo_opacity,
+            .title_bar = .hidden,
+            .content = .{ .view = .init(g, Gallery.demoView) },
+        };
+        g.demo_window = app.newWindow(opts) catch null;
+        c.changed = true;
+    }
+
+    fn reopenDemo(g: *Gallery, c: *ui.Context) void {
+        if (g.demo_window) |w| {
+            w.close();
+            g.demo_window = null;
+        }
+        g.openDemo(c);
+    }
+
+    fn applyDemoOpacity(g: *Gallery) void {
+        if (g.demo_window) |w| {
+            w.setOpacity(g.demo_opacity);
+            // The demo window shows the number, so it is built again too.
+            if (w.surface) |s| s.requestFrame();
+        }
+    }
+
+    /// The demo window's own content: it says what it is, so it is obvious which
+    /// window the options applied to.
+    fn demoView(g: *Gallery, c: *ui.Context) void {
+        ui.column(c, .{ .padding = .all(18), .gap = 10, .width = .fill, .height = .fill, .justify = .center });
+        defer ui.end(c);
+        ui.text(c, "This window", .{ .size = 18, .weight = .bold });
+        ui.text(c, if (g.demo_borderless) "borderless: no title bar, no frame." else "decorated: drag the title bar.", .{});
+        ui.text(c, if (g.demo_skip_taskbar) "Out of the taskbar and Alt-Tab." else "In the taskbar and Alt-Tab.", .{});
+        ui.textf(c, .{ .color = c.theme.muted }, "opacity {d:.0}%", .{g.demo_opacity * 100});
+    }
+
     fn typography(_: *Gallery, c: *ui.Context) void {
         ui.heading(c, "Typography");
         ui.card(c, .{ .width = .fill, .gap = 10, .max_width = 640 });
@@ -320,6 +449,7 @@ pub fn main(init: std.process.Init) !void {
     const app = try nanoui.App.create(init, .{ .name = "Gallery" });
     defer app.destroy();
     var g: Gallery = .{};
+    g.app = app;
     g.add("Write a UI toolkit in Zig");
     g.add("Draw it with Metal");
     g.add("Ship it");
