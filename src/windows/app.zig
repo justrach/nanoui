@@ -34,6 +34,14 @@ fn onTimer(_: ?w.HWND, _: u32, id: usize, _: u32) callconv(.winapi) void {
     };
 }
 
+/// Kills every timer still waiting, so none fires into a torn-down app.
+fn clearTimers() void {
+    for (&timers) |*slot| if (slot.*) |t| {
+        _ = w.KillTimer(null, t.id);
+        slot.* = null;
+    };
+}
+
 pub const App = struct {
     gpa: std.mem.Allocator,
     io: std.Io,
@@ -53,15 +61,26 @@ pub const App = struct {
         const flags = try dev.Flags.parse(init);
         self.* = .{ .gpa = gpa, .io = init.io, .options = options, .flags = flags, .debug = init.environ_map.get("NANOUI_DEBUG") != null };
         self.gui = flags.snapshot == null and flags.generate_dir == null;
-        // Pixels, not stretched bitmaps: nanoui draws at the monitor's DPI.
-        if (self.gui) _ = w.SetProcessDPIAware();
+        // Pixels, not stretched bitmaps: nanoui draws at the monitor's DPI,
+        // per monitor — a window carried to another screen hears about it
+        // (`WM_DPICHANGED`) and rescales. Before Windows 10 1607 there is no
+        // such call: system awareness, the oldest way, is the fallback.
+        if (self.gui) {
+            if (w.SetProcessDpiAwarenessContext(-4) == 0) _ = w.SetProcessDPIAware();
+        }
         // Where other threads' calls for the main thread arrive (`onMain`).
         @import("fdwatch.zig").prepare() catch {};
         return self;
     }
 
     pub fn destroy(self: *App) void {
-        while (self.windows.items.len > 0) self.windows.items[self.windows.items.len - 1].close();
+        // No timer outlives the app: one that fired after this would call its
+        // function with a context that is already gone.
+        clearTimers();
+        // `destroyNow`, not `close`: `close` only posts the request and waits for
+        // a message loop that is not running any more, so this drained nothing
+        // and spun forever.
+        while (self.windows.items.len > 0) self.windows.items[self.windows.items.len - 1].destroyNow();
         self.windows.deinit(self.gpa);
         if (self.main_menu) |m| m.destroy();
         self.gpa.destroy(self);
@@ -98,6 +117,10 @@ pub const App = struct {
         if (self.stopping or !self.gui) return;
         self.running = true;
         var msg: w.MSG = undefined;
+        // A modal dialog (a message box, a file dialog) pumps its own loop
+        // while it is up: a quit asked for inside one is consumed there, and
+        // this loop hears of it when the dialog is gone — the usual Windows
+        // arithmetic, and one more reason `close` defers.
         while (w.GetMessageW(&msg, null, 0, 0) > 0) {
             _ = w.TranslateMessage(&msg);
             _ = w.DispatchMessageW(&msg);
@@ -121,12 +144,20 @@ pub const App = struct {
     }
 
     pub fn after(ms: u64, ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) void {
-        const id = w.SetTimer(null, 0, @intCast(@max(1, ms)), onTimer);
-        if (id == 0) return;
-        for (&timers) |*slot| if (slot.* == null) {
-            slot.* = .{ .id = id, .ctx = ctx, .func = func };
+        // A slot first: a timer with nowhere to be remembered would fire once
+        // into nothing, its callback silently dropped.
+        var slot: ?*?Timer = null;
+        for (&timers) |*t| if (t.* == null) {
+            slot = t;
+            break;
+        };
+        const s = slot orelse {
+            std.log.warn("nanoui: more than {d} timers pending; one for {d} ms is dropped", .{ timers.len, ms });
             return;
         };
+        const id = w.SetTimer(null, 0, @intCast(@max(1, ms)), onTimer);
+        if (id == 0) return;
+        s.* = .{ .id = id, .ctx = ctx, .func = func };
     }
 
     pub fn setMenu(self: *App, template: []const menu_mod.MenuItem) !void {
@@ -155,6 +186,11 @@ pub const App = struct {
                 return true;
             },
             .close => {
+                // The window that has the keyboard, not just the first one made.
+                for (self.windows.items) |win| if (win.isFocused()) {
+                    win.close();
+                    return true;
+                };
                 if (self.windows.items.len > 0) self.windows.items[0].close();
                 return true;
             },

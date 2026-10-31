@@ -19,6 +19,9 @@ const Theme = @import("../ui/theme.zig").Theme;
 const Context = ctx_mod.Context;
 const Window = @import("window.zig").Window;
 const d3d = @import("d3d.zig");
+const d3d11 = @import("../ui/d3d11.zig");
+const gpu_side = @import("surface_gpu.zig");
+const ime = @import("ime.zig");
 
 /// Posted for a frame requested from outside the view.
 pub const WM_FRAME = w.WM_APP + 1;
@@ -37,29 +40,75 @@ pub const Surface = struct {
     size: types.Size = .{},
     scale: f32 = 1,
     last_frame_time: f64 = 0,
+    /// A frame is being built: a second one asked for meanwhile is queued, not
+    /// run. Windows dispatches messages from inside calls the view makes
+    /// (`ShellExecuteW` pumps its own), so a timer can reach `frame` while the
+    /// view is still building the Context, and the Context is not re-entrant.
+    in_frame: bool = false,
+    /// A frame was asked for while one was building: run one more after it.
+    frame_again: bool = false,
     start_time: f64,
     ticking: bool = false,
     frame_posted: bool = false,
     tracking: bool = false,
     theme_override: ?Theme = null,
+    /// The system's appearance as last read: a window that names no theme of
+    /// its own follows it, and `WM_SETTINGCHANGE` says when it changed.
+    system_theme_dark: bool = false,
+    /// The theme the view asked for with `c.theme`, which outranks the system's
+    /// appearance until the view resets it to null.
+    theme_chosen: ?Theme = null,
     cursor: ctx_mod.Cursor = .arrow,
     /// A UTF-16 high surrogate waiting for its other half.
     high: u16 = 0,
+    /// The IME's state for this window: a composition running, the guard that
+    /// keeps a placement from echoing into a freeze, and the caret last told
+    /// about. `ime.zig` says why each one exists.
+    ime: ime.State = .{},
     chars: [8]u8 = undefined,
+    /// Where `NANOUI_DUMP` writes the frames it compares.
+    path_buf: [64]u8 = undefined,
     /// Frames go to the screen through this, once made; GDI if it can't be.
     presenter: ?d3d.Presenter = null,
     no_d3d: bool = false,
+    /// The frame drawn by the GPU, on the swap chain's own device. Absent
+    /// until the first frame, and after the device is lost.
+    gpu: ?d3d11.Renderer = null,
+    /// Set when there is no Direct3D 11 renderer to draw with, so that the
+    /// canvas is not kept trying.
+    no_gpu: bool = false,
+    /// A size arrived that no frame has been built for yet.
+    size_dirty: bool = false,
+    /// A drag is moving the window's edge (`WM_ENTERSIZEMOVE` .. `WM_EXITSIZEMOVE`).
+    dragging: bool = false,
+    /// `NANOUI_DUMP`: F12 writes the canvas beside the same frame drawn whole.
+    dump_enabled: bool = false,
+    dumps: usize = 0,
 
     pub fn create(window: *Window, view: ui.View, theme_override: ?Theme) !*Surface {
         const gpa = window.app.gpa;
         const self = try gpa.create(Surface);
         self.* = .{ .gpa = gpa, .window = window, .text = .init(gpa), .ctx = undefined, .view = view, .theme_override = theme_override, .start_time = clock.now() };
         self.ctx = .init(gpa, &self.text);
+        // Diagnostics, off unless asked for: which presenter draws the frame,
+        // how many threads draw it, and F12 dumping the canvas.
+        self.no_d3d = envFlag("NANOUI_NO_D3D");
+        self.dump_enabled = envFlag("NANOUI_DUMP");
+        if (envFlag("NANOUI_ONE_THREAD")) @import("../ui/raster.zig").threads = 1;
+        // Frames come from Direct3D 11 here (`paintGpu`), so the view names it
+        // from the first frame; if no device can be made, `paintGpu` says CPU
+        // and the next frame reads that instead.
+        if (!self.no_d3d) self.ctx.renderer = "Direct3D 11";
+        // The system's appearance now, and again if it changes while the app
+        // runs (a window without a theme of its own follows it).
+        self.system_theme_dark = @import("desktop.zig").isDark();
         return self;
     }
 
     pub fn destroy(self: *Surface) void {
-        if (self.presenter) |*p| p.deinit();
+        gpu_side.release(self);
+        // The IME's scratch buffers: three ArrayLists that outlive a frame.
+        self.ime.deinit(self.gpa);
         self.instances.deinit(self.gpa);
         self.pixels.deinit(self.gpa);
         self.ctx.deinit();
@@ -71,22 +120,70 @@ pub const Surface = struct {
         return self.window.hwnd;
     }
 
+    /// The theme the frame is drawn with: a window's own when it named one,
+    /// else the one the view chose (`c.theme`), else the system's appearance.
     fn theme(self: *Surface) Theme {
-        return self.theme_override orelse Theme.light;
+        if (self.theme_override) |t| return t;
+        if (self.theme_chosen) |t| return t;
+        return if (self.system_theme_dark) Theme.dark_theme else Theme.light;
     }
 
+    /// Builds the view for the current state and asks for it to be drawn: the
+    /// one entry point for everything that changes what the window shows.
     pub fn frame(self: *Surface) void {
+        if (self.in_frame) {
+            // Building the view called something that pumped messages (the
+            // shell, a dialog), and a timer or input arrived: the frame it asks
+            // for runs once the one being built is done.
+            self.frame_again = true;
+            return;
+        }
+        self.in_frame = true;
+        defer self.in_frame = false;
+        // A view that asks for a frame every time it builds one would spin
+        // here; a handful is what a queued timer or a click needs.
+        var passes: u8 = 0;
+        while (passes < 4) : (passes += 1) {
+            self.frame_again = false;
+            self.buildFrame();
+            gpu_side.invalidate(self);
+            if (!self.frame_again) break;
+        }
+        self.frame_again = false;
+        // The size a WM_SIZE between frames brought is built here: a WM_PAINT
+        // still to come has nothing left to build.
+        self.size_dirty = false;
+    }
+
+    /// Builds one frame: layout, paint, and the timers animations and later
+    /// frames need, without asking for a paint. `frame` adds that; `paint` is
+    /// already drawing.
+    pub fn buildFrame(self: *Surface) void {
         if (self.size.w <= 0 or self.size.h <= 0) return;
         const c = &self.ctx;
         const now = clock.now();
+        const raw_dt: f32 = if (self.last_frame_time > 0) @floatCast(@min(now - self.last_frame_time, 1.0)) else 1.0 / 60.0;
         const dt: f32 = if (self.last_frame_time > 0) @floatCast(@min(now - self.last_frame_time, 0.1)) else 1.0 / 60.0;
         self.last_frame_time = now;
-        const r = frame_mod.run(c, self.view, &self.text, &self.instances, self.size, self.scale, self.theme(), dt, now - self.start_time);
-        // The client area is in pixels, as the damage is.
-        if (self.pixels.damage(self.shown())) |d| if (self.hwnd()) |h| {
-            const rect: w.RECT = .{ .left = @intCast(d[0]), .top = @intCast(d[1]), .right = @intCast(d[2]), .bottom = @intCast(d[3]) };
-            _ = w.InvalidateRect(h, &rect, 0);
-        };
+        // The theme the view picked last frame, and the one it picks now: a
+        // view that picks a theme has the frame rebuilt with it in this same
+        // frame, so a change shows at once and the first frame is right too.
+        var drawn_theme = self.theme();
+        var r = frame_mod.run(c, self.view, &self.text, &self.instances, self.size, self.scale, drawn_theme, dt, now - self.start_time);
+        if (!sameChoice(self.theme_chosen, c.theme_chosen)) {
+            self.theme_chosen = c.theme_chosen;
+            drawn_theme = self.theme();
+            r = frame_mod.run(c, self.view, &self.text, &self.instances, self.size, self.scale, drawn_theme, dt, now - self.start_time);
+        }
+        // The real gap, for a view that reports its frame rate: `dt` above is
+        // clamped so an animation cannot jump. The rate is what it is.
+        c.frame_time = raw_dt;
+        // The caret may have moved: the IME's windows follow it.
+        if (c.focused_text != null) if (self.hwnd()) |h| ime.followIfMoved(h, c, self.scale, &self.ime);
+        if (c.close_request) {
+            c.close_request = false;
+            self.window.close();
+        }
         self.updateCursor();
         const more = c.animating or r.hot_changed;
         if (more and !self.ticking) if (self.hwnd()) |h| {
@@ -97,7 +194,13 @@ pub const Surface = struct {
         if (!more) if (c.frame_in) |s| if (self.hwnd()) |h| {
             _ = w.SetTimer(h, later_timer, @intFromFloat(@max(1, s * 1000)), null);
         };
-        if (!c.animating) self.last_frame_time = 0;
+    }
+
+    /// Whether two theme choices pick the same theme (both null: the system's).
+    fn sameChoice(a: ?Theme, b: ?Theme) bool {
+        const an = a orelse return b == null;
+        const bn = b orelse return false;
+        return std.meta.eql(an, bn);
     }
 
     pub fn requestFrame(self: *Surface) void {
@@ -105,53 +208,6 @@ pub const Surface = struct {
         const h = self.hwnd() orelse return;
         self.frame_posted = true;
         _ = w.PostMessageW(h, WM_FRAME, 0, 0);
-    }
-
-    fn shown(self: *Surface) canvas.Frame {
-        return .{ .instances = self.instances.items, .text = &self.text, .clear = self.ctx.theme.background, .size = self.size, .scale = self.scale, .textures = self.ctx.textures.items };
-    }
-
-    fn paint(self: *Surface, h: w.HWND) void {
-        var ps: w.PAINTSTRUCT = undefined;
-        const dc = w.BeginPaint(h, &ps) orelse return;
-        defer _ = w.EndPaint(h, &ps);
-        self.pixels.draw(self.gpa, self.shown());
-        const px = &self.pixels;
-        if (px.bytes.len == 0) return;
-        if (self.present(h)) return;
-        // A negative height: rows from the top, as the renderer writes them.
-        // GDI copies only what was invalidated.
-        const info: w.BITMAPINFOHEADER = .{ .biWidth = @intCast(px.width), .biHeight = -@as(i32, @intCast(px.height)) };
-        _ = w.SetDIBitsToDevice(dc, 0, 0, @intCast(px.width), @intCast(px.height), 0, 0, 0, @intCast(px.height), px.bytes.ptr, &info, 0);
-    }
-
-    /// Presents the frame through the swap chain (made the first time);
-    /// false to draw with GDI instead. A lost device is made again next frame.
-    fn present(self: *Surface, h: w.HWND) bool {
-        if (self.no_d3d) return false;
-        const pw: u32 = @intCast(self.pixels.width);
-        const ph: u32 = @intCast(self.pixels.height);
-        if (self.presenter == null) {
-            self.presenter = d3d.Presenter.init(h, pw, ph) catch {
-                self.no_d3d = true;
-                return false;
-            };
-        }
-        const p = &self.presenter.?;
-        const bg = self.ctx.theme.background;
-        p.setBackground(bg.r, bg.g, bg.b);
-        p.upload(self.pixels.bytes, pw, ph) catch {
-            p.deinit();
-            self.presenter = null;
-            return false;
-        };
-        if (!p.present()) {
-            // The device was lost: a new one gets the whole frame.
-            p.deinit();
-            self.presenter = null;
-            _ = w.InvalidateRect(h, null, 0);
-        }
-        return true;
     }
 
     fn updateCursor(self: *Surface) void {
@@ -177,9 +233,16 @@ pub const Surface = struct {
         var r: w.RECT = .{};
         _ = w.GetClientRect(h, &r);
         const dpi = w.GetDpiForWindow(h);
-        self.scale = if (dpi > 0) @as(f32, @floatFromInt(dpi)) / 96 else 1;
+        const scale: f32 = if (dpi > 0) @as(f32, @floatFromInt(dpi)) / 96 else 1;
+        // A drag-resize sends WM_SIZE per pixel of movement, and the DPI does
+        // not change with the size: only a scale that changed is worth telling
+        // the text system about (it would empty the glyph atlas to re-raster
+        // every glyph at the new scale).
+        if (scale != self.scale) {
+            self.scale = scale;
+            self.text.setScale(scale);
+        }
         self.size = .{ .w = @as(f32, @floatFromInt(r.right - r.left)) / self.scale, .h = @as(f32, @floatFromInt(r.bottom - r.top)) / self.scale };
-        self.text.setScale(self.scale);
     }
 
     fn setMouse(self: *Surface, lp: w.LPARAM) void {
@@ -195,11 +258,56 @@ pub const Surface = struct {
     /// leaves to the default.
     pub fn handle(self: *Surface, h: w.HWND, msg: u32, wp: w.WPARAM, lp: w.LPARAM) ?w.LRESULT {
         switch (msg) {
-            w.WM_PAINT => self.paint(h),
+            w.WM_PAINT => gpu_side.paint(self, h),
             w.WM_ERASEBKGND => return 1,
-            w.WM_SIZE, w.WM_DPICHANGED => {
+            w.WM_SETTINGCHANGE => {
+                // The system's appearance may have changed under
+                // Personalization > Colors: a window that follows it is redrawn.
+                if (self.theme_override == null) {
+                    const dark = @import("desktop.zig").isDark();
+                    if (dark != self.system_theme_dark) {
+                        self.system_theme_dark = dark;
+                        self.frame();
+                    }
+                }
+            },
+            w.WM_DPICHANGED => {
+                // The window has moved or been scaled onto a monitor with
+                // another DPI: the system suggests a rect that keeps its
+                // physical size, and WM_SIZE from that reads the new scale.
+                const r: *const w.RECT = @ptrFromInt(@as(usize, @bitCast(lp)));
+                _ = w.SetWindowPos(h, null, r.left, r.top, r.right - r.left, r.bottom - r.top, 0x0004 | 0x0010); // no z-order, no activate
+                return 0;
+            },
+            w.WM_SIZE => {
+                // A resize is many messages a second, and laying the view out
+                // for each is wasted: the size is read now, the frame built once
+                // when the queue is empty. Except before the first frame: a
+                // hidden window never receives WM_PAINT, so deferring it leaves
+                // every rect zero and clicks landing nowhere.
                 self.updateSize(h);
-                self.frame();
+                if (self.last_frame_time == 0) {
+                    self.buildFrame();
+                    self.requestFrame();
+                } else {
+                    self.size_dirty = true;
+                    if (self.hwnd()) |hh| _ = w.InvalidateRect(hh, null, 0);
+                }
+            },
+            // A drag resize begins and ends: between them frames present at
+            // once instead of one per vblank, so the sizes the drag passes
+            // through are not each a refresh behind the pointer.
+            w.WM_ENTERSIZEMOVE, w.WM_EXITSIZEMOVE => {
+                // The surface keeps it as well as the presenter: the drag may
+                // begin before the first frame made one.
+                const begin = msg == w.WM_ENTERSIZEMOVE;
+                self.dragging = begin;
+                if (self.presenter) |*p| {
+                    p.resizing = begin;
+                    // The size the drag ended on, in one ResizeBuffers.
+                    if (!begin) p.endResize();
+                }
+                if (!begin) self.requestFrame();
             },
             w.WM_TIMER => if (wp == later_timer) {
                 _ = w.KillTimer(h, later_timer);
@@ -247,10 +355,22 @@ pub const Surface = struct {
                 }
             },
             w.WM_LBUTTONDOWN, w.WM_LBUTTONDBLCLK => {
-                _ = w.SetCapture(h);
                 self.setMouse(lp);
                 self.ctx.input.click_count = if (msg == w.WM_LBUTTONDBLCLK) 2 else 1;
                 self.ctx.updateHot();
+                // A borderless window's drag handle (`window_drag`): the press
+                // belongs to the system's move loop, the way macOS hands the
+                // event to `performWindowDragWithEvent`. A double click zooms.
+                if (self.ctx.startsWindowDrag()) {
+                    if (msg == w.WM_LBUTTONDBLCLK) {
+                        self.window.zoom();
+                    } else {
+                        _ = w.ReleaseCapture();
+                        _ = w.SendMessageW(h, w.WM_NCLBUTTONDOWN, w.HTCAPTION, 0);
+                    }
+                    return 0;
+                }
+                _ = w.SetCapture(h);
                 self.ctx.pointerDown();
                 self.frame();
             },
@@ -275,9 +395,40 @@ pub const Surface = struct {
                     self.frame();
                 }
             },
-            w.WM_KEYDOWN, w.WM_SYSKEYDOWN => if (self.keyDown(@intCast(wp))) return 0 else return null,
-            w.WM_CHAR => self.char(@truncate(wp)),
-            else => return null,
+            // The sideways wheel (tilt, trackpads): the same as the vertical
+            // one, along x. Windows' delta is positive to the right.
+            w.WM_MOUSEHWHEEL => {
+                var p: w.POINT = .{ .x = @as(i16, @truncate(lp)), .y = @as(i16, @truncate(lp >> 16)) };
+                _ = w.ScreenToClient(h, &p);
+                self.ctx.input.mouse = .{ .x = @as(f32, @floatFromInt(p.x)) / self.scale, .y = @as(f32, @floatFromInt(p.y)) / self.scale };
+                const notches: f32 = @as(f32, @floatFromInt(@as(i16, @truncate(@as(isize, @bitCast(wp)) >> 16)))) / 120;
+                self.ctx.input.scroll = .{ .x = notches * 48 };
+                self.frame();
+            },
+            w.WM_KEYDOWN, w.WM_SYSKEYDOWN => {
+                // F12, with NANOUI_DUMP set: what the canvas holds, and what
+                // drawing the same frame whole makes of it.
+                if (wp == 0x7B and self.dump_enabled) {
+                    gpu_side.verify(self);
+                    return 0;
+                }
+                // Composing: the keys belong to the input method — its caret,
+                // its candidates, Return to commit. Handling them here as well
+                // makes Return commit and insert a newline at the same time.
+                // A *system* key is another matter: Alt+F4 and its friends must
+                // keep working, so they go to the default handling.
+                if (self.ime.composing) return if (msg == w.WM_SYSKEYDOWN) null else 0;
+                if (self.keyDown(@intCast(wp))) {
+                    // An arrow key or a delete moved the caret: the IME's windows
+                    // follow it, outside `frame` where its callbacks re-enter.
+                    if (self.ctx.focused_text != null) ime.follow(h, &self.ctx, self.scale, &self.ime);
+                    return 0;
+                }
+                return null;
+            },
+            w.WM_CHAR, w.WM_IME_CHAR => ime.char(self, @truncate(wp)),
+            // The input method and its windows: `ime.zig` has the lot.
+            else => if (ime.handle(self, h, msg, wp, lp)) |r| return r else return null,
         }
         return 0;
     }
@@ -305,7 +456,7 @@ pub const Surface = struct {
             0x1B => .escape,
             0x21 => .page_up,
             0x22 => .page_down,
-            0x70...0x7B => @enumFromInt(@intFromEnum(ctx_mod.Key.f1) + (vk - 0x70)),
+            0x70...0x7B => @fromBackingInt(@intCast(@backingInt(ctx_mod.Key.f1) + (vk - 0x70))),
             else => null,
         };
         const S = ui.Shortcut;
@@ -340,7 +491,12 @@ pub const Surface = struct {
             if (ctrl and self.ctx.focused_text != null and self.editShortcut(base)) return true;
             self.ctx.shortcut_taken = false;
             in.shortcut = sc;
+            // Restored, not cleared: building the view can pump messages (the
+            // shell does), and an IME character that arrives inside the pump
+            // sets its own ops — which must not be thrown away with ours.
+            const prev_ops = self.ctx.input.ops;
             self.frame();
+            self.ctx.input.ops = prev_ops;
             in.shortcut = null;
             if (self.ctx.shortcut_taken) return true;
         }
@@ -350,24 +506,6 @@ pub const Surface = struct {
             return true;
         }
         return false;
-    }
-
-    fn char(self: *Surface, unit: u16) void {
-        if (unit >= 0xD800 and unit <= 0xDBFF) {
-            self.high = unit;
-            return;
-        }
-        var cp: u21 = unit;
-        if (unit >= 0xDC00 and unit <= 0xDFFF) {
-            if (self.high == 0) return;
-            cp = 0x10000 + ((@as(u21, self.high) - 0xD800) << 10) + (unit - 0xDC00);
-            self.high = 0;
-        }
-        // Controls (Ctrl+letters, Enter, Tab, Backspace) came as keys.
-        if (cp < 0x20 or cp == 0x7f) return;
-        const n = std.unicode.utf8Encode(cp, &self.chars) catch return;
-        self.ctx.input.chars = self.chars[0..n];
-        self.frame();
     }
 
     /// Ctrl+C, X, V and A in a text field: copy, cut, paste, select all.
@@ -390,9 +528,25 @@ pub const Surface = struct {
             },
             else => return false,
         };
+        // Restored, not cleared, for the same reason as in `keyDown`: a message
+        // pumped during the frame may set ops of its own.
+        const prev_ops = self.ctx.input.ops;
         self.ctx.input.ops = &ops;
         self.frame();
-        self.ctx.input.ops = &.{};
+        self.ctx.input.ops = prev_ops;
         return true;
     }
 };
+
+/// Whether the environment variable `name` is set to something but "0":
+/// `NANOUI_NO_D3D` (draw with GDI), `NANOUI_ONE_THREAD` (one raster thread),
+/// `NANOUI_DUMP` (F12 dumps the canvas). All off unless set.
+fn envFlag(name: []const u8) bool {
+    if (name.len == 0 or name.len > 120) return false;
+    var key: [128]u16 = undefined;
+    for (name, 0..) |ch, i| key[i] = ch;
+    key[name.len] = 0;
+    var value: [64]u16 = undefined;
+    const n = w.GetEnvironmentVariableW(@ptrCast(&key), &value, value.len);
+    return n > 0 and n < value.len and value[0] != '0';
+}

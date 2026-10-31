@@ -8,24 +8,70 @@ const phone = @import("phone.zig");
 
 const Item = struct { title: [64]u8, len: usize, done: bool };
 
+/// Which theme the gallery draws in: its own light or dark, or the system's.
+pub const Appearance = enum { light, dark, system };
+
 const Gallery = struct {
     page: usize = 0,
     /// On a phone: the page is open, pushed over the list of pages.
     open: bool = false,
     notifications: bool = true,
-    dark_glass: bool = false,
+    /// Light, dark, or whatever the system shows (`c.theme_chosen`): the
+    /// system's is the default, as the rest of the desktop has it.
+    appearance: Appearance = .system,
     sync: bool = true,
     volume: f32 = 0.6,
     speed: f32 = 3,
     clicks: u32 = 0,
     name: ui.TextBuffer = .{},
+    /// The multiline field on the Controls page: several lines, so the box is
+    /// tall enough to hold them.
+    notes: ui.TextBuffer = .{},
     task: ui.TextBuffer = .{},
     filter: ui.TextBuffer = .{},
     items: [64]Item = undefined,
     count: usize = 0,
+    /// The rows of the List page that match `filter`, as indices into the
+    /// 100 000. Rebuilt only when the filter text changes: it used to be built
+    /// every frame, which is 100 000 `print` allocations and appends per frame,
+    /// and that is what made dragging the scrollbar stutter — the faster the
+    /// frames came, the more of them paid that cost.
+    matches: std.ArrayList(u32) = .empty,
+    /// The filter text `matches` was built from, so an unchanged one costs a
+    /// string compare instead of a rebuild.
+    matches_for: std.ArrayList(u8) = .empty,
+    /// Whether `matches` has ever been built. Without it the first frame
+    /// compares the empty filter against the empty `matches_for`, calls them
+    /// equal, and leaves the list at zero rows.
+    matches_built: bool = false,
+    /// The last few frames' times, and the rate read from them: `fps` follows
+    /// the frame as it is drawn, and falls when the app goes idle, because idle
+    /// frames really are slower coming.
+    fps_samples: [8]f32 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+    fps_at: usize = 0,
+    fps: f32 = 0,
+    /// Wait for the display's refresh when presenting. Off, the frame rate is
+    /// the renderer's own.
+    vsync: bool = true,
     motion: @import("motion.zig").Demo = .{},
     kit: @import("kit.zig").Demo = .{},
     glass: @import("glass.zig").Demo = .{},
+    /// The app, so a page can make a window of its own: the Windows page does,
+    /// because a borderless or translucent window is the only way to see what
+    /// those options do.
+    app: ?*nanoui.App = null,
+    /// The gallery's own window, so the demo window can be placed beside it
+    /// rather than over the controls that change it.
+    window: ?*nanoui.Window = null,
+    /// The window the Windows page made, if it is open: one at a time, and the
+    /// opacity slider writes to it.
+    demo_window: ?*nanoui.Window = null,
+    /// The demo window's options, as the page's controls set them. A slider is
+    /// `f32` and a window's opacity is `f64`, so this is the slider's type and
+    /// the window reads it converted.
+    demo_opacity: f32 = 0.85,
+    demo_borderless: bool = true,
+    demo_skip_taskbar: bool = true,
 
     fn add(g: *Gallery, title: []const u8) void {
         if (g.count == g.items.len or title.len == 0) return;
@@ -36,6 +82,21 @@ const Gallery = struct {
     }
 
     fn view(g: *Gallery, c: *ui.Context) void {
+        // The rate from the last few frames' own gaps, refreshed every frame:
+        // a frame drawn now is in the number now. `c.dt` is the real gap
+        // between frames, and it reads low while the app sits idle, which is
+        // the truth of it.
+        g.fps_samples[g.fps_at] = c.frame_time;
+        g.fps_at = (g.fps_at + 1) % g.fps_samples.len;
+        var total: f32 = 0;
+        for (g.fps_samples) |s| total += s;
+        g.fps = if (total > 0) @as(f32, @floatFromInt(g.fps_samples.len)) / total else 0;
+        c.vsync = g.vsync;
+        c.theme_chosen = switch (g.appearance) {
+            .light => ui.Theme.light,
+            .dark => ui.Theme.dark_theme,
+            .system => null,
+        };
         if (phone.compact(c)) return phone.view(g, c);
         ui.row(c, .{ .width = .fill, .height = .fill });
         defer ui.end(c);
@@ -48,7 +109,8 @@ const Gallery = struct {
         if (g.page == 3) return g.bigList(c);
         if (g.page == 4) return g.glass.view(c);
         if (g.page == 5) return g.motion.page(c);
-        if (g.page == 6) return g.kit.view(c);
+        if (g.page == 6) return g.kit.view(c, &g.appearance);
+        if (g.page == 7) return g.windowsContent(c);
         ui.scroll(c, .{ .grow = 1, .width = .fill, .height = .fill, .padding = .all(if (phone.compact(c)) 16 else 28), .gap = 20 });
         defer ui.end(c);
         switch (g.page) {
@@ -87,6 +149,7 @@ const Gallery = struct {
         }
         ui.spacer(c);
         ui.label(c, c.print("{d} frames", .{c.frame}));
+        ui.label(c, c.print("{d:.0} fps", .{g.fps}));
     }
 
     fn controls(g: *Gallery, c: *ui.Context) void {
@@ -115,7 +178,17 @@ const Gallery = struct {
             ui.text(c, "Toggles", .{ .weight = .semibold });
             _ = ui.toggle(c, "Notifications", &g.notifications);
             _ = ui.toggle(c, "Sync over cellular", &g.sync);
-            _ = ui.checkbox(c, "Remember me", &g.dark_glass);
+            _ = ui.checkbox(c, "V-Sync", &g.vsync);
+            ui.row(c, .{ .gap = 8, .align_items = .center });
+            {
+                defer ui.end(c);
+                ui.text(c, "Theme", .{ .color = c.theme.muted });
+                var choice: usize = @intFromEnum(g.appearance);
+                if (ui.segmented(c, &.{ "Light", "Dark", "System" }, &choice)) {
+                    g.appearance = @enumFromInt(choice);
+                    c.changed = true;
+                }
+            }
         }
         ui.card(c, .{ .width = .fill, .gap = 12 });
         {
@@ -143,6 +216,31 @@ const Gallery = struct {
             ui.end(c);
             const name = g.name.text();
             ui.text(c, if (name.len == 0) "Type to be greeted." else c.print("Hello, {s}!", .{name}), .{ .color = c.theme.muted });
+        }
+        ui.card(c, .{ .width = .fill, .gap = 12 });
+        {
+            defer ui.end(c);
+            ui.text(c, "Multiline text field", .{ .weight = .semibold });
+            // Up to eight lines before it scrolls: a place to write a paragraph,
+            // not a single line. Return breaks the line here rather than
+            // submitting, which is what a notes field wants.
+            _ = ui.textArea(c, &g.notes, .{
+                .placeholder = "Write something. Return starts a new line.",
+                .min_lines = 5,
+                .max_lines = 10,
+                .submit_on_return = false,
+                .bare = false,
+            });
+            const notes = g.notes.text();
+            var newlines: usize = 0;
+            for (notes) |ch| if (ch == '\n') {
+                newlines += 1;
+            };
+            ui.textf(c, .{ .color = c.theme.muted }, "{d} characters, {d} line{s}.", .{
+                notes.len,
+                newlines + 1,
+                if (newlines == 0) "" else "s",
+            });
         }
     }
 
@@ -179,7 +277,49 @@ const Gallery = struct {
         if (g.count == 0) ui.text(c, "Nothing to do.", .{ .color = c.theme.muted });
     }
 
-    /// Ten thousand rows, filtered as you type: only those in view are built.
+    /// Rebuilds `matches` only when the filter text is not the one they were
+    /// built from. That comparison is the whole point: an unchanged filter costs
+    /// one `eql` per frame, and a changed one costs a single pass over the
+    /// 100 000 — which is what a keystroke deserves and a frame does not.
+    ///
+    /// The allocations come from `std.heap.c_allocator`, not `c.alloc()`: that
+    /// one is the frame's arena, reset at the start of every frame, so a list
+    /// kept in it is freed while the list still points at it — which is why the
+    /// count read zero on the second frame.
+    fn syncMatches(g: *Gallery, c: *ui.Context) void {
+        _ = c;
+        const f = g.filter.text();
+        if (g.matches_built and std.mem.eql(u8, g.matches_for.items, f)) return;
+        g.matches_built = true;
+
+        const gpa = std.heap.c_allocator;
+        g.matches_for.clearRetainingCapacity();
+        g.matches_for.appendSlice(gpa, f) catch return;
+        g.matches.clearRetainingCapacity();
+
+        // An empty filter is every row: no need to format 100 000 names to say
+        // so, and that is the common case — the page opens with it empty, and a
+        // scrollbar drag never touches it.
+        if (f.len == 0) {
+            g.matches.ensureTotalCapacity(gpa, 100_000) catch return;
+            for (0..100_000) |i| g.matches.appendAssumeCapacity(@intCast(i));
+            return;
+        }
+        // A filter is typed a character at a time, so this runs once per
+        // keystroke at most; the formatted name is built into a stack buffer,
+        // never allocated.
+        var buf: [32]u8 = undefined;
+        for (0..100_000) |i| {
+            const name = std.fmt.bufPrint(&buf, "Item {d}", .{i}) catch continue;
+            if (std.mem.indexOf(u8, name, f) != null) g.matches.append(gpa, @intCast(i)) catch return;
+        }
+    }
+
+    /// A hundred thousand rows, filtered as you type: only those in view are
+    /// built, and the matches themselves are rebuilt only when the filter text
+    /// changes. Building them every frame is 100 000 formatted strings and
+    /// 100 000 appends per frame, which is what made dragging the scrollbar
+    /// stutter: the faster the frames came, the more of them paid it.
     fn bigList(g: *Gallery, c: *ui.Context) void {
         const th = c.theme;
         ui.column(c, .{ .grow = 1, .height = .fill, .padding = .{ .top = 28, .left = 28, .right = 28 }, .gap = 12 });
@@ -187,19 +327,13 @@ const Gallery = struct {
         ui.heading(c, "List");
         ui.row(c, .{ .gap = 8, .align_items = .center });
         ui.icon(c, "magnifyingglass", .{ .color = th.muted });
-        _ = ui.textField(c, &g.filter, .{ .placeholder = "Filter 10 000 rows", .width = .{ .px = 280 } });
+        _ = ui.textField(c, &g.filter, .{ .placeholder = "Filter 100 000 rows", .width = .{ .px = 280 } });
         ui.end(c);
-        // The rows that match, as indices into the 10 000.
-        var matches: std.ArrayList(u16) = .empty;
-        const f = g.filter.text();
-        for (0..10_000) |i| {
-            if (f.len == 0 or std.mem.indexOf(u8, c.print("Item {d}", .{i}), f) != null)
-                matches.append(c.alloc(), @intCast(i)) catch break;
-        }
-        ui.label(c, c.print("{d} rows · a virtual list builds only those in view", .{matches.items.len}));
-        var rows = ui.list(c, .{ .count = matches.items.len, .row_height = 36, .gap = 0 });
+        g.syncMatches(c);
+        ui.label(c, c.print("{d} rows · a virtual list builds only those in view", .{g.matches.items.len}));
+        var rows = ui.list(c, .{ .count = g.matches.items.len, .row_height = 36, .gap = 0 });
         while (rows.next()) |i| {
-            const n = matches.items[i];
+            const n = g.matches.items[i];
             const row = ui.div(c).row().wFull().h(36).px(12).gap(10).itemsCenter().rounded(6).hover(th.surface_hover);
             defer row.end();
             ui.icon(c, if (n % 3 == 0) "star.fill" else "doc.text", .{ .size = 13, .frame = 18, .color = if (n % 3 == 0) th.accent else th.muted });
@@ -208,6 +342,167 @@ const Gallery = struct {
             ui.textf(c, .{ .size = 12, .color = th.muted, .mono = true }, "#{x:0>4}", .{n});
         }
         rows.end();
+    }
+
+    /// The Windows page's whole body, in the same scrolling column the other
+    /// pages use: the three cards stack, they do not sit side by side.
+    fn windowsContent(g: *Gallery, c: *ui.Context) void {
+        ui.scroll(c, .{ .grow = 1, .width = .fill, .height = .fill, .padding = .all(if (phone.compact(c)) 16 else 28), .gap = 20 });
+        defer ui.end(c);
+        g.windowsPage(c);
+        g.windowsOpacityCard(c);
+        g.windowsNotesCard(c);
+    }
+
+    /// The window options only Windows can show: a borderless window, one that
+    /// stays out of the taskbar, and one whose opacity a slider changes.
+    ///
+    /// The point of the page is that a person can see the result. Nothing about
+    /// `decorations`, `skip_taskbar` or `opacity` is visible from the main
+    /// window, so the page makes a second one and changes it live.
+    fn windowsPage(g: *Gallery, c: *ui.Context) void {
+        const th = c.theme;
+        ui.heading(c, "Windows");
+        ui.text(c, "A second window, made with the options below.", .{ .color = th.muted });
+        ui.card(c, .{ .width = .fill, .gap = 12 });
+        defer ui.end(c);
+        ui.text(c, "Window", .{ .weight = .semibold });
+        ui.textf(c, .{ .size = 12, .color = th.muted }, "decorations = {s}   skip_taskbar = {s}   opacity = {d:.2}", .{
+            if (g.demo_borderless) "false (borderless)" else "true",
+            if (g.demo_skip_taskbar) "true" else "false",
+            g.demo_opacity,
+        });
+        if (ui.button(c, if (g.demo_window == null) "Open" else "Close", .{ .variant = .primary }).clicked) g.toggleDemoWindow(c);
+        if (g.demo_window != null) {
+            if (ui.checkbox(c, "Borderless", &g.demo_borderless)) g.reopenDemo(c);
+            if (ui.checkbox(c, "Out of the taskbar", &g.demo_skip_taskbar)) g.reopenDemo(c);
+        }
+    }
+
+    /// The opacity slider is its own card, so it can come and go with the demo
+    /// window without closing the one above it.
+    fn windowsOpacityCard(g: *Gallery, c: *ui.Context) void {
+        if (g.demo_window == null) return;
+        ui.card(c, .{ .width = .fill, .gap = 10 });
+        defer ui.end(c);
+        ui.text(c, "Opacity", .{ .weight = .semibold });
+        if (ui.slider(c, &g.demo_opacity, .{ .min = 0.2, .max = 1, .width = .{ .px = 200 } })) g.applyDemoOpacity();
+        ui.textf(c, .{ .mono = true, .size = 12 }, "{d:.0}%", .{g.demo_opacity * 100});
+    }
+
+    /// What the three options become on Windows: the page says it, so the demo
+    /// does not have to be read alongside the source to make sense.
+    fn windowsNotesCard(_: *Gallery, c: *ui.Context) void {
+        const th = c.theme;
+        ui.card(c, .{ .width = .fill, .gap = 8 });
+        defer ui.end(c);
+        ui.text(c, "What each one asks Windows for", .{ .weight = .semibold });
+        for ([_][]const u8{
+            "decorations = false  ->  WS_POPUP: no title bar, no frame, no drag-to-resize",
+            "skip_taskbar = true  ->  WS_EX_TOOLWINDOW: out of the taskbar and Alt-Tab",
+            "opacity < 1          ->  WS_EX_LAYERED + SetLayeredWindowAttributes",
+        }) |line| ui.text(c, line, .{ .size = 12, .mono = true, .color = th.muted });
+        ui.text(c, "While the window is translucent it is drawn by the canvas and presented with GDI: " ++
+            "SetLayeredWindowAttributes does nothing on a DXGI flip-model swap chain. At 100% the GPU comes back.", .{ .size = 12, .color = th.muted, .wrap = true });
+    }
+
+    /// Makes the demo window with the current options, or remakes it: some of
+    /// them (`WS_POPUP`, `WS_EX_LAYERED`) are fixed when a window is created and
+    /// cannot be changed afterwards.
+    fn toggleDemoWindow(g: *Gallery, c: *ui.Context) void {
+        if (g.demo_window) |w| {
+            w.close();
+            g.demo_window = null;
+        } else g.openDemo(c);
+    }
+
+    fn openDemo(g: *Gallery, c: *ui.Context) void {
+        const app = g.app orelse return;
+        // Beside the gallery, not over it. The point of the demo is to be looked
+        // at while the page's controls change it, so it must not cover them: it
+        // goes to the right of the window, and above it when there is no room
+        // there.
+        const at = g.demoPlacement(c);
+        const opts = nanoui.WindowOptions{
+            .title = "Borderless demo",
+            .width = demo_w,
+            .height = demo_h,
+            .x = at[0],
+            .y = at[1],
+            .decorations = !g.demo_borderless,
+            .skip_taskbar = g.demo_skip_taskbar,
+            .opacity = g.demo_opacity,
+            .title_bar = .hidden,
+            // Above other windows so it stays visible while the gallery has the
+            // keyboard: changing a slider must not hide the thing being
+            // changed.
+            .always_on_top = true,
+            .content = .{ .view = .init(g, Gallery.demoView) },
+        };
+        g.demo_window = app.newWindow(opts) catch null;
+        c.changed = true;
+    }
+
+    const demo_w: f64 = 320;
+    const demo_h: f64 = 180;
+
+    /// Where the demo window goes: to the right of the gallery when there is
+    /// room, else to its left, else below it. The gallery's own frame decides,
+    /// so a window the user moved gets the demo beside it rather than over it.
+    fn demoPlacement(g: *Gallery, c: *ui.Context) [2]f64 {
+        const gap: f64 = 12;
+        const win = g.window orelse return .{ c.size.w + gap, 80 };
+        const f = win.frame();
+        const m = win.monitorSize();
+        const right = f.x + f.width + gap;
+        if (right + demo_w <= m[0]) return .{ right, f.y };
+        const left = f.x - demo_w - gap;
+        if (left >= 0) return .{ left, f.y };
+        // No room beside it: below, which still leaves the page visible.
+        return .{ f.x, f.y + f.height + gap };
+    }
+
+    fn reopenDemo(g: *Gallery, c: *ui.Context) void {
+        if (g.demo_window) |w| {
+            w.close();
+            g.demo_window = null;
+        }
+        g.openDemo(c);
+    }
+
+    fn applyDemoOpacity(g: *Gallery) void {
+        if (g.demo_window) |w| {
+            w.setOpacity(g.demo_opacity);
+            // The demo window shows the number, so it is built again too.
+            if (w.surface) |s| s.requestFrame();
+        }
+    }
+    /// The demo window's own content: it says what it is.
+    ///
+    /// No Close button: the page's own "Close it" button does that, and it is the
+    /// one being watched — a button in here would be a second way to do the same
+    /// thing, in the window that is meant to be looked at. Nor does it close on
+    /// losing the keyboard, which would make it impossible to drag a slider and
+    /// watch the result.
+    ///
+    /// A borderless window cannot be moved by its title bar, so the header is a
+    /// `window_drag` handle — only when borderless, because a decorated window
+    /// already moves by its own title bar and would be moved twice.
+    fn demoView(g: *Gallery, c: *ui.Context) void {
+        ui.column(c, .{ .padding = .all(16), .gap = 10, .width = .fill, .height = .fill });
+        defer ui.end(c);
+        const drag = ui.div(c).row().wFull().itemsCenter().h(24);
+        defer drag.end();
+        _ = c.leaf(.{ .grow = 1, .window_drag = g.demo_borderless }, .{ .text = .{
+            .str = if (g.demo_borderless) "Drag here to move" else "",
+            .style = .{ .size = 11 },
+            .color = c.theme.muted,
+        } }, null);
+
+        ui.text(c, "This window", .{ .size = 18, .weight = .bold });
+        ui.text(c, if (g.demo_borderless) "borderless: no title bar, no frame." else "decorated: drag the title bar.", .{});
+        ui.text(c, if (g.demo_skip_taskbar) "Out of the taskbar and Alt-Tab." else "In the taskbar and Alt-Tab.", .{});
+        ui.textf(c, .{ .color = c.theme.muted }, "opacity {d:.0}%", .{g.demo_opacity * 100});
     }
 
     fn typography(_: *Gallery, c: *ui.Context) void {
@@ -231,11 +526,12 @@ pub fn main(init: std.process.Init) !void {
     const app = try nanoui.App.create(init, .{ .name = "Gallery" });
     defer app.destroy();
     var g: Gallery = .{};
+    g.app = app;
     g.add("Write a UI toolkit in Zig");
     g.add("Draw it with Metal");
     g.add("Ship it");
     g.items[1].done = true;
-    _ = try app.newWindow(.{
+    const win = try app.newWindow(.{
         .title = "Gallery",
         .width = 900,
         .height = 640,
@@ -244,5 +540,6 @@ pub fn main(init: std.process.Init) !void {
         .title_bar = .hidden,
         .content = .{ .view = .init(&g, Gallery.view) },
     });
+    g.window = win;
     try app.run();
 }

@@ -148,13 +148,17 @@ pub const Context = struct {
     arena: std.heap.ArenaAllocator,
     text: *text.TextSystem,
     theme: Theme = .light,
+    theme_chosen: ?Theme = null, // the view's own choice; null: the system's
     size: types.Size = .{},
     scale: f32 = 2,
-    /// What draws the frames: Metal, OpenGL (Linux, where there is a GPU),
-    /// or nanoui's own CPU renderer.
+    /// What draws the frames: Metal, OpenGL, or nanoui's own CPU renderer.
     renderer: []const u8 = if (@import("text.zig").portable) "CPU" else "Metal",
-    /// Seconds since the previous frame, for animations.
+    /// Wait for the display's refresh when presenting (Windows' Direct3D 11).
+    vsync: bool = true,
+    /// `dt` is capped and reset after an idle frame, for animations;
+    /// `frame_time` is the real gap, which a frame rate is read from.
     dt: f32 = 1.0 / 60.0,
+    frame_time: f32 = 1.0 / 60.0,
     /// Seconds since the first frame: the clock of animations a view drives itself.
     time: f64 = 0,
     frame: u64 = 0,
@@ -228,6 +232,7 @@ pub const Context = struct {
     building: bool = false,
     right_press: bool = false,
     drag_request: ?@import("context_hooks.zig").DragRequest = null,
+    close_request: bool = false,
     focusable_ids: std.ArrayList(u64) = .empty,
     last_focusable_ids: std.ArrayList(u64) = .empty,
     clipboard: Clipboard = .{},
@@ -340,7 +345,6 @@ pub const Context = struct {
     pub fn print(c: *Context, comptime fmt: []const u8, args: anytype) []const u8 {
         return std.fmt.allocPrint(c.alloc(), fmt, args) catch "…";
     }
-
     /// Starts building a frame: the root fills the window.
     pub fn begin(c: *Context) void {
         if (c.frame == 0 and c.nodes.capacity == 0) c.warmMaps();
@@ -376,8 +380,8 @@ pub const Context = struct {
         c.stack.append(c.gpa, 0) catch @panic("OOM");
     }
 
-    /// A frame whose interactions changed state is built again: the edges
-    /// of the input (the press, the key) are consumed by the first build.
+    /// A frame whose interactions changed state is built again, the input's
+    /// edges spent. `close_request` is not an edge: a one-shot ask survives.
     pub fn rebuild(c: *Context) void {
         c.input.clearEdges();
         c.undo_op = .none;
@@ -385,7 +389,6 @@ pub const Context = struct {
         c.changed = false;
         c.begin();
     }
-
     pub fn finish(c: *Context) void {
         c.building = false;
         if (c.focus != 0 and std.mem.indexOfScalar(u64, c.focusable_ids.items, c.focus) == null) c.focus = 0;
@@ -522,6 +525,7 @@ pub const Context = struct {
     }
 
     pub const interact = hooks.interact;
+    pub const requestClose = hooks.requestClose;
 
     const hooks = @import("context_hooks.zig");
     const scroll_mod = @import("scroll.zig");
@@ -562,7 +566,6 @@ pub const Context = struct {
     pub fn frameIn(c: *Context, seconds: f32) void {
         c.frame_in = if (c.frame_in) |f| @min(f, seconds) else seconds;
     }
-
 
     pub const addHit = hooks.addHit;
     pub const commitHits = hooks.commitHits;

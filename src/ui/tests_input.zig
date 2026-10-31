@@ -223,3 +223,29 @@ test "button flush against the right edge of a scroll box gets its click" {
     t.click(95, 8);
     try testing.expectEqual(@as(u32, 1), s.edge_clicks);
 }
+
+const CloseOnce = struct {
+    builds: u32 = 0,
+
+    fn view(r: *CloseOnce, c: *ui.Context) void {
+        r.builds += 1;
+        const root = ui.div(c).p(10);
+        defer root.end();
+        ui.text(c, "close me", .{});
+        // A one-shot ask, the way a click action makes it. The rebuild the ask
+        // causes must not take the request back out: that was a window that
+        // never closed no matter how often the button was pressed.
+        if (r.builds == 1) c.requestClose();
+    }
+};
+
+test "a one-shot requestClose survives the rebuild it asked for" {
+    var s: CloseOnce = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&s, CloseOnce.view), .{});
+    defer t.deinit();
+    // The first build asked; the rebuild it caused ran the view again (a
+    // window that did close on this path built twice and closed never).
+    try testing.expect(s.builds >= 2);
+    try testing.expect(t.ctx.close_request);
+}

@@ -3,6 +3,7 @@
 const std = @import("std");
 const ui = @import("ui.zig");
 const testing = std.testing;
+const tempPath = @import("../temp_path.zig").tempPath;
 
 const Counter = struct {
     n: i32 = 0,
@@ -361,7 +362,8 @@ test "rich text: bold and code runs, leading, wrapping, families" {
     try testing.expect(t.findText("airy").?.h > t.findText("tight").?.h + 4);
     try testing.expect(t.findText("A paragraph with **bold** words long enough to wrap onto lines in a narrow column.").?.h > 40);
     try testing.expect(t.findText("tight").?.w > 20);
-    try t.screenshot("/tmp/nanoui-rich.png");
+    var path_buf: [256]u8 = undefined;
+    try t.screenshot(try tempPath(&path_buf, "nanoui-rich.png"));
 }
 
 const Zoomed = struct {

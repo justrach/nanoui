@@ -366,6 +366,12 @@ fn runErr(a: std.mem.Allocator, io: std.Io, argv: []const []const u8) ![]const u
 /// Puts the bundle at `staged` where `bundle` is: a copy beside it first
 /// (`ditto` keeps signatures and works across volumes), then two renames,
 /// putting the old one back if the second fails.
+///
+/// NOTE (Windows): this is macOS-only and never compiled here — its test above
+/// returns early off macOS, so Zig skips the body. Forcing it on Windows fails
+/// with a `{d}` format-string error inside this function. Left alone because it
+/// does not run on Windows and cannot be checked from here; whoever next works
+/// on the macOS updater should know.
 pub fn swap(gpa: std.mem.Allocator, io: std.Io, staged: []const u8, bundle: []const u8) !void {
     const parent = std.fs.path.dirname(bundle) orelse return error.NoParent;
     const name = std.fs.path.basename(bundle);
