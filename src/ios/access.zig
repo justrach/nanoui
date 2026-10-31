@@ -20,7 +20,6 @@ extern "c" const UIAccessibilityTraitNotEnabled: u64;
 extern "c" const UIAccessibilityTraitStaticText: u64;
 extern "c" const UIAccessibilityTraitImage: u64;
 extern "c" const UIAccessibilityTraitAdjustable: u64;
-extern "c" const UIAccessibilityTraitToggleButton: u64;
 extern "c" const UIAccessibilityLayoutChangedNotification: u32;
 extern "c" const UIAccessibilityScreenChangedNotification: u32;
 extern "c" const UIAccessibilityAnnouncementNotification: u32;
@@ -190,10 +189,17 @@ fn valueOf(e: access.Element) []const u8 {
     };
 }
 
+/// iOS 17's trait for a control that turns on and off: looked up when
+/// the app starts, as nanoui runs on iOS 15 too (a plain button there).
+fn toggleTrait() u64 {
+    const p = @extern(?*const u64, .{ .name = "UIAccessibilityTraitToggleButton", .linkage = .weak });
+    return if (p) |t| t.* else 0;
+}
+
 pub fn traitsOf(e: access.Element) u64 {
     var t: u64 = switch (e.role) {
         .button, .menu_button, .tab, .radio_button, .popover => UIAccessibilityTraitButton,
-        .checkbox, .switch_toggle => UIAccessibilityTraitButton | UIAccessibilityTraitToggleButton,
+        .checkbox, .switch_toggle => UIAccessibilityTraitButton | toggleTrait(),
         .link => UIAccessibilityTraitLink,
         .static_text => UIAccessibilityTraitStaticText,
         .image => UIAccessibilityTraitImage,
