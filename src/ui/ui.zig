@@ -180,6 +180,7 @@ test {
     _ = @import("tests_canvas.zig");
     _ = @import("triangulate.zig");
     _ = @import("tests_motion_more.zig");
+    _ = @import("tests_roll.zig");
     _ = @import("tests_layer.zig");
     _ = @import("tests_safe_area.zig");
     _ = @import("motion/motion.zig");
