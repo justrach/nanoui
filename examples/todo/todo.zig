@@ -175,7 +175,7 @@ pub const Todo = struct {
         defer root.end();
         wash(c);
         {
-            const sc = ui.div(c).column().sizeFull().scrollY().pt(safe.top + 84).pb(safe.bottom + 112);
+            const sc = ui.div(c).column().sizeFull().scrollY().scrollbar(.{ .overlay = ink.alpha(0.35) }).pt(safe.top + 84).pb(safe.bottom + 112);
             defer sc.end();
             {
                 const head = ui.div(c).column().wFull().px(gutter).gap(16);
