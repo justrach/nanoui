@@ -42,7 +42,7 @@ pub const Demo = struct {
     }
 
     fn content(d: *Demo, c: *ui.Context) void {
-        const sc = ui.div(c).column().sizeFull().scrollY().p(if (@import("phone.zig").compact(c)) 16 else 28).gap(20);
+        const sc = ui.div(c).column().sizeFull().scrollY().p(if (@import("phone.zig").compact(c)) 24 else 28).gap(20);
         defer sc.end();
         const bar = motion.scroll.value(c, "read", sc.id(), .{ 8, @max(24, c.size.w - 56) }, .instant);
         _ = c.leaf(.{ .width = .{ .px = bar }, .height = .{ .px = 3 }, .radius = 2, .background = c.theme.accent }, .none, null);

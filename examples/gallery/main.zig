@@ -12,6 +12,9 @@ const Gallery = struct {
     page: usize = 0,
     /// On a phone: the page is open, pushed over the list of pages.
     open: bool = false,
+    /// On a phone: the chip chosen over the list, and its search.
+    chip: usize = 0,
+    search: ui.TextBuffer = .{},
     notifications: bool = true,
     dark_glass: bool = false,
     sync: bool = true,
@@ -49,7 +52,7 @@ const Gallery = struct {
         if (g.page == 4) return g.glass.view(c);
         if (g.page == 5) return g.motion.page(c);
         if (g.page == 6) return g.kit.view(c);
-        ui.scroll(c, .{ .grow = 1, .width = .fill, .height = .fill, .padding = .all(if (phone.compact(c)) 16 else 28), .gap = 20 });
+        ui.scroll(c, .{ .grow = 1, .width = .fill, .height = .fill, .padding = .all(if (phone.compact(c)) 24 else 28), .gap = 20 });
         defer ui.end(c);
         switch (g.page) {
             0 => g.controls(c),
@@ -182,7 +185,8 @@ const Gallery = struct {
     /// Ten thousand rows, filtered as you type: only those in view are built.
     fn bigList(g: *Gallery, c: *ui.Context) void {
         const th = c.theme;
-        ui.column(c, .{ .grow = 1, .height = .fill, .padding = .{ .top = 28, .left = 28, .right = 28 }, .gap = 12 });
+        const pad: f32 = if (phone.compact(c)) 24 else 28;
+        ui.column(c, .{ .grow = 1, .height = .fill, .padding = .{ .top = pad, .left = pad, .right = pad }, .gap = 12 });
         defer ui.end(c);
         ui.heading(c, "List");
         ui.row(c, .{ .gap = 8, .align_items = .center });
