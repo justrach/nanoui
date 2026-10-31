@@ -5,9 +5,9 @@ pub const ios = @import("tools/ios/bundle.zig");
 /// Android APKs, likewise: `@import("nanoui").android.apk(b, lib, .{ .name = "Notes", .id = "com.example.notes" })`.
 pub const android = @import("tools/android/apk.zig");
 
-const examples = [_][]const u8{ "hello", "counter", "gallery", "duo", "board" };
+const examples = [_][]const u8{ "hello", "counter", "gallery", "duo", "board", "basics" };
 const frameworks = [_][]const u8{ "AppKit", "WebKit", "Metal", "QuartzCore", "CoreText", "CoreGraphics", "CoreFoundation", "Foundation", "ImageIO", "UniformTypeIdentifiers", "CoreVideo" };
-const ios_frameworks = [_][]const u8{ "UIKit", "Metal", "QuartzCore", "CoreText", "CoreGraphics", "CoreFoundation", "Foundation", "ImageIO", "UniformTypeIdentifiers", "CoreVideo" };
+const ios_frameworks = [_][]const u8{ "UIKit", "CoreLocation", "Metal", "QuartzCore", "CoreText", "CoreGraphics", "CoreFoundation", "Foundation", "ImageIO", "UniformTypeIdentifiers", "CoreVideo" };
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -160,7 +160,11 @@ fn addIosExample(b: *std.Build, name: []const u8, target: std.Build.ResolvedTarg
         }),
     });
     const title = b.fmt("{c}{s}", .{ std.ascii.toUpper(name[0]), name[1..] });
-    const opts: ios.Options = .{ .name = title, .id = b.fmt("dev.nanoui.{s}", .{name}) };
+    const opts: ios.Options = .{
+        .name = title,
+        .id = b.fmt("dev.nanoui.{s}", .{name}),
+        .location_usage = if (std.mem.eql(u8, name, "basics")) "The basics example shows where you are." else null,
+    };
     const bundle = ios.app(b, exe, opts);
     b.getInstallStep().dependOn(&b.addInstallDirectory(.{ .source_dir = bundle, .install_dir = .prefix, .install_subdir = b.fmt("ios/{s}.app", .{title}) }).step);
     const step = b.step(b.fmt("run-{s}", .{name}), b.fmt("Run the {s} example in the booted Simulator", .{name}));

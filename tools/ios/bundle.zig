@@ -12,6 +12,9 @@ pub const Options = struct {
     version: []const u8 = "1.0",
     /// Files the Files app shows (the app's Documents).
     file_sharing: bool = false,
+    /// Why the app asks for the location while in use, shown in iOS's
+    /// prompt (NSLocationWhenInUseUsageDescription). Without it, iOS refuses.
+    location_usage: ?[]const u8 = null,
 };
 
 /// The folder `<name>.app` holding `exe` and an Info.plist made for its
@@ -133,6 +136,7 @@ pub fn infoPlist(b: *std.Build, exe_name: []const u8, target: std.Target, opts: 
         \\  <key>CADisableMinimumFrameDurationOnPhone</key><true/>
         \\  <key>UIFileSharingEnabled</key><{s}/>
         \\  <key>LSSupportsOpeningDocumentsInPlace</key><{s}/>
+        \\{s}
         \\  <key>UISupportedInterfaceOrientations</key>
         \\  <array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
         \\  <key>UISupportedInterfaceOrientations~ipad</key>
@@ -152,5 +156,18 @@ pub fn infoPlist(b: *std.Build, exe_name: []const u8, target: std.Target, opts: 
         min.minor,
         if (opts.file_sharing) "true" else "false",
         if (opts.file_sharing) "true" else "false",
+        if (opts.location_usage) |why| b.fmt("  <key>NSLocationWhenInUseUsageDescription</key><string>{s}</string>", .{escaped(b, why)}) else "",
     });
+}
+
+/// `text` with XML's special characters escaped, for a plist string.
+fn escaped(b: *std.Build, text: []const u8) []const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    for (text) |ch| switch (ch) {
+        '&' => out.appendSlice(b.allocator, "&amp;") catch @panic("OOM"),
+        '<' => out.appendSlice(b.allocator, "&lt;") catch @panic("OOM"),
+        '>' => out.appendSlice(b.allocator, "&gt;") catch @panic("OOM"),
+        else => out.append(b.allocator, ch) catch @panic("OOM"),
+    };
+    return out.items;
 }
