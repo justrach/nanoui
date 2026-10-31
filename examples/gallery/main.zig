@@ -24,6 +24,9 @@ const Gallery = struct {
     speed: f32 = 3,
     clicks: u32 = 0,
     name: ui.TextBuffer = .{},
+    /// The multiline field on the Controls page: several lines, so the box is
+    /// tall enough to hold them.
+    notes: ui.TextBuffer = .{},
     task: ui.TextBuffer = .{},
     filter: ui.TextBuffer = .{},
     items: [64]Item = undefined,
@@ -211,6 +214,31 @@ const Gallery = struct {
             const name = g.name.text();
             ui.text(c, if (name.len == 0) "Type to be greeted." else c.print("Hello, {s}!", .{name}), .{ .color = c.theme.muted });
         }
+        ui.card(c, .{ .width = .fill, .gap = 12 });
+        {
+            defer ui.end(c);
+            ui.text(c, "Multiline text field", .{ .weight = .semibold });
+            // Up to eight lines before it scrolls: a place to write a paragraph,
+            // not a single line. Return breaks the line here rather than
+            // submitting, which is what a notes field wants.
+            _ = ui.textArea(c, &g.notes, .{
+                .placeholder = "Write something. Return starts a new line.",
+                .min_lines = 5,
+                .max_lines = 10,
+                .submit_on_return = false,
+                .bare = false,
+            });
+            const notes = g.notes.text();
+            var newlines: usize = 0;
+            for (notes) |ch| if (ch == '\n') {
+                newlines += 1;
+            };
+            ui.textf(c, .{ .color = c.theme.muted }, "{d} characters, {d} line{s}.", .{
+                notes.len,
+                newlines + 1,
+                if (newlines == 0) "" else "s",
+            });
+        }
     }
 
     fn tasks(g: *Gallery, c: *ui.Context) void {
@@ -395,6 +423,10 @@ const Gallery = struct {
             .skip_taskbar = g.demo_skip_taskbar,
             .opacity = g.demo_opacity,
             .title_bar = .hidden,
+            // `always_on_top` and a corner position: the point of the demo is to
+            // watch it while changing the controls beside it, so it must not sit
+            // over the page that changes it.
+            .always_on_top = true,
             .content = .{ .view = .init(g, Gallery.demoView) },
         };
         g.demo_window = app.newWindow(opts) catch null;
@@ -416,47 +448,30 @@ const Gallery = struct {
             if (w.surface) |s| s.requestFrame();
         }
     }
-    /// The demo window's own content: it says what it is, so it is obvious which
-    /// window the options applied to, and it closes itself.
+    /// The demo window's own content: it says what it is, and it closes itself.
     ///
-    /// The Close button is not decoration. A borderless window has no title bar
-    /// and no system menu, and `skip_taskbar` keeps it out of the taskbar and
-    /// Alt-Tab, so without a button of its own the window could not be closed at
-    /// all — the first version of this demo could not be.
-    ///
-    /// Dragging: a borderless window cannot be moved by its title bar either.
-    /// The header below is a drag handle (`ui.drag` moves the window), except
-    /// when `decorations` is on, where the system's own title bar does it.
+    /// `close` is deferred to the message loop, so closing from here does not
+    /// destroy the `Context` this frame is building in — which is what made the
+    /// first version crash on the Close button.
     fn demoView(g: *Gallery, c: *ui.Context) void {
         ui.column(c, .{ .padding = .all(16), .gap = 10, .width = .fill, .height = .fill });
         defer ui.end(c);
-
-        // The header drags the window, and holds the Close button.
-        const header = ui.div(c).row().wFull().gap(10).itemsCenter().h(30);
-        defer header.end();
-        // A borderless window has no title bar to drag, so the header is the
-        // handle. A decorated one keeps its own title bar, and making this a
-        // handle too would move the window twice.
+        const drag = ui.div(c).row().wFull().itemsCenter().h(26);
+        defer drag.end();
         _ = c.leaf(.{ .grow = 1, .window_drag = g.demo_borderless }, .{ .text = .{
-            .str = "Drag here to move",
+            .str = if (g.demo_borderless) "Drag here to move" else "",
             .style = .{ .size = 11 },
             .color = c.theme.muted,
         } }, null);
-        if (ui.button(c, "Close", .{ .variant = .secondary, .size = 12 }).clicked) g.closeDemo();
+        if (ui.button(c, "Close", .{ .variant = .secondary, .size = 12 }).clicked) {
+            g.demo_window = null;
+            c.requestClose();
+        }
 
         ui.text(c, "This window", .{ .size = 18, .weight = .bold });
         ui.text(c, if (g.demo_borderless) "borderless: no title bar, no frame." else "decorated: drag the title bar.", .{});
         ui.text(c, if (g.demo_skip_taskbar) "Out of the taskbar and Alt-Tab." else "In the taskbar and Alt-Tab.", .{});
         ui.textf(c, .{ .color = c.theme.muted }, "opacity {d:.0}%", .{g.demo_opacity * 100});
-    }
-
-    /// Closes the demo window and lets the page know, so the button goes back to
-    /// "Open" and the controls that only apply to a live window go away.
-    fn closeDemo(g: *Gallery) void {
-        if (g.demo_window) |w| {
-            g.demo_window = null;
-            w.close();
-        }
     }
 
     fn typography(_: *Gallery, c: *ui.Context) void {

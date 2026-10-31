@@ -232,6 +232,7 @@ pub const Context = struct {
     building: bool = false,
     right_press: bool = false,
     drag_request: ?@import("context_hooks.zig").DragRequest = null,
+    close_request: bool = false,
     focusable_ids: std.ArrayList(u64) = .empty,
     last_focusable_ids: std.ArrayList(u64) = .empty,
     clipboard: Clipboard = .{},
@@ -344,11 +345,9 @@ pub const Context = struct {
     pub fn print(c: *Context, comptime fmt: []const u8, args: anytype) []const u8 {
         return std.fmt.allocPrint(c.alloc(), fmt, args) catch "…";
     }
-
     /// Starts building a frame: the root fills the window.
     pub fn begin(c: *Context) void {
-        if (c.frame == 0 and c.nodes.capacity == 0) c.warmMaps();
-        if (c.input.key == .tab and c.focus == 0 and c.last_focusable_ids.items.len > 0) {
+        if (c.frame == 0 and c.nodes.capacity == 0) c.warmMaps();        if (c.input.key == .tab and c.focus == 0 and c.last_focusable_ids.items.len > 0) {
             hooks.focusCycle(c, c.input.shift);
             c.input.key = null;
         }
@@ -387,9 +386,9 @@ pub const Context = struct {
         c.undo_op = .none;
         c.paste_op = false;
         c.changed = false;
+        c.close_request = false;
         c.begin();
     }
-
     pub fn finish(c: *Context) void {
         c.building = false;
         if (c.focus != 0 and std.mem.indexOfScalar(u64, c.focusable_ids.items, c.focus) == null) c.focus = 0;
@@ -526,6 +525,7 @@ pub const Context = struct {
     }
 
     pub const interact = hooks.interact;
+    pub const requestClose = hooks.requestClose;
 
     const hooks = @import("context_hooks.zig");
     const scroll_mod = @import("scroll.zig");

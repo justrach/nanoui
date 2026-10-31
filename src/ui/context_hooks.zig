@@ -274,3 +274,10 @@ pub fn animate(c: *Context, id: u64, salt: u32, target: f32, speed: f32) f32 {
     if (@abs(target - a.value) < 0.002) a.value = target else c.animating = true;
     return a.value;
 }
+
+/// Asks the window to close once this frame is done, which is the only safe
+/// time to: closing during it frees the Context the view is building in.
+pub fn requestClose(c: *Context) void {
+    c.close_request = true;
+    c.changed = true;
+}

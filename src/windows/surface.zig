@@ -21,7 +21,7 @@ const Window = @import("window.zig").Window;
 const d3d = @import("d3d.zig");
 const d3d11 = @import("../ui/d3d11.zig");
 const gpu_side = @import("surface_gpu.zig");
-const ime = @import("surface_ime.zig");
+const ime = @import("ime.zig");
 
 /// Posted for a frame requested from outside the view.
 pub const WM_FRAME = w.WM_APP + 1;
@@ -62,10 +62,9 @@ pub const Surface = struct {
     /// A UTF-16 high surrogate waiting for its other half.
     high: u16 = 0,
     text_scratch: [2]ctx_mod.TextOp = undefined,
-    /// The IME's state for this window: whether a composition is running, the
-    /// re-entrancy guard that keeps a placement from echoing into a freeze, and
-    /// the caret it was last told about. Grouped in `surface_ime.zig` so the
-    /// reason each one exists lives with the code that uses it.
+    /// The IME's state for this window: a composition running, the guard that
+    /// keeps a placement from echoing into a freeze, and the caret last told
+    /// about. `ime.zig` says why each one exists.
     ime: ime.State = .{},
     chars: [8]u8 = undefined,
     /// Where `NANOUI_DUMP` writes the frames it compares.
@@ -109,6 +108,8 @@ pub const Surface = struct {
 
     pub fn destroy(self: *Surface) void {
         gpu_side.release(self);
+        // The IME's scratch buffers: three ArrayLists that outlive a frame.
+        self.ime.deinit(self.gpa);
         self.instances.deinit(self.gpa);
         self.pixels.deinit(self.gpa);
         self.ctx.deinit();
@@ -189,12 +190,14 @@ pub const Surface = struct {
             r = frame_mod.run(c, self.view, &self.text, &self.instances, self.size, self.scale, drawn_theme, dt, now - self.start_time);
         }
         // The real gap, for a view that reports its frame rate: `dt` above is
-        // clamped so an animation cannot jump, but the rate is what it is.
+        // clamped so an animation cannot jump. The rate is what it is.
         c.frame_time = raw_dt;
-        // The caret may have moved: the IME's windows follow it. Only with a
-        // field focused — a window with no text has nothing to place, and taking
-        // the IME's context costs a call each way.
-        if (c.focused_text != null) if (self.hwnd()) |h| ime.placeWindows(self, h);
+        // The caret may have moved: the IME's windows follow it.
+        if (c.focused_text != null) if (self.hwnd()) |h| ime.followIfMoved(h, c, self.scale, &self.ime);
+        if (c.close_request) {
+            c.close_request = false;
+            self.window.close();
+        }
         self.updateCursor();
         const more = c.animating or r.hot_changed;
         if (more and !self.ticking) if (self.hwnd()) |h| {
@@ -357,14 +360,10 @@ pub const Surface = struct {
             },
             w.WM_SIZE, w.WM_DPICHANGED => {
                 // A resize is many messages a second, and laying the view out
-                // for each of them is wasted work: the size is read now, and the
-                // frame is built once, when the message queue is empty.
-                //
-                // Except when no frame has been built yet: a hidden window (a
-                // test's, or one made with `hidden`) never receives WM_PAINT, so
-                // deferring the first frame to a paint that never comes leaves
-                // it with no layout at all — every rect zero, and clicks land
-                // nowhere. The first size builds it here instead.
+                // for each is wasted: the size is read now, the frame built once
+                // when the queue is empty. Except before the first frame: a
+                // hidden window never receives WM_PAINT, so deferring it leaves
+                // every rect zero and clicks landing nowhere.
                 self.updateSize(h);
                 if (self.last_frame_time == 0) {
                     self.buildFrame();
@@ -470,15 +469,20 @@ pub const Surface = struct {
                     self.verify();
                     return 0;
                 }
+                // Composing: the keys belong to the input method — its caret,
+                // its candidates, Return to commit. Handling them here as well
+                // makes Return commit and insert a newline at the same time.
+                if (self.ime.composing) return 0;
                 if (self.keyDown(@intCast(wp))) {
                     // An arrow key or a delete moved the caret: the IME's windows
                     // follow it, outside `frame` where its callbacks re-enter.
-                    if (self.ctx.focused_text != null) ime.placeWindows(self, h);
+                    if (self.ctx.focused_text != null) ime.follow(h, &self.ctx, self.scale, &self.ime);
                     return 0;
                 }
                 return null;
             },
-            w.WM_CHAR => ime.char(self, @truncate(wp)),
+            w.WM_CHAR, w.WM_IME_CHAR => ime.char(self, @truncate(wp)),
+            // The input method and its windows: `ime.zig` has the lot.
             else => if (ime.handle(self, h, msg, wp, lp)) |r| return r else return null,
         }
         return 0;

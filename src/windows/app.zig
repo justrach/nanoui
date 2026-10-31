@@ -61,7 +61,10 @@ pub const App = struct {
     }
 
     pub fn destroy(self: *App) void {
-        while (self.windows.items.len > 0) self.windows.items[self.windows.items.len - 1].close();
+        // `destroyNow`, not `close`: `close` only posts the request and waits for
+        // a message loop that is not running any more, so this drained nothing
+        // and spun forever.
+        while (self.windows.items.len > 0) self.windows.items[self.windows.items.len - 1].destroyNow();
         self.windows.deinit(self.gpa);
         if (self.main_menu) |m| m.destroy();
         self.gpa.destroy(self);

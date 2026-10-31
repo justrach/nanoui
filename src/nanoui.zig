@@ -149,6 +149,10 @@ test {
         if (builtin.os.tag == .windows) {
             _ = @import("windows/d3d.zig");
             _ = @import("windows/tests_surface.zig");
+            // The input method: its own tests, and the file itself for the
+            // decode/mapping units.
+            _ = @import("windows/ime.zig");
+            _ = @import("windows/tests_ime.zig");
         }
         return;
     }

@@ -112,6 +112,14 @@ pub const Window = struct {
             self.finish();
             return 0;
         }
+        // `WM_CLOSE` is where a deferred `close` lands, and where the system's own
+        // close button goes. Handled here rather than by `DefWindowProc` so the
+        // view gets the same `on_close` either way, and so the `should_close`
+        // veto below is possible.
+        if (msg == w.WM_CLOSE) {
+            self.destroyNow();
+            return 0;
+        }
         if (msg == w.WM_GETMINMAXINFO) {
             // MINMAXINFO: ptMinTrackSize is its fourth POINT.
             const pts: [*]w.POINT = @ptrFromInt(@as(usize, @bitCast(lp)));
@@ -140,7 +148,24 @@ pub const Window = struct {
         app.gpa.destroy(self);
     }
 
+    /// Asks the window to close. Deferred: the request is posted, and the window
+    /// is destroyed when the message loop reaches it.
+    ///
+    /// Destroying it here would run its `WM_DESTROY` synchronously, which frees
+    /// the `Surface` and its `Context` — and a view that closes its own window
+    /// (a button in a demo, a dialog's action) is running inside that Context's
+    /// frame. Deferring is what makes `close` safe to call from a view.
     pub fn close(self: *Window) void {
+        if (self.hwnd != null) {
+            _ = w.PostMessageW(self.hwnd.?, w.WM_CLOSE, 0, 0);
+            return;
+        }
+        self.finish();
+    }
+
+    /// Closes now, destroying the window. From the message loop, or from `App`
+    /// teardown where no loop is running any more.
+    pub fn destroyNow(self: *Window) void {
         if (self.hwnd) |h| _ = w.DestroyWindow(h) else self.finish();
     }
 
