@@ -33,7 +33,7 @@ pub const Demo = struct {
         const whole = ui.div(c).grow().hFull().clip();
         defer whole.end();
         {
-            const sc = ui.div(c).column().sizeFull().scrollY().p(if (@import("phone.zig").compact(c)) 16 else 28).gap(22);
+            const sc = ui.div(c).column().sizeFull().scrollY().p(if (@import("phone.zig").compact(c)) 24 else 28).gap(22);
             defer sc.end();
             ui.heading(c, "Kit");
             ui.text(c, "Components after GPUI Kit, drawn by nanoui and moved by ui.motion.", .{ .wrap = true, .color = c.theme.muted });
