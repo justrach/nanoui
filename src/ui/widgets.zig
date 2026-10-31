@@ -192,6 +192,15 @@ pub fn texture(c: *Context, style: types.Style, source: @import("gpu.zig").Textu
     _ = c.leaf(style, .{ .texture = .{ .slot = slot, .uv = uv, .opacity = opacity } }, null);
 }
 
+/// A see-through box filling its parent, its corners rounded by `radius`:
+/// what's under the frame (a native view: `nanoui.map`) shows there, and
+/// takes the touches that land on it. Returns its id.
+pub fn hole(c: *Context, name: []const u8, radius: f32) u64 {
+    const i = c.leaf(.{ .width = .fill, .height = .fill }, .{ .hole = radius }, name);
+    c.node(i).interactive = true;
+    return c.node(i).id;
+}
+
 pub fn heading(c: *Context, str: []const u8) void {
     text(c, str, .{ .size = 22, .weight = .bold });
 }

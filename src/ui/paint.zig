@@ -175,6 +175,7 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip:
                 .border_width = @floatFromInt(tx.slot),
                 .clip = clip4,
             }),
+            .hole => |radius| push(c, out, .{ .rect = rect4, .color = .{ 0, 0, 0, 1 }, .radius = radius, .kind = metal.Kind.hole, .clip = clip4 }),
             .canvas => |cv| paintCanvas(c, out, cv, r, visible, opacity),
             .none => {},
         }

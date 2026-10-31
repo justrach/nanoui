@@ -73,6 +73,9 @@ pub const Kind = struct {
     pub const layer_begin: f32 = 9;
     pub const layer_end: f32 = 10;
     pub const layer_composite: f32 = 11;
+    /// A rounded box cut out of the frame (`ui.hole`), drawn as a quad's
+    /// fill: what's under the frame (a map) shows there.
+    pub const hole: f32 = 12;
 };
 
 /// Pixels the app gives a frame to show (`ui.texture`), changing as often

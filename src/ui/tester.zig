@@ -251,7 +251,7 @@ pub const Tester = struct {
     pub fn findText(t: *Tester, s: []const u8) ?types.Rect {
         for (t.ctx.nodes.items) |n| switch (n.content) {
             .text => |tx| if (std.mem.eql(u8, tx.str, s)) return n.rect,
-            .icon, .image, .texture, .canvas, .none => {},
+            .icon, .image, .texture, .hole, .canvas, .none => {},
         };
         return null;
     }
@@ -264,7 +264,7 @@ pub const Tester = struct {
     pub fn containsText(t: *Tester, s: []const u8) bool {
         for (t.ctx.nodes.items) |n| switch (n.content) {
             .text => |tx| if (std.mem.indexOf(u8, tx.str, s) != null) return true,
-            .icon, .image, .texture, .canvas, .none => {},
+            .icon, .image, .texture, .hole, .canvas, .none => {},
         };
         return false;
     }

@@ -263,8 +263,7 @@ fn drawOne(out: gpu.Pixels, i: *const gpu.Instance, mask: Mask, pictures: Pictur
     }
     if (i.kind == gpu.Kind.shadow or i.kind == gpu.Kind.shadow_out) return shadow(out, i, scale, b);
     if (i.kind == gpu.Kind.glass) return pane(out, i, scale, b);
-    if (i.kind == gpu.Kind.segment) return shapes.segment(out, i, scale, b);
-    if (i.kind == gpu.Kind.triangle) return shapes.triangle(out, i, scale, b);
+    if (i.kind == gpu.Kind.segment or i.kind == gpu.Kind.triangle or i.kind == gpu.Kind.hole) return shapes.draw(out, i, scale, b);
     quad(out, i, scale, b);
 }
 

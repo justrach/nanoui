@@ -20,6 +20,7 @@ const Window = @import("window.zig").Window;
 const touch = @import("touch.zig");
 const keys = @import("keys.zig");
 const fold = @import("fold.zig");
+const map = @import("map.zig");
 
 extern "c" fn UIAccessibilityIsReduceMotionEnabled() bool;
 extern "c" const NSRunLoopCommonModes: objc.Object;
@@ -89,7 +90,7 @@ pub const Surface = struct {
         const view_class = objc.defineClass(.{
             .name = "NanoUIView",
             .superclass = "UIView",
-            .methods = &(view_methods ++ touch.methods ++ keys.view_methods),
+            .methods = &(view_methods ++ touch.methods ++ keys.view_methods ++ map.view_methods),
         });
         const uiview = objc.msg(objc.Object, objc.msg(objc.Object, view_class, "alloc", .{}), "initWithFrame:", .{objc.CGRect{}});
         self.* = .{
@@ -241,6 +242,8 @@ pub const Surface = struct {
         const root: ui.View = if (self.full_bleed) self.view else .init(self, insideSafeArea);
         const r = frame_mod.run(c, root, &self.text, &self.instances, self.size, self.scale, self.theme(), dt, now - self.start_time);
         @import("../play.zig").paint(self.gpa, &self.instances);
+        // Native views (maps) go where their holes are.
+        map.sync(self);
         c.device.rotated = false;
         c.device.posture_changed = false;
         if (self.dead) {

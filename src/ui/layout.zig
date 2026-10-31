@@ -68,7 +68,7 @@ pub fn measure(c: *Context, index: u32, avail_w: f32) types.Size {
             } else content = .{ .w = ic.size, .h = ic.size };
         },
         // Sized by its style (the widget gives the size).
-        .image, .texture, .canvas => {},
+        .image, .texture, .hole, .canvas => {},
         .none => {
             var child = n.first_child;
             var count: f32 = 0;
