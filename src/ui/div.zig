@@ -185,6 +185,11 @@ pub const Div = struct {
     pub fn scrollY(d: Div) Div {
         return d.set("scroll", true);
     }
+    /// How a scrolling box shows its bar: `.always`, or `.{ .overlay = color }`
+    /// to show it only while the box scrolls, as touch platforms do.
+    pub fn scrollbar(d: Div, v: types.Scrollbar) Div {
+        return d.set("scrollbar", v);
+    }
     pub fn absolute(d: Div) Div {
         return d.set("absolute", true);
     }
