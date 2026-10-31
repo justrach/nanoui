@@ -60,6 +60,28 @@ pub fn Options(comptime Window: type) type {
         min_height: f64 = 150,
         resizable: bool = true,
         title_bar: TitleBar = .default,
+        /// Whether the window has a title bar and a resizable frame at all.
+        /// `false` is a borderless window (`WS_POPUP` on Windows, no style mask
+        /// on macOS, undecorated on GTK): no title bar, no border, no system
+        /// shadow, and no drag-to-resize — the application draws or moves it.
+        ///
+        /// Independent of `title_bar`, which is about what the title bar looks
+        /// like when there is one.
+        decorations: bool = true,
+        /// Window opacity, 0 to 1. 1 is opaque and the normal path. Below 1 the
+        /// window is translucent, and on Windows that costs the GPU renderer:
+        /// `SetLayeredWindowAttributes` has no effect on a DXGI flip-model swap
+        /// chain, so the frame is drawn by GDI while the window is translucent
+        /// and the GPU is picked up again at 1. One CPU copy per frame while
+        /// translucent is the price; see `src/windows/surface.zig`.
+        ///
+        /// At 0 the window is invisible, which is a way to fade one out
+        /// (`setOpacity`) but not a way to hide it — use `show`/`hide`.
+        opacity: f64 = 1,
+        /// Keeps the window out of the taskbar and out of Alt-Tab
+        /// (`WS_EX_TOOLWINDOW` on Windows; macOS and GTK ignore it). For a
+        /// sidebar or a utility window that belongs to another application.
+        skip_taskbar: bool = false,
         /// Native UI's colors, fixed; the system's light or dark when null.
         theme: ?ui.Theme = null,
         /// Where the window opens, in screen points from the primary screen's

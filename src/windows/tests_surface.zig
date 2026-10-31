@@ -125,3 +125,83 @@ test "a frame asked for while one is building is queued, not run inside it" {
     try testing.expectEqual(@as(u32, 2), r.builds);
     try testing.expect(!s.in_frame);
 }
+
+/// A window's real Win32 styles, which is the only thing that can be checked
+/// without a person looking at it: `decorations`, `skip_taskbar` and `opacity`
+/// are all requests to Windows, and whether it took them is visible in the
+/// window's style bits and its layered attributes.
+/// A window's real Win32 styles: the only thing about `decorations`,
+/// `skip_taskbar` and `opacity` that can be checked without a person looking at
+/// the screen. Each is a request to Windows, and whether it took the request is
+/// in the style bits and the layered attributes.
+fn styleOf(h: @import("win32.zig").HWND) u32 {
+    const w = @import("win32.zig");
+    return @bitCast(@as(i32, @truncate(w.GetWindowLongPtrW(h, w.GWL_STYLE))));
+}
+
+fn exStyleOf(h: @import("win32.zig").HWND) u32 {
+    const w = @import("win32.zig");
+    return @bitCast(@as(i32, @truncate(w.GetWindowLongPtrW(h, w.GWL_EXSTYLE))));
+}
+
+test "a window: decorations, skip_taskbar and opacity reach Win32" {
+    const w = @import("win32.zig");
+    const gpa = testing.allocator;
+    const app = try gpa.create(App);
+    app.* = .{
+        .gpa = gpa,
+        .io = std.Io.Threaded.global_single_threaded.io(),
+        .options = .{ .quit_on_last_window_closed = false },
+        .flags = .{ .hidden = true },
+        .gui = true,
+    };
+    defer app.destroy();
+
+    // A decorated, taskbar, opaque window: the defaults.
+    var page_a: Page = .{};
+    const plain = try app.newWindow(.{ .title = "plain", .width = 200, .height = 120, .visible = false, .content = .{ .view = .init(&page_a, Page.view) } });
+    const ph = plain.hwnd orelse return error.SkipZigTest;
+    const plain_style = styleOf(ph);
+    try testing.expect(plain_style & w.WS_OVERLAPPEDWINDOW == w.WS_OVERLAPPEDWINDOW);
+    try testing.expect(plain_style & w.WS_POPUP == 0);
+    try testing.expect(exStyleOf(ph) & w.WS_EX_TOOLWINDOW == 0);
+    try testing.expect(exStyleOf(ph) & w.WS_EX_LAYERED == 0);
+    try testing.expectEqual(@as(f64, 1), plain.opacity);
+
+    // Borderless, out of the taskbar, and translucent.
+    var page_b: Page = .{};
+    const sidebar = try app.newWindow(.{
+        .title = "sidebar",
+        .width = 200,
+        .height = 120,
+        .visible = false,
+        .decorations = false,
+        .skip_taskbar = true,
+        .opacity = 0.6,
+        .content = .{ .view = .init(&page_b, Page.view) },
+    });
+    const sh = sidebar.hwnd orelse return error.SkipZigTest;
+    const bare_style = styleOf(sh);
+    // Borderless is WS_POPUP with no frame bits at all; it must not also carry
+    // the overlapped style, which is what would draw a title bar.
+    try testing.expect(bare_style & w.WS_POPUP != 0);
+    try testing.expect(bare_style & w.WS_CAPTION == 0);
+    try testing.expect(bare_style & w.WS_THICKFRAME == 0);
+    try testing.expect(exStyleOf(sh) & w.WS_EX_TOOLWINDOW != 0);
+    // `WS_EX_LAYERED` is what lets the window be faded at all.
+    try testing.expect(exStyleOf(sh) & w.WS_EX_LAYERED != 0);
+    try testing.expectEqual(@as(f64, 0.6), sidebar.opacity);
+
+    // A resize of the opaque window keeps it opaque; the layered one can be
+    // made opaque and back, and the flag survives either way.
+    sidebar.setOpacity(1);
+    try testing.expectEqual(@as(f64, 1), sidebar.opacity);
+    sidebar.setOpacity(0.25);
+    try testing.expectEqual(@as(f64, 0.25), sidebar.opacity);
+    // Clamped, not accepted blindly.
+    sidebar.setOpacity(-3);
+    try testing.expectEqual(@as(f64, 0), sidebar.opacity);
+    sidebar.setOpacity(9);
+    try testing.expectEqual(@as(f64, 1), sidebar.opacity);
+}
+

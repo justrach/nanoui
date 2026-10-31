@@ -244,7 +244,11 @@ pub const Surface = struct {
         }
         // The GPU first: it draws the whole frame, and no CPU rasterising
         // happens at all. Without one, the canvas draws what changed.
-        if (gpu_side.paintGpu(self, h)) return;
+        //
+        // Not while translucent: `SetLayeredWindowAttributes` has no effect on a
+        // DXGI flip-model swap chain, so a GPU frame would not fade. The canvas
+        // draws it and GDI copies the pixels into the layered window, which does.
+        if (self.window.opacity >= 1 and gpu_side.paintGpu(self, h)) return;
         self.pixels.draw(self.gpa, self.shown());
         const px = &self.pixels;
         if (px.bytes.len == 0) return;

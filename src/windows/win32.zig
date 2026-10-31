@@ -285,6 +285,29 @@ pub const WM_APP = 0x8000;
 pub const WS_OVERLAPPEDWINDOW = 0x00CF0000;
 pub const WS_THICKFRAME = 0x00040000;
 pub const WS_MAXIMIZEBOX = 0x00010000;
+/// WS_POPUP: no title bar, no border. What a borderless window is made with.
+pub const WS_POPUP = 0x80000000;
+pub const WS_VISIBLE = 0x10000000;
+pub const WS_CAPTION = 0x00C00000;
+pub const WS_SYSMENU = 0x00080000;
+
+/// Extended styles: `CreateWindowExW`'s first argument.
+/// WS_EX_TOOLWINDOW keeps the window out of the taskbar and out of Alt-Tab.
+pub const WS_EX_TOOLWINDOW = 0x00000080;
+pub const WS_EX_APPWINDOW = 0x00040000;
+/// WS_EX_LAYERED is what `SetLayeredWindowAttributes` needs.
+pub const WS_EX_LAYERED = 0x00080000;
+
+/// `GetWindowLongPtrW` / `SetWindowLongPtrW`: the extended style.
+pub const GWL_EXSTYLE: i32 = -20;
+/// The same call, for the plain style (title bar, frame, popup).
+pub const GWL_STYLE: i32 = -16;
+/// `SetLayeredWindowAttributes` flags: `LWA_ALPHA` is the whole-window one.
+pub const LWA_ALPHA = 0x00000002;
+/// Sets a layered window's opacity. It has no effect on a DXGI flip-model swap
+/// chain, which is why `surface.zig` draws with GDI while a window is
+/// translucent (`opacity < 1`).
+pub extern "user32" fn SetLayeredWindowAttributes(hwnd: HWND, key: u32, alpha: u8, flags: u32) callconv(.winapi) BOOL;
 pub const CS_DBLCLKS = 0x0008;
 pub const CW_USEDEFAULT: i32 = @bitCast(@as(u32, 0x80000000));
 pub const GWLP_USERDATA = -21;

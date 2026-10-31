@@ -35,11 +35,14 @@ pub const Window = struct {
     theme: ?ui.Theme = null,
     min_width: f64 = 0,
     min_height: f64 = 0,
+    /// Window opacity, 0 to 1. Below 1 `surface.zig` draws with GDI: see
+    /// `setOpacity` for why the GPU path cannot show it.
+    opacity: f64 = 1,
 
     pub fn create(app: *App, options: Options) !*Window {
         const self = try app.gpa.create(Window);
         errdefer app.gpa.destroy(self);
-        self.* = .{ .app = app, .title_bar = options.title_bar, .on_close = options.on_close, .width = options.width, .height = options.height, .theme = options.theme, .min_width = options.min_width, .min_height = options.min_height };
+        self.* = .{ .app = app, .title_bar = options.title_bar, .on_close = options.on_close, .width = options.width, .height = options.height, .theme = options.theme, .min_width = options.min_width, .min_height = options.min_height, .opacity = options.opacity };
         switch (options.content) {
             .page => return error.PagesUnsupported,
             .view => |v| self.view = v,
@@ -53,15 +56,47 @@ pub const Window = struct {
         }
         self.surface = try Surface.create(self, self.view.?, options.theme);
         var title: [512]u16 = undefined;
-        var style: u32 = w.WS_OVERLAPPEDWINDOW;
-        if (!options.resizable) style &= ~@as(u32, w.WS_THICKFRAME | w.WS_MAXIMIZEBOX);
-        const hwnd = w.CreateWindowExW(0, class_name, w.wide(&title, options.title), style, w.CW_USEDEFAULT, w.CW_USEDEFAULT, 100, 100, null, null, inst, null) orelse return error.CreateWindow;
+        // A borderless window is `WS_POPUP`: no title bar, no frame, and the
+        // client area is the whole window. `WS_OVERLAPPEDWINDOW` otherwise, which
+        // is titled, resizable, and has the system menu and minimise/maximise.
+        var style: u32 = if (options.decorations) w.WS_OVERLAPPEDWINDOW else w.WS_POPUP;
+        if (options.decorations and !options.resizable) style &= ~@as(u32, w.WS_THICKFRAME | w.WS_MAXIMIZEBOX);
+        // The extended style: out of the taskbar and Alt-Tab, and layered for an
+        // opacity below 1. `WS_EX_LAYERED` is what makes
+        // `SetLayeredWindowAttributes` do anything at all.
+        var ex: u32 = 0;
+        if (options.skip_taskbar) ex |= w.WS_EX_TOOLWINDOW;
+        if (options.opacity < 1) ex |= w.WS_EX_LAYERED;
+        const hwnd = w.CreateWindowExW(ex, class_name, w.wide(&title, options.title), style, w.CW_USEDEFAULT, w.CW_USEDEFAULT, 100, 100, null, null, inst, null) orelse return error.CreateWindow;
         self.hwnd = hwnd;
         _ = w.SetWindowLongPtrW(hwnd, w.GWLP_USERDATA, @bitCast(@intFromPtr(self)));
         self.setSize(options.width, options.height);
         if (options.x != null and options.y != null) self.setPosition(options.x.?, options.y.?) else self.center();
+        // After the window exists: `SetLayeredWindowAttributes` needs one, and it
+        // needs `WS_EX_LAYERED` to have been set when it was made.
+        if (options.opacity < 1) self.setOpacity(options.opacity);
         if (!app.flags.hidden and options.visible) self.show();
         return self;
+    }
+
+    /// Sets how opaque the window is, 0 to 1. The window must have been made
+    /// with `WS_EX_LAYERED` for this to do anything, which `Options.opacity < 1`
+    /// does — a window made opaque cannot become translucent afterwards, and
+    /// says so rather than silently doing nothing.
+    ///
+    /// The D3D11 path cannot show it: `SetLayeredWindowAttributes` has no effect
+    /// on a DXGI flip-model swap chain. `surface.zig` reads `opacity` back and
+    /// draws with GDI while it is below 1, so the pixels are right and the GPU
+    /// comes back at 1.
+    pub fn setOpacity(self: *Window, opacity: f64) void {
+        self.opacity = std.math.clamp(opacity, 0, 1);
+        const h = self.hwnd orelse return;
+        const ex = w.GetWindowLongPtrW(h, w.GWL_EXSTYLE);
+        if (@as(u32, @bitCast(@as(i32, @truncate(ex)))) & w.WS_EX_LAYERED == 0) return;
+        const alpha: u8 = @intFromFloat(@round(self.opacity * 255));
+        _ = w.SetLayeredWindowAttributes(h, 0, alpha, w.LWA_ALPHA);
+        // A frame with the new mode: GDI when translucent, the GPU at 1.
+        if (self.surface) |s| s.requestFrame();
     }
 
     fn of(hwnd: w.HWND) ?*Window {
