@@ -1,8 +1,10 @@
 //! A to-do list for a phone, after the "Productivity Todo List" design by
-//! @marten_maxxx (via CollectUI): a week of progress rings, today's plan
-//! as cards, and a floating tab bar. Checking a task fills its box at once,
-//! greys it, and then slides it under the ones still to do, the rest
-//! moving up to close the gap; today's ring fills as the day gets done.
+//! @marten_maxxx (via CollectUI), built from nanoui's own components: a
+//! week of progress rings, a day's ring and bar, cards with kit tags,
+//! glass filter tabs and a glass menu over the list, a glass tab bar and
+//! + button, and a glass sheet with pill tabs and switches to add a task.
+//! Checking a task fills its box at once, greys it, and then slides it
+//! under the ones still to do, the rest moving up to close the gap.
 //!
 //! `zig build run-todo`, or in the iOS Simulator:
 //! `zig build $(sh tools/ios/zig-lib.sh) run-todo -Dtarget=aarch64-ios-simulator`.
