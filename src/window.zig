@@ -45,21 +45,36 @@ pub const Window = struct {
         if (options.title_bar == .hidden) style |= 1 << 15; // full size content view
         if (popover) style = 1 << 7; // borderless, non-activating panel
         if (options.non_activating) style |= 1 << 7;
+        // No title bar, no frame, no resizing edges (`decorations`): the
+        // app draws it and moves it (`window_drag`). Only the panel's
+        // non-activating bit stays.
+        const borderless = !options.decorations and !popover;
+        if (borderless) style &= 1 << 7;
         const rect: objc.CGRect = .{ .size = .{ .width = options.width, .height = options.height } };
-        // A borderless panel takes keys only if its class says it can.
+        // A borderless window or panel takes keys only if its class says it can.
         const window_class = if (popover) objc.defineClass(.{ .name = "NanoUIPopover", .superclass = "NSPanel", .methods = &.{
             .{ .name = "canBecomeKeyWindow", .imp = &yes, .types = "B@:" },
-        } }) else if (options.kind == .panel) objc.class("NSPanel") else objc.class("NSWindow");
+        } }) else if (borderless and options.kind == .panel)
+            objc.defineClass(.{ .name = "NanoUIBorderlessPanel", .superclass = "NSPanel", .methods = &borderless_methods })
+        else if (borderless)
+            objc.defineClass(.{ .name = "NanoUIBorderlessWindow", .superclass = "NSWindow", .methods = &borderless_methods })
+        else if (options.kind == .panel) objc.class("NSPanel") else objc.class("NSWindow");
         const nswindow = objc.msg(objc.Object, objc.msg(objc.Object, window_class, "alloc", .{}), "initWithContentRect:styleMask:backing:defer:", .{
             rect, style, @as(objc.NSUInteger, 2), objc.NO,
         });
         if (options.tabbing_disallowed) objc.msg(void, nswindow, "setTabbingMode:", .{@as(objc.NSInteger, 2)}); // NSWindowTabbingModeDisallowed
+        var behavior: objc.NSUInteger = 0;
         // NSWindowCollectionBehaviorCanJoinAllSpaces | FullScreenAuxiliary.
-        if (options.all_spaces) objc.msg(void, nswindow, "setCollectionBehavior:", .{@as(objc.NSUInteger, (1 << 0) | (1 << 8))});
+        if (options.all_spaces) behavior |= (1 << 0) | (1 << 8);
+        // The Mac has no taskbar, and the Dock and Command-Tab list apps, not
+        // windows: what a window can leave is Command-` and the Window menu.
+        if (options.skip_taskbar) behavior |= 1 << 6; // IgnoresCycle
+        if (behavior != 0) objc.msg(void, nswindow, "setCollectionBehavior:", .{behavior});
+        if (options.skip_taskbar) objc.msg(void, nswindow, "setExcludedFromWindowsMenu:", .{objc.YES});
         objc.msg(void, nswindow, "setReleasedWhenClosed:", .{objc.NO});
         objc.msg(void, nswindow, "setTitle:", .{objc.nsString(options.title)});
         objc.msg(void, nswindow, "setContentMinSize:", .{objc.CGSize{ .width = options.min_width, .height = options.min_height }});
-        if (options.title_bar == .hidden) {
+        if (options.title_bar == .hidden and !borderless) {
             objc.msg(void, nswindow, "setTitlebarAppearsTransparent:", .{objc.YES});
             objc.msg(void, nswindow, "setTitleVisibility:", .{@as(objc.NSInteger, 1)});
         }
@@ -379,6 +394,13 @@ fn shouldClose(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) 
 fn yes(_: objc.Object, _: objc.SEL) callconv(.c) bool {
     return true;
 }
+
+/// A borderless NSWindow can't become key or main unless its class says
+/// so, and then it would take no keys.
+const borderless_methods = [_]objc.Method{
+    .{ .name = "canBecomeKeyWindow", .imp = &yes, .types = "B@:" },
+    .{ .name = "canBecomeMainWindow", .imp = &yes, .types = "B@:" },
+};
 
 extern "c" fn CACurrentMediaTime() f64;
 
