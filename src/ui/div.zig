@@ -149,6 +149,11 @@ pub const Div = struct {
     pub fn roundedFull(d: Div) Div {
         return d.set("radius", 1e4);
     }
+    /// Circular corners rather than Apple's continuous ones: with
+    /// `roundedFull`, a true circle or capsule, not a squircle.
+    pub fn circular(d: Div) Div {
+        return d.set("corner_circular", true);
+    }
     pub fn shadow(d: Div, s: types.Shadow) Div {
         return d.set("shadow", @as(?types.Shadow, s));
     }

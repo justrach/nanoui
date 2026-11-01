@@ -108,13 +108,6 @@ pub const Todo = struct {
         t.started = true;
     }
 
-    /// Back to the morning's list, as it first opened.
-    pub fn restart(t: *Todo) void {
-        const p = t.promo;
-        t.* = .{};
-        t.promo = p;
-    }
-
     fn next(t: *const Todo) Task {
         return more[t.added % more.len];
     }
@@ -178,7 +171,7 @@ pub const Todo = struct {
     }
 
     pub fn view(t: *Todo, c: *ui.Context) void {
-        if (t.promo.on) t.promo.step(t, c);
+        if (t.promo.on) t.promo.step(c);
         if (!t.started) t.start();
         const safe = c.safe_area;
         const root = ui.div(c).sizeFull().clip().bg(canvas);
@@ -200,7 +193,7 @@ pub const Todo = struct {
         t.moreButton(c);
         t.tabBar(c);
         t.addSheet(c);
-        if (t.promo.on) t.promo.draw(c, plusRect(c));
+        if (t.promo.on) t.promo.draw(c, plusRect(c), t.menu_at);
     }
 
     /// The one control at the top: a small round button of glass that
