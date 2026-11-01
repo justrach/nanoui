@@ -33,7 +33,8 @@ pub fn strip(c: *ui.Context, done: usize, total: usize) void {
     const share: f32 = if (total == 0) 0 else @as(f32, @floatFromInt(done)) / @as(f32, @floatFromInt(total));
     const now = motion.number(c, "today", share, .{ .spring = motion.Spring.visual(0.6, 0) });
     for (days, 0..) |d, i| {
-        const col = ui.div(c).column().w(40).gap(8).itemsCenter();
+        // 40 points a day, less when seven of them don't fit.
+        const col = ui.div(c).column().w(@min(40, (c.size.w - 2 * todo.gutter) / 7)).gap(8).itemsCenter();
         defer col.end();
         {
             const is_today = i == today;

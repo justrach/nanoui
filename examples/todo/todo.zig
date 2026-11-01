@@ -59,7 +59,7 @@ pub const canvas = ui.Color.hex(0xf2f2f5);
 pub const green = ui.Color.hex(0x34c759);
 const line = ui.Color.hex(0xd5d7dc);
 
-const gutter = 24;
+pub const gutter = 24;
 const card_radius = 24;
 const card_pad = 12;
 /// A checked task waits this long, greyed, before it moves down.
@@ -262,18 +262,29 @@ pub const Todo = struct {
                 return k.remind and !k.done;
             }
         }.f);
-        kit.tag(c, c.print("{d} urgent", .{urgent}), .{ .status = if (urgent > 0) .danger else .neutral, .pill = true, .icon = "flame.fill" });
-        kit.tag(c, c.print("{d} {s}", .{ reminders, if (reminders == 1) "reminder" else "reminders" }), .{ .status = .info, .pill = true, .icon = "bell.fill" });
-        if (d == t.count and t.count > 0) kit.tag(c, "All done", .{ .status = .success, .pill = true, .icon = "checkmark" });
+        const all = d == t.count and t.count > 0;
+        // Narrow, all done says it alone: the counts of none don't fit by it.
+        if (!(all and narrow(c))) {
+            kit.tag(c, c.print("{d} urgent", .{urgent}), .{ .status = if (urgent > 0) .danger else .neutral, .pill = true, .icon = "flame.fill" });
+            kit.tag(c, c.print("{d} {s}", .{ reminders, if (reminders == 1) "reminder" else "reminders" }), .{ .status = .info, .pill = true, .icon = "bell.fill" });
+        }
+        if (all) kit.tag(c, "All done", .{ .status = .success, .pill = true, .icon = "checkmark" });
     }
 
     fn planHeader(t: *Todo, c: *ui.Context) void {
         const f = t.promo.enter(c, 0.14);
-        const r = ui.div(c).row().wFull().px(gutter).pt(24).pb(8).gap(8).itemsCenter().motion(f);
+        const tight = narrow(c);
+        // Narrow, the tabs go under the title: side by side they need 360.
+        const r = (if (tight) ui.div(c).column().gap(12) else ui.div(c).row().gap(8).itemsCenter())
+            .wFull().px(gutter).pt(24).pb(8).motion(f);
         defer r.end();
-        ui.text(c, "Today\u{2019}s plan", .{ .size = 20, .weight = .bold, .color = ink });
-        kit.tag(c, c.print("{d}", .{t.count - t.done()}), .{ .pill = true });
-        ui.spacer(c);
+        {
+            const title = ui.div(c).row().gap(8).itemsCenter();
+            defer title.end();
+            ui.text(c, "Today\u{2019}s plan", .{ .size = 20, .weight = .bold, .color = ink });
+            kit.tag(c, c.print("{d}", .{t.count - t.done()}), .{ .pill = true });
+        }
+        if (!tight) ui.spacer(c);
         // Solid, in the content: what the list shows.
         _ = kit.tabs(c, &filters, &t.filter, .{ .variant = .segmented, .size = .sm });
     }
@@ -283,6 +294,7 @@ pub const Todo = struct {
         const list = ui.div(c).column().wFull().px(gutter).gap(12);
         defer list.end();
         const shown = t.order(c, &buf);
+        const tight = narrow(c);
         t.promo.next = null;
         if (shown.len == 0) {
             kit.empty(c, .{ .icon = "checklist", .title = "Nothing here", .description = "Tasks you check off show up here." });
@@ -297,12 +309,13 @@ pub const Todo = struct {
                 .layout = true,
                 .transition = .{ .spring = glide() },
             });
-            const card = ui.div(c).row().wFull().h(84).pl(card_pad).pr(4).gap(14).itemsCenter().rounded(card_radius).bg(.white).motion(f);
+            const card = ui.div(c).row().wFull().h(84).pl(card_pad).pr(4).gap(if (tight) 10 else 14).itemsCenter().rounded(card_radius).bg(.white).motion(f);
             defer card.end();
             // Grey, over a quarter of a second, once checked.
             const grey = motion.number(c, "grey", if (k.done) 1 else 0, .{ .tween = .{ .duration = 0.25, .ease = .ease_out } });
             {
-                const tile = ui.div(c).w(52).h(52).rounded(card_radius - card_pad).bg(ui.Color.hex(k.hue).alpha(0.12)).center().opacity(1 - 0.55 * grey);
+                const tile_size: f32 = if (tight) 44 else 52;
+                const tile = ui.div(c).w(tile_size).h(tile_size).rounded(card_radius - card_pad).bg(ui.Color.hex(k.hue).alpha(0.12)).center().opacity(1 - 0.55 * grey);
                 defer tile.end();
                 ui.icon(c, k.icon, .{ .size = 22, .frame = 26, .weight = .semibold, .color = .hex(k.hue) });
             }
@@ -310,13 +323,19 @@ pub const Todo = struct {
                 const words = ui.div(c).column().grow().gap(6).opacity(1 - 0.45 * grey);
                 defer words.end();
                 ui.text(c, k.title, .{ .size = 16, .weight = .semibold, .color = ink.mix(ui.Color.hex(0xc4c6cb), grey), .truncate = .ellipsis });
-                const when = ui.div(c).row().gap(6).itemsCenter();
+                const when = ui.div(c).row().gap(if (tight) 4 else 6).itemsCenter();
                 defer when.end();
                 const tint = muted.mix(ui.Color.hex(0xcdcfd4), grey);
                 ui.icon(c, "clock.fill", .{ .size = 11, .frame = 12, .color = tint });
                 ui.text(c, k.time, .{ .size = 12, .weight = .semibold, .color = tint, .tabular = true });
                 kit.tag(c, k.kind.label(), .{ .color = k.kind.color(), .pill = true, .size = .xs });
-                if (k.urgent) kit.tag(c, "Urgent", .{ .status = .danger, .pill = true, .size = .xs });
+                // Narrow, urgent is a flame, as a reminder is a bell.
+                if (k.urgent) {
+                    if (tight)
+                        ui.icon(c, "flame.fill", .{ .size = 11, .frame = 12, .color = kit.tokens(c).danger.mix(ui.Color.hex(0xcdcfd4), grey) })
+                    else
+                        kit.tag(c, "Urgent", .{ .status = .danger, .pill = true, .size = .xs });
+                }
                 if (k.remind) ui.icon(c, "bell.fill", .{ .size = 11, .frame = 12, .color = kit.tokens(c).info.mix(ui.Color.hex(0xcdcfd4), grey) });
             }
             var box: ?ui.Rect = null;
@@ -358,7 +377,8 @@ pub const Todo = struct {
                 if (item.clicked()) t.tab = i;
                 const col = if (on) ink else ui.Color.hex(0x6b6e76);
                 ui.icon(c, tab[1], .{ .size = 18, .frame = 22, .weight = .semibold, .color = col });
-                ui.text(c, tab[0], .{ .size = 11, .weight = .semibold, .color = col });
+                // Narrow, "Calendar" at 11 is wider than a quarter of the bar.
+                ui.text(c, tab[0], .{ .size = if (narrow(c)) 10 else 11, .weight = .semibold, .color = col });
             }
         }
         // The + : a pane of glass tinted ink, that gives when pressed.
@@ -411,6 +431,13 @@ pub const Todo = struct {
 fn plusRect(c: *ui.Context) ui.Rect {
     const size = 64;
     return .{ .x = c.size.w - gutter - size, .y = c.size.h - c.safe_area.bottom - 76, .w = size, .h = size };
+}
+
+/// Narrower than the design's 402 points (a small phone, a narrow window):
+/// the plan's tabs drop under its title, and the cards draw tighter so a
+/// task's time and tags still fit by its box.
+fn narrow(c: *ui.Context) bool {
+    return c.size.w < 400;
 }
 
 /// A row of the sheet: an icon, a label, and a switch at the end.
