@@ -14,6 +14,7 @@ const ui = nanoui.ui;
 const kit = nanoui.kit;
 const motion = ui.motion;
 const week = @import("week.zig");
+const Promo = @import("promo.zig").Promo;
 
 /// What kind of task it is: the tag on its card.
 pub const Kind = enum {
@@ -93,6 +94,8 @@ pub const Todo = struct {
     draft_kind: usize = 0,
     draft_urgent: bool = false,
     draft_remind: bool = true,
+    /// `TODO_PROMO=1`: the app plays its own promo film (`promo.zig`).
+    promo: Promo = .{},
 
     fn start(t: *Todo) void {
         t.tasks[0..5].* = .{
@@ -103,6 +106,13 @@ pub const Todo = struct {
             .{ .title = "Sprint planning call", .time = "2:00 PM", .icon = "calendar", .hue = 0xff453a, .kind = .meeting },
         };
         t.started = true;
+    }
+
+    /// Back to the morning's list, as it first opened.
+    pub fn restart(t: *Todo) void {
+        const p = t.promo;
+        t.* = .{};
+        t.promo = p;
     }
 
     fn next(t: *const Todo) Task {
@@ -168,15 +178,17 @@ pub const Todo = struct {
     }
 
     pub fn view(t: *Todo, c: *ui.Context) void {
+        if (t.promo.on) t.promo.step(t, c);
         if (!t.started) t.start();
         const safe = c.safe_area;
         const root = ui.div(c).sizeFull().clip().bg(canvas);
         defer root.end();
-        {
+        if (!t.promo.on or t.promo.list) {
             const sc = ui.div(c).column().sizeFull().scrollY().scrollbar(.{ .overlay = ink.alpha(0.35) }).pt(safe.top + 14).pb(safe.bottom + 112);
             defer sc.end();
             {
-                const head = ui.div(c).column().wFull().px(gutter).gap(16);
+                const f = t.promo.enter(c, 0);
+                const head = ui.div(c).column().wFull().px(gutter).gap(16).motion(f);
                 defer head.end();
                 ui.text(c, "To-do list", .{ .size = 32, .weight = .bold, .color = ink });
                 week.strip(c, t.done(), t.count);
@@ -188,6 +200,7 @@ pub const Todo = struct {
         t.moreButton(c);
         t.tabBar(c);
         t.addSheet(c);
+        if (t.promo.on) t.promo.draw(c, plusRect(c));
     }
 
     /// The one control at the top: a small round button of glass that
@@ -226,7 +239,8 @@ pub const Todo = struct {
     /// Today: a progress ring and bar, and tags for what's urgent and
     /// what will remind you.
     fn today(t: *Todo, c: *ui.Context) void {
-        const wrap = ui.div(c).wFull().px(gutter).pt(20);
+        const in_f = t.promo.enter(c, 0.08);
+        const wrap = ui.div(c).wFull().px(gutter).pt(20).motion(in_f);
         defer wrap.end();
         const card = ui.div(c).column().wFull().p(18).gap(14).rounded(28).bg(.white);
         defer card.end();
@@ -261,7 +275,8 @@ pub const Todo = struct {
     }
 
     fn planHeader(t: *Todo, c: *ui.Context) void {
-        const r = ui.div(c).row().wFull().px(gutter).pt(24).pb(8).gap(8).itemsCenter();
+        const f = t.promo.enter(c, 0.14);
+        const r = ui.div(c).row().wFull().px(gutter).pt(24).pb(8).gap(8).itemsCenter().motion(f);
         defer r.end();
         ui.text(c, "Today\u{2019}s plan", .{ .size = 20, .weight = .bold, .color = ink });
         kit.tag(c, c.print("{d}", .{t.count - t.done()}), .{ .pill = true });
@@ -275,6 +290,7 @@ pub const Todo = struct {
         const list = ui.div(c).column().wFull().px(gutter).gap(12);
         defer list.end();
         const shown = t.order(c, &buf);
+        t.promo.next = null;
         if (shown.len == 0) {
             kit.empty(c, .{ .icon = "checklist", .title = "Nothing here", .description = "Tasks you check off show up here." });
             return;
@@ -284,7 +300,7 @@ pub const Todo = struct {
             ui.key(c, c.print("task-{d}", .{i}));
             const f = motion.frame(c, .{
                 .initial = .{ .y = 16, .opacity = 0, .scale = 0.97 },
-                .delay = if (c.frame < 3) motion.stagger(i, 0.05) else 0,
+                .delay = if (t.promo.entering(c)) 0.2 + motion.stagger(i, 0.06) else if (c.frame < 3) motion.stagger(i, 0.05) else 0,
                 .layout = true,
                 .transition = .{ .spring = glide() },
             });
@@ -310,7 +326,14 @@ pub const Todo = struct {
                 if (k.urgent) kit.tag(c, "Urgent", .{ .status = .danger, .pill = true, .size = .xs });
                 if (k.remind) ui.icon(c, "bell.fill", .{ .size = 11, .frame = 12, .color = kit.tokens(c).info.mix(ui.Color.hex(0xcdcfd4), grey) });
             }
-            if (checkbox(c, k.done)) {
+            var box: ?ui.Rect = null;
+            const tapped = checkbox(c, k.done, &box);
+            // The promo's finger goes to the first task still to do.
+            if (!k.done and t.promo.next == null) {
+                t.promo.next = i;
+                t.promo.target = box;
+            }
+            if (tapped) {
                 k.done = !k.done;
                 k.done_at = c.time;
             }
@@ -319,8 +342,9 @@ pub const Todo = struct {
 
     fn tabBar(t: *Todo, c: *ui.Context) void {
         const w = c.size.w;
-        const y = c.size.h - c.safe_area.bottom - 76;
-        const plus_size = 64;
+        const plus_at = plusRect(c);
+        const y = plus_at.y;
+        const plus_size = plus_at.w;
         // The + stands 12 points clear of the bar's end.
         const pill_w = w - 2 * gutter - plus_size - 12;
         {
@@ -346,7 +370,7 @@ pub const Todo = struct {
         }
         // The + : a pane of glass tinted ink, that gives when pressed.
         const f = motion.frame(c, .{ .press = .{ .scale = 0.88 }, .transition = .{ .spring = motion.Spring.bouncy } });
-        const plus = ui.div(c).absolute().offset(w - gutter - plus_size, y).w(plus_size).h(plus_size).roundedFull().glass(.{ .tint = ink.alpha(0.9) })
+        const plus = ui.div(c).absolute().offset(plus_at.x, y).w(plus_size).h(plus_size).roundedFull().glass(.{ .tint = ink.alpha(0.9) })
             .shadow(.{ .color = .{ .a = 0.2 }, .blur = 20, .y = 8 }).center().control().motion(f);
         defer plus.end();
         if (plus.clicked()) t.sheet = true;
@@ -389,6 +413,13 @@ pub const Todo = struct {
     }
 };
 
+/// Where the + button stands: 64 points, a gutter in from the right, its
+/// top 76 points above the home indicator's safe area.
+fn plusRect(c: *ui.Context) ui.Rect {
+    const size = 64;
+    return .{ .x = c.size.w - gutter - size, .y = c.size.h - c.safe_area.bottom - 76, .w = size, .h = size };
+}
+
 /// A row of the sheet: an icon, a label, and a switch at the end.
 fn switchRow(c: *ui.Context, icon: []const u8, col: ui.Color, label: []const u8, on: *bool) void {
     const r = ui.div(c).row().wFull().h(48).gap(12).itemsCenter();
@@ -401,10 +432,11 @@ fn switchRow(c: *ui.Context, icon: []const u8, col: ui.Color, label: []const u8,
 
 /// A round box with a 44-point target: grey ring, or green with a white
 /// check the moment it's tapped, on a spring that gives. True when tapped.
-fn checkbox(c: *ui.Context, on: bool) bool {
+fn checkbox(c: *ui.Context, on: bool, at: *?ui.Rect) bool {
     const f = motion.frame(c, .{ .press = .{ .scale = 0.86 }, .transition = .{ .spring = motion.Spring.bouncy } });
     const hit = ui.div(c).w(44).h(44).center().control().motion(f);
     defer hit.end();
+    at.* = hit.interaction().rect;
     const pop = motion.frame(c, .{ .target = .{ .scale = if (on) 1 else 0.92 }, .transition = .{ .spring = motion.Spring.bouncy } });
     const box = if (on)
         ui.div(c).w(26).h(26).roundedFull().bg(green).center().motion(pop)

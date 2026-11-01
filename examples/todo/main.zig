@@ -16,6 +16,8 @@ pub fn main(init: std.process.Init) !void {
     const app = try nanoui.App.create(init, .{ .name = "Todo" });
     defer app.destroy();
     var t: Todo = .{};
+    // The promo film (`promo.zig`): the app plays it, the screen records it.
+    t.promo.on = init.environ_map.get("TODO_PROMO") != null;
     _ = try app.newWindow(.{
         .title = "To-do list",
         .width = 402,
