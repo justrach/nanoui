@@ -88,7 +88,29 @@ pub const Com = extern struct {
 };
 
 pub extern "d3d11" fn D3D11CreateDevice(adapter: ?*anyopaque, driver: u32, software: ?*anyopaque, flags: u32, levels: ?[*]const u32, n_levels: u32, sdk: u32, device: *?*Com, level: ?*u32, context: *?*Com) callconv(.winapi) HRESULT;
-pub extern "d3dcompiler_47" fn D3DCompile(src: [*]const u8, len: usize, name: ?[*:0]const u8, defines: ?*const anyopaque, include: ?*anyopaque, entry: [*:0]const u8, target: [*:0]const u8, flags1: u32, flags2: u32, code: *?*Blob, errors: *?*Blob) callconv(.winapi) HRESULT;
+
+/// The entry `D3DCompile` has in `d3dcompiler_47.dll`.
+pub const CompileFn = *const fn (src: [*]const u8, len: usize, name: ?[*:0]const u8, defines: ?*const anyopaque, include: ?*anyopaque, entry: [*:0]const u8, target: [*:0]const u8, flags1: u32, flags2: u32, code: *?*Blob, errors: *?*Blob) callconv(.winapi) HRESULT;
+
+/// `D3DCompile`, from the `d3dcompiler_47.dll` Windows ships, loaded when
+/// first asked for rather than linked against: the Windows SDK has no
+/// import library for it (only the DLL), so an MSVC-target build would
+/// otherwise have nothing to link.
+var compile_fn: ?CompileFn = null;
+var compile_tried: bool = false;
+
+const HMODULE = *opaque {};
+extern "kernel32" fn LoadLibraryW(name: [*:0]const u16) callconv(.winapi) ?HMODULE;
+extern "kernel32" fn GetProcAddress(module: HMODULE, name: [*:0]const u8) callconv(.winapi) ?*const anyopaque;
+
+pub fn d3dCompile() ?CompileFn {
+    if (compile_tried) return compile_fn;
+    compile_tried = true;
+    const lib = LoadLibraryW(std.unicode.utf8ToUtf16LeStringLiteral("d3dcompiler_47.dll")) orelse return null;
+    const proc = GetProcAddress(lib, "D3DCompile") orelse return null;
+    compile_fn = @ptrCast(@alignCast(proc));
+    return compile_fn;
+}
 
 /// A compiled shader, as `D3DCompile` gives it.
 pub const Blob = extern struct {

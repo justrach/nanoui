@@ -1,10 +1,10 @@
 //! The application: lifecycle, the menu bar, tray icons, bound services, timers.
 const std = @import("std");
 const objc = @import("objc.zig");
-const ipc = @import("ipc.zig");
 const tsgen = @import("tsgen.zig");
 const dev = @import("dev.zig");
 const window_mod = @import("window.zig");
+const ipc = @import("ipc.zig").ipc(window_mod.Window, App);
 const menu_mod = @import("menu.zig");
 const tray_mod = @import("tray.zig");
 const Window = window_mod.Window;

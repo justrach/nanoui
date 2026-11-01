@@ -103,9 +103,11 @@ pub const Window = plat.window.Window;
 pub const WindowOptions = plat.window.Options;
 pub const PageOptions = plat.window.PageOptions;
 pub const Asset = plat.window.Asset;
-/// Typed IPC for pages (macOS for now: pages need a webview).
-pub const Call = if (mac) @import("ipc.zig").Call else void;
-pub const Event = if (mac) @import("ipc.zig").Event else void;
+/// Typed IPC for pages: wherever a webview draws them (macOS, Windows).
+const has_pages = mac or builtin.os.tag == .windows;
+const page_ipc = if (has_pages) @import("ipc.zig").ipc(plat.window.Window, plat.app.App) else struct {};
+pub const Call = if (has_pages) page_ipc.Call else void;
+pub const Event = if (has_pages) page_ipc.Event else void;
 
 pub const menu = plat.menu;
 pub const MenuItem = plat.menu.MenuItem;
@@ -138,6 +140,8 @@ test {
     _ = tsgen;
     _ = ui;
     _ = kit;
+    // A page's platform-free parts: the asset table, the origin, the bridge.
+    _ = @import("tests_page.zig");
     std.testing.refAllDecls(kit);
     _ = @import("menu_types.zig");
     _ = @import("update.zig");

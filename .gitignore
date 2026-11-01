@@ -12,3 +12,4 @@ codedb.snapshot
 .DS_Store
 zig-pkg/
 hillclimb/zig-pkg/
+.rpi/

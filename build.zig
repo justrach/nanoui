@@ -5,7 +5,7 @@ pub const ios = @import("tools/ios/bundle.zig");
 /// Android APKs, likewise: `@import("nanoui").android.apk(b, lib, .{ .name = "Notes", .id = "com.example.notes" })`.
 pub const android = @import("tools/android/apk.zig");
 
-const examples = [_][]const u8{ "hello", "counter", "gallery", "duo", "board", "basics", "map", "turn", "access", "todo", "sgbus" };
+const examples = [_][]const u8{ "hello", "counter", "gallery", "duo", "board", "basics", "map", "turn", "access", "todo", "sgbus", "browser" };
 const frameworks = [_][]const u8{ "AppKit", "WebKit", "Metal", "QuartzCore", "CoreText", "CoreGraphics", "CoreFoundation", "Foundation", "ImageIO", "UniformTypeIdentifiers", "CoreVideo" };
 const ios_frameworks = [_][]const u8{ "UIKit", "CoreLocation", "MapKit", "Metal", "QuartzCore", "CoreText", "CoreGraphics", "CoreFoundation", "Foundation", "ImageIO", "UniformTypeIdentifiers", "CoreVideo" };
 
@@ -48,15 +48,47 @@ pub fn build(b: *std.Build) void {
         nanoui.linkSystemLibrary("objc", .{});
     }
     if (target.result.abi.isAndroid()) {
-        // The NDK's libraries; OpenGL ES is loaded with dlopen.
-        if (android.Sdk.find(b)) |sdk| if (sdk.libDir(b, target.result)) |dir| nanoui.addLibraryPath(.{ .cwd_relative = dir });
-        for ([_][]const u8{ "android", "log", "EGL" }) |l| nanoui.linkSystemLibrary(l, .{});
+        // The NDK's libraries; OpenGL ES is loaded with dlopen. Where the
+        // host is Windows they are named as files, `-L` finding none there
+        // (apk.zig's `libFile` says why).
+        if (android.Sdk.find(b)) |sdk| {
+            if (sdk.libDir(b, target.result)) |dir| nanoui.addLibraryPath(.{ .cwd_relative = dir });
+            for ([_][]const u8{ "android", "log", "EGL" }) |l| {
+                if (sdk.libFile(b, target.result, l)) |file| {
+                    nanoui.addObjectFile(.{ .cwd_relative = file });
+                } else nanoui.linkSystemLibrary(l, .{});
+            }
+        }
     }
     if (os == .windows) {
         // The D3D11 renderer (`ui/d3d11.zig`): d3d11 and dxgi are the
-        // system's, and d3dcompiler_47 turns the HLSL into shaders at
-        // startup (it ships with Windows and every DirectX runtime).
-        for ([_][]const u8{ "d3d11", "dxgi", "d3dcompiler_47" }) |l| nanoui.linkSystemLibrary(l, .{});
+        // system's; d3dcompiler_47 turns the HLSL into shaders at startup,
+        // and the Windows SDK has no import library for it (only the DLL),
+        // so `ui/d3d11_glue.zig` loads it when it first compiles one.
+        for ([_][]const u8{ "d3d11", "dxgi" }) |l| nanoui.linkSystemLibrary(l, .{});
+    }
+    // WebView2 (pages on Windows) is linked the way `d3dcompiler_47` is: at
+    // no link time at all. `windows/webview2.zig` loads `WebView2Loader.dll`
+    // with `LoadLibraryW`, and every COM call is a vtable slot. That is what
+    // keeps the gnu ABI — Zig's default on Windows — building as well as the
+    // MSVC one: the SDK's static loader is MSVC's C++ and its static CRT, and
+    // would drag both into a `-gnu` binary.
+    //
+    // So the runtime dependency is that one DLL, and the build installs it
+    // beside the executable. `-Dwebview2=none` builds without it (pages then
+    // say the runtime is missing); `-Dwebview2=<folder>` uses a copy of your
+    // own instead of the SDK's.
+    if (os == .windows) {
+        const webview2_dir = b.option([]const u8, "webview2", "WebView2's WebView2Loader.dll: 'sdk' (from the SDK), 'none', or a folder holding it") orelse "sdk";
+        if (!std.mem.eql(u8, webview2_dir, "none")) {
+            const dir = if (std.mem.eql(u8, webview2_dir, "sdk")) webview2Sdk(b) else webview2_dir;
+            if (dir) |d| {
+                const dll_path = b.pathJoin(&.{ d, "WebView2Loader.dll" });
+                // Installed beside every executable the build installs.
+                const dll = b.addInstallFile(.{ .cwd_relative = dll_path }, "bin/WebView2Loader.dll");
+                b.getInstallStep().dependOn(&dll.step);
+            }
+        }
     }
     // Elsewhere GTK is loaded when the app starts (dlopen): nothing to link.
     // HTTP there is http-zig's (nanoui.http), fetched only for those targets.
@@ -80,8 +112,9 @@ pub fn build(b: *std.Build) void {
     b.step("test-nui", "Test nui").dependOn(&b.addRunArtifact(nui_tests).step);
 
     for (examples) |name| {
-        // Pages (the hello example) need a webview: macOS for now.
-        if (os != .macos and std.mem.eql(u8, name, "hello")) continue;
+        // Pages (the hello and browser examples) need a webview: WKWebView on
+        // macOS, WebView2 on Windows.
+        if (os != .macos and os != .windows and (std.mem.eql(u8, name, "hello") or std.mem.eql(u8, name, "browser"))) continue;
         if (os == .ios) {
             addIosExample(b, name, target, optimize, nanoui);
             continue;
@@ -217,4 +250,75 @@ fn addAndroidExample(b: *std.Build, name: []const u8, target: std.Build.Resolved
     const run = android.runOnDevice(b, apk, opts, b.path("."));
     run.addPassthruArgs();
     b.step(b.fmt("run-{s}", .{name}), b.fmt("Run the {s} example on the device adb sees", .{name})).dependOn(&run.step);
+}
+
+/// The WebView2 SDK's native folder (`.../build/native/x64`), where its import
+/// and static libraries are: `-Dwebview2-sdk=` if given, else the newest in
+/// the NuGet cache, else the one an installation (the MSI, a NuGet restore)
+/// put under `CommonProgramFiles(x86)`.
+fn webview2Sdk(b: *std.Build) ?[]const u8 {
+    const abi = switch (b.graph.host.result.cpu.arch) {
+        .x86_64, .aarch64 => @tagName(b.graph.host.result.cpu.arch),
+        .x86 => "x86",
+        else => return null,
+    };
+    const dir_name = if (b.graph.host.result.os.tag == .windows) blk: {
+        break :blk switch (b.graph.host.result.cpu.arch) {
+            .x86_64 => "x64",
+            .aarch64 => "arm64",
+            .x86 => "x86",
+            else => return null,
+        };
+    } else abi;
+    if (b.option([]const u8, "webview2-sdk", "The WebView2 SDK's build/native/<arch> folder")) |dir| {
+        return if (hasLoader(b, dir)) dir else null;
+    }
+    const env = &b.graph.environ_map;
+    const candidates = [_][]const u8{ "USERPROFILE", "HOME" };
+    for (candidates) |name| {
+        const home = env.get(name) orelse continue;
+        const cache = b.pathJoin(&.{ home, ".nuget", "packages", "microsoft.web.webview2" });
+        var dir = std.Io.Dir.cwd().openDir(b.graph.io, cache, .{ .iterate = true }) catch continue;
+        defer dir.close(b.graph.io);
+        var it = dir.iterate();
+        var best: ?[]const u8 = null;
+        var best_version: ?[]const u8 = null;
+        while (it.next(b.graph.io) catch null) |e| {
+            if (e.kind != .directory) continue;
+            const native = b.pathJoin(&.{ cache, b.dupe(e.name), "build", "native", dir_name });
+            if (!hasLoader(b, native)) continue;
+            if (best_version == null or versionNewer(e.name, best_version.?)) {
+                best_version = b.dupe(e.name);
+                best = b.dupe(native);
+            }
+        }
+        if (best) |found| return found;
+    }
+    if (env.get("CommonProgramFiles(x86)")) |common| {
+        const native = b.pathJoin(&.{ common, "Microsoft Shared", "WebView2", dir_name });
+        if (hasLoader(b, native)) return native;
+    }
+    std.log.warn("nanoui: no WebView2 SDK: pages can't be linked (pass -Dwebview2-sdk=<build/native/<arch>>)", .{});
+    return null;
+}
+
+/// One dotted version after another ("1.0.4191.47"), numerically. A string
+/// compare would put 1.0.99 ahead of 1.0.4191.
+fn versionNewer(a: []const u8, b: []const u8) bool {
+    var ia = std.mem.splitScalar(u8, a, '.');
+    var ib = std.mem.splitScalar(u8, b, '.');
+    while (true) {
+        const x = ia.next() orelse return false; // a ended: not newer
+        const y = ib.next() orelse return true; // b ended, a went on: newer
+        const nx = std.fmt.parseInt(u32, x, 10) catch return false;
+        const ny = std.fmt.parseInt(u32, y, 10) catch return false;
+        if (nx != ny) return nx > ny;
+    }
+}
+
+fn hasLoader(b: *std.Build, dir: []const u8) bool {
+    var d = std.Io.Dir.cwd().openDir(b.graph.io, dir, .{}) catch return false;
+    defer d.close(b.graph.io);
+    _ = d.statFile(b.graph.io, "WebView2Loader.dll", .{}) catch return false;
+    return true;
 }

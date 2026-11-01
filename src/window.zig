@@ -3,7 +3,7 @@
 const std = @import("std");
 const objc = @import("objc.zig");
 const App = @import("app.zig").App;
-const Page = @import("page.zig").Page;
+const Page = @import("page_webkit.zig").Page;
 const ui = @import("ui/ui.zig");
 const Surface = @import("ui/surface.zig").Surface;
 
@@ -287,6 +287,19 @@ pub const Window = struct {
         const pool = objc.Pool.push();
         defer pool.pop();
         objc.msg(void, self.nswindow, "setTitle:", .{objc.nsString(title)});
+    }
+
+    /// Points a page's window at `url`: a path from the app's assets, or an
+    /// absolute `http(s)://` one. No effect on a native-UI window.
+    pub fn setPageUrl(self: *Window, url: []const u8) void {
+        if (self.page) |p| p.load(url);
+    }
+
+    /// Shows entry `i` of `PageOptions.pages` (the bar's buttons).
+    pub fn showPage(self: *Window, i: usize) void {
+        const p = self.page orelse return;
+        if (i >= p.queue.options.pages.len) return;
+        p.load(p.queue.options.pages[i].url);
     }
 
     /// Queues an encoded message for the page and takes ownership of it.

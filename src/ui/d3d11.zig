@@ -32,7 +32,7 @@ const RasterizerDesc = api.RasterizerDesc;
 const SamplerDesc = api.SamplerDesc;
 const Params = api.Params;
 const D3D11CreateDevice = api.D3D11CreateDevice;
-const D3DCompile = api.D3DCompile;
+const D3DCompile = api.d3dCompile;
 const check = api.check;
 const must = api.must;
 const bgra8 = api.bgra8;
@@ -84,7 +84,8 @@ const CreateSamplerState = api.CreateSamplerState;
 fn shader(device: *Com, comptime entry: [:0]const u8, comptime target: [:0]const u8, comptime create: usize) !*Com {
     var blob: ?*Blob = null;
     var errors: ?*Blob = null;
-    const hr = D3DCompile(source, source.len, "shader.hlsl", null, null, entry, target, 0, 0, &blob, &errors);
+    const compile = D3DCompile() orelse return error.ShaderCompilerMissing;
+    const hr = compile(source, source.len, "shader.hlsl", null, null, entry, target, 0, 0, &blob, &errors);
     if (errors) |e| {
         if (hr < 0) std.log.err("nanoui: HLSL {s} ({s}):\n{s}", .{ entry, target, e.bytes()[0..e.size()] });
         e.release();

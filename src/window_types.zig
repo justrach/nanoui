@@ -16,6 +16,17 @@ pub const PageOptions = struct {
     assets: []const Asset = &.{},
     /// Web Inspector (right click > Inspect Element).
     inspectable: bool = true,
+    /// Pages the window can switch between, shown as a bar on every one of
+    /// them (the app's own and every remote page): `{ "Local", "/" }`,
+    /// `{ "Docs", "https://example.com/" }`. Empty: no bar.
+    pages: []const PageEntry = &.{},
+};
+
+/// One entry of `PageOptions.pages`.
+pub const PageEntry = struct {
+    title: []const u8,
+    /// A path from the app's assets, or an absolute `http(s)://` URL.
+    url: []const u8,
 };
 
 pub const Content = union(enum) {

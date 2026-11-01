@@ -70,7 +70,12 @@ src/objc.zig          Objective-C runtime, runtime classes, blocks, libdispatch
 src/app.zig           lifecycle, menu bar, trays, services, client generation
 src/dev.zig           --nanoui-* flags: generate, snapshot, script, eval, hidden
 src/window.zig        NSWindow showing a page or native UI, window controls
-src/page.zig          WKWebView, the nanoui:// scheme, the batched outbox
+src/page.zig          the page's platform-free part: the outbox, held messages, the asset table
+src/page_webkit.zig   WKWebView: the view, the scheme handler, the message handler
+src/page_webview2.zig WebView2: the view, the resource filter, the message handler
+src/page_webview2_profile.zig  WebView2's profile folder
+src/windows/webview2.zig  WebView2's COM interfaces, by vtable slot
+src/tests_page.zig    the page's platform-free parts, tested
 src/ipc.zig           bound services, calls, typed events, page messages
 src/tsgen.zig         comptime TypeScript declarations and JS client
 src/bridge.js         the page runtime (window.nanoui)
@@ -131,7 +136,7 @@ src/kit/              nanoui.kit: components after GPUI Kit (buttons, overlays, 
 tools/*.Dockerfile    Linux (GTK, Xvfb) and Windows (Wine) test images
 tools/ios/            app bundles (bundle.zig), the Simulator (sim.sh), Zig's lib fixed (zig-lib.sh)
 tools/android/        APKs (apk.zig: the SDK, the manifest, aapt2, pack.zig, apksigner), run.sh, emulator.sh
-examples/             hello (webview), counter and gallery (native UI)
+examples/             hello (webview), counter and gallery (native UI), browser (local and remote pages)
 hillclimb/            headless benchmarks against mygo (its own package)
 apps/nanoterm/        the first app: a Warp-like terminal with ACP agents
 apps/nanomon/         a small activity monitor (libproc, Mach, /proc)

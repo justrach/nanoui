@@ -84,6 +84,10 @@ pub extern "user32" fn GetForegroundWindow() callconv(.winapi) ?HWND;
 pub extern "user32" fn SetFocus(hwnd: HWND) callconv(.winapi) ?HWND;
 pub extern "user32" fn GetMessageW(msg: *MSG, hwnd: ?HWND, min: u32, max: u32) callconv(.winapi) BOOL;
 pub extern "user32" fn PeekMessageW(msg: *MSG, hwnd: ?HWND, min: u32, max: u32, remove: u32) callconv(.winapi) BOOL;
+/// Waits for a message (or `ms`) without taking it: a loop that must also
+/// look at its own state stops here instead of spinning.
+pub extern "user32" fn MsgWaitForMultipleObjects(count: u32, handles: ?*const ?*anyopaque, wait_all: BOOL, ms: u32, wake_mask: u32) callconv(.winapi) u32;
+pub const QS_ALLINPUT: u32 = 0x04FF;
 pub extern "user32" fn TranslateMessage(msg: *const MSG) callconv(.winapi) BOOL;
 pub extern "user32" fn DispatchMessageW(msg: *const MSG) callconv(.winapi) LRESULT;
 pub extern "user32" fn SendMessageW(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) callconv(.winapi) LRESULT;
@@ -147,7 +151,14 @@ pub extern "user32" fn SetClipboardData(format: u32, mem: ?*anyopaque) callconv(
 pub extern "user32" fn GetClipboardData(format: u32) callconv(.winapi) ?*anyopaque;
 pub extern "gdi32" fn SetDIBitsToDevice(hdc: HDC, x: i32, y: i32, w: u32, h: u32, sx: i32, sy: i32, start: u32, lines: u32, bits: *const anyopaque, info: *const BITMAPINFOHEADER, usage: u32) callconv(.winapi) i32;
 pub extern "kernel32" fn GetModuleHandleW(name: ?[*:0]const u16) callconv(.winapi) ?HINSTANCE;
+pub extern "kernel32" fn GetCurrentThreadId() callconv(.winapi) u32;
+pub extern "user32" fn GetWindow(hwnd: HWND, cmd: u32) callconv(.winapi) ?HWND;
+pub extern "kernel32" fn CreateDirectoryW(path: [*:0]const u16, security: ?*anyopaque) callconv(.winapi) BOOL;
+pub extern "kernel32" fn GetLastError() callconv(.winapi) u32;
+pub const ERROR_ALREADY_EXISTS = 183;
 pub extern "kernel32" fn GlobalAlloc(flags: u32, bytes: usize) callconv(.winapi) ?*anyopaque;
+/// `GMEM_MOVEABLE`: what `CreateStreamOnHGlobal` takes.
+pub const GMEM_MOVEABLE = 0x0002;
 pub extern "kernel32" fn GlobalLock(mem: *anyopaque) callconv(.winapi) ?*anyopaque;
 pub extern "kernel32" fn GlobalUnlock(mem: *anyopaque) callconv(.winapi) BOOL;
 /// Frees a block `GlobalAlloc` made that the clipboard did not take.
@@ -259,6 +270,11 @@ pub const WM_GETMINMAXINFO = 0x0024;
 pub const WM_NCLBUTTONDOWN = 0x00A1;
 /// HTCAPTION: the window's caption bar, for `WM_NCLBUTTONDOWN`.
 pub const HTCAPTION = 2;
+/// `SetWindowPos` flags: move without resizing, order or activation — what
+/// parking a window off-screen for WebView2's sake takes.
+pub const SWP_NOSIZE: u32 = 0x0001;
+pub const SWP_NOZORDER: u32 = 0x0004;
+pub const SWP_NOACTIVATE: u32 = 0x0010;
 pub const WM_KEYDOWN = 0x0100;
 pub const WM_CHAR = 0x0102;
 pub const WM_SYSKEYDOWN = 0x0104;

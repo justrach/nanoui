@@ -39,7 +39,8 @@ Each window shows one of two kinds of interface:
   JavaScript, no webview. It has flexbox layout, text in a glyph atlas,
   animations, and views you can test without a window. On macOS it draws with
   Metal and CoreText, in one instanced draw call per frame.
-- **A web page** in the system webview (WKWebView, macOS for now). The
+- **A web page** in the system webview (WKWebView on macOS, WebView2 on
+  Windows). The
   frontend calls Zig through a JavaScript client generated from your Zig
   types, with TypeScript declarations.
 
@@ -342,7 +343,7 @@ Android's SDK and NDK). On a Mac, `zig build -Dtarget=x86_64-linux-gnu` or
 | rendering | Metal | Metal | OpenGL ES 3; CPU without it | OpenGL 3.3 in a GtkGLArea; CPU (`src/ui/raster.zig`) without one | CPU, shown by Direct3D 11 (a DXGI flip swap chain; GDI without it) |
 | icons | SF Symbols | SF Symbols | line icons drawn by nanoui (`src/ui/icons.zig`) | the same | the same |
 | SVG (`ui.svg`) | drawn by nanoui (`src/ui/svg.zig`) | the same | the same | the same | the same |
-| pages (webview) | WKWebView | not yet | not yet | not yet | not yet |
+| pages (webview) | WKWebView | not yet | not yet | not yet | WebView2 |
 | menus | the menu bar | a keyboard's shortcuts | a keyboard's shortcuts | accelerators | accelerators |
 | HTTP (`nanoui.http`) | NSURLSession | NSURLSession | http-zig, names looked up by Android | [http-zig](https://github.com/justrach/http-zig): HTTP/2 over TLS, a thread per request | the same |
 | input methods that compose text | NSTextInputClient: marked text, the text around the caret, the edit menu | UITextInput: marked text (pinyin), autocorrect, ⌘C ⌘X ⌘V | not yet: a software keyboard types keys | GTK's input method, its preedit | not yet: only what arrives as `WM_CHAR` |
@@ -557,10 +558,11 @@ git push origin v0.2.1`). The release workflow checks that the tag matches
 Rules for working here, by hand or with an agent, are in
 [AGENTS.md](AGENTS.md).
 
-nanoui is a subset of what full frameworks offer. Pages work only on macOS so
-far, accessibility is only on iOS and macOS's built-in controls, there are no
-notifications, channels or plugins yet, and bundling is only for iOS and Android.
-Apps update themselves from GitHub releases on macOS (`nanoui.Updater`). Bound methods run on the main thread.
+nanoui is a subset of what full frameworks offer. Pages work on macOS and
+Windows so far, accessibility is only on iOS and macOS's built-in controls,
+there are no notifications, channels or plugins yet, and bundling is only for
+iOS and Android. Apps update themselves from GitHub releases on macOS
+(`nanoui.Updater`). Bound methods run on the main thread.
 
 ## License
 
@@ -593,8 +595,5 @@ nanoui stands on the shoulders of these projects:
   [1keep](https://github.com/1bye): `ui.motion` follows its model and API.
   That covers interruptible targets, presence, keyframes, stagger, layout
   animation, its exact springs and its easing curves.
-- **[GPUI Kit](https://github.com/longbridge/gpui-component)** by
-  [Longbridge](https://github.com/longbridge): `nanoui.kit` follows its
-  components, their variants and their names.
-
+- **[GPUI Kit](https://github.com/longbridge/gpui-component)** by [Longbridge](https://github.com/longbridge): `nanoui.kit` follows its components, their variants and their names.
 <p align="center"><sub>Built in Zig 0.17 · <a href="AGENTS.md">AGENTS.md</a> · <a href="hillclimb/README.md">benchmarks</a> · <a href="LICENSE">MIT</a> · <a href="THIRD_PARTY_NOTICES.md">third-party notices</a></sub></p>

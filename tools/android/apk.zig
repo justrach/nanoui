@@ -168,6 +168,19 @@ pub const Sdk = struct {
         return b.pathJoin(&.{ root, "usr", "lib", triple(target) orelse return null, b.fmt("{d}", .{api}) });
     }
 
+    /// One of the NDK's shared libraries for `target` (`libEGL.so`): the
+    /// file itself, not a name to look up in `libDir`.
+    ///
+    /// Zig hands the linker every path in a library search dir as
+    /// `-l:<path>`, and lld reads the colon of a Windows drive letter there
+    /// as flag syntax: on Windows, `-L` finds nothing. A file named outright
+    /// does. Elsewhere `-L`/`-l` is what a linker expects, and this is null.
+    pub fn libFile(sdk: Sdk, b: *std.Build, target: std.Target, name: []const u8) ?[]const u8 {
+        if (b.graph.host.result.os.tag != .windows) return null;
+        const dir = sdk.libDir(b, target) orelse return null;
+        return b.pathJoin(&.{ dir, b.fmt("lib{s}.so", .{name}) });
+    }
+
     pub fn tool(sdk: Sdk, b: *std.Build, name: []const u8) []const u8 {
         const windows = b.graph.host.result.os.tag == .windows;
         const ext = if (!windows) "" else if (std.mem.eql(u8, name, "apksigner")) ".bat" else ".exe";
@@ -246,9 +259,8 @@ pub fn linkNdk(b: *std.Build, lib: *std.Build.Step.Compile, sdk: Sdk) bool {
         \\cc_dir={2s}
         \\darwin_sdk_dir=
         \\
-    , .{ root, triple(target).?, dir }));
+    , .{ root, triple(target) orelse return false, dir }));
     lib.setLibCFile(libc);
-    lib.root_module.addLibraryPath(.{ .cwd_relative = dir });
     return true;
 }
 
