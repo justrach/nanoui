@@ -14,6 +14,7 @@ const ui = nanoui.ui;
 const kit = nanoui.kit;
 const motion = ui.motion;
 const week = @import("week.zig");
+const Promo = @import("promo.zig").Promo;
 
 /// What kind of task it is: the tag on its card.
 pub const Kind = enum {
@@ -58,7 +59,7 @@ pub const canvas = ui.Color.hex(0xf2f2f5);
 pub const green = ui.Color.hex(0x34c759);
 const line = ui.Color.hex(0xd5d7dc);
 
-const gutter = 24;
+pub const gutter = 24;
 const card_radius = 24;
 const card_pad = 12;
 /// A checked task waits this long, greyed, before it moves down.
@@ -93,6 +94,8 @@ pub const Todo = struct {
     draft_kind: usize = 0,
     draft_urgent: bool = false,
     draft_remind: bool = true,
+    /// `TODO_PROMO=1`: the app plays its own promo film (`promo.zig`).
+    promo: Promo = .{},
 
     fn start(t: *Todo) void {
         t.tasks[0..5].* = .{
@@ -168,15 +171,17 @@ pub const Todo = struct {
     }
 
     pub fn view(t: *Todo, c: *ui.Context) void {
+        if (t.promo.on) t.promo.step(c);
         if (!t.started) t.start();
         const safe = c.safe_area;
         const root = ui.div(c).sizeFull().clip().bg(canvas);
         defer root.end();
-        {
+        if (!t.promo.on or t.promo.list) {
             const sc = ui.div(c).column().sizeFull().scrollY().scrollbar(.{ .overlay = ink.alpha(0.35) }).pt(safe.top + 14).pb(safe.bottom + 112);
             defer sc.end();
             {
-                const head = ui.div(c).column().wFull().px(gutter).gap(16);
+                const f = t.promo.enter(c, 0);
+                const head = ui.div(c).column().wFull().px(gutter).gap(16).motion(f);
                 defer head.end();
                 ui.text(c, "To-do list", .{ .size = 32, .weight = .bold, .color = ink });
                 week.strip(c, t.done(), t.count);
@@ -188,6 +193,7 @@ pub const Todo = struct {
         t.moreButton(c);
         t.tabBar(c);
         t.addSheet(c);
+        if (t.promo.on) t.promo.draw(c, plusRect(c), t.menu_at);
     }
 
     /// The one control at the top: a small round button of glass that
@@ -226,7 +232,8 @@ pub const Todo = struct {
     /// Today: a progress ring and bar, and tags for what's urgent and
     /// what will remind you.
     fn today(t: *Todo, c: *ui.Context) void {
-        const wrap = ui.div(c).wFull().px(gutter).pt(20);
+        const in_f = t.promo.enter(c, 0.08);
+        const wrap = ui.div(c).wFull().px(gutter).pt(20).motion(in_f);
         defer wrap.end();
         const card = ui.div(c).column().wFull().p(18).gap(14).rounded(28).bg(.white);
         defer card.end();
@@ -255,17 +262,29 @@ pub const Todo = struct {
                 return k.remind and !k.done;
             }
         }.f);
-        kit.tag(c, c.print("{d} urgent", .{urgent}), .{ .status = if (urgent > 0) .danger else .neutral, .pill = true, .icon = "flame.fill" });
-        kit.tag(c, c.print("{d} {s}", .{ reminders, if (reminders == 1) "reminder" else "reminders" }), .{ .status = .info, .pill = true, .icon = "bell.fill" });
-        if (d == t.count and t.count > 0) kit.tag(c, "All done", .{ .status = .success, .pill = true, .icon = "checkmark" });
+        const all = d == t.count and t.count > 0;
+        // Narrow, all done says it alone: the counts of none don't fit by it.
+        if (!(all and narrow(c))) {
+            kit.tag(c, c.print("{d} urgent", .{urgent}), .{ .status = if (urgent > 0) .danger else .neutral, .pill = true, .icon = "flame.fill" });
+            kit.tag(c, c.print("{d} {s}", .{ reminders, if (reminders == 1) "reminder" else "reminders" }), .{ .status = .info, .pill = true, .icon = "bell.fill" });
+        }
+        if (all) kit.tag(c, "All done", .{ .status = .success, .pill = true, .icon = "checkmark" });
     }
 
     fn planHeader(t: *Todo, c: *ui.Context) void {
-        const r = ui.div(c).row().wFull().px(gutter).pt(24).pb(8).gap(8).itemsCenter();
+        const f = t.promo.enter(c, 0.14);
+        const tight = narrow(c);
+        // Narrow, the tabs go under the title: side by side they need 360.
+        const r = (if (tight) ui.div(c).column().gap(12) else ui.div(c).row().gap(8).itemsCenter())
+            .wFull().px(gutter).pt(24).pb(8).motion(f);
         defer r.end();
-        ui.text(c, "Today\u{2019}s plan", .{ .size = 20, .weight = .bold, .color = ink });
-        kit.tag(c, c.print("{d}", .{t.count - t.done()}), .{ .pill = true });
-        ui.spacer(c);
+        {
+            const title = ui.div(c).row().gap(8).itemsCenter();
+            defer title.end();
+            ui.text(c, "Today\u{2019}s plan", .{ .size = 20, .weight = .bold, .color = ink });
+            kit.tag(c, c.print("{d}", .{t.count - t.done()}), .{ .pill = true });
+        }
+        if (!tight) ui.spacer(c);
         // Solid, in the content: what the list shows.
         _ = kit.tabs(c, &filters, &t.filter, .{ .variant = .segmented, .size = .sm });
     }
@@ -275,6 +294,8 @@ pub const Todo = struct {
         const list = ui.div(c).column().wFull().px(gutter).gap(12);
         defer list.end();
         const shown = t.order(c, &buf);
+        const tight = narrow(c);
+        t.promo.next = null;
         if (shown.len == 0) {
             kit.empty(c, .{ .icon = "checklist", .title = "Nothing here", .description = "Tasks you check off show up here." });
             return;
@@ -284,16 +305,17 @@ pub const Todo = struct {
             ui.key(c, c.print("task-{d}", .{i}));
             const f = motion.frame(c, .{
                 .initial = .{ .y = 16, .opacity = 0, .scale = 0.97 },
-                .delay = if (c.frame < 3) motion.stagger(i, 0.05) else 0,
+                .delay = if (t.promo.entering(c)) 0.2 + motion.stagger(i, 0.06) else if (c.frame < 3) motion.stagger(i, 0.05) else 0,
                 .layout = true,
                 .transition = .{ .spring = glide() },
             });
-            const card = ui.div(c).row().wFull().h(84).pl(card_pad).pr(4).gap(14).itemsCenter().rounded(card_radius).bg(.white).motion(f);
+            const card = ui.div(c).row().wFull().h(84).pl(card_pad).pr(4).gap(if (tight) 10 else 14).itemsCenter().rounded(card_radius).bg(.white).motion(f);
             defer card.end();
             // Grey, over a quarter of a second, once checked.
             const grey = motion.number(c, "grey", if (k.done) 1 else 0, .{ .tween = .{ .duration = 0.25, .ease = .ease_out } });
             {
-                const tile = ui.div(c).w(52).h(52).rounded(card_radius - card_pad).bg(ui.Color.hex(k.hue).alpha(0.12)).center().opacity(1 - 0.55 * grey);
+                const tile_size: f32 = if (tight) 44 else 52;
+                const tile = ui.div(c).w(tile_size).h(tile_size).rounded(card_radius - card_pad).bg(ui.Color.hex(k.hue).alpha(0.12)).center().opacity(1 - 0.55 * grey);
                 defer tile.end();
                 ui.icon(c, k.icon, .{ .size = 22, .frame = 26, .weight = .semibold, .color = .hex(k.hue) });
             }
@@ -301,16 +323,29 @@ pub const Todo = struct {
                 const words = ui.div(c).column().grow().gap(6).opacity(1 - 0.45 * grey);
                 defer words.end();
                 ui.text(c, k.title, .{ .size = 16, .weight = .semibold, .color = ink.mix(ui.Color.hex(0xc4c6cb), grey), .truncate = .ellipsis });
-                const when = ui.div(c).row().gap(6).itemsCenter();
+                const when = ui.div(c).row().gap(if (tight) 4 else 6).itemsCenter();
                 defer when.end();
                 const tint = muted.mix(ui.Color.hex(0xcdcfd4), grey);
                 ui.icon(c, "clock.fill", .{ .size = 11, .frame = 12, .color = tint });
                 ui.text(c, k.time, .{ .size = 12, .weight = .semibold, .color = tint, .tabular = true });
                 kit.tag(c, k.kind.label(), .{ .color = k.kind.color(), .pill = true, .size = .xs });
-                if (k.urgent) kit.tag(c, "Urgent", .{ .status = .danger, .pill = true, .size = .xs });
+                // Narrow, urgent is a flame, as a reminder is a bell.
+                if (k.urgent) {
+                    if (tight)
+                        ui.icon(c, "flame.fill", .{ .size = 11, .frame = 12, .color = kit.tokens(c).danger.mix(ui.Color.hex(0xcdcfd4), grey) })
+                    else
+                        kit.tag(c, "Urgent", .{ .status = .danger, .pill = true, .size = .xs });
+                }
                 if (k.remind) ui.icon(c, "bell.fill", .{ .size = 11, .frame = 12, .color = kit.tokens(c).info.mix(ui.Color.hex(0xcdcfd4), grey) });
             }
-            if (checkbox(c, k.done)) {
+            var box: ?ui.Rect = null;
+            const tapped = checkbox(c, k.done, &box);
+            // The promo's finger goes to the first task still to do.
+            if (!k.done and t.promo.next == null) {
+                t.promo.next = i;
+                t.promo.target = box;
+            }
+            if (tapped) {
                 k.done = !k.done;
                 k.done_at = c.time;
             }
@@ -319,8 +354,9 @@ pub const Todo = struct {
 
     fn tabBar(t: *Todo, c: *ui.Context) void {
         const w = c.size.w;
-        const y = c.size.h - c.safe_area.bottom - 76;
-        const plus_size = 64;
+        const plus_at = plusRect(c);
+        const y = plus_at.y;
+        const plus_size = plus_at.w;
         // The + stands 12 points clear of the bar's end.
         const pill_w = w - 2 * gutter - plus_size - 12;
         {
@@ -341,12 +377,13 @@ pub const Todo = struct {
                 if (item.clicked()) t.tab = i;
                 const col = if (on) ink else ui.Color.hex(0x6b6e76);
                 ui.icon(c, tab[1], .{ .size = 18, .frame = 22, .weight = .semibold, .color = col });
-                ui.text(c, tab[0], .{ .size = 11, .weight = .semibold, .color = col });
+                // Narrow, "Calendar" at 11 is wider than a quarter of the bar.
+                ui.text(c, tab[0], .{ .size = if (narrow(c)) 10 else 11, .weight = .semibold, .color = col });
             }
         }
         // The + : a pane of glass tinted ink, that gives when pressed.
         const f = motion.frame(c, .{ .press = .{ .scale = 0.88 }, .transition = .{ .spring = motion.Spring.bouncy } });
-        const plus = ui.div(c).absolute().offset(w - gutter - plus_size, y).w(plus_size).h(plus_size).roundedFull().glass(.{ .tint = ink.alpha(0.9) })
+        const plus = ui.div(c).absolute().offset(plus_at.x, y).w(plus_size).h(plus_size).roundedFull().glass(.{ .tint = ink.alpha(0.9) })
             .shadow(.{ .color = .{ .a = 0.2 }, .blur = 20, .y = 8 }).center().control().motion(f);
         defer plus.end();
         if (plus.clicked()) t.sheet = true;
@@ -389,6 +426,20 @@ pub const Todo = struct {
     }
 };
 
+/// Where the + button stands: 64 points, a gutter in from the right, its
+/// top 76 points above the home indicator's safe area.
+fn plusRect(c: *ui.Context) ui.Rect {
+    const size = 64;
+    return .{ .x = c.size.w - gutter - size, .y = c.size.h - c.safe_area.bottom - 76, .w = size, .h = size };
+}
+
+/// Narrower than the design's 402 points (a small phone, a narrow window):
+/// the plan's tabs drop under its title, and the cards draw tighter so a
+/// task's time and tags still fit by its box.
+fn narrow(c: *ui.Context) bool {
+    return c.size.w < 400;
+}
+
 /// A row of the sheet: an icon, a label, and a switch at the end.
 fn switchRow(c: *ui.Context, icon: []const u8, col: ui.Color, label: []const u8, on: *bool) void {
     const r = ui.div(c).row().wFull().h(48).gap(12).itemsCenter();
@@ -401,10 +452,11 @@ fn switchRow(c: *ui.Context, icon: []const u8, col: ui.Color, label: []const u8,
 
 /// A round box with a 44-point target: grey ring, or green with a white
 /// check the moment it's tapped, on a spring that gives. True when tapped.
-fn checkbox(c: *ui.Context, on: bool) bool {
+fn checkbox(c: *ui.Context, on: bool, at: *?ui.Rect) bool {
     const f = motion.frame(c, .{ .press = .{ .scale = 0.86 }, .transition = .{ .spring = motion.Spring.bouncy } });
     const hit = ui.div(c).w(44).h(44).center().control().motion(f);
     defer hit.end();
+    at.* = hit.interaction().rect;
     const pop = motion.frame(c, .{ .target = .{ .scale = if (on) 1 else 0.92 }, .transition = .{ .spring = motion.Spring.bouncy } });
     const box = if (on)
         ui.div(c).w(26).h(26).roundedFull().bg(green).center().motion(pop)
