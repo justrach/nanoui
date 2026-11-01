@@ -178,6 +178,8 @@ test {
             _ = @import("windows/ime.zig");
             _ = @import("windows/tests_ime.zig");
         }
+        // The GTK window's: decorations, the taskbar hint, opacity.
+        if (builtin.os.tag == .linux) _ = @import("linux/tests_window.zig");
         return;
     }
     // Analyze every declaration, used by an example or not.
@@ -191,4 +193,6 @@ test {
     std.testing.refAllDecls(@import("menu.zig").Menu);
     std.testing.refAllDecls(@import("menu.zig").Item);
     std.testing.refAllDecls(@import("tray.zig").Tray);
+    // The window's own: borderless, out of the window cycle, its alpha.
+    _ = @import("tests_window.zig");
 }
