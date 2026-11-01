@@ -206,7 +206,7 @@ pub const Surface = struct {
         c.input.window_active = objc.msg(objc.BOOL, self.window.nswindow, "isKeyWindow", .{});
         // What scrolling gathered since the last frame, applied at once.
         const dy = self.scroll.take();
-        if (dy != 0 and !c.applyScroll(dy) and c.wants_wheel) c.input.scroll = .{ .y = dy };
+        if (dy != 0 and !c.applyScroll(dy) and c.wants_wheel) c.input.scroll.y = dy;
         const r = frame_mod.run(c, self.view, &self.text, &self.instances, self.size, self.scale, self.theme(), dt, now - self.start_time);
         @import("../play.zig").paint(self.gpa, &self.instances);
         self.renderer.syncImages(&self.text.images);
@@ -395,8 +395,8 @@ fn mouseExited(obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void 
 fn scrollWheel(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) void {
     const s = surfaceOf(obj) orelse return;
     s.setMouse(event);
-    var dy: f32 = @floatCast(objc.msg(f64, event, "scrollingDeltaY", .{}));
-    if (!objc.msg(objc.BOOL, event, "hasPreciseScrollingDeltas", .{})) dy *= 12;
+    // Sideways goes to a view that takes the wheel (a row of tabs).
+    const dy = @import("surface_wheel.zig").sideways(s, event) orelse return;
     // On the display link: gathered, and drawn at the next refresh.
     if (s.display_link != null and !s.resizing) {
         s.scroll.add(dy, cf.CACurrentMediaTime());
@@ -406,7 +406,7 @@ fn scrollWheel(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) v
         s.frame();
         s.ctx.updateHot();
     } else if (s.ctx.wants_wheel) {
-        s.ctx.input.scroll = .{ .y = dy };
+        s.ctx.input.scroll.y = dy;
         s.frame();
     }
 }
