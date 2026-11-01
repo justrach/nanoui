@@ -9,6 +9,7 @@ const types = @import("types.zig");
 const utf8 = @import("utf8.zig");
 const ctx_mod = @import("context.zig");
 const lines_mod = @import("textfield_lines.zig");
+pub const Caret = lines_mod.Caret;
 const Context = ctx_mod.Context;
 const EditState = ctx_mod.EditState;
 
@@ -109,6 +110,8 @@ pub const Options = struct {
     /// color (the accent).
     selection_color: ?types.Color = null,
     caret_color: ?types.Color = null,
+    /// The caret's shape; the default is a 1.5-point hairline.
+    caret: Caret = .{},
     /// The typed text's color (the theme's text when null).
     color: ?types.Color = null,
     /// Gaining the focus selects all the text, as an address field.
@@ -453,7 +456,7 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
         // Past its most lines it scrolls: the wheel's, and a scrollbar.
         c.node(i).style.scroll = lines.len > opts.max_lines;
         const follow = result.changed or e.caret != caret_before[0] or e.anchor != caret_before[1] or s.len != caret_before[2];
-        const d = lines_mod.draw(c, s, e, style, lines, view_h, focused, follow, result.vim_normal, opts.placeholder, opts.placeholder_color orelse th.muted, opts.suggestion);
+        const d = lines_mod.draw(c, s, e, style, lines, view_h, focused, follow, result.vim_normal, opts.placeholder, opts.placeholder_color orelse th.muted, opts.suggestion, opts.caret, opts.caret_color orelse th.accent);
         c.scroll.put(c.gpa, it.id, e.scroll_y) catch {};
         result.line = d.line;
         result.lines = d.lines;
@@ -466,7 +469,7 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
                 .caret = e.caret,
                 .anchor = e.anchor,
                 .marked = e.marked,
-                .caret_rect = .{ .x = r.x + pad_x + d.caret.x, .y = r.y + pad_y + d.caret.y, .w = 1.5, .h = lh_ },
+                .caret_rect = .{ .x = r.x + pad_x + d.caret.x, .y = r.y + pad_y + d.caret.y, .w = opts.caret.width, .h = lh_ },
             };
         }
         return result;
@@ -504,8 +507,9 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
     if (focused and hi == lo and (result.vim_normal or textedit.caretVisible(c))) {
         // Vim's normal mode: a block over the character under the caret.
         const block = result.vim_normal;
-        const w: f32 = if (!block) 1.5 else if (e.caret < s.len) @max(4, c.text.caretX(shown, style, shownIndex(s, opts.password, @min(s.len, e.caret + 1))) - caret_x) else c.text.width("m", style);
-        _ = c.leaf(.{ .absolute = true, .width = .{ .px = w }, .height = .{ .px = lh }, .background = if (block) th.accent.alpha(0.45) else opts.caret_color orelse th.accent, .offset = .{ .x = caret_x - e.scroll_x } }, .none, null);
+        const w: f32 = if (!block) opts.caret.width else if (e.caret < s.len) @max(4, c.text.caretX(shown, style, shownIndex(s, opts.password, @min(s.len, e.caret + 1))) - caret_x) else c.text.width("m", style);
+        const inset: f32 = if (block) 0 else opts.caret.inset;
+        _ = c.leaf(.{ .absolute = true, .width = .{ .px = w }, .height = .{ .px = @max(1, lh - 2 * inset) }, .radius = if (block) 0 else opts.caret.radius, .background = if (block) th.accent.alpha(0.45) else opts.caret_color orelse th.accent, .offset = .{ .x = caret_x - e.scroll_x, .y = inset } }, .none, null);
     }
     if (focused) {
         c.focused_password = opts.password;
@@ -517,7 +521,7 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
             .caret = e.caret,
             .anchor = e.anchor,
             .marked = e.marked,
-            .caret_rect = .{ .x = r.x + pad_x + caret_x - e.scroll_x, .y = r.y + (r.h - lh) / 2, .w = 1.5, .h = lh },
+            .caret_rect = .{ .x = r.x + pad_x + caret_x - e.scroll_x, .y = r.y + (r.h - lh) / 2, .w = opts.caret.width, .h = lh },
         };
     }
     return result;
