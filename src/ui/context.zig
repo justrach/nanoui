@@ -107,7 +107,7 @@ pub const Interaction = struct {
     focused: bool,
 };
 
-const Hit = struct { id: u64, index: u32, rect: types.Rect, scroll: bool };
+const Hit = struct { id: u64, index: u32, rect: types.Rect, scroll: bool, wheel: bool = false };
 
 pub const Cursor = enum { arrow, hand, text, resize_left_right, resize_up_down };
 
@@ -563,13 +563,14 @@ pub const Context = struct {
         @import("context_hits.zig").computeHot(c);
     }
 
-    /// Scrolls the innermost scrolling box under the pointer.
+    /// Scrolls the innermost scrolling box under the pointer, if no `wheel` box is over it.
     pub fn applyScroll(c: *Context, dy: f32) bool {
         var i = c.hits.items.len;
         while (i > 0) {
             i -= 1;
             const h = c.hits.items[i];
             if (h.scroll and h.rect.contains(c.input.mouse)) {
+                if (h.wheel) return false;
                 const gop = c.scroll.getOrPut(c.gpa, h.id) catch return false;
                 if (!gop.found_existing) gop.value_ptr.* = 0;
                 gop.value_ptr.* = @max(0, gop.value_ptr.* - dy);

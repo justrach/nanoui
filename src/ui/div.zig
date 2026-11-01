@@ -186,6 +186,11 @@ pub const Div = struct {
     pub fn scrollY(d: Div) Div {
         return d.set("scroll", true);
     }
+    /// Takes the wheel over it, read with `wants_wheel` (a strip of tabs
+    /// that pans): a scrolling box behind it doesn't scroll instead.
+    pub fn wheel(d: Div) Div {
+        return d.set("wheel", true);
+    }
     pub fn absolute(d: Div) Div {
         return d.set("absolute", true);
     }

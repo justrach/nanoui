@@ -144,6 +144,7 @@ test {
     _ = @import("triangulate.zig");
     _ = @import("tests_motion.zig");
     _ = @import("tests_layer.zig");
+    _ = @import("tests_wheel.zig");
     _ = @import("tests_safe_area.zig");
     _ = @import("motion/motion.zig");
     _ = @import("keymap.zig");
