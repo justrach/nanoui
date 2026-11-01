@@ -94,6 +94,7 @@ pub const textField = textfield.textField;
 pub const TextFieldOptions = textfield.Options;
 pub const TextBuffer = textfield.TextBuffer;
 pub const TextFieldResult = textfield.Result;
+pub const TextFieldCaret = textfield.Caret;
 /// Declarative, interruptible animation (springs, tweens, presence).
 pub const motion = @import("motion/motion.zig");
 pub const div = @import("div.zig").div;
