@@ -181,6 +181,8 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip:
         }
     }
     if (n.interactive and visible.w > 0 and visible.h > 0) c.addHit(n.id, index, visible, false);
+    // Over the scrolling boxes behind it, never hot itself.
+    if (st.wheel and visible.w > 0 and visible.h > 0) c.next_hits.append(c.gpa, .{ .id = n.id, .index = index, .rect = visible, .scroll = true, .wheel = true }) catch {};
 
     var child_clip = clip;
     if (st.clip or st.scroll_x) child_clip = visible;

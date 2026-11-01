@@ -190,6 +190,11 @@ pub const Div = struct {
     pub fn scrollY(d: Div) Div {
         return d.set("scroll", true);
     }
+    /// Takes the wheel over it, read with `wants_wheel` (a strip of tabs
+    /// that pans): a scrolling box behind it doesn't scroll instead.
+    pub fn wheel(d: Div) Div {
+        return d.set("wheel", true);
+    }
     /// How a scrolling box shows its bar: `.always`, or `.{ .overlay = color }`
     /// to show it only while the box scrolls, as touch platforms do.
     pub fn scrollbar(d: Div, v: types.Scrollbar) Div {
