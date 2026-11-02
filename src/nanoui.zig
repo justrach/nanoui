@@ -148,6 +148,7 @@ test {
     _ = @import("menu_types.zig");
     _ = @import("update.zig");
     _ = @import("update_auto.zig");
+    _ = @import("basics/kv_file.zig");
     _ = @import("http.zig");
     _ = haptics;
     _ = location;
