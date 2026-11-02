@@ -79,6 +79,8 @@ pub extern "user32" fn DestroyWindow(hwnd: HWND) callconv(.winapi) BOOL;
 pub extern "user32" fn ShowWindow(hwnd: HWND, cmd: i32) callconv(.winapi) BOOL;
 pub extern "user32" fn IsWindowVisible(hwnd: HWND) callconv(.winapi) BOOL;
 pub extern "user32" fn IsZoomed(hwnd: HWND) callconv(.winapi) BOOL;
+/// A minimized window: its client area is the icon's, and nothing of it shows.
+pub extern "user32" fn IsIconic(hwnd: HWND) callconv(.winapi) BOOL;
 pub extern "user32" fn SetForegroundWindow(hwnd: HWND) callconv(.winapi) BOOL;
 pub extern "user32" fn GetForegroundWindow() callconv(.winapi) ?HWND;
 pub extern "user32" fn SetFocus(hwnd: HWND) callconv(.winapi) ?HWND;
@@ -279,6 +281,11 @@ pub const WM_KEYDOWN = 0x0100;
 pub const WM_CHAR = 0x0102;
 pub const WM_SYSKEYDOWN = 0x0104;
 pub const WM_TIMER = 0x0113;
+/// The window became, or stopped being, the active application.
+pub const WM_ACTIVATEAPP = 0x001C;
+pub const WM_SHOWWINDOW = 0x0018;
+/// The display's resolution or color depth changed.
+pub const WM_DISPLAYCHANGE = 0x007E;
 pub const WM_MOUSEMOVE = 0x0200;
 pub const WM_LBUTTONDOWN = 0x0201;
 pub const WM_LBUTTONUP = 0x0202;

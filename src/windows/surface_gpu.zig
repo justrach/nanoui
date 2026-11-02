@@ -40,7 +40,10 @@ pub fn paintGpu(self: *Surface, h: w.HWND) bool {
     // that just began defers its first size too, instead of resizing once and
     // then holding still for the rest of the drag.
     p.resizing = self.dragging;
-    p.resize(pw, ph) catch return false;
+    p.resize(pw, ph) catch |e| {
+        std.log.warn("nanoui: the swap chain could not be sized for {d}x{d}: {t}", .{ pw, ph, e });
+        return false;
+    };
     if (self.gpu == null) {
         self.gpu = d3d11.Renderer.initOn(@ptrCast(d3d.Presenter.deviceOf(p)), @ptrCast(d3d.Presenter.contextOf(p))) catch {
             self.no_gpu = true;
@@ -74,8 +77,10 @@ pub fn paintGpu(self: *Surface, h: w.HWND) bool {
         dumpGpuFrame(self, g);
     }
     const ok = p.present();
+    self.trace("gpu paint: {d}x{d} px, chain {d}x{d}, {d} draws, present 0x{x:0>8} ok={}", .{ pw, ph, p.width, p.height, self.instances.items.len, p.last_hr, ok });
     if (!ok) {
         // The device was lost: both go, and a new pair gets the frame.
+        std.log.warn("nanoui: present failed (0x{x:0>8}): the device and swap chain are made again", .{p.last_hr});
         release(self);
         _ = w.InvalidateRect(h, null, 0);
     }
@@ -131,13 +136,15 @@ pub fn present(self: *Surface, h: w.HWND) bool {
     const p = &self.presenter.?;
     const bg = self.ctx.theme.background;
     p.setBackground(bg.r, bg.g, bg.b);
-    p.upload(self.pixels.bytes, pw, ph) catch {
+    p.upload(self.pixels.bytes, pw, ph) catch |e| {
+        std.log.warn("nanoui: the canvas could not reach the swap chain: {t}", .{e});
         p.deinit();
         self.presenter = null;
         return false;
     };
     if (!p.present()) {
         // The device was lost: a new one gets the whole frame.
+        std.log.warn("nanoui: presenting the canvas failed (0x{x:0>8}): the chain is made again", .{p.last_hr});
         p.deinit();
         self.presenter = null;
         _ = w.InvalidateRect(h, null, 0);
@@ -173,6 +180,29 @@ pub fn paint(self: *Surface, h: w.HWND) void {
     var ps: w.PAINTSTRUCT = undefined;
     const dc = w.BeginPaint(h, &ps) orelse return;
     defer _ = w.EndPaint(h, &ps);
+    self.paints += 1;
+    // A minimized window has the icon's client area and shows nothing of it:
+    // sizing the swap chain for that would leave the window blank until the
+    // next resize sized it back.
+    if (w.IsIconic(h) != 0) return;
+    // The size the window really is, read where it is drawn into. A WM_SIZE
+    // can be missed (a modal loop pumps its own messages; a hidden window has
+    // no client area to speak of) and a frame built for another size draws
+    // nothing where the window now is. This is the read a resize does, so a
+    // window that would have stayed blank until one is repainted by its own
+    // paint.
+    const was = self.size;
+    const resynced = self.updateSize(h);
+    if (resynced) {
+        // What a resize would have done, done by the paint: the frame is
+        // built for the size the window is now. This firing at all means a
+        // size message went missing, which is the bug this paint is here for.
+        std.log.warn("nanoui: a paint found the window {d:.0}x{d:.0}, not the frame's {d:.0}x{d:.0}: rebuilt for it", .{ self.size.w, self.size.h, was.w, was.h });
+        self.size_dirty = true;
+    }
+    self.trace("paint: {d:.0}x{d:.0} at {d:.2}, {d} draws, dirty={} in_frame={} gpu={} resynced={}", .{ self.size.w, self.size.h, self.scale, self.instances.items.len, self.size_dirty, self.in_frame, self.gpu != null, resynced });
+    // Nothing to draw into (a hidden window): the frame stays as it was.
+    if (self.size.w <= 0 or self.size.h <= 0) return;
     // A size arrived since the last frame: build it now, once, however many
     // WM_SIZE messages asked for it. No invalidation: this paint is the
     // drawing, and asking for another would draw every size twice. A paint
