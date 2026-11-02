@@ -145,7 +145,7 @@ fn scrubTo(c: *Context, id: u64, g: ScrollbarGeom, thumb_top: f32) void {
 }
 
 pub fn tryPressScrollbar(c: *Context) bool {
-    if (c.input.button != .left or c.input.ctrl) return false;
+    if (c.input.button != .left or (@import("keys.zig").mac and c.input.ctrl)) return false;
     const m = c.input.mouse;
     // The bar is drawn over the box's right edge and has no hit box of its own,
     // so whatever is under the pointer there belongs to a row or to nothing:

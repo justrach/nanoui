@@ -8,6 +8,10 @@ const builtin = @import("builtin");
 /// keyboard) or Control.
 pub const mac = builtin.os.tag == .macos or builtin.os.tag == .ios;
 
+/// Control-click asks for a context menu, as the Mac has it. Elsewhere
+/// Ctrl+left is a plain click with Ctrl held — how lists are multi-selected
+/// on Windows and Linux — so it stays a left click there.
+
 /// `s` (written with the Mac's ⌘ ⌃ ⌥ ⇧) as this platform shows it.
 pub fn label(comptime s: []const u8) []const u8 {
     if (mac) return s;
