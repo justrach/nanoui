@@ -79,6 +79,9 @@ pub const Surface = struct {
     no_gpu: bool = false,
     /// A size arrived that no frame has been built for yet.
     size_dirty: bool = false,
+    /// The client area is being worked out again: the call that does it can
+    /// send the size messages that would ask for it again.
+    repairing: bool = false,
     /// A drag is moving the window's edge (`WM_ENTERSIZEMOVE` .. `WM_EXITSIZEMOVE`).
     dragging: bool = false,
     /// `NANOUI_DUMP`: F12 writes the canvas beside the same frame drawn whole.
@@ -258,6 +261,17 @@ pub const Surface = struct {
         // become a zeroed surface, and a frame built for nothing is a window
         // that stays blank until something resizes it.
         if (w.GetClientRect(h, &r) == 0) return false;
+        // Windows hands back the client area it last worked out, and a window
+        // moved to another monitor can keep the one it had there — a client
+        // area that is not inside the window at all. Nothing invalidates a
+        // region it does not intersect: no WM_PAINT comes, the frame is never
+        // built, and the window stays blank until something resizes it. The
+        // client area is worked out again here instead, which is exactly the
+        // `WM_NCCALCSIZE` a resize sends, with nothing moved.
+        if (!self.clientFits(h, r)) {
+            self.repairClient(h, r);
+            if (w.GetClientRect(h, &r) == 0) return false;
+        }
         const dpi = w.GetDpiForWindow(h);
         const scale: f32 = if (dpi > 0) @as(f32, @floatFromInt(dpi)) / 96 else 1;
         const w_: f32 = @as(f32, @floatFromInt(r.right - r.left)) / scale;
@@ -273,6 +287,40 @@ pub const Surface = struct {
         }
         self.size = .{ .w = w_, .h = h_ };
         return changed;
+    }
+
+    /// Whether the client area a window reports lies inside the window. True of
+    /// every window Windows has placed; false when the two disagree — a client
+    /// area belonging to where the window was, not to where it is.
+    fn clientFits(_: *Surface, h: w.HWND, r: w.RECT) bool {
+        var wr: w.RECT = .{};
+        if (w.GetWindowRect(h, &wr) == 0) return true;
+        // Smaller than the window's frame is all a client area can be; one
+        // bigger than the frame cannot be inside it.
+        if (r.right - r.left > wr.right - wr.left or r.bottom - r.top > wr.bottom - wr.top) return false;
+        // And where it starts: a client area whose corner is outside the window
+        // is not the window's, whatever its size.
+        var origin: w.POINT = .{};
+        if (w.ClientToScreen(h, &origin) == 0) return true;
+        return origin.x >= wr.left and origin.x < wr.right and origin.y >= wr.top and origin.y < wr.bottom;
+    }
+
+    /// Has Windows work the client area out again, without moving or resizing
+    /// the window, and ask for the frame the window needs now. A client area
+    /// that has been outside the window left no update region to paint, so the
+    /// invalidation is what gets the first frame back.
+    fn repairClient(self: *Surface, h: w.HWND, stale: w.RECT) void {
+        if (self.repairing) return;
+        self.repairing = true;
+        defer self.repairing = false;
+        _ = w.SetWindowPos(h, null, 0, 0, 0, 0, w.SWP_NOSIZE | w.SWP_NOMOVE | w.SWP_NOZORDER | w.SWP_NOACTIVATE | w.SWP_FRAMECHANGED);
+        var fresh: w.RECT = .{};
+        _ = w.GetClientRect(h, &fresh);
+        std.log.warn("nanoui: the client area {d}x{d} was not the window's: worked out again as {d}x{d}", .{
+            stale.right - stale.left, stale.bottom - stale.top, fresh.right - fresh.left, fresh.bottom - fresh.top,
+        });
+        self.size_dirty = true;
+        _ = w.InvalidateRect(h, null, 0);
     }
 
     fn setMouse(self: *Surface, lp: w.LPARAM) void {
@@ -314,6 +362,16 @@ pub const Surface = struct {
                 const r: *const w.RECT = @ptrFromInt(@as(usize, @bitCast(lp)));
                 _ = w.SetWindowPos(h, null, r.left, r.top, r.right - r.left, r.bottom - r.top, 0x0004 | 0x0010); // no z-order, no activate
                 return 0;
+            },
+            w.WM_MOVE => {
+                // A window moved onto another monitor has a client area there.
+                // One left at the old monitor's would never be painted again,
+                // and a move is not always a resize: read it here too.
+                if (w.IsIconic(h) == 0 and self.updateSize(h)) {
+                    self.size_dirty = true;
+                    _ = w.InvalidateRect(h, null, 0);
+                    self.requestFrame();
+                }
             },
             w.WM_SIZE => {
                 // A resize is many messages a second, and laying the view out
