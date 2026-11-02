@@ -19,6 +19,12 @@ pub const Result = struct {
 };
 
 pub fn run(c: *Context, view: View, ts: *text.TextSystem, instances: *std.ArrayList(gpu.Instance), size: types.Size, scale: f32, theme: Theme, dt: f32, time: f64) Result {
+    // A frame inside a frame (a surface without the guard, while a dialog's
+    // event loop runs in the view) would reset the frame's memory and its
+    // boxes under the build that is still using them.
+    if (c.building) std.debug.panic("nanoui: a frame started while another was being built", .{});
+    c.building = true;
+    defer c.building = false;
     c.dt = dt;
     c.time = time;
     c.size = size;

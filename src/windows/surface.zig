@@ -49,6 +49,9 @@ pub const Surface = struct {
     /// Frames go to the screen through this, once made; GDI if it can't be.
     presenter: ?d3d.Presenter = null,
     no_d3d: bool = false,
+    /// A frame is being built, and another was asked for meanwhile.
+    in_frame: bool = false,
+    pending: bool = false,
 
     pub fn create(window: *Window, view: ui.View, theme_override: ?Theme) !*Surface {
         const gpa = window.app.gpa;
@@ -76,12 +79,23 @@ pub const Surface = struct {
     }
 
     pub fn frame(self: *Surface) void {
+        // Asked for while a frame is being built (a dialog run from the
+        // view runs an event loop inside it, which draws): building again
+        // would reuse what the frame is laying out. It waits for that
+        // frame, which asks for it as it ends.
+        if (self.in_frame) {
+            self.pending = true;
+            return;
+        }
         if (self.size.w <= 0 or self.size.h <= 0) return;
+        self.pending = false;
         const c = &self.ctx;
         const now = clock.now();
         const dt: f32 = if (self.last_frame_time > 0) @floatCast(@min(now - self.last_frame_time, 0.1)) else 1.0 / 60.0;
         self.last_frame_time = now;
+        self.in_frame = true;
         const r = frame_mod.run(c, self.view, &self.text, &self.instances, self.size, self.scale, self.theme(), dt, now - self.start_time);
+        self.in_frame = false;
         // The client area is in pixels, as the damage is.
         if (self.pixels.damage(self.shown())) |d| if (self.hwnd()) |h| {
             const rect: w.RECT = .{ .left = @intCast(d[0]), .top = @intCast(d[1]), .right = @intCast(d[2]), .bottom = @intCast(d[3]) };
@@ -97,6 +111,7 @@ pub const Surface = struct {
         if (!more) if (c.frame_in) |s| if (self.hwnd()) |h| {
             _ = w.SetTimer(h, later_timer, @intFromFloat(@max(1, s * 1000)), null);
         };
+        if (self.pending) self.requestFrame();
         if (!c.animating) self.last_frame_time = 0;
     }
 

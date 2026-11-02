@@ -210,6 +210,8 @@ pub const Context = struct {
     changed: bool = false,
     /// Set while an animated value has not reached its target.
     animating: bool = false,
+    /// A frame is being built (`frame.run`): another may not start inside it.
+    building: bool = false,
     stats: FrameStats = .{},
     /// Set when the pointer is over something clickable.
     cursor_hand: bool = false,
