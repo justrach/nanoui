@@ -489,14 +489,18 @@ What you need, an app's build.zig, and what isn't there yet:
       <a href="https://github.com/gstohl/nanomail"><img src="docs/images/nanomail-dark.png" alt="nanomail: a message with links and a picture, shared mailboxes in the sidebar"></a>
       <p><a href="https://github.com/gstohl/nanomail"><strong>nanomail</strong></a>: a JMAP mail client for macOS and iOS. It shows rich mail with links and pictures, loading pictures from the web only when you ask. New mail arrives by push, and mailboxes others share with you appear with what you may do in them. It signs in with a password, a token, or OAuth in the browser.</p>
     </td>
-    <td width="50%" valign="top"></td>
+    <td width="50%" valign="top">
+      <a href="https://github.com/justrach/nanolight"><img src="docs/images/nanolight.jpg" alt="Nanolight: its panel has found Safari from &quot;saf&quot;"></a>
+      <p><a href="https://github.com/justrach/nanolight"><strong>nanolight</strong></a>: a ⌘Space launcher for the Mac. It finds apps as you type (initials and typos too), does math, and completes Google searches inline, showing the results in its own panel. Ask Grok or search X a row away.</p>
+    </td>
   </tr>
 </table>
 
 Download them for macOS:
 [nanoterm](https://github.com/justrach/nanoterm/releases/latest/download/nanoterm-macos-arm64.dmg) ·
 [nanomon](https://github.com/justrach/nanomon/releases/latest/download/nanomon-macos-arm64.dmg) ·
-[nanostudio](https://github.com/justrach/nanostudio/releases/latest/download/nanostudio-macos-arm64.dmg).
+[nanostudio](https://github.com/justrach/nanostudio/releases/latest/download/nanostudio-macos-arm64.dmg) ·
+[nanolight](https://github.com/justrach/nanolight/releases/latest/download/nanolight-macos-arm64.dmg).
 nanomail builds from source for now (`zig build`; its README has iOS).
 
 They live in `apps/` as submodules, and each also builds on its own, fetching

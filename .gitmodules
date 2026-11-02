@@ -16,3 +16,6 @@
 [submodule "site"]
 	path = site
 	url = https://github.com/justrach/nanoui-site.git
+[submodule "apps/nanolight"]
+	path = apps/nanolight
+	url = https://github.com/justrach/nanolight.git
