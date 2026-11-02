@@ -6,6 +6,7 @@ const std = @import("std");
 const objc = @import("../objc.zig");
 const cf = @import("cf.zig");
 const ctx_mod = @import("context.zig");
+const textfield = @import("textfield.zig");
 const Surface = @import("surface.zig").Surface;
 
 const NSRange = extern struct { location: usize, length: usize };
@@ -40,6 +41,13 @@ pub const Queue = struct {
     arena: std.heap.ArenaAllocator,
     /// Inside `keyDown:`: operations wait for the end of the event.
     collecting: bool = false,
+    /// The focused field as the operations waiting leave it. An input
+    /// method sets its text and asks about it in the same event (where the
+    /// composition is, what is selected): the answers are this, not the
+    /// last frame's, or it loses its place (Japanese's Space and ↓).
+    pending: ?ctx_mod.FocusedText = null,
+    text: textfield.TextBuffer = .{},
+    edit: ctx_mod.EditState = .{},
 
     pub fn init(gpa: std.mem.Allocator) Queue {
         return .{ .arena = .init(gpa) };
@@ -48,12 +56,44 @@ pub const Queue = struct {
     pub fn deinit(q: *Queue, gpa: std.mem.Allocator) void {
         q.ops.deinit(gpa);
         q.arena.deinit();
+        q.text.deinit();
+    }
+
+    /// Applies `op` to a copy of the focused field `base`, as the frame
+    /// will to the field itself.
+    pub fn preview(q: *Queue, base: ?ctx_mod.FocusedText, multiline: bool, op: ctx_mod.TextOp) void {
+        const f = q.pending orelse base orelse return;
+        if (q.pending == null and q.text.replace(0, q.text.buf.items.len, f.text) != f.text.len) return;
+        q.edit.caret = f.caret;
+        q.edit.anchor = f.anchor;
+        q.edit.marked = f.marked;
+        var r: textfield.Result = .{};
+        textfield.apply(&q.text, &q.edit, op, .{ .multiline = multiline }, .{ .write = ignoreCopy }, &r);
+        q.pending = .{ .id = f.id, .text = q.text.text(), .caret = q.edit.caret, .anchor = q.edit.anchor, .marked = q.edit.marked, .caret_rect = f.caret_rect };
+    }
+
+    /// The focused field as the input method should see it now.
+    pub fn focused(q: *const Queue, base: ?ctx_mod.FocusedText) ?ctx_mod.FocusedText {
+        return q.pending orelse base;
     }
 };
 
+fn ignoreCopy(_: ?*anyopaque, _: []const u8) void {}
+
 fn push(s: *Surface, op: ctx_mod.TextOp) void {
     s.text_queue.ops.append(s.gpa, op) catch return;
-    if (!s.text_queue.collecting) flush(s);
+    if (!s.text_queue.collecting) return flush(s);
+    s.text_queue.preview(s.ctx.focused_text, s.ctx.focused_multiline, op);
+}
+
+fn focusedOf(s: *Surface) ?ctx_mod.FocusedText {
+    return s.text_queue.focused(s.ctx.focused_text);
+}
+
+/// An input method is composing in the focused field: keys are its first.
+pub fn composing(s: *Surface) bool {
+    const f = focusedOf(s) orelse return false;
+    return f.marked != null;
 }
 
 fn dupe(s: *Surface, str: []const u8) []const u8 {
@@ -68,6 +108,7 @@ pub fn flush(s: *Surface) void {
     s.frame();
     s.ctx.input.ops = &.{};
     s.ctx.undo_op = .none;
+    q.pending = null;
     q.ops.clearRetainingCapacity();
     _ = q.arena.reset(.retain_capacity);
 }
@@ -116,8 +157,7 @@ fn unmarkText(obj: objc.Object, _: objc.SEL) callconv(.c) void {
 
 fn hasMarkedText(obj: objc.Object, _: objc.SEL) callconv(.c) objc.BOOL {
     const s = objc.getZig(Surface, obj) orelse return objc.NO;
-    const f = s.ctx.focused_text orelse return objc.NO;
-    return f.marked != null;
+    return composing(s);
 }
 
 fn range16(text: []const u8, lo: usize, hi: usize) NSRange {
@@ -128,14 +168,14 @@ fn range16(text: []const u8, lo: usize, hi: usize) NSRange {
 
 fn markedRange(obj: objc.Object, _: objc.SEL) callconv(.c) NSRange {
     const s = objc.getZig(Surface, obj) orelse return .{ .location = not_found, .length = 0 };
-    const f = s.ctx.focused_text orelse return .{ .location = not_found, .length = 0 };
+    const f = focusedOf(s) orelse return .{ .location = not_found, .length = 0 };
     const m = f.marked orelse return .{ .location = not_found, .length = 0 };
     return range16(f.text, m[0], m[1]);
 }
 
 fn selectedRange(obj: objc.Object, _: objc.SEL) callconv(.c) NSRange {
     const s = objc.getZig(Surface, obj) orelse return .{ .location = not_found, .length = 0 };
-    const f = s.ctx.focused_text orelse return .{ .location = not_found, .length = 0 };
+    const f = focusedOf(s) orelse return .{ .location = not_found, .length = 0 };
     return range16(f.text, @min(f.caret, f.anchor), @max(f.caret, f.anchor));
 }
 
@@ -148,7 +188,7 @@ fn validAttributes(_: objc.Object, _: objc.SEL) callconv(.c) objc.Object {
 /// that exists.
 fn attributedSubstring(obj: objc.Object, _: objc.SEL, r: NSRange, actual: ?*NSRange) callconv(.c) ?objc.Object {
     const s = objc.getZig(Surface, obj) orelse return null;
-    const f = s.ctx.focused_text orelse return null;
+    const f = focusedOf(s) orelse return null;
     const b = clampRange(f.text, r) orelse return null;
     if (actual) |a| a.* = range16(f.text, b[0], b[1]);
     const str = objc.nsString(f.text[b[0]..b[1]]);
@@ -340,4 +380,23 @@ pub fn popMenu(s: *Surface) void {
     objc.msg(void, m, "addItem:", .{all});
     const at: objc.CGPoint = .{ .x = s.ctx.input.mouse.x, .y = s.ctx.input.mouse.y };
     _ = objc.msg(objc.BOOL, m, "popUpMenuPositioningItem:atLocation:inView:", .{ @as(?objc.Object, null), at, s.nsview });
+}
+
+test "the input method's questions see what it set in the same event" {
+    const t = std.testing;
+    var q: Queue = .init(t.allocator);
+    defer q.deinit(t.allocator);
+    const base: ctx_mod.FocusedText = .{ .id = 1, .text = "emacs ", .caret = 6, .anchor = 6, .marked = null, .caret_rect = .{} };
+    // ふくすう becomes 複数, committed; ぎょう is composed, all selected.
+    q.preview(base, false, .{ .set_marked = .{ .text = "ふくすう", .sel_start = 12, .sel_len = 0 } });
+    q.preview(base, false, .{ .insert = "複数" });
+    q.preview(base, false, .{ .set_marked = .{ .text = "ぎょう", .sel_start = 0, .sel_len = 9 } });
+    const f = q.focused(base).?;
+    try t.expectEqualStrings("emacs 複数ぎょう", f.text);
+    try t.expectEqual(@as(?[2]usize, .{ 12, 21 }), f.marked);
+    try t.expectEqual(@as(usize, 12), f.anchor);
+    try t.expectEqual(@as(usize, 21), f.caret);
+    // The frame ran them: the field's own state answers again.
+    q.pending = null;
+    try t.expectEqualStrings("emacs ", q.focused(base).?.text);
 }
