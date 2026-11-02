@@ -491,7 +491,7 @@ What you need, an app's build.zig, and what isn't there yet:
     </td>
     <td width="50%" valign="top">
       <a href="https://github.com/justrach/nanolight"><img src="docs/images/nanolight.jpg" alt="Nanolight: its panel has found Safari from &quot;saf&quot;"></a>
-      <p><a href="https://github.com/justrach/nanolight"><strong>nanolight</strong></a>: a ⌘Space launcher for the Mac. It finds apps as you type (initials and typos too), does math, and completes Google searches inline, showing the results in its own panel. Ask Grok or search X a row away.</p>
+      <p><a href="https://github.com/justrach/nanolight"><strong>nanolight</strong></a>: a launcher for the Mac, Windows and Linux. It finds apps as you type (initials and typos too), does math, and completes Google searches inline, showing the results in its own panel. It runs Raycast extensions and script commands, and asks Grok or searches X a row away.</p>
     </td>
   </tr>
 </table>
