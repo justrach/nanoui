@@ -130,6 +130,8 @@ pub const accentColor = plat.desktop.accentColor;
 pub const update = @import("update.zig");
 pub const Updater = update.Updater;
 pub const UpdateOptions = update.Options;
+/// Restarting into an update unseen (`Updater.autoRestart`).
+pub const UpdateAuto = update.Auto;
 /// Runs the event loop for a while (headless tests: replies, processes, timers).
 pub const runFor = @import("platform.zig").runFor;
 
@@ -145,6 +147,7 @@ test {
     std.testing.refAllDecls(kit);
     _ = @import("menu_types.zig");
     _ = @import("update.zig");
+    _ = @import("update_auto.zig");
     _ = @import("http.zig");
     _ = haptics;
     _ = location;

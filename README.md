@@ -565,8 +565,8 @@ Rules for working here, by hand or with an agent, are in
 nanoui is a subset of what full frameworks offer. Pages work on macOS and
 Windows so far, accessibility is only on iOS and macOS's built-in controls,
 there are no notifications, channels or plugins yet, and bundling is only for
-iOS and Android. Apps update themselves from GitHub releases on macOS
-(`nanoui.Updater`). Bound methods run on the main thread.
+iOS and Android. Apps update themselves from GitHub releases on macOS, even
+restarting unseen (`nanoui.Updater`). Bound methods run on the main thread.
 
 ## License
 
@@ -583,15 +583,12 @@ nanoui stands on the shoulders of these projects:
   means:
   - the Objective-C runtime called directly, with runtime classes for
     delegates;
-  - a batched outbox with one evaluation per main-loop turn;
-  - events held until the page is ready;
-  - a generated, typed client;
-  - native UI drawn by the framework;
+  - a batched outbox (one evaluation per main-loop turn), held events;
+  - a generated, typed client, and native UI drawn by the framework;
   - Liquid Glass drawn by its own renderers, ported from mygo's glass plugin.
 - **[GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui)** by
   [Zed Industries](https://zed.dev). From GPUI, nanoui takes:
-  - elements styled by method chains;
-  - the virtualized `uniform_list`;
+  - elements styled by method chains, and the virtualized `uniform_list`;
   - layouts cached across frames, with glyphs rasterized once into an atlas;
   - Gaussian shadows;
   - its general idea of a fast, GPU-drawn native UI.
