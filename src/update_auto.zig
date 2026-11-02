@@ -80,8 +80,9 @@ pub fn enable(u: *Updater, app: *App, auto: Auto) void {
     u.auto = auto;
     u.app = app;
     app.away_hook = .{ .ctx = u, .func = wentAway };
+    // `App.quiet` stays set until launching finishes (`didFinishLaunching`):
+    // cleared here, before the run loop, AppKit would still activate the app.
     if (u.restored) |r| place(app, r.value);
-    app.quiet = false;
     consider(u);
 }
 
