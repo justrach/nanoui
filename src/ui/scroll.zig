@@ -52,6 +52,8 @@ pub fn applyScroll(c: *Context, dy: f32) bool {
         i -= 1;
         const h = c.hits.items[i];
         if (h.scroll and h.rect.contains(c.input.mouse)) {
+            // A box that takes the wheel itself is over the one behind.
+            if (h.wheel) return false;
             const gop = c.scroll.getOrPut(c.gpa, h.id) catch return false;
             if (!gop.found_existing) gop.value_ptr.* = 0;
             if (!isHolding(c)) {
