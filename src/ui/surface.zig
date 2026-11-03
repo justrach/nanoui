@@ -146,14 +146,7 @@ pub const Surface = struct {
             for (events.drag_types) |t| objc.msg(void, arr, "addObject:", .{objc.nsString(t)});
             objc.msg(void, nsview, "registerForDraggedTypes:", .{arr});
         }
-        {
-            const link = objc.msg(objc.Object, objc.alloc("CAMetalDisplayLink"), "initWithMetalLayer:", .{self.renderer.layer});
-            objc.msg(void, link, "setDelegate:", .{nsview});
-            objc.msg(void, link, "setPaused:", .{objc.YES});
-            const loop = objc.msg(objc.Object, objc.class("NSRunLoop"), "mainRunLoop", .{});
-            objc.msg(void, link, "addToRunLoop:forMode:", .{ loop, NSRunLoopCommonModes });
-            self.display_link = link;
-        }
+        self.startLink();
         {
             const ws = objc.msg(objc.Object, objc.class("NSWorkspace"), "sharedWorkspace", .{});
             self.reduce_motion = objc.msg(objc.BOOL, ws, "accessibilityDisplayShouldReduceMotion", .{});
@@ -166,6 +159,36 @@ pub const Surface = struct {
         self.frame();
         return self;
     }
+    /// The CAMetalDisplayLink that paces frames and hands out drawables.
+    pub fn startLink(self: *Surface) void {
+        if (self.display_link != null) return;
+        const link = objc.msg(objc.Object, objc.alloc("CAMetalDisplayLink"), "initWithMetalLayer:", .{self.renderer.layer});
+        objc.msg(void, link, "setDelegate:", .{self.nsview});
+        objc.msg(void, link, "setPaused:", .{objc.YES});
+        const loop = objc.msg(objc.Object, objc.class("NSRunLoop"), "mainRunLoop", .{});
+        objc.msg(void, link, "addToRunLoop:forMode:", .{ loop, NSRunLoopCommonModes });
+        self.display_link = link;
+        self.paced = false;
+        self.link_fps = -1;
+    }
+
+    /// Detaches the link for a live resize. A layer a CAMetalDisplayLink
+    /// drives may not be asked for `nextDrawable` (AppKit throws
+    /// CAMetalLayerInvalidOperation), so a resize's own frame could never
+    /// present: the window showed the last drawable stretched to the new
+    /// size until the link's next frame. Without the link, `frame` takes a
+    /// drawable itself and presents in the resize's transaction.
+    pub fn stopLink(self: *Surface) void {
+        const link = self.display_link orelse return;
+        objc.msg(void, link, "setPaused:", .{objc.YES});
+        if (objc.msg(objc.BOOL, link, "respondsToSelector:", .{objc.sel("setDelegate:")}))
+            objc.msg(void, link, "setDelegate:", .{@as(?objc.Object, null)});
+        objc.msg(void, link, "invalidate", .{});
+        objc.release(link);
+        self.display_link = null;
+        self.paced = false;
+    }
+
     pub fn destroy(self: *Surface) void {
         self.dead = true;
         self.force_destroy = !self.window.app.running;
@@ -275,7 +298,12 @@ pub const Surface = struct {
 
     pub fn frame(self: *Surface) void {
         if (self.in_frame or self.dead) return;
-        self.renderer.given_drawable = null;
+        // No link (a live resize): this frame presents, at the size it was
+        // laid out at, in the transaction that resized the window.
+        self.renderer.given_drawable = if (self.display_link == null and self.visible())
+            objc.msg(?objc.Object, self.renderer.layer, "nextDrawable", .{})
+        else
+            null;
         self.full_pending = true;
         const now = @max(cf.CACurrentMediaTime(), self.last_frame_time);
         const fallback_dur = 1.0 / @as(f64, @max(60.0, self.max_fps));

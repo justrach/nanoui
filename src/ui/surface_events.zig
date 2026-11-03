@@ -471,6 +471,7 @@ fn liveResizeStart(obj: objc.Object, _: objc.SEL) callconv(.c) void {
     const s = surfaceOf(obj) orelse return;
     s.ctx.live_resizing = true;
     s.renderer.setLiveResize(true);
+    s.stopLink();
 }
 
 fn liveResizeEnd(obj: objc.Object, _: objc.SEL) callconv(.c) void {
@@ -478,6 +479,8 @@ fn liveResizeEnd(obj: objc.Object, _: objc.SEL) callconv(.c) void {
     const s = surfaceOf(obj) orelse return;
     s.ctx.live_resizing = false;
     s.frame();
+    s.startLink();
+    s.requestFrame();
 }
 
 fn setFrameSize(obj: objc.Object, _: objc.SEL, size: objc.CGSize) callconv(.c) void {
