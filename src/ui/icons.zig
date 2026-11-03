@@ -35,6 +35,18 @@ fn star(comptime cx: f32, comptime cy: f32, comptime outer: f32, comptime inner:
     return pts;
 }
 
+/// A cog: `n` teeth between radii `inner` and `outer`, as one outline.
+fn gear(comptime cx: f32, comptime cy: f32, comptime outer: f32, comptime inner: f32, comptime n: usize) [4 * n][2]f32 {
+    var pts: [4 * n][2]f32 = undefined;
+    const s = std.math.pi / @as(f32, @floatFromInt(n));
+    for (0..n) |i| {
+        const a = -std.math.pi / 2.0 + 2 * s * @as(f32, @floatFromInt(i));
+        for ([_]f32{ -0.55, -0.32, 0.32, 0.55 }, [_]f32{ inner, outer, outer, inner }, 0..) |d, r, j|
+            pts[4 * i + j] = .{ cx + r * @cos(a + d * s), cy + r * @sin(a + d * s) };
+    }
+    return pts;
+}
+
 const sq = [5]f32{ 3, 3, 18, 18, 3.5 };
 const win = [5]f32{ 3, 4, 18, 16, 2.5 };
 
@@ -47,6 +59,7 @@ pub const all = [_]Icon{
     .{ .name = "chevron.down", .ops = &.{.{ .line = &.{ .{ 6, 9 }, .{ 12, 15 }, .{ 18, 9 } } }} },
     .{ .name = "chevron.up", .ops = &.{.{ .line = &.{ .{ 6, 15 }, .{ 12, 9 }, .{ 18, 15 } } }} },
     .{ .name = "chevron.right", .ops = &.{.{ .line = &.{ .{ 9, 6 }, .{ 15, 12 }, .{ 9, 18 } } }} },
+    .{ .name = "chevron.left", .ops = &.{.{ .line = &.{ .{ 15, 6 }, .{ 9, 12 }, .{ 15, 18 } } }} },
     .{ .name = "chevron.up.chevron.down", .ops = &.{ .{ .line = &.{ .{ 8, 9 }, .{ 12, 5 }, .{ 16, 9 } } }, .{ .line = &.{ .{ 8, 15 }, .{ 12, 19 }, .{ 16, 15 } } } } },
     .{ .name = "arrow.right", .ops = &.{ .{ .line = &.{ .{ 5, 12 }, .{ 19, 12 } } }, .{ .line = &.{ .{ 13, 6 }, .{ 19, 12 }, .{ 13, 18 } } } } },
     .{ .name = "arrow.clockwise", .ops = &.{ .{ .arc = .{ 12, 12, 7.5, -60, 230 } }, .{ .line = &.{ .{ 16, 3.5 }, .{ 16.2, 6.5 }, .{ 19.2, 6.7 } } } } },
@@ -115,6 +128,14 @@ pub const all = [_]Icon{
     .{ .name = "text.cursor", .ops = &.{ .{ .line = &.{ .{ 12, 4.5 }, .{ 12, 19.5 } } }, .{ .line = &.{ .{ 9, 4 }, .{ 15, 4 } } }, .{ .line = &.{ .{ 9, 20 }, .{ 15, 20 } } } } },
     .{ .name = "textformat", .ops = &.{ .{ .line = &.{ .{ 3, 19 }, .{ 8.5, 5 }, .{ 14, 19 } } }, .{ .line = &.{ .{ 5, 14 }, .{ 12, 14 } } }, .{ .circle = .{ 18, 15.5, 3 } }, .{ .line = &.{ .{ 21, 12 }, .{ 21, 19 } } } } },
     .{ .name = "code", .ops = &.{ .{ .line = &.{ .{ 8, 7 }, .{ 3, 12 }, .{ 8, 17 } } }, .{ .line = &.{ .{ 16, 7 }, .{ 21, 12 }, .{ 16, 17 } } } } },
+    .{ .name = "gearshape", .ops = &.{ .{ .loop = &gear(12, 12, 9.5, 7, 8) }, .{ .circle = .{ 12, 12, 3 } } } },
+    // An app not yet known: a rounded square in dashes (its corners and
+    // the middle of each side).
+    .{ .name = "app.dashed", .ops = &.{ .{ .arc = .{ 7, 7, 4, 180, 270 } }, .{ .arc = .{ 17, 7, 4, 270, 360 } }, .{ .arc = .{ 17, 17, 4, 0, 90 } }, .{ .arc = .{ 7, 17, 4, 90, 180 } }, .{ .line = &.{ .{ 10.5, 3 }, .{ 13.5, 3 } } }, .{ .line = &.{ .{ 21, 10.5 }, .{ 21, 13.5 } } }, .{ .line = &.{ .{ 10.5, 21 }, .{ 13.5, 21 } } }, .{ .line = &.{ .{ 3, 10.5 }, .{ 3, 13.5 } } } } },
+    .{ .name = "app.badge", .ops = &.{ .{ .box = .{ 3, 6, 15, 15, 3.5 } }, .{ .disc = .{ 18.5, 5.5, 3.2 } } } },
+    .{ .name = "plus.forwardslash.minus", .ops = &.{ .{ .line = &.{ .{ 8, 4.5 }, .{ 8, 11.5 } } }, .{ .line = &.{ .{ 4.5, 8 }, .{ 11.5, 8 } } }, .{ .line = &.{ .{ 17.5, 4 }, .{ 6.5, 20 } } }, .{ .line = &.{ .{ 13, 16.5 }, .{ 19.5, 16.5 } } } } },
+    .{ .name = "lock.open", .ops = &.{ .{ .box = .{ 5, 11, 14, 10, 2 } }, .{ .line = &.{ .{ 8, 11 }, .{ 8, 7 } } }, .{ .arc = .{ 12, 7, 4, 180, 360 } }, .{ .disc = .{ 12, 16, 1.3 } } } },
+    .{ .name = "exclamationmark.triangle.fill", .ops = &.{ .{ .fill = &.{ .{ 12, 2.5 }, .{ 22, 20 }, .{ 2, 20 } } }, .{ .cut = &.{ .{ 12, 9 }, .{ 12, 13.5 } } }, .{ .cut = &.{ .{ 12, 16.2 }, .{ 12, 17.2 } } } } },
     .{ .name = "clear", .ops = &.{ .{ .loop = &.{ .{ 21, 5 }, .{ 9, 5 }, .{ 3, 12 }, .{ 9, 19 }, .{ 21, 19 } } }, .{ .line = &.{ .{ 12, 9 }, .{ 17, 15 } } }, .{ .line = &.{ .{ 17, 9 }, .{ 12, 15 } } } } },
 };
 
