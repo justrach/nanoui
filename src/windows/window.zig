@@ -69,6 +69,9 @@ pub const Window = struct {
     /// (`layered.zig`).
     transparent: bool = false,
 
+    /// Resizing changes geometry only, never the foreground window.
+    pub const set_size_flags: u32 = w.SWP_NOMOVE | w.SWP_NOZORDER | w.SWP_NOACTIVATE;
+
     pub fn create(app: *App, options: Options) !*Window {
         const self = try app.gpa.create(Window);
         errdefer app.gpa.destroy(self);
@@ -376,7 +379,7 @@ pub const Window = struct {
         // decorated style's border inflated every borderless window.
         const style: u32 = @bitCast(@as(i32, @truncate(w.GetWindowLongPtrW(h, w.GWL_STYLE))));
         _ = w.AdjustWindowRectEx(&r, style, 0, 0);
-        _ = w.SetWindowPos(h, null, 0, 0, r.right - r.left, r.bottom - r.top, 0x0002 | 0x0004); // no move, no z-order
+        _ = w.SetWindowPos(h, null, 0, 0, r.right - r.left, r.bottom - r.top, set_size_flags);
     }
 
     pub fn setPosition(self: *Window, x: f64, y: f64) void {
