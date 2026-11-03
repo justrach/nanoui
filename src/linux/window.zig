@@ -51,7 +51,12 @@ pub const Window = struct {
         self.setTitle(options.title);
         g.gtk_window_set_default_size(win, @intFromFloat(options.width), @intFromFloat(options.height));
         g.gtk_window_set_resizable(win, @intFromBool(options.resizable));
-        if (!options.decorations) g.gtk_window_set_decorated(win, 0);
+        if (!options.decorations) {
+            g.gtk_window_set_decorated(win, 0);
+            // So a GL clear with a < 1 (rounded panels) shows the desktop
+            // through the corners, not a solid square window.
+            clearChrome(win);
+        }
         // Out of the taskbar and the pager. GTK 4 dropped both hints (on
         // Wayland, a window can't ask), so there it is a no-op.
         if (options.skip_taskbar and !gtk.v4) {
@@ -235,3 +240,34 @@ pub const Window = struct {
         std.debug.print("nanoui: window {x} frame {d} {d} {d} {d}\n", .{ @intFromPtr(self), f.x, f.y, f.width, f.height });
     }
 };
+
+/// App-paintable + a transparent style so the compositor keeps per-pixel
+/// alpha from the GL area (GTK 3; GTK 4's GL areas are transparent already
+/// when has_alpha is on). Missing symbols are skipped.
+fn clearChrome(win: *gtk.Widget) void {
+    const lib = std.c.dlopen(if (gtk.v4) "libgtk-4.so.1" else "libgtk-3.so.0", .{ .NOW = true, .NOLOAD = true }) orelse return;
+    if (std.c.dlsym(lib, "gtk_widget_set_app_paintable")) |sym| {
+        const set_app: *const fn (*gtk.Widget, c_int) callconv(.c) void = @ptrCast(@alignCast(sym));
+        set_app(win, 1);
+    }
+    // X11: an RGBA visual; Wayland ignores set_visual.
+    if (!gtk.v4) {
+        const gdk = std.c.dlopen("libgdk-3.so.0", .{ .NOW = true, .NOLOAD = true }) orelse return;
+        const get_screen: ?*const fn () callconv(.c) ?*anyopaque = if (std.c.dlsym(gdk, "gdk_screen_get_default")) |s| @ptrCast(@alignCast(s)) else null;
+        const get_rgba: ?*const fn (*anyopaque) callconv(.c) ?*anyopaque = if (std.c.dlsym(gdk, "gdk_screen_get_rgba_visual")) |s| @ptrCast(@alignCast(s)) else null;
+        const set_visual: ?*const fn (*gtk.Widget, ?*anyopaque) callconv(.c) void = if (std.c.dlsym(lib, "gtk_widget_set_visual")) |s| @ptrCast(@alignCast(s)) else null;
+        if (get_screen) |gs| if (get_rgba) |gr| if (set_visual) |sv| {
+            if (gs()) |screen| sv(win, gr(screen));
+        };
+    }
+    // Kill the theme's solid window background.
+    const css_new: ?*const fn (c_int) callconv(.c) ?*anyopaque = if (std.c.dlsym(lib, "gtk_css_provider_new")) |s| @ptrCast(@alignCast(s)) else null;
+    const css_load: ?*const fn (*anyopaque, [*:0]const u8, c_ulong, ?*anyopaque) callconv(.c) c_int = if (std.c.dlsym(lib, "gtk_css_provider_load_from_data")) |s| @ptrCast(@alignCast(s)) else null;
+    const get_style: ?*const fn (*gtk.Widget) callconv(.c) ?*anyopaque = if (std.c.dlsym(lib, "gtk_widget_get_style_context")) |s| @ptrCast(@alignCast(s)) else null;
+    const add_provider: ?*const fn (*anyopaque, *anyopaque, c_uint) callconv(.c) void = if (std.c.dlsym(lib, "gtk_style_context_add_provider")) |s| @ptrCast(@alignCast(s)) else null;
+    const provider = (css_new orelse return)(0) orelse return;
+    const data = "window { background-color: transparent; }";
+    _ = (css_load orelse return)(provider, data, data.len, null);
+    const ctx = (get_style orelse return)(win) orelse return;
+    (add_provider orelse return)(ctx, provider, 800); // GTK_STYLE_PROVIDER_PRIORITY_USER
+}
