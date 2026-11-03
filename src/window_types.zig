@@ -160,6 +160,11 @@ pub fn Options(comptime Window: type) type {
         all_spaces: bool = false,
         /// A panel that takes clicks without making its app active.
         non_activating: bool = false,
+        /// A panel with the small utility title bar (an inspector, a palette). macOS.
+        utility: bool = false,
+        /// A panel that hides while its app is inactive (AppKit's default for
+        /// panels); false keeps a floating inspector up. macOS.
+        hides_on_deactivate: bool = true,
         /// Never merged into another window's tabs.
         tabbing_disallowed: bool = true,
         // Where a platform has none of these (Linux, Windows), they are ignored.
