@@ -19,6 +19,8 @@ pub const Pixels = gpu.Pixels;
 
 extern "c" fn dispatch_time(when: u64, delta: i64) u64;
 const FrameLog = @import("frame_log.zig").FrameLog;
+const PresentSlots = @import("present_slots.zig").PresentSlots;
+const PresentSlot = @import("present_slots.zig").Slot;
 
 pub const DrawStats = struct {
     drawable_wait_ms: f64 = 0,
@@ -33,14 +35,6 @@ const DoneSlot = struct {
     log: ?*FrameLog = null,
     record_idx: usize = 0,
 };
-
-/// A frame waiting for `addPresentedHandler:`: it can fire after the
-/// command buffer completed and its `DoneSlot` was reused, so it has its own.
-const PresentSlot = struct {
-    log: ?*FrameLog = null,
-    record_idx: usize = 0,
-};
-const present_slots = 16;
 
 const MTLScissorRect = extern struct { x: objc.NSUInteger, y: objc.NSUInteger, width: objc.NSUInteger, height: objc.NSUInteger };
 
@@ -72,8 +66,10 @@ pub const Renderer = struct {
     next_buffer: usize = 0,
     in_flight: objc.dispatch_semaphore_t,
     done_slots: [frames_in_flight]DoneSlot = @splat(.{}),
-    present_slots: [present_slots]PresentSlot = @splat(.{}),
-    next_present: usize = 0,
+    /// Frames waiting for `addPresentedHandler:`. That can fire after the
+    /// command buffer completed and its `DoneSlot` was reused, and after
+    /// this renderer is gone, so these are on the heap (`present_slots.zig`).
+    presents: *PresentSlots,
     next_done: usize = 0,
     /// The frame's textures (`ui.texture`), set by whoever draws it.
     textures: []const gpu.Texture = &.{},
@@ -104,6 +100,9 @@ pub const Renderer = struct {
         errdefer objc.release(hole);
         const glass = try metal_glass.Glass.init(device, library, try makePipeline(device, library, "fs_glass", 1));
 
+        const presents = try PresentSlots.create(std.heap.c_allocator);
+        errdefer presents.close();
+
         const layer = objc.new("CAMetalLayer");
         objc.msg(void, layer, "setDevice:", .{device});
         objc.msg(void, layer, "setPixelFormat:", .{pixel_format});
@@ -122,7 +121,7 @@ pub const Renderer = struct {
             defer cf.CGColorSpaceRelease(srgb);
             objc.msg(void, layer, "setColorspace:", .{srgb});
         };
-        return .{ .device = device, .queue = queue, .pipeline = pipeline, .hole = hole, .glass = glass, .layer = layer, .in_flight = objc.dispatch_semaphore_create(frames_in_flight) };
+        return .{ .device = device, .queue = queue, .pipeline = pipeline, .hole = hole, .glass = glass, .layer = layer, .presents = presents, .in_flight = objc.dispatch_semaphore_create(frames_in_flight) };
     }
 
     /// Brings the GPU's copy of the image atlas up to date (made on the
@@ -180,6 +179,8 @@ pub const Renderer = struct {
         }
         self.frame_textures.deinit();
         objc.dispatch_release(self.in_flight);
+        // Presented handlers can still be queued: they find these closed.
+        self.presents.close();
         for (self.buffers) |b| if (b) |buf| objc.release(buf);
         objc.release(self.layer);
         self.glass.deinit();
@@ -250,11 +251,8 @@ pub const Renderer = struct {
         self.done_slots[slot_idx] = .{ .renderer = self, .log = log, .record_idx = record_idx };
         var done = objc.Block(DoneSlot, &.{objc.Object}).init(&self.done_slots[slot_idx], frameDone);
         objc.msg(void, cmd, "addCompletedHandler:", .{@as(*anyopaque, @ptrCast(&done))});
-        if (log != null) {
-            const p = self.next_present;
-            self.next_present = (p + 1) % present_slots;
-            self.present_slots[p] = .{ .log = log, .record_idx = record_idx };
-            var shown = objc.Block(PresentSlot, &.{objc.Object}).init(&self.present_slots[p], framePresented);
+        if (log) |l| {
+            var shown = objc.Block(PresentSlot, &.{objc.Object}).init(self.presents.take(l, record_idx), framePresented);
             objc.msg(void, drawable, "addPresentedHandler:", .{@as(*anyopaque, @ptrCast(&shown))});
         }
         const t2 = cf.CACurrentMediaTime();
@@ -277,7 +275,7 @@ pub const Renderer = struct {
     }
 
     fn framePresented(slot: *PresentSlot, drawable: objc.Object) void {
-        if (slot.log) |log| log.setPresented(slot.record_idx, objc.msg(f64, drawable, "presentedTime", .{}));
+        PresentSlots.presented(slot, objc.msg(f64, drawable, "presentedTime", .{}));
     }
 
     fn frameDone(slot: *DoneSlot, cmd: objc.Object) void {

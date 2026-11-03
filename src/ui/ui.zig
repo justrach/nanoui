@@ -206,6 +206,7 @@ test {
     _ = @import("tests_live_theme.zig");
     _ = @import("tests_field_layout.zig");
     _ = frame_log;
+    _ = @import("present_slots.zig");
     _ = @import("tests_effects.zig");
     _ = @import("tests_scroll_x.zig");
     _ = @import("tests_a11y_adjust.zig");
