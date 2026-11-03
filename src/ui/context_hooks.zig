@@ -208,6 +208,9 @@ pub fn interact(c: *Context, index: u32, opts: struct { focusable: bool = false 
     const rect = c.rects.get(id);
     const top = c.hot == id;
     const hovered = top or std.mem.indexOfScalar(u64, c.hot_path.items, id) != null;
+    // Control-click asks for a context menu, as the Mac has it. Elsewhere
+    // Ctrl+left is a plain click with Ctrl held (how lists are
+    // multi-selected on Windows and Linux), so it stays a left click there.
     const ctrl_secondary = @import("keys.zig").mac;
     const right_press = top and c.input.pressed and (c.input.button == .right or (ctrl_secondary and c.input.button == .left and c.input.ctrl));
     const left_press = top and c.input.pressed and c.input.button == .left and !(ctrl_secondary and c.input.ctrl);
