@@ -74,6 +74,9 @@ pub const Surface = struct {
     reduce_motion: bool = false,
     is_visible: bool = false,
     released: bool = false,
+    /// When the live resize last changed the size: the link stays awake a
+    /// little after it (`resizeStepping`), not for the whole drag.
+    resize_step_at: f64 = 0,
     geometry_changed: bool = false,
     transparent: bool = false,
     after_frame_ctx: ?*anyopaque = null,
@@ -370,7 +373,7 @@ pub const Surface = struct {
         const c = &self.ctx;
         const elapsed = (now - self.start_time) - c.caret_moved_at;
         const recent_typing = c.focused_text != null and c.caret_moved_at > 0 and elapsed >= 0 and elapsed < 0.35;
-        const more = self.ctx.live_resizing or c.animating or hot_changed or c.input.down or recent_typing or self.scroll.active(now);
+        const more = self.resizeStepping() or c.animating or hot_changed or c.input.down or recent_typing or self.scroll.active(now);
         if (self.display_link != null) {
             if (more) {
                 self.setRate(null);
@@ -386,6 +389,15 @@ pub const Surface = struct {
             self.last_frame_time = 0;
             if (self.frame_log) |*fl| fl.last_t = 0;
         }
+    }
+
+    /// How long the link keeps running after a live-resize step: a drag's
+    /// next step lands on a running link, and a held mouse stops it.
+    const resize_grace = 0.25;
+
+    /// A live resize is changing the size now: a held mouse is not.
+    pub fn resizeStepping(self: *Surface) bool {
+        return self.ctx.live_resizing and cf.CACurrentMediaTime() - self.resize_step_at < resize_grace;
     }
 
     pub fn redrawRetained(self: *Surface, target_in: f64, duration_in: f64) void {

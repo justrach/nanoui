@@ -451,7 +451,7 @@ fn metalDisplayLinkNeedsUpdate(obj: objc.Object, _: objc.SEL, _: objc.Object, up
     s.wake.last_tick = cf.CACurrentMediaTime();
     const target = objc.msg(f64, update, "targetPresentationTimestamp", .{});
     const frame_in_due = s.ctx.frame_in != null and target >= s.frame_in_due - 0.001;
-    if (!s.full_pending and !frame_in_due and !s.ctx.animating and !s.ctx.live_resizing and !s.geometry_changed and !s.retained_ready and !s.pending_sync and s.ctx.time_driven == .none) {
+    if (!s.full_pending and !frame_in_due and !s.ctx.animating and !s.geometry_changed and !s.retained_ready and !s.pending_sync and s.ctx.time_driven == .none) {
         s.updatePacing(target, false);
         return;
     }
@@ -459,7 +459,7 @@ fn metalDisplayLinkNeedsUpdate(obj: objc.Object, _: objc.SEL, _: objc.Object, up
     const duration: f64 = if (s.link_fps > 0) 1.0 / @as(f64, s.link_fps) else 1.0 / @as(f64, @max(60.0, s.max_fps));
     s.renderer.given_drawable = drawable;
     defer s.renderer.given_drawable = null;
-    if (!s.full_pending and !frame_in_due and !s.ctx.animating and !s.ctx.live_resizing and !s.geometry_changed and (s.retained_ready or (!s.pending_sync and s.ctx.time_driven != .none))) {
+    if (!s.full_pending and !frame_in_due and !s.ctx.animating and !s.geometry_changed and (s.retained_ready or (!s.pending_sync and s.ctx.time_driven != .none))) {
         s.redrawRetained(target, duration);
         return;
     }
@@ -472,8 +472,10 @@ fn liveResizeStart(obj: objc.Object, _: objc.SEL) callconv(.c) void {
     // The link keeps drawing through the drag, at every vsync, at the
     // size of the moment: frames presented in the resize's transaction
     // instead stall the main thread on `waitUntilScheduled` (2-18 resize
-    // steps a second instead of the drag's 180).
+    // steps a second instead of the drag's 180). Each step asks for its
+    // frame (`setFrameSize`); held still, the link stops after a moment.
     s.ctx.live_resizing = true;
+    s.resize_step_at = cf.CACurrentMediaTime();
     s.requestFrame();
 }
 
@@ -490,7 +492,10 @@ fn setFrameSize(obj: objc.Object, _: objc.SEL, size: objc.CGSize) callconv(.c) v
     s.updateGeometry();
     // In a drag the link's next frame lays out at this size: a frame now
     // would have no drawable to present.
-    if (s.ctx.live_resizing) return s.requestFrame();
+    if (s.ctx.live_resizing) {
+        s.resize_step_at = cf.CACurrentMediaTime();
+        return s.requestFrame();
+    }
     s.frame();
 }
 
