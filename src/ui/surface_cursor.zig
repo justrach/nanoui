@@ -4,7 +4,8 @@ const Cursor = @import("context.zig").Cursor;
 /// The `NSCursor` class method that returns `c`.
 pub fn name(c: Cursor) [:0]const u8 {
     return switch (c) {
-        .arrow => "arrowCursor",
+        // `.custom` without its image (`Surface.applyCursor`).
+        .arrow, .custom => "arrowCursor",
         .hand => "pointingHandCursor",
         .text => "IBeamCursor",
         .resize_left_right => "resizeLeftRightCursor",
