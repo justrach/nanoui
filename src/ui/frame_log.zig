@@ -23,6 +23,9 @@ pub const Record = struct {
     encode_ms: f64,
     sync: bool,
     gpu_ms: f64 = 0,
+    /// When the frame reached the display (`MTLDrawable.presentedTime`),
+    /// 0 until Metal reports it; -1 when Metal dropped it unshown.
+    presented_t: f64 = 0,
     nodes: usize,
     instances: usize,
     atlas_reset: bool,
@@ -129,6 +132,14 @@ pub const FrameLog = struct {
         }
     }
 
+
+    pub fn setPresented(self: *FrameLog, idx: usize, t: f64) void {
+        self.acquire();
+        defer self.release();
+        if (idx < self.records.items.len) {
+            self.records.items[idx].presented_t = if (t > 0) t else -1;
+        }
+    }
 
     pub fn setDraw(self: *FrameLog, idx: usize, drawable_wait_ms: f64, encode_ms: f64, sync: bool, queued: u8) void {
         self.acquire();

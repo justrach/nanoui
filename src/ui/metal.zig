@@ -34,6 +34,14 @@ const DoneSlot = struct {
     record_idx: usize = 0,
 };
 
+/// A frame waiting for `addPresentedHandler:`: it can fire after the
+/// command buffer completed and its `DoneSlot` was reused, so it has its own.
+const PresentSlot = struct {
+    log: ?*FrameLog = null,
+    record_idx: usize = 0,
+};
+const present_slots = 16;
+
 const MTLScissorRect = extern struct { x: objc.NSUInteger, y: objc.NSUInteger, width: objc.NSUInteger, height: objc.NSUInteger };
 
 pub const Renderer = struct {
@@ -64,6 +72,8 @@ pub const Renderer = struct {
     next_buffer: usize = 0,
     in_flight: objc.dispatch_semaphore_t,
     done_slots: [frames_in_flight]DoneSlot = @splat(.{}),
+    present_slots: [present_slots]PresentSlot = @splat(.{}),
+    next_present: usize = 0,
     next_done: usize = 0,
     /// The frame's textures (`ui.texture`), set by whoever draws it.
     textures: []const gpu.Texture = &.{},
@@ -240,6 +250,13 @@ pub const Renderer = struct {
         self.done_slots[slot_idx] = .{ .renderer = self, .log = log, .record_idx = record_idx };
         var done = objc.Block(DoneSlot, &.{objc.Object}).init(&self.done_slots[slot_idx], frameDone);
         objc.msg(void, cmd, "addCompletedHandler:", .{@as(*anyopaque, @ptrCast(&done))});
+        if (log != null) {
+            const p = self.next_present;
+            self.next_present = (p + 1) % present_slots;
+            self.present_slots[p] = .{ .log = log, .record_idx = record_idx };
+            var shown = objc.Block(PresentSlot, &.{objc.Object}).init(&self.present_slots[p], framePresented);
+            objc.msg(void, drawable, "addPresentedHandler:", .{@as(*anyopaque, @ptrCast(&shown))});
+        }
         const t2 = cf.CACurrentMediaTime();
         if (sync or self.in_transaction) {
             // In the window's transaction: a resizing window never shows a
@@ -257,6 +274,10 @@ pub const Renderer = struct {
             .sync = sync,
             .presented = true,
         };
+    }
+
+    fn framePresented(slot: *PresentSlot, drawable: objc.Object) void {
+        if (slot.log) |log| log.setPresented(slot.record_idx, objc.msg(f64, drawable, "presentedTime", .{}));
     }
 
     fn frameDone(slot: *DoneSlot, cmd: objc.Object) void {
