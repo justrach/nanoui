@@ -54,6 +54,7 @@ pub const Surface = struct {
     full_pending: bool = false,
     retained_ready: bool = false,
     frame_in_due: f64 = 0,
+    wake: @import("surface_wake.zig").Wake = .{},
     pending_sync: bool = false,
     /// A frame was wanted while the window was hidden: run it once visible.
     pending: bool = false,
@@ -168,7 +169,7 @@ pub const Surface = struct {
         self.dead = true;
         if (!self.in_frame) self.finishDestroy();
     }
-    fn finishDestroy(self: *Surface) void {
+    pub fn finishDestroy(self: *Surface) void {
         if (!self.torn_down) {
             self.torn_down = true;
             objc.setZig(self.nsview, null);
@@ -194,7 +195,7 @@ pub const Surface = struct {
             self.pacing_log.close();
             if (self.frame_log) |*fl| fl.deinit();
         }
-        if (!self.tick_scheduled) self.gpa.destroy(self);
+        if (!self.tick_scheduled and self.wake.pending == 0) self.gpa.destroy(self);
     }
 
     fn finishFrame(self: *Surface) void {
@@ -364,9 +365,8 @@ pub const Surface = struct {
             if (more) {
                 self.setRate(null);
                 self.setPaced(true);
-            } else if (c.frame_in) |fi| {
-                self.setRate(fi);
-                self.setPaced(true);
+            } else if (c.frame_in != null) {
+                @import("surface_wake.zig").at(self, self.frame_in_due); // not a slowed link: see there
             } else if (c.time_driven != .none) {
                 self.setRate(if (c.time_driven == .fast) null else 1.0 / 24.0);
                 self.setPaced(true);
@@ -474,7 +474,7 @@ pub const Surface = struct {
 
     /// The display link's pace: the display's (null), or one frame every
     /// `seconds`.
-    fn setRate(self: *Surface, seconds: ?f32) void {
+    pub fn setRate(self: *Surface, seconds: ?f32) void {
         const link = self.display_link orelse return;
         const fps: f32 = if (seconds) |s| (if (s < 0.009) 0 else std.math.clamp(1 / @max(s, 0.001), 1, 60)) else 0;
         if (fps == self.link_fps) return;
@@ -499,7 +499,7 @@ pub const Surface = struct {
         return self.is_visible;
     }
 
-    fn setPaced(self: *Surface, on: bool) void {
+    pub fn setPaced(self: *Surface, on: bool) void {
         if (self.paced == on) return;
         self.paced = on;
         if (!on) if (self.frame_log) |*fl| {
