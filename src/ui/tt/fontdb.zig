@@ -1,4 +1,4 @@
-﻿//! The fonts installed: found in the system's font folders once, each
+//! The fonts installed: found in the system's font folders once, each
 //! face known by its family, weight, italics and width, and loaded when
 //! first used. Matching a style picks the family's nearest face; a
 //! character a font lacks is found in the fallback families, then in any
@@ -6,6 +6,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const font = @import("font.zig");
+const fontindex = @import("fontindex.zig");
+const fontmap = @import("fontmap.zig");
 
 pub const Face = struct {
     path: []const u8,
@@ -14,14 +16,14 @@ pub const Face = struct {
     /// A font the app brought (`ui.registerFont`): its bytes, not a file.
     memory: ?[]const u8 = null,
 
-    fn read(f: Face, db: *Db) ![]u8 {
-        if (f.memory) |m| return db.gpa.dupe(u8, m);
-        return std.Io.Dir.cwd().readFileAlloc(db.io, f.path, db.gpa, .limited(256 << 20));
+    fn read(f: Face, db: *Db) !fontmap.Bytes {
+        if (f.memory) |m| return .{ .data = try db.gpa.dupe(u8, m), .heap = true };
+        return fontmap.readFile(db.io, db.gpa, f.path);
     }
 };
 
 const Loaded = struct {
-    data: []u8,
+    bytes: fontmap.Bytes,
     font: font.Font,
 };
 
@@ -55,9 +57,30 @@ pub const Db = struct {
     found: std.AutoHashMapUnmanaged(u21, ?u32) = .empty,
     /// How many of the app's fonts (`font_registry`) are added.
     bundled: usize = 0,
+    disk_start: usize = 0,
+    /// Persistent index, in the app's data directory when enabled by the
+    /// window surface. Tests and headless Testers leave `cache_path` null.
+    cache_path: ?[]const u8 = null,
+    owned_cache_path: ?[]u8 = null,
+    /// A test/benchmark may scan one folder instead of the platform folders.
+    fonts_dir: ?[]const u8 = null,
+    cache: fontindex.Stats = .{},
+    cache_dirs: std.ArrayList(fontindex.Directory) = .empty,
+    cache_broken: bool = false,
+    /// Instrumentation for proving a cache hit never walks or opens fonts.
+    scan_files: usize = 0,
+    scan_directories: usize = 0,
 
     pub fn init(gpa: std.mem.Allocator, io: std.Io) Db {
         return .{ .gpa = gpa, .io = io };
+    }
+
+    /// Enables the cross-process index below the app's own data directory.
+    pub fn enableCache(db: *Db, data_dir: []const u8) void {
+        if (db.owned_cache_path != null) return;
+        const path = std.fs.path.join(db.gpa, &.{ data_dir, "font-index-v1.bin" }) catch return;
+        db.owned_cache_path = path;
+        db.cache_path = path;
     }
 
     pub fn deinit(db: *Db) void {
@@ -65,11 +88,14 @@ pub const Db = struct {
         db.faces.deinit(db.gpa);
         var it = db.loaded.valueIterator();
         while (it.next()) |l| {
-            db.gpa.free(l.*.data);
+            fontmap.freeBytes(db.io, db.gpa, &l.*.bytes);
             db.gpa.destroy(l.*);
         }
         db.loaded.deinit(db.gpa);
         db.found.deinit(db.gpa);
+        for (db.cache_dirs.items) |dir| db.gpa.free(dir.path);
+        db.cache_dirs.deinit(db.gpa);
+        if (db.owned_cache_path) |path| db.gpa.free(path);
     }
 
     /// Adds the faces of fonts the app registered since last asked.
@@ -90,11 +116,66 @@ pub const Db = struct {
     }
 
     /// Adds the faces of the fonts in the system's font folders, after
-    /// those the app brought.
+    /// those the app brought. A valid persistent index replaces the scan.
     pub fn scan(db: *Db) void {
         db.addBundled();
+        db.disk_start = db.faces.items.len;
         if (db.scanned) return;
         db.scanned = true;
+        if (db.loadCached()) return;
+        db.scanFonts();
+        db.saveCached();
+    }
+
+    fn cacheScope(db: *const Db) []const u8 {
+        return db.fonts_dir orelse "system";
+    }
+
+    fn loadCached(db: *Db) bool {
+        const path = db.cache_path orelse return false;
+        const entries = fontindex.read(db.gpa, db.io, path, db.cacheScope()) catch |err| {
+            db.cache.state = switch (err) {
+                error.NotFound => .miss,
+                error.Stale => .stale,
+                error.OutOfMemory, error.Unreadable => .unreadable,
+                else => .damaged,
+            };
+            return false;
+        };
+        defer db.gpa.free(entries);
+        for (entries) |entry| {
+            db.faces.append(db.gpa, .{ .path = entry.path, .index = entry.index, .style = entry.style }) catch {
+                db.gpa.free(entry.path);
+                continue;
+            };
+        }
+        db.cache.state = .hit;
+        db.cache.faces = entries.len;
+        return true;
+    }
+
+    fn saveCached(db: *Db) void {
+        const path = db.cache_path orelse return;
+        if (db.cache_broken) {
+            db.cache.state = .write_failed;
+            return;
+        }
+        const faces = db.faces.items[db.disk_start..];
+        const written = fontindex.write(db.gpa, db.io, path, db.cacheScope(), db.cache_dirs.items, faces) orelse {
+            db.cache.state = .write_failed;
+            return;
+        };
+        db.cache.state = .written;
+        db.cache.faces = faces.len;
+        db.cache.directories = db.cache_dirs.items.len;
+        db.cache.bytes = written;
+    }
+
+    fn scanFonts(db: *Db) void {
+        if (db.fonts_dir) |dir| {
+            db.scanDir(dir);
+            return;
+        }
         var buf: [1024]u8 = undefined;
         switch (builtin.os.tag) {
             .windows => {
@@ -118,12 +199,63 @@ pub const Db = struct {
         }
     }
 
+    /// Records a directory without enumerating it. A missing optional folder
+    /// is part of the key too; other stat failures suppress only the write.
+    fn recordDir(db: *Db, path: []const u8) void {
+        if (db.cache_path == null) return;
+        var record: fontindex.Directory = .{ .path = db.gpa.dupe(u8, path) catch {
+            db.cache_broken = true;
+            return;
+        } };
+        const stat = std.Io.Dir.cwd().statFile(db.io, path, .{}) catch |err| {
+            if (err == error.FileNotFound) {
+                record.present = false;
+            } else {
+                db.gpa.free(record.path);
+                db.cache_broken = true;
+                return;
+            }
+            db.cache_dirs.append(db.gpa, record) catch {
+                db.gpa.free(record.path);
+                db.cache_broken = true;
+            };
+            return;
+        };
+        if (stat.kind != .directory) {
+            db.gpa.free(record.path);
+            db.cache_broken = true;
+            return;
+        }
+        record.mtime = stat.mtime.nanoseconds;
+        record.size = stat.size;
+        db.cache_dirs.append(db.gpa, record) catch {
+            db.gpa.free(record.path);
+            db.cache_broken = true;
+        };
+    }
+
     pub fn scanDir(db: *Db, path: []const u8) void {
+        db.recordDir(path);
         var dir = std.Io.Dir.cwd().openDir(db.io, path, .{ .iterate = true }) catch return;
         defer dir.close(db.io);
-        var walker = dir.walk(db.gpa) catch return;
+        db.scan_directories += 1;
+        var walker = dir.walk(db.gpa) catch {
+            db.cache_broken = true;
+            return;
+        };
         defer walker.deinit();
-        while (walker.next(db.io) catch null) |e| {
+        while (true) {
+            const next = walker.next(db.io) catch {
+                db.cache_broken = true;
+                break;
+            };
+            const e = next orelse break;
+            if (e.kind == .directory) {
+                var sub: [1024]u8 = undefined;
+                const p = std.fmt.bufPrint(&sub, "{s}{c}{s}", .{ path, std.fs.path.sep, e.path }) catch continue;
+                db.recordDir(p);
+                continue;
+            }
             if (e.kind != .file and e.kind != .sym_link) continue;
             const ext = std.fs.path.extension(e.basename);
             if (!std.ascii.eqlIgnoreCase(ext, ".ttf") and !std.ascii.eqlIgnoreCase(ext, ".ttc")) continue;
@@ -135,6 +267,7 @@ pub const Db = struct {
 
     /// Reads a file's faces' styles, touching only the tables they need.
     pub fn addFile(db: *Db, path: []const u8) void {
+        db.scan_files += 1;
         var file = std.Io.Dir.cwd().openFile(db.io, path, .{}) catch return;
         defer file.close(db.io);
         const len = file.length(db.io) catch return;
@@ -190,18 +323,22 @@ pub const Db = struct {
     pub fn load(db: *Db, face: u32) ?*const font.Font {
         if (db.loaded.get(face)) |l| return &l.font;
         const f = db.faces.items[face];
-        const data = f.read(db) catch return null;
-        const parsed = font.Font.init(data, f.index) catch {
-            db.gpa.free(data);
+        var bytes = f.read(db) catch return null;
+        const parsed = font.Font.init(bytes.data, f.index) catch {
+            fontmap.freeBytes(db.io, db.gpa, &bytes);
             return null;
         };
         const l = db.gpa.create(Loaded) catch {
-            db.gpa.free(data);
+            fontmap.freeBytes(db.io, db.gpa, &bytes);
             return null;
         };
-        l.* = .{ .data = data, .font = parsed };
-        l.font.data = l.data;
-        db.loaded.put(db.gpa, face, l) catch {};
+        l.* = .{ .bytes = bytes, .font = parsed };
+        l.font.data = l.bytes.data;
+        db.loaded.put(db.gpa, face, l) catch {
+            fontmap.freeBytes(db.io, db.gpa, &l.bytes);
+            db.gpa.destroy(l);
+            return null;
+        };
         return &l.font;
     }
 
@@ -228,9 +365,9 @@ pub const Db = struct {
             if (i > 0 and std.mem.eql(u8, db.faces.items[i - 1].style.name(), db.faces.items[i].style.name())) continue;
             tries += 1;
             const face = db.faces.items[i];
-            const data = face.read(db) catch continue;
-            defer db.gpa.free(data);
-            const f = font.Font.init(data, face.index) catch continue;
+            var bytes = face.read(db) catch continue;
+            defer fontmap.freeBytes(db.io, db.gpa, &bytes);
+            const f = font.Font.init(bytes.data, face.index) catch continue;
             if (f.glyphIndex(cp) != 0) return @intCast(i);
         }
         return null;
