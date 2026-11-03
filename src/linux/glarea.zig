@@ -38,13 +38,14 @@ fn load() bool {
     return state == .loaded;
 }
 
-/// A GL area asking for OpenGL 3.3 core, opaque; null without OpenGL.
-pub fn new() ?*gtk.Widget {
+/// A GL area asking for OpenGL 3.3 core, opaque unless `alpha` (a
+/// transparent window's); null without OpenGL.
+pub fn new(alpha: bool) ?*gtk.Widget {
     if (!load()) return null;
     const area = api.gtk_gl_area_new();
     api.gtk_gl_area_set_use_es(area, 0);
     api.gtk_gl_area_set_required_version(area, 3, 3);
-    if (set_has_alpha) |f| f(area, 0);
+    if (set_has_alpha) |f| f(area, @intFromBool(alpha));
     return area;
 }
 

@@ -37,6 +37,8 @@ pub const Surface = struct {
     view: ui.View,
     instances: std.ArrayList(gpu.Instance) = .empty,
     pixels: canvas.Canvas = .{},
+    /// A transparent window's frames go to the screen through this.
+    layered: @import("layered.zig").Layered = .{},
     size: types.Size = .{},
     scale: f32 = 1,
     last_frame_time: f64 = 0,
@@ -90,6 +92,8 @@ pub const Surface = struct {
         const self = try gpa.create(Surface);
         self.* = .{ .gpa = gpa, .window = window, .text = .init(gpa), .ctx = undefined, .view = view, .theme_override = theme_override, .start_time = clock.now() };
         self.ctx = .init(gpa, &self.text);
+        // No theme background under a transparent window's view.
+        self.ctx.transparent_root = window.transparent;
         // Diagnostics, off unless asked for: which presenter draws the frame,
         // how many threads draw it, and F12 dumping the canvas.
         self.no_d3d = envFlag("NANOUI_NO_D3D");
@@ -111,6 +115,7 @@ pub const Surface = struct {
         self.ime.deinit(self.gpa);
         self.instances.deinit(self.gpa);
         self.pixels.deinit(self.gpa);
+        self.layered.deinit();
         self.ctx.deinit();
         self.text.deinit();
         self.gpa.destroy(self);
@@ -291,7 +296,8 @@ pub const Surface = struct {
                     self.requestFrame();
                 } else {
                     self.size_dirty = true;
-                    if (self.hwnd()) |hh| _ = w.InvalidateRect(hh, null, 0);
+                    // A transparent window gets no WM_PAINT to build it in.
+                    if (self.window.transparent) self.requestFrame() else if (self.hwnd()) |hh| _ = w.InvalidateRect(hh, null, 0);
                 }
             },
             // A drag resize begins and ends: between them frames present at

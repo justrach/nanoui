@@ -93,6 +93,15 @@ pub fn Options(comptime Window: type) type {
         /// At 0 the window is invisible, which is a way to fade one out
         /// (`setOpacity`) but not a way to hide it — use `show`/`hide`.
         opacity: f64 = 1,
+        /// No background: only what the view draws shows, antialiased
+        /// against what is behind the window (a launcher's rounded panel,
+        /// with nothing square behind its corners). For a borderless window
+        /// (`decorations = false`); ignored on one with a frame. Windows:
+        /// per-pixel alpha (`UpdateLayeredWindow`, the CPU renderer), and
+        /// clicks on what isn't drawn fall through. Linux (GTK 3): an RGBA
+        /// window where a compositor runs; where none does, the window is
+        /// cut to what is more than half opaque. Elsewhere it changes nothing.
+        transparent: bool = false,
         /// Keeps the window out of the taskbar and out of Alt-Tab
         /// (`WS_EX_TOOLWINDOW` on Windows; the skip-taskbar and skip-pager
         /// hints on GTK 3, which GTK 4 no longer has). The Mac lists apps,
