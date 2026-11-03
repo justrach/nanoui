@@ -12,6 +12,7 @@ const types = @import("../ui/types.zig");
 const gpu = @import("../ui/gpu.zig");
 const canvas = @import("../ui/canvas.zig");
 const glarea = @import("glarea.zig");
+const transparent = @import("transparent.zig");
 const opengl = @import("../ui/opengl.zig");
 const text = @import("../ui/text.zig");
 const frame_mod = @import("../ui/frame.zig");
@@ -50,13 +51,17 @@ pub const Surface = struct {
     committed: std.ArrayList(u8) = .empty,
     /// The press that started a double or triple click was already sent.
     pressed: bool = false,
+    /// A frame is being built, and another was asked for meanwhile.
+    in_frame: bool = false,
+    pending: bool = false,
 
     pub fn create(window: *Window, view: ui.View, theme_override: ?Theme) !*Surface {
         const gpa = window.app.gpa;
         const self = try gpa.create(Surface);
         errdefer gpa.destroy(self);
         const g = &gtk.api;
-        const gl_area = if (window.app.cpu_only) null else glarea.new();
+        // A window shaped to its frame reads the shape from the CPU's pixels.
+        const gl_area = if (window.app.cpu_only or window.transparent == .shape) null else glarea.new(window.transparent == .alpha);
         const area = gl_area orelse g.gtk_drawing_area_new();
         self.* = .{
             .gpa = gpa,
@@ -71,6 +76,8 @@ pub const Surface = struct {
             .start_time = clock.now(),
         };
         self.ctx = .init(gpa, &self.text);
+        // No theme background under a transparent window's view.
+        self.ctx.transparent_root = window.transparent != .none;
         if (gtk.v4) {
             @import("surface_gtk4.zig").attach(self);
             return self;
@@ -128,12 +135,23 @@ pub const Surface = struct {
     /// Builds, lays out and paints a frame; what it changed is drawn when
     /// GTK draws.
     pub fn frame(self: *Surface) void {
+        // Asked for while a frame is being built (a dialog run from the
+        // view runs an event loop inside it, which draws): building again
+        // would reuse what the frame is laying out. It waits for that
+        // frame, which asks for it as it ends.
+        if (self.in_frame) {
+            self.pending = true;
+            return;
+        }
         if (self.size.w <= 0 or self.size.h <= 0) return;
+        self.pending = false;
         const c = &self.ctx;
         const now = clock.now();
         const dt: f32 = if (self.last_frame_time > 0) @floatCast(@min(now - self.last_frame_time, 0.1)) else 1.0 / 60.0;
         self.last_frame_time = now;
+        self.in_frame = true;
         const r = frame_mod.run(c, self.view, &self.text, &self.instances, self.size, self.scale, self.theme(), dt, now - self.start_time);
+        self.in_frame = false;
         if (self.gl) {
             glarea.api.gtk_gl_area_queue_render(self.area);
         } else if (self.pixels.damage(self.shown())) |d| {
@@ -153,6 +171,7 @@ pub const Surface = struct {
             // Something changes now and then: one frame, that much later.
             self.later = gtk.api.g_timeout_add(@intFromFloat(@max(1, s * 1000)), onLater, self);
         };
+        if (self.pending) self.requestFrame();
         if (!c.animating) self.last_frame_time = 0;
     }
 
@@ -184,7 +203,12 @@ pub const Surface = struct {
     }
 
     pub fn shown(self: *Surface) canvas.Frame {
-        return .{ .instances = self.instances.items, .text = &self.text, .clear = self.ctx.theme.background, .size = self.size, .scale = self.scale, .textures = self.ctx.textures.items };
+        return .{ .instances = self.instances.items, .text = &self.text, .clear = self.clearColor(), .size = self.size, .scale = self.scale, .textures = self.ctx.textures.items };
+    }
+
+    /// What the frame is drawn over: nothing, in a transparent window.
+    fn clearColor(self: *Surface) types.Color {
+        return if (self.window.transparent != .none) .transparent else self.ctx.theme.background;
     }
 
     fn updateCursor(self: *Surface) void {
@@ -281,7 +305,7 @@ fn onRender(_: *gtk.Widget, _: *anyopaque, data: ?*anyopaque) callconv(.c) c_int
 pub fn glRender(s: *Surface) bool {
     if (s.renderer) |*r| {
         r.sync(s.text.atlas.mask(), s.text.atlas.generation, s.text.images.pictures(), s.text.images.generation);
-        r.draw(s.instances.items, s.size, s.scale, s.ctx.theme.background, glarea.target(), s.ctx.time);
+        r.draw(s.instances.items, s.size, s.scale, s.clearColor(), glarea.target(), s.ctx.time);
         return true;
     }
     return false;
@@ -302,7 +326,9 @@ pub fn paint(s: *Surface, cr: *anyopaque) bool {
     defer g.cairo_surface_destroy(surf);
     g.cairo_surface_set_device_scale(surf, s.scale, s.scale);
     g.cairo_set_source_surface(cr, surf, 0, 0);
+    if (s.window.transparent != .none) transparent.replace(cr);
     g.cairo_paint(cr);
+    if (s.window.transparent == .shape) transparent.shapeTo(s.window.gtkwindow.?, surf, s.size.w, s.size.h);
     return true;
 }
 

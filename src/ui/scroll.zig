@@ -52,6 +52,8 @@ pub fn applyScroll(c: *Context, dy: f32) bool {
         i -= 1;
         const h = c.hits.items[i];
         if (h.scroll and h.rect.contains(c.input.mouse)) {
+            // A box that takes the wheel itself is over the one behind.
+            if (h.wheel) return false;
             const gop = c.scroll.getOrPut(c.gpa, h.id) catch return false;
             if (!gop.found_existing) gop.value_ptr.* = 0;
             if (!isHolding(c)) {
@@ -145,7 +147,7 @@ fn scrubTo(c: *Context, id: u64, g: ScrollbarGeom, thumb_top: f32) void {
 }
 
 pub fn tryPressScrollbar(c: *Context) bool {
-    if (c.input.button != .left or c.input.ctrl) return false;
+    if (c.input.button != .left or (@import("keys.zig").mac and c.input.ctrl)) return false;
     const m = c.input.mouse;
     // The bar is drawn over the box's right edge and has no hit box of its own,
     // so whatever is under the pointer there belongs to a row or to nothing:

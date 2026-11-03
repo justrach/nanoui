@@ -37,6 +37,8 @@ pub const Surface = struct {
     view: ui.View,
     instances: std.ArrayList(gpu.Instance) = .empty,
     pixels: canvas.Canvas = .{},
+    /// A transparent window's frames go to the screen through this.
+    layered: @import("layered.zig").Layered = .{},
     size: types.Size = .{},
     scale: f32 = 1,
     last_frame_time: f64 = 0,
@@ -79,21 +81,33 @@ pub const Surface = struct {
     no_gpu: bool = false,
     /// A size arrived that no frame has been built for yet.
     size_dirty: bool = false,
+    /// The client area is being worked out again: the call that does it can
+    /// send the size messages that would ask for it again.
+    repairing: bool = false,
     /// A drag is moving the window's edge (`WM_ENTERSIZEMOVE` .. `WM_EXITSIZEMOVE`).
     dragging: bool = false,
     /// `NANOUI_DUMP`: F12 writes the canvas beside the same frame drawn whole.
     dump_enabled: bool = false,
     dumps: usize = 0,
+    /// `NANOUI_TRACE`: every size, frame and paint is printed to stderr, to
+    /// see a window that stopped showing what its view built.
+    trace_on: bool = false,
+    /// The frames built, and the paints done: the trace's frame number.
+    frames: u64 = 0,
+    paints: u64 = 0,
 
     pub fn create(window: *Window, view: ui.View, theme_override: ?Theme) !*Surface {
         const gpa = window.app.gpa;
         const self = try gpa.create(Surface);
         self.* = .{ .gpa = gpa, .window = window, .text = .init(gpa), .ctx = undefined, .view = view, .theme_override = theme_override, .start_time = clock.now() };
         self.ctx = .init(gpa, &self.text);
+        // No theme background under a transparent window's view.
+        self.ctx.transparent_root = window.transparent;
         // Diagnostics, off unless asked for: which presenter draws the frame,
         // how many threads draw it, and F12 dumping the canvas.
         self.no_d3d = envFlag("NANOUI_NO_D3D");
         self.dump_enabled = envFlag("NANOUI_DUMP");
+        self.trace_on = envFlag("NANOUI_TRACE");
         if (envFlag("NANOUI_ONE_THREAD")) @import("../ui/raster.zig").threads = 1;
         // Frames come from Direct3D 11 here (`paintGpu`), so the view names it
         // from the first frame; if no device can be made, `paintGpu` says CPU
@@ -111,6 +125,7 @@ pub const Surface = struct {
         self.ime.deinit(self.gpa);
         self.instances.deinit(self.gpa);
         self.pixels.deinit(self.gpa);
+        self.layered.deinit();
         self.ctx.deinit();
         self.text.deinit();
         self.gpa.destroy(self);
@@ -126,6 +141,12 @@ pub const Surface = struct {
         if (self.theme_override) |t| return t;
         if (self.theme_chosen) |t| return t;
         return if (self.system_theme_dark) Theme.dark_theme else Theme.light;
+    }
+
+    /// `NANOUI_TRACE`: what the surface is doing, to stderr.
+    pub fn trace(self: *Surface, comptime fmt: []const u8, args: anytype) void {
+        if (!self.trace_on) return;
+        std.debug.print("nanoui trace {d:.3} [#{d}/{d}]: " ++ fmt ++ "\n", .{ clock.now() - self.start_time, self.paints, self.frames } ++ args);
     }
 
     /// Builds the view for the current state and asks for it to be drawn: the
@@ -149,6 +170,8 @@ pub const Surface = struct {
             gpu_side.invalidate(self);
             if (!self.frame_again) break;
         }
+        self.frames += 1;
+        self.trace("frame built: {d:.0}x{d:.0} {d} draws, {d} passes, again={}", .{ self.size.w, self.size.h, self.instances.items.len, passes + 1, self.frame_again });
         self.frame_again = false;
         // The size a WM_SIZE between frames brought is built here: a WM_PAINT
         // still to come has nothing left to build.
@@ -189,11 +212,14 @@ pub const Surface = struct {
         if (more and !self.ticking) if (self.hwnd()) |h| {
             _ = w.SetTimer(h, tick_timer, 16, null);
             self.ticking = true;
+            self.trace("tick timer on", .{});
         };
         // Something changes now and then: one frame, that much later.
         if (!more) if (c.frame_in) |s| if (self.hwnd()) |h| {
             _ = w.SetTimer(h, later_timer, @intFromFloat(@max(1, s * 1000)), null);
+            self.trace("later timer {d} ms", .{@as(u32, @intFromFloat(@max(1, s * 1000)))});
         };
+        self.trace("built: {d:.0}x{d:.0} scale {d:.2}, {d} draws, anim={} hot={} in={?d:.2} ticking={}", .{ self.size.w, self.size.h, self.scale, self.instances.items.len, c.animating, r.hot_changed, c.frame_in, self.ticking });
     }
 
     /// Whether two theme choices pick the same theme (both null: the system's).
@@ -229,21 +255,8 @@ pub const Surface = struct {
         _ = w.SetCursor(w.LoadCursorW(null, id));
     }
 
-    fn updateSize(self: *Surface, h: w.HWND) void {
-        var r: w.RECT = .{};
-        _ = w.GetClientRect(h, &r);
-        const dpi = w.GetDpiForWindow(h);
-        const scale: f32 = if (dpi > 0) @as(f32, @floatFromInt(dpi)) / 96 else 1;
-        // A drag-resize sends WM_SIZE per pixel of movement, and the DPI does
-        // not change with the size: only a scale that changed is worth telling
-        // the text system about (it would empty the glyph atlas to re-raster
-        // every glyph at the new scale).
-        if (scale != self.scale) {
-            self.scale = scale;
-            self.text.setScale(scale);
-        }
-        self.size = .{ .w = @as(f32, @floatFromInt(r.right - r.left)) / self.scale, .h = @as(f32, @floatFromInt(r.bottom - r.top)) / self.scale };
-    }
+    /// The window's client size and DPI, read into the surface (`client_size.zig`).
+    pub const updateSize = @import("client_size.zig").updateSize;
 
     fn setMouse(self: *Surface, lp: w.LPARAM) void {
         const x: i16 = @truncate(lp);
@@ -260,6 +273,12 @@ pub const Surface = struct {
         switch (msg) {
             w.WM_PAINT => gpu_side.paint(self, h),
             w.WM_ERASEBKGND => return 1,
+            // Back from a lock, a display change, another desktop or a hidden
+            // window: the frame is built again, as a resize would build it, so
+            // what is on screen is what the app is now.
+            w.WM_ACTIVATEAPP => if (wp != 0) self.requestFrame(),
+            w.WM_SHOWWINDOW => if (wp != 0) self.requestFrame(),
+            w.WM_DISPLAYCHANGE => self.requestFrame(),
             w.WM_SETTINGCHANGE => {
                 // The system's appearance may have changed under
                 // Personalization > Colors: a window that follows it is redrawn.
@@ -279,19 +298,36 @@ pub const Surface = struct {
                 _ = w.SetWindowPos(h, null, r.left, r.top, r.right - r.left, r.bottom - r.top, 0x0004 | 0x0010); // no z-order, no activate
                 return 0;
             },
+            w.WM_MOVE => {
+                // A window moved onto another monitor has a client area there.
+                // One left at the old monitor's would never be painted again,
+                // and a move is not always a resize: read it here too.
+                if (w.IsIconic(h) == 0 and self.updateSize(h)) {
+                    self.size_dirty = true;
+                    _ = w.InvalidateRect(h, null, 0);
+                    self.requestFrame();
+                }
+            },
             w.WM_SIZE => {
                 // A resize is many messages a second, and laying the view out
                 // for each is wasted: the size is read now, the frame built once
                 // when the queue is empty. Except before the first frame: a
                 // hidden window never receives WM_PAINT, so deferring it leaves
                 // every rect zero and clicks landing nowhere.
-                self.updateSize(h);
+                // A minimized window's client area is the icon's: reading it
+                // would lay the view out for the icon, and size the swap chain
+                // for it, leaving the window showing that until a resize sized
+                // it back. The size it had stands, and the restore's WM_SIZE
+                // (or the paint's own read) picks up the real one again.
+                if (w.IsIconic(h) == 0) _ = self.updateSize(h);
+                self.trace("WM_SIZE wp={d}: {d:.0}x{d:.0} at {d:.2}", .{ wp, self.size.w, self.size.h, self.scale });
                 if (self.last_frame_time == 0) {
                     self.buildFrame();
                     self.requestFrame();
                 } else {
                     self.size_dirty = true;
-                    if (self.hwnd()) |hh| _ = w.InvalidateRect(hh, null, 0);
+                    // A transparent window gets no WM_PAINT to build it in.
+                    if (self.window.transparent) self.requestFrame() else if (self.hwnd()) |hh| _ = w.InvalidateRect(hh, null, 0);
                 }
             },
             // A drag resize begins and ends: between them frames present at
@@ -311,12 +347,14 @@ pub const Surface = struct {
             },
             w.WM_TIMER => if (wp == later_timer) {
                 _ = w.KillTimer(h, later_timer);
+                self.trace("later timer fired", .{});
                 self.frame();
             } else if (wp == tick_timer) {
                 self.frame();
                 if (!self.ctx.animating) {
                     _ = w.KillTimer(h, tick_timer);
                     self.ticking = false;
+                    self.trace("tick timer off", .{});
                 }
             },
             WM_FRAME => {

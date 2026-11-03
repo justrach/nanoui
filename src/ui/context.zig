@@ -67,7 +67,7 @@ pub const Interaction = struct {
     /// (`Context.adjustable`): a splitter, a slider.
     a11y_step: i8 = 0,
 };
-pub const Hit = struct { id: u64, index: u32, rect: types.Rect, scroll: bool };
+pub const Hit = struct { id: u64, index: u32, rect: types.Rect, scroll: bool, wheel: bool = false };
 pub const Cursor = enum { arrow, hand, text, resize_left_right, resize_up_down, open_hand, closed_hand, not_allowed, crosshair };
 pub const A11yRole = @import("access.zig").Role;
 pub const A11yItem = @import("access.zig").Item;
@@ -535,7 +535,7 @@ pub const Context = struct {
     pub fn pointerDown(c: *Context) void {
         c.input.down = true;
         c.input.pressed = true;
-        c.right_press = c.input.button == .right or (c.input.button == .left and c.input.ctrl);
+        c.right_press = c.input.button == .right or (@import("keys.zig").mac and c.input.button == .left and c.input.ctrl);
         if (scroll_mod.tryPressScrollbar(c)) return;
         if (c.hot == 0) c.focus = 0;
     }

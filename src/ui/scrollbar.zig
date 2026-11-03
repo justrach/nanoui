@@ -19,6 +19,7 @@ pub fn begin(c: *Context) bool {
         i -= 1;
         const h = c.hits.items[i];
         if (!h.scroll or !h.rect.contains(c.input.mouse)) continue;
+        if (h.wheel) return false;
         if (c.input.mouse.x < h.rect.x + h.rect.w - 10) return false;
         if (h.index >= c.nodes.items.len) return false;
         const n = c.node(h.index);

@@ -121,6 +121,7 @@ pub const textField = textfield.textField;
 pub const TextFieldOptions = textfield.Options;
 pub const TextBuffer = textfield.TextBuffer;
 pub const TextFieldResult = textfield.Result;
+pub const TextFieldCaret = textfield.Caret;
 /// Declarative, interruptible animation (springs, tweens, presence).
 pub const motion = @import("motion/motion.zig");
 pub const div = @import("div.zig").div;
@@ -190,6 +191,7 @@ test {
     _ = @import("tests_motion_more.zig");
     _ = @import("tests_roll.zig");
     _ = @import("tests_layer.zig");
+    _ = @import("tests_wheel.zig");
     _ = @import("tests_safe_area.zig");
     _ = @import("motion/motion.zig");
     _ = @import("keymap.zig");

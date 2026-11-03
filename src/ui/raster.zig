@@ -35,7 +35,8 @@ pub fn draw(out: gpu.Pixels, instances: []const gpu.Instance, mask: Mask, pictur
 /// `out` is kept. Over the pixels of an earlier frame, with the `damage`
 /// between the two, it makes the same pixels as drawing it all.
 pub fn drawRegion(out: gpu.Pixels, instances: []const gpu.Instance, mask: Mask, pictures: Pictures, scale: f32, clear: types.Color, region: [4]usize) void {
-    const alpha = if (mask.native_pixels.len > 0) clear.a else 1;
+    // Opaque, but on the Mac and for a transparent window (a clear of nothing).
+    const alpha = if (mask.native_pixels.len > 0 or clear.a == 0) clear.a else 1;
     const px: [4]u8 = .{ unit(clear.b * alpha), unit(clear.g * alpha), unit(clear.r * alpha), unit(alpha) };
     for (instances) |*inst_chk| if (inst_chk.kind == gpu.Kind.layer_begin) {
         const words: []u32 = @alignCast(std.mem.bytesAsSlice(u32, out.bytes[0 .. out.width * out.height * 4]));

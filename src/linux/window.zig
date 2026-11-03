@@ -25,6 +25,8 @@ pub const Window = struct {
     /// Null when headless (snapshots without a display).
     gtkwindow: ?*gtk.Widget,
     surface: ?*Surface = null,
+    /// `Options.transparent`, as the screen allowed it (`transparent.zig`).
+    transparent: @import("transparent.zig").Mode = .none,
     /// What a snapshot draws: the view, the window's size, its colors.
     view: ?ui.View = null,
     width: f64 = 0,
@@ -52,6 +54,8 @@ pub const Window = struct {
         g.gtk_window_set_default_size(win, @intFromFloat(options.width), @intFromFloat(options.height));
         g.gtk_window_set_resizable(win, @intFromBool(options.resizable));
         if (!options.decorations) g.gtk_window_set_decorated(win, 0);
+        // Before it is realized: the visual can't change after.
+        if (options.transparent and !options.decorations) self.transparent = @import("transparent.zig").setup(win);
         // Out of the taskbar and the pager. GTK 4 dropped both hints (on
         // Wayland, a window can't ask), so there it is a no-op.
         if (options.skip_taskbar and !gtk.v4) {
