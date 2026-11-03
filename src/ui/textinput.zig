@@ -206,12 +206,15 @@ pub fn clampRange(text: []const u8, r: NSRange) ?[2]usize {
     return .{ cf.byteOffset(text, @intCast(r.location)), cf.byteOffset(text, @intCast(end)) };
 }
 
-/// Where the input method's candidate window goes: under the caret, in
-/// screen coordinates.
-fn firstRect(obj: objc.Object, _: objc.SEL, _: NSRange, _: ?*NSRange) callconv(.c) objc.CGRect {
+/// Where the input method's candidate window goes: under the clause it
+/// converts while composing (Kotoeri, Pinyin), else under the caret, in
+/// screen coordinates; `actual` gets the range the rect is for.
+fn firstRect(obj: objc.Object, _: objc.SEL, range: NSRange, actual: ?*NSRange) callconv(.c) objc.CGRect {
     const s = objc.getZig(Surface, obj) orelse return .{};
     const f = s.ctx.focused_text orelse return .{};
-    const r: objc.CGRect = .{ .origin = .{ .x = f.caret_rect.x, .y = f.caret_rect.y }, .size = .{ .width = f.caret_rect.w, .height = f.caret_rect.h } };
+    const at = if (f.marked != null) f.clause_rect orelse f.caret_rect else f.caret_rect;
+    if (actual) |a| a.* = if (range.location == not_found) range else .{ .location = range.location, .length = 0 };
+    const r: objc.CGRect = .{ .origin = .{ .x = at.x, .y = at.y }, .size = .{ .width = at.w, .height = at.h } };
     const in_window = objc.msg(objc.CGRect, obj, "convertRect:toView:", .{ r, @as(?objc.Object, null) });
     return objc.msg(objc.CGRect, s.window.nswindow, "convertRectToScreen:", .{in_window});
 }

@@ -516,6 +516,13 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
         c.focused_password = opts.password;
         c.focused_multiline = false;
         const r = it.rect orelse types.Rect{};
+        // The clause the input method converts: the selection inside the
+        // composition, else the composition's start.
+        const clause: ?types.Rect = if (e.marked) |m| blk: {
+            const at = std.math.clamp(@min(e.caret, e.anchor), m[0], m[1]);
+            const x = c.text.caretX(shown, style, shownIndex(s, opts.password, if (e.caret == e.anchor) m[0] else at));
+            break :blk .{ .x = r.x + pad_x + x - e.scroll_x, .y = r.y + (r.h - lh) / 2, .w = opts.caret.width, .h = lh };
+        } else null;
         c.focused_text = .{
             .id = it.id,
             .text = s,
@@ -523,6 +530,7 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
             .anchor = e.anchor,
             .marked = e.marked,
             .caret_rect = .{ .x = r.x + pad_x + caret_x - e.scroll_x, .y = r.y + (r.h - lh) / 2, .w = opts.caret.width, .h = lh },
+            .clause_rect = clause,
             .ends = if (hi > lo) .{
                 .{ .x = r.x + pad_x - e.scroll_x + c.text.caretX(shown, style, shownIndex(s, opts.password, lo)), .y = r.y + (r.h - lh) / 2, .w = 0, .h = lh },
                 .{ .x = r.x + pad_x - e.scroll_x + c.text.caretX(shown, style, shownIndex(s, opts.password, hi)), .y = r.y + (r.h - lh) / 2, .w = 0, .h = lh },
