@@ -220,6 +220,90 @@ test "d3d11: ClearType coverage blends each color channel" {
     }
 }
 
+test "d3d11: painted glyph quads use physical atlas texels" {
+    const Scene = struct {
+        fn view(_: *@This(), c: *ui.Context) void {
+            ui.text(c, "RGB glyph sizes", .{});
+        }
+    };
+    for ([_]f32{ 1, 1.25, 1.5, 2 }) |scale| {
+        var s: Scene = .{};
+        var t: ui.Tester = undefined;
+        try t.init(testing.allocator, .init(&s, Scene.view), .{ .width = 200, .height = 60, .scale = scale });
+        defer t.deinit();
+        const side: f32 = @floatFromInt(t.text.atlas.size);
+        var glyphs: usize = 0;
+        for (t.instances.items) |i| {
+            if (i.kind != gpu.Kind.text) continue;
+            glyphs += 1;
+            try testing.expectApproxEqAbs(i.rect[2] * scale, (i.uv[2] - i.uv[0]) * side, 0.001);
+            try testing.expectApproxEqAbs(i.rect[3] * scale, (i.uv[3] - i.uv[1]) * side, 0.001);
+        }
+        try testing.expect(glyphs > 0);
+    }
+}
+
+fn drawNativeGlyph(r: *d3d11.Renderer, rect: [4]f32, scale: f32, side: f32) !gpu.Pixels {
+    const glyph = [_]gpu.Instance{.{
+        .rect = rect,
+        .color = .{ 0.8, 0.6, 0.4, 1 },
+        .uv = .{ 0, 0, 1, 1 },
+        .kind = gpu.Kind.text,
+    }};
+    r.draw(&glyph, .{ .w = side, .h = side }, scale, .{ .r = 0.2, .g = 0.4, .b = 0.6, .a = 1 }, null);
+    return r.read(testing.allocator);
+}
+
+fn expectNativePixel(px: gpu.Pixels, at: usize, expected: [3]u8) !void {
+    for (px.bytes[at * 4 ..][0..3], expected) |actual, want| {
+        try testing.expect(@abs(@as(i16, actual) - @as(i16, want)) <= 2);
+    }
+}
+
+test "d3d11: native RGB glyph size includes DPI scale" {
+    const gpa = testing.allocator;
+    var maybe = try renderer();
+    if (maybe == null) return error.SkipZigTest;
+    var r = &maybe.?;
+    defer r.deinit();
+    const gray = [_]u8{128};
+    const native = [_]u8{ 64, 128, 192, 255 };
+    r.sync(.{ .pixels = &gray, .size = 1, .native_pixels = &native }, 1, .{}, 0);
+
+    // One atlas texel is one physical pixel at every DPI. The quad's points
+    // shrink at the same rate as the frame's points, so these are still 1:1.
+    for ([_]f32{ 1.5, 2 }) |scale| {
+        const side = 1 / scale;
+        const px = try drawNativeGlyph(r, .{ 0, 0, side, side }, scale, side);
+        defer px.deinit(gpa);
+        try expectNativePixel(px, 0, .{ 115, 128, 89 });
+    }
+}
+
+test "d3d11: scaled native glyphs use linear grayscale" {
+    const gpa = testing.allocator;
+    var maybe = try renderer();
+    if (maybe == null) return error.SkipZigTest;
+    var r = &maybe.?;
+    defer r.deinit();
+    const gray = [_]u8{128};
+    const native = [_]u8{ 64, 128, 192, 255 };
+    r.sync(.{ .pixels = &gray, .size = 1, .native_pixels = &native }, 1, .{}, 0);
+
+    // Two physical pixels for one atlas texel: no ClearType coverage.
+    const doubled = try drawNativeGlyph(r, .{ 0, 0, 2, 2 }, 1, 2);
+    defer doubled.deinit(gpa);
+    for (0..4) |at| try expectNativePixel(doubled, at, .{ 127, 128, 128 });
+
+    // scaleItems changes rect, not uv. Fractional origins and intermediate
+    // animation sizes must not occasionally take the native RGB branch.
+    for ([_]f32{ 1.25, 1.5, 1.75, 2 }) |size| {
+        const px = try drawNativeGlyph(r, .{ 0.25, 0.25, size, size }, 1, 4);
+        defer px.deinit(gpa);
+        try expectNativePixel(px, 0, .{ 127, 128, 128 });
+    }
+}
+
 // `shader.hlsl`'s `Instance` must be the same size as `gpu.zig`'s, because the
 // vertex shader walks the structured buffer by that stride: a shader struct that
 // is smaller steps too little and every instance after the first reads another's
