@@ -217,7 +217,7 @@ pub const Surface = struct {
         if (want == self.cursor) return;
         self.cursor = want;
         const name: [*:0]const u8 = switch (want) {
-            .arrow => "default",
+            .arrow, .custom => "default",
             .hand => "pointer",
             .text => "text",
             .resize_left_right => "col-resize",
