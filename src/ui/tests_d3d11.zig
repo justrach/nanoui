@@ -215,7 +215,6 @@ test "d3d11: ClearType coverage blends each color channel" {
     defer px.deinit(gpa);
     // BGRA: round(background * (1 - RGB coverage) + foreground * RGB coverage).
     const expected = [_]u8{ 115, 128, 89, 255 };
-    std.debug.print("[ClearType] got {any}, want {any} ", .{ px.bytes[0..4], expected });
     for (px.bytes[0..4], expected) |actual, want| {
         try testing.expect(@abs(@as(i16, actual) - @as(i16, want)) <= 2);
     }
