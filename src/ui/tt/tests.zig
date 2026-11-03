@@ -96,7 +96,7 @@ fn glyphCoverage(gpa: std.mem.Allocator, data: []const u8) ![]u8 {
     return pixels;
 }
 
-test "mapped and heap fonts render byte-identical coverage" {
+test "Windows mappings and heap fonts render byte-identical coverage" {
     const gpa = std.testing.allocator;
     const path = fontPath() orelse return error.SkipZigTest;
     var mapped = try fontmap.readFile(std.testing.io, gpa, path);
@@ -109,7 +109,11 @@ test "mapped and heap fonts render byte-identical coverage" {
     const b = try glyphCoverage(gpa, mapped.data);
     defer gpa.free(b);
     try std.testing.expectEqualSlices(u8, a, b);
-    if (!mapped.mapped) return error.SkipZigTest;
+    if (@import("builtin").os.tag == .windows) {
+        try std.testing.expect(mapped.mapped);
+    } else {
+        try std.testing.expect(mapped.heap and !mapped.mapped);
+    }
 }
 
 test "font index hits without scanning and directory changes rebuild it" {
@@ -125,8 +129,10 @@ test "font index hits without scanning and directory changes rebuild it" {
     const root = root_buf[0..root_len];
     const fonts_dir = try std.fs.path.join(gpa, &.{ root, "fonts" });
     defer gpa.free(fonts_dir);
-    // Outside the indexed folder: the cache write must not change its key.
-    const cache_path = try std.fs.path.join(gpa, &.{ root, "data", "fonts.idx" });
+    // Outside the indexed folder and below cache, never backed-up app data.
+    const cache_dir = try std.fs.path.join(gpa, &.{ root, "cache" });
+    defer gpa.free(cache_dir);
+    const cache_path = try std.fs.path.join(gpa, &.{ cache_dir, "font-index-v2.bin" });
     defer gpa.free(cache_path);
 
     var faces: usize = 0;
@@ -134,7 +140,8 @@ test "font index hits without scanning and directory changes rebuild it" {
         var db = fontdb.Db.init(gpa, std.testing.io);
         defer db.deinit();
         db.fonts_dir = fonts_dir;
-        db.cache_path = cache_path;
+        db.enableCache(cache_dir);
+        try std.testing.expectEqualStrings(cache_path, db.cache_path.?);
         db.scan();
         try std.testing.expectEqual(@import("fontindex.zig").State.written, db.cache.state);
         try std.testing.expect(db.scan_files > 0 and db.scan_directories > 0);
@@ -150,6 +157,35 @@ test "font index hits without scanning and directory changes rebuild it" {
         try std.testing.expectEqual(@import("fontindex.zig").State.hit, db.cache.state);
         try std.testing.expectEqual(@as(usize, 0), db.scan_files);
         try std.testing.expectEqual(@as(usize, 0), db.scan_directories);
+        try std.testing.expectEqual(faces, db.faces.items.len);
+    }
+
+    // Rewriting the file in place leaves its directory's fingerprint alone.
+    // The per-file size+mtime must nevertheless reject the warm index.
+    const font_path = try std.fs.path.join(gpa, &.{ fonts_dir, "one.ttf" });
+    defer gpa.free(font_path);
+    const dir_before = try std.Io.Dir.cwd().statFile(std.testing.io, fonts_dir, .{});
+    const file_before = try std.Io.Dir.cwd().statFile(std.testing.io, font_path, .{});
+    std.Io.sleep(std.testing.io, .fromMilliseconds(20), .awake) catch {};
+    {
+        var file = try std.Io.Dir.cwd().openFile(std.testing.io, font_path, .{ .mode = .read_write });
+        defer file.close(std.testing.io);
+        try file.writePositionalAll(std.testing.io, &.{data[data.len - 1] ^ 1}, data.len - 1);
+    }
+    const dir_after = try std.Io.Dir.cwd().statFile(std.testing.io, fonts_dir, .{});
+    const file_after = try std.Io.Dir.cwd().statFile(std.testing.io, font_path, .{});
+    try std.testing.expectEqual(dir_before.size, dir_after.size);
+    try std.testing.expectEqual(dir_before.mtime.nanoseconds, dir_after.mtime.nanoseconds);
+    try std.testing.expectEqual(file_before.size, file_after.size);
+    try std.testing.expect(file_before.mtime.nanoseconds != file_after.mtime.nanoseconds);
+    {
+        var db = fontdb.Db.init(gpa, std.testing.io);
+        defer db.deinit();
+        db.fonts_dir = fonts_dir;
+        db.cache_path = cache_path;
+        db.scan();
+        try std.testing.expectEqual(@import("fontindex.zig").State.written, db.cache.state);
+        try std.testing.expect(db.scan_files > 0);
         try std.testing.expectEqual(faces, db.faces.items.len);
     }
 
@@ -173,6 +209,32 @@ test "font index hits without scanning and directory changes rebuild it" {
 
     // A damaged index is ignored and rewritten, never partially trusted.
     try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = cache_path, .data = "not a font index" });
+    {
+        var db = fontdb.Db.init(gpa, std.testing.io);
+        defer db.deinit();
+        db.fonts_dir = fonts_dir;
+        db.cache_path = cache_path;
+        db.scan();
+        try std.testing.expectEqual(@import("fontindex.zig").State.written, db.cache.state);
+        try std.testing.expect(db.scan_files > 0);
+        try std.testing.expectEqual(faces, db.faces.items.len);
+    }
+
+    // A face that fails after a cache hit drops the persistent entry's index;
+    // the next process must scan rather than trusting that face again.
+    {
+        var db = fontdb.Db.init(gpa, std.testing.io);
+        defer db.deinit();
+        db.fonts_dir = fonts_dir;
+        db.cache_path = cache_path;
+        db.scan();
+        try std.testing.expectEqual(@import("fontindex.zig").State.hit, db.cache.state);
+        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "fonts/one.ttf", .data = "broken" });
+        try std.testing.expect(db.load(@intCast(db.disk_start)) == null);
+        try std.testing.expectEqual(@import("fontindex.zig").State.stale, db.cache.state);
+        try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(std.testing.io, cache_path, .{}));
+    }
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "fonts/one.ttf", .data = data });
     {
         var db = fontdb.Db.init(gpa, std.testing.io);
         defer db.deinit();

@@ -13,6 +13,9 @@ pub const Face = struct {
     path: []const u8,
     index: u32,
     style: font.Style,
+    /// The file fingerprint checked whenever a persistent cache is read.
+    mtime: i128 = 0,
+    size: u64 = 0,
     /// A font the app brought (`ui.registerFont`): its bytes, not a file.
     memory: ?[]const u8 = null,
 
@@ -58,7 +61,7 @@ pub const Db = struct {
     /// How many of the app's fonts (`font_registry`) are added.
     bundled: usize = 0,
     disk_start: usize = 0,
-    /// Persistent index, in the app's data directory when enabled by the
+    /// Persistent index, in the app's cache directory when enabled by the
     /// window surface. Tests and headless Testers leave `cache_path` null.
     cache_path: ?[]const u8 = null,
     owned_cache_path: ?[]u8 = null,
@@ -75,10 +78,10 @@ pub const Db = struct {
         return .{ .gpa = gpa, .io = io };
     }
 
-    /// Enables the cross-process index below the app's own data directory.
-    pub fn enableCache(db: *Db, data_dir: []const u8) void {
+    /// Enables the cross-process index below the app's own cache directory.
+    pub fn enableCache(db: *Db, cache_dir: []const u8) void {
         if (db.owned_cache_path != null) return;
-        const path = std.fs.path.join(db.gpa, &.{ data_dir, "font-index-v1.bin" }) catch return;
+        const path = std.fs.path.join(db.gpa, &.{ cache_dir, "font-index-v2.bin" }) catch return;
         db.owned_cache_path = path;
         db.cache_path = path;
     }
@@ -144,7 +147,13 @@ pub const Db = struct {
         };
         defer db.gpa.free(entries);
         for (entries) |entry| {
-            db.faces.append(db.gpa, .{ .path = entry.path, .index = entry.index, .style = entry.style }) catch {
+            db.faces.append(db.gpa, .{
+                .path = entry.path,
+                .index = entry.index,
+                .style = entry.style,
+                .mtime = entry.mtime,
+                .size = entry.size,
+            }) catch {
                 db.gpa.free(entry.path);
                 continue;
             };
@@ -270,7 +279,8 @@ pub const Db = struct {
         db.scan_files += 1;
         var file = std.Io.Dir.cwd().openFile(db.io, path, .{}) catch return;
         defer file.close(db.io);
-        const len = file.length(db.io) catch return;
+        const stat = file.stat(db.io) catch return;
+        const len = stat.size;
         if (len < 12 or len > 256 << 20) return;
         // Untouched pages of an anonymous mapping cost nothing: the
         // tables read land at their offsets, the rest stays unread.
@@ -287,7 +297,13 @@ pub const Db = struct {
             const style = font.Style.read(data, t);
             if (style.family_len == 0) continue;
             const owned = db.gpa.dupe(u8, path) catch return;
-            db.faces.append(db.gpa, .{ .path = owned, .index = @intCast(i), .style = style }) catch db.gpa.free(owned);
+            db.faces.append(db.gpa, .{
+                .path = owned,
+                .index = @intCast(i),
+                .style = style,
+                .mtime = stat.mtime.nanoseconds,
+                .size = stat.size,
+            }) catch db.gpa.free(owned);
         }
     }
 
@@ -319,13 +335,28 @@ pub const Db = struct {
         return if (db.faces.items.len > 0) 0 else null;
     }
 
+    /// A failed cached disk face invalidates the persistent index. Keeping the
+    /// in-process face indices stable is safe; the next process must rescan.
+    fn discardFailedFace(db: *Db, face: u32) void {
+        if (face < db.disk_start or db.faces.items[face].memory != null) return;
+        const path = db.cache_path orelse return;
+        std.Io.Dir.cwd().deleteFile(db.io, path) catch |err| {
+            if (err != error.FileNotFound) std.Io.Dir.cwd().writeFile(db.io, .{ .sub_path = path, .data = "invalid" }) catch {};
+        };
+        if (db.cache.state != .off) db.cache.state = .stale;
+    }
+
     /// A face's font, loaded on first use (null if it cannot be read).
     pub fn load(db: *Db, face: u32) ?*const font.Font {
         if (db.loaded.get(face)) |l| return &l.font;
         const f = db.faces.items[face];
-        var bytes = f.read(db) catch return null;
+        var bytes = f.read(db) catch {
+            db.discardFailedFace(face);
+            return null;
+        };
         const parsed = font.Font.init(bytes.data, f.index) catch {
             fontmap.freeBytes(db.io, db.gpa, &bytes);
+            db.discardFailedFace(face);
             return null;
         };
         const l = db.gpa.create(Loaded) catch {
@@ -365,9 +396,15 @@ pub const Db = struct {
             if (i > 0 and std.mem.eql(u8, db.faces.items[i - 1].style.name(), db.faces.items[i].style.name())) continue;
             tries += 1;
             const face = db.faces.items[i];
-            var bytes = face.read(db) catch continue;
+            var bytes = face.read(db) catch {
+                db.discardFailedFace(@intCast(i));
+                continue;
+            };
             defer fontmap.freeBytes(db.io, db.gpa, &bytes);
-            const f = font.Font.init(bytes.data, face.index) catch continue;
+            const f = font.Font.init(bytes.data, face.index) catch {
+                db.discardFailedFace(@intCast(i));
+                continue;
+            };
             if (f.glyphIndex(cp) != 0) return @intCast(i);
         }
         return null;

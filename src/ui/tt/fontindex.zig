@@ -1,16 +1,13 @@
 //! The installed-font index kept between processes. A cache is valid only for
-//! the same nanoui version, scope, and every scanned directory's mtime+size.
-//! Validating those records stats directories; it never walks one or opens a
-//! font. Missing optional directories are records too, so creating one stale-
-//! proofs an otherwise empty cache. Damage or a write failure only loses the
-//! optimization: the caller scans and keeps the same font-matching behavior.
-//! The deliberate trade-off is that rewriting a font in place without changing
-//! any containing directory's mtime or size is outside this key; delete the
-//! cache (or change the directory) after such an out-of-band font update.
+//! the same nanoui version, scope, every scanned directory's mtime+size, and
+//! every font file's mtime+size. Validation stats those paths but never walks
+//! a directory or opens a font, so an in-place rewrite stale-proofs the index.
+//! Missing optional directories are records too. Damage or a write failure
+//! only loses the optimization: the caller scans with the same font matching.
 const std = @import("std");
 const font = @import("font.zig");
 
-pub const format_version: u32 = 1;
+pub const format_version: u32 = 2;
 const nanoui_version = @import("build_options").version;
 const magic = "NUFI";
 const seed: u64 = 0x4e554649;
@@ -30,6 +27,8 @@ pub const Entry = struct {
     path: []u8,
     index: u32,
     style: font.Style,
+    mtime: i128,
+    size: u64,
 };
 
 pub const State = enum { off, hit, miss, stale, damaged, unreadable, written, write_failed };
@@ -42,8 +41,8 @@ pub const Stats = struct {
 
 pub const ReadError = error{ NotFound, Damaged, Stale, Unreadable, OutOfMemory };
 
-/// Reads and validates a whole index. Every directory must still have the
-/// recorded mtime and size before any face is returned to the caller.
+/// Reads and validates a whole index. Every directory and every font file
+/// must still have its recorded mtime and size before any face is returned.
 pub fn read(gpa: std.mem.Allocator, io: std.Io, cache_path: []const u8, scope: []const u8) ReadError![]Entry {
     const data = std.Io.Dir.cwd().readFileAlloc(io, cache_path, gpa, .limited(max_cache_bytes)) catch |err| switch (err) {
         error.FileNotFound => return error.NotFound,
@@ -102,13 +101,20 @@ pub fn read(gpa: std.mem.Allocator, io: std.Io, cache_path: []const u8, scope: [
         if (flags & ~@as(u8, 3) != 0) return error.Damaged;
         style.italic = flags & 1 != 0;
         style.mono = flags & 2 != 0;
-        entries[made] = .{ .path = path, .index = index, .style = style };
+        const mtime = try r.i128v();
+        const size = try r.u64v();
+        const stat = std.Io.Dir.cwd().statFile(io, path, .{}) catch |err| {
+            if (err == error.FileNotFound) return error.Stale;
+            return error.Unreadable;
+        };
+        if (stat.kind != .file or stat.size != size or stat.mtime.nanoseconds != mtime) return error.Stale;
+        entries[made] = .{ .path = path, .index = index, .style = style, .mtime = mtime, .size = size };
     }
     if (r.at != body.len) return error.Damaged;
     return entries;
 }
 
-/// Atomically writes one complete index. The cache lives in the app's data
+/// Atomically writes one complete index. The cache lives in the app's cache
 /// directory, never in a font directory (which would invalidate its key).
 pub fn write(gpa: std.mem.Allocator, io: std.Io, cache_path: []const u8, scope: []const u8, directories: anytype, faces: anytype) ?usize {
     if (scope.len > std.math.maxInt(u16) or nanoui_version.len > std.math.maxInt(u8)) return null;
@@ -119,7 +125,7 @@ pub fn write(gpa: std.mem.Allocator, io: std.Io, cache_path: []const u8, scope: 
     }
     for (faces) |face| {
         if (face.path.len == 0 or face.path.len > max_path_bytes or face.style.family_len > 64) return null;
-        if (!grow(&body, 2 + face.path.len + 4 + 1 + face.style.family_len + 2 + 1)) return null;
+        if (!grow(&body, 2 + face.path.len + 4 + 1 + face.style.family_len + 2 + 1 + 16 + 8)) return null;
     }
     if (directories.len > max_directories or faces.len > max_entries or body + 8 > max_cache_bytes) return null;
     const data = gpa.alloc(u8, body + 8) catch return null;
@@ -148,6 +154,8 @@ pub fn write(gpa: std.mem.Allocator, io: std.Io, cache_path: []const u8, scope: 
         c.bytes(face.style.family[0..face.style.family_len]);
         c.u16v(face.style.weight);
         c.u8v(@as(u8, @intFromBool(face.style.italic)) | @as(u8, @intFromBool(face.style.mono)) << 1);
+        c.i128v(face.mtime);
+        c.u64v(face.size);
     }
     std.debug.assert(c.at == body);
     std.mem.writeInt(u64, data[body..][0..8], std.hash.Wyhash.hash(seed, data[0..body]), .little);

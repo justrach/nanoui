@@ -84,7 +84,7 @@ pub const TextSystem = struct {
     /// plain `init`, so they never create or write a persistent font index.
     pub fn enablePersistence(self: *TextSystem, app_name: []const u8) void {
         if (builtin.is_test) return;
-        const dir = desktop.path(self.gpa, .data, app_name) catch return;
+        const dir = desktop.path(self.gpa, .cache, app_name) catch return;
         defer self.gpa.free(dir);
         self.db.enableCache(dir);
     }
