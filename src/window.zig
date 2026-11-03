@@ -32,6 +32,8 @@ pub const Window = struct {
     nswindow: objc.Object,
     delegate: objc.Object,
     page: ?*Page = null,
+    /// Pages docked in a native-UI window's views (`dockPage`).
+    docked: std.ArrayList(*Page) = .empty,
     surface: ?*Surface = null,
     title_bar: TitleBar = .default,
     on_close: ?Callback = null,
@@ -309,6 +311,17 @@ pub const Window = struct {
         if (self.surface) |s| s.requestFrame();
     }
 
+    /// A web page docked in `options.parent`, an NSView of this window
+    /// (a native-UI window's region): its own bridge, the app's services,
+    /// freed with the window. Place it with `Page.setFrame`.
+    pub fn dockPage(self: *Window, options: PageOptions) !*Page {
+        if (options.parent == null) return error.NoParent;
+        const p = try Page.create(self, options);
+        errdefer p.destroy();
+        try self.docked.append(self.app.gpa, p);
+        return p;
+    }
+
     pub fn setTitle(self: *Window, title: []const u8) void {
         const pool = objc.Pool.push();
         defer pool.pop();
@@ -359,6 +372,8 @@ pub const Window = struct {
         self.closed = true;
         if (self.on_close) |cb| cb.func(cb.ctx, self);
         if (self.page) |p| p.destroy();
+        for (self.docked.items) |p| p.destroy();
+        self.docked.deinit(self.app.gpa);
         if (self.surface) |s| s.destroy();
         self.page = null;
         self.surface = null;

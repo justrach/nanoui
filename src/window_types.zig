@@ -20,6 +20,15 @@ pub const PageOptions = struct {
     /// them (the app's own and every remote page): `{ "Local", "/" }`,
     /// `{ "Docs", "https://example.com/" }`. Empty: no bar.
     pages: []const PageEntry = &.{},
+    /// Docked: the native view (an NSView on macOS) the webview goes in,
+    /// instead of filling the window's content; the app places it with
+    /// `Page.setFrame`. For `Window.dockPage` in a native-UI window.
+    parent: ?*anyopaque = null,
+    /// Called with the platform's webview configuration (macOS: the
+    /// WKWebViewConfiguration) before the webview is made: preferences,
+    /// process pool, data store, extra script handlers.
+    configure: ?*const fn (ctx: ?*anyopaque, config: *anyopaque) void = null,
+    configure_ctx: ?*anyopaque = null,
 };
 
 /// One entry of `PageOptions.pages`.

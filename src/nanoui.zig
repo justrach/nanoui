@@ -102,6 +102,8 @@ pub const AppOptions = plat.app.Options;
 pub const Window = plat.window.Window;
 pub const WindowOptions = plat.window.Options;
 pub const PageOptions = plat.window.PageOptions;
+/// A page docked in a native-UI window (`Window.dockPage`), macOS.
+pub const Page = if (mac) @import("page_webkit.zig").Page else void;
 pub const Asset = plat.window.Asset;
 /// Typed IPC for pages: wherever a webview draws them (macOS, iOS, Windows, Linux).
 const has_pages = mac or builtin.os.tag == .ios or builtin.os.tag == .windows or (builtin.os.tag == .linux and !is_android);

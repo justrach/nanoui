@@ -81,6 +81,12 @@ pub fn ipc(comptime Window: type, comptime App: type) type {
                     window.sendOwned(msg);
                 }
 
+                /// Sends `payload` to one page (a docked one). Main thread.
+                pub fn emitPage(page: anytype, payload: T) void {
+                    const msg = encode(page.queue.gpa, payload) catch return;
+                    page.sendOwned(msg);
+                }
+
                 /// Sends `payload` to every window's page. Main thread only.
                 pub fn broadcast(app: *App, payload: T) void {
                     const msg = encode(app.gpa, payload) catch return;
@@ -121,8 +127,15 @@ pub fn ipc(comptime Window: type, comptime App: type) type {
             return @intFromFloat(@min(id, 9007199254740992.0));
         }
 
-        /// Handles one message from a page, on the main thread.
+        /// Handles one message from the window's page, on the main thread.
         pub fn handleMessage(window: *Window, body: []const u8) void {
+            const page = window.page orelse return;
+            handlePageMessage(window, page, body);
+        }
+
+        /// Handles one message from `page`, one of `window`'s (its `page`
+        /// or a docked one), on the main thread.
+        pub fn handlePageMessage(window: *Window, page: anytype, body: []const u8) void {
             const app = window.app;
             var arena: std.heap.ArenaAllocator = .init(app.gpa);
             defer arena.deinit();
@@ -131,7 +144,6 @@ pub fn ipc(comptime Window: type, comptime App: type) type {
                 std.log.warn("nanoui: malformed message from page", .{});
                 return;
             };
-            const page = window.page orelse return;
             if (std.mem.eql(u8, env.t, "call")) {
                 var aw: std.Io.Writer.Allocating = .init(a);
                 aw.writer.print("{{\"t\":\"reply\",\"id\":{d},", .{pageId(env.id)}) catch return;
