@@ -535,7 +535,7 @@ pub const Context = struct {
     pub fn pointerDown(c: *Context) void {
         c.input.down = true;
         c.input.pressed = true;
-        c.right_press = c.input.button == .right or (c.input.button == .left and c.input.ctrl);
+        c.right_press = c.input.button == .right or (@import("keys.zig").mac and c.input.button == .left and c.input.ctrl);
         if (scroll_mod.tryPressScrollbar(c)) return;
         if (c.hot == 0) c.focus = 0;
     }

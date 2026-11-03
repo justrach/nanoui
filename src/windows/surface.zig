@@ -81,11 +81,20 @@ pub const Surface = struct {
     no_gpu: bool = false,
     /// A size arrived that no frame has been built for yet.
     size_dirty: bool = false,
+    /// The client area is being worked out again: the call that does it can
+    /// send the size messages that would ask for it again.
+    repairing: bool = false,
     /// A drag is moving the window's edge (`WM_ENTERSIZEMOVE` .. `WM_EXITSIZEMOVE`).
     dragging: bool = false,
     /// `NANOUI_DUMP`: F12 writes the canvas beside the same frame drawn whole.
     dump_enabled: bool = false,
     dumps: usize = 0,
+    /// `NANOUI_TRACE`: every size, frame and paint is printed to stderr, to
+    /// see a window that stopped showing what its view built.
+    trace_on: bool = false,
+    /// The frames built, and the paints done: the trace's frame number.
+    frames: u64 = 0,
+    paints: u64 = 0,
 
     pub fn create(window: *Window, view: ui.View, theme_override: ?Theme) !*Surface {
         const gpa = window.app.gpa;
@@ -98,6 +107,7 @@ pub const Surface = struct {
         // how many threads draw it, and F12 dumping the canvas.
         self.no_d3d = envFlag("NANOUI_NO_D3D");
         self.dump_enabled = envFlag("NANOUI_DUMP");
+        self.trace_on = envFlag("NANOUI_TRACE");
         if (envFlag("NANOUI_ONE_THREAD")) @import("../ui/raster.zig").threads = 1;
         // Frames come from Direct3D 11 here (`paintGpu`), so the view names it
         // from the first frame; if no device can be made, `paintGpu` says CPU
@@ -133,6 +143,12 @@ pub const Surface = struct {
         return if (self.system_theme_dark) Theme.dark_theme else Theme.light;
     }
 
+    /// `NANOUI_TRACE`: what the surface is doing, to stderr.
+    pub fn trace(self: *Surface, comptime fmt: []const u8, args: anytype) void {
+        if (!self.trace_on) return;
+        std.debug.print("nanoui trace {d:.3} [#{d}/{d}]: " ++ fmt ++ "\n", .{ clock.now() - self.start_time, self.paints, self.frames } ++ args);
+    }
+
     /// Builds the view for the current state and asks for it to be drawn: the
     /// one entry point for everything that changes what the window shows.
     pub fn frame(self: *Surface) void {
@@ -154,6 +170,8 @@ pub const Surface = struct {
             gpu_side.invalidate(self);
             if (!self.frame_again) break;
         }
+        self.frames += 1;
+        self.trace("frame built: {d:.0}x{d:.0} {d} draws, {d} passes, again={}", .{ self.size.w, self.size.h, self.instances.items.len, passes + 1, self.frame_again });
         self.frame_again = false;
         // The size a WM_SIZE between frames brought is built here: a WM_PAINT
         // still to come has nothing left to build.
@@ -194,11 +212,14 @@ pub const Surface = struct {
         if (more and !self.ticking) if (self.hwnd()) |h| {
             _ = w.SetTimer(h, tick_timer, 16, null);
             self.ticking = true;
+            self.trace("tick timer on", .{});
         };
         // Something changes now and then: one frame, that much later.
         if (!more) if (c.frame_in) |s| if (self.hwnd()) |h| {
             _ = w.SetTimer(h, later_timer, @intFromFloat(@max(1, s * 1000)), null);
+            self.trace("later timer {d} ms", .{@as(u32, @intFromFloat(@max(1, s * 1000)))});
         };
+        self.trace("built: {d:.0}x{d:.0} scale {d:.2}, {d} draws, anim={} hot={} in={?d:.2} ticking={}", .{ self.size.w, self.size.h, self.scale, self.instances.items.len, c.animating, r.hot_changed, c.frame_in, self.ticking });
     }
 
     /// Whether two theme choices pick the same theme (both null: the system's).
@@ -234,11 +255,33 @@ pub const Surface = struct {
         _ = w.SetCursor(w.LoadCursorW(null, id));
     }
 
-    fn updateSize(self: *Surface, h: w.HWND) void {
+    /// Reads the window's client size and DPI into the surface; true when
+    /// either changed. Called on `WM_SIZE`, and again by `paint`: a size
+    /// message a modal loop swallowed, or one sent while the window was
+    /// hidden, must not leave the frame (and the swap chain) at a size the
+    /// window no longer is.
+    pub fn updateSize(self: *Surface, h: w.HWND) bool {
         var r: w.RECT = .{};
-        _ = w.GetClientRect(h, &r);
+        // A call that failed says nothing about the size: a zeroed rect would
+        // become a zeroed surface, and a frame built for nothing is a window
+        // that stays blank until something resizes it.
+        if (w.GetClientRect(h, &r) == 0) return false;
+        // Windows hands back the client area it last worked out, and a window
+        // moved to another monitor can keep the one it had there — a client
+        // area that is not inside the window at all. Nothing invalidates a
+        // region it does not intersect: no WM_PAINT comes, the frame is never
+        // built, and the window stays blank until something resizes it. The
+        // client area is worked out again here instead, which is exactly the
+        // `WM_NCCALCSIZE` a resize sends, with nothing moved.
+        if (!self.clientFits(h, r)) {
+            self.repairClient(h, r);
+            if (w.GetClientRect(h, &r) == 0) return false;
+        }
         const dpi = w.GetDpiForWindow(h);
         const scale: f32 = if (dpi > 0) @as(f32, @floatFromInt(dpi)) / 96 else 1;
+        const w_: f32 = @as(f32, @floatFromInt(r.right - r.left)) / scale;
+        const h_: f32 = @as(f32, @floatFromInt(r.bottom - r.top)) / scale;
+        const changed = w_ != self.size.w or h_ != self.size.h or scale != self.scale;
         // A drag-resize sends WM_SIZE per pixel of movement, and the DPI does
         // not change with the size: only a scale that changed is worth telling
         // the text system about (it would empty the glyph atlas to re-raster
@@ -247,7 +290,42 @@ pub const Surface = struct {
             self.scale = scale;
             self.text.setScale(scale);
         }
-        self.size = .{ .w = @as(f32, @floatFromInt(r.right - r.left)) / self.scale, .h = @as(f32, @floatFromInt(r.bottom - r.top)) / self.scale };
+        self.size = .{ .w = w_, .h = h_ };
+        return changed;
+    }
+
+    /// Whether the client area a window reports lies inside the window. True of
+    /// every window Windows has placed; false when the two disagree — a client
+    /// area belonging to where the window was, not to where it is.
+    fn clientFits(_: *Surface, h: w.HWND, r: w.RECT) bool {
+        var wr: w.RECT = .{};
+        if (w.GetWindowRect(h, &wr) == 0) return true;
+        // Smaller than the window's frame is all a client area can be; one
+        // bigger than the frame cannot be inside it.
+        if (r.right - r.left > wr.right - wr.left or r.bottom - r.top > wr.bottom - wr.top) return false;
+        // And where it starts: a client area whose corner is outside the window
+        // is not the window's, whatever its size.
+        var origin: w.POINT = .{};
+        if (w.ClientToScreen(h, &origin) == 0) return true;
+        return origin.x >= wr.left and origin.x < wr.right and origin.y >= wr.top and origin.y < wr.bottom;
+    }
+
+    /// Has Windows work the client area out again, without moving or resizing
+    /// the window, and ask for the frame the window needs now. A client area
+    /// that has been outside the window left no update region to paint, so the
+    /// invalidation is what gets the first frame back.
+    fn repairClient(self: *Surface, h: w.HWND, stale: w.RECT) void {
+        if (self.repairing) return;
+        self.repairing = true;
+        defer self.repairing = false;
+        _ = w.SetWindowPos(h, null, 0, 0, 0, 0, w.SWP_NOSIZE | w.SWP_NOMOVE | w.SWP_NOZORDER | w.SWP_NOACTIVATE | w.SWP_FRAMECHANGED);
+        var fresh: w.RECT = .{};
+        _ = w.GetClientRect(h, &fresh);
+        std.log.warn("nanoui: the client area {d}x{d} was not the window's: worked out again as {d}x{d}", .{
+            stale.right - stale.left, stale.bottom - stale.top, fresh.right - fresh.left, fresh.bottom - fresh.top,
+        });
+        self.size_dirty = true;
+        _ = w.InvalidateRect(h, null, 0);
     }
 
     fn setMouse(self: *Surface, lp: w.LPARAM) void {
@@ -265,6 +343,12 @@ pub const Surface = struct {
         switch (msg) {
             w.WM_PAINT => gpu_side.paint(self, h),
             w.WM_ERASEBKGND => return 1,
+            // Back from a lock, a display change, another desktop or a hidden
+            // window: the frame is built again, as a resize would build it, so
+            // what is on screen is what the app is now.
+            w.WM_ACTIVATEAPP => if (wp != 0) self.requestFrame(),
+            w.WM_SHOWWINDOW => if (wp != 0) self.requestFrame(),
+            w.WM_DISPLAYCHANGE => self.requestFrame(),
             w.WM_SETTINGCHANGE => {
                 // The system's appearance may have changed under
                 // Personalization > Colors: a window that follows it is redrawn.
@@ -284,13 +368,29 @@ pub const Surface = struct {
                 _ = w.SetWindowPos(h, null, r.left, r.top, r.right - r.left, r.bottom - r.top, 0x0004 | 0x0010); // no z-order, no activate
                 return 0;
             },
+            w.WM_MOVE => {
+                // A window moved onto another monitor has a client area there.
+                // One left at the old monitor's would never be painted again,
+                // and a move is not always a resize: read it here too.
+                if (w.IsIconic(h) == 0 and self.updateSize(h)) {
+                    self.size_dirty = true;
+                    _ = w.InvalidateRect(h, null, 0);
+                    self.requestFrame();
+                }
+            },
             w.WM_SIZE => {
                 // A resize is many messages a second, and laying the view out
                 // for each is wasted: the size is read now, the frame built once
                 // when the queue is empty. Except before the first frame: a
                 // hidden window never receives WM_PAINT, so deferring it leaves
                 // every rect zero and clicks landing nowhere.
-                self.updateSize(h);
+                // A minimized window's client area is the icon's: reading it
+                // would lay the view out for the icon, and size the swap chain
+                // for it, leaving the window showing that until a resize sized
+                // it back. The size it had stands, and the restore's WM_SIZE
+                // (or the paint's own read) picks up the real one again.
+                if (w.IsIconic(h) == 0) _ = self.updateSize(h);
+                self.trace("WM_SIZE wp={d}: {d:.0}x{d:.0} at {d:.2}", .{ wp, self.size.w, self.size.h, self.scale });
                 if (self.last_frame_time == 0) {
                     self.buildFrame();
                     self.requestFrame();
@@ -317,12 +417,14 @@ pub const Surface = struct {
             },
             w.WM_TIMER => if (wp == later_timer) {
                 _ = w.KillTimer(h, later_timer);
+                self.trace("later timer fired", .{});
                 self.frame();
             } else if (wp == tick_timer) {
                 self.frame();
                 if (!self.ctx.animating) {
                     _ = w.KillTimer(h, tick_timer);
                     self.ticking = false;
+                    self.trace("tick timer off", .{});
                 }
             },
             WM_FRAME => {

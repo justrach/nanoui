@@ -166,16 +166,27 @@ test "right_clicked fires on right press and Ctrl+left press and clears down" {
     try testing.expectEqual(@as(u32, 1), s.right);
     try testing.expect(!t.ctx.input.down);
     try testing.expectEqual(@as(u64, 0), t.ctx.active);
-    // Ctrl+left press triggers right_clicked, not left click or pressed.
+    // On the Mac, Ctrl+left is the secondary click: right_clicked, not left
+    // click or pressed. Elsewhere it is a left click with Ctrl held, the way
+    // lists are multi-selected on Windows and Linux.
     t.ctx.input.button = .left;
     t.ctx.input.ctrl = true;
     t.ctx.pointerDown();
     t.frame();
     t.ctx.input.ctrl = false;
-    try testing.expectEqual(@as(u32, 2), s.right);
-    try testing.expectEqual(@as(u32, 0), s.left);
-    try testing.expect(!s.pressed);
-    try testing.expect(!t.ctx.input.down);
+    if (@import("keys.zig").mac) {
+        try testing.expectEqual(@as(u32, 2), s.right);
+        try testing.expectEqual(@as(u32, 0), s.left);
+        try testing.expect(!s.pressed);
+        try testing.expect(!t.ctx.input.down);
+    } else {
+        try testing.expectEqual(@as(u32, 1), s.right);
+        try testing.expectEqual(@as(u32, 0), s.left);
+        try testing.expect(s.pressed);
+        try testing.expect(t.ctx.input.down);
+        t.ctx.pointerUp();
+        t.frame();
+    }
 }
 
 const ScrollBox = struct {

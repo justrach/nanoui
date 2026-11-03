@@ -22,8 +22,6 @@ const iid_dxgi_factory2: Guid = .{ .a = 0x50c83a1c, .b = 0xe072, .c = 0x4c48, .d
 const iid_texture2d: Guid = .{ .a = 0x6f15aaf2, .b = 0xd208, .c = 0x4e89, .d = .{ 0x9a, 0xb4, 0x48, 0x95, 0x35, 0xd3, 0x4f, 0x9c } };
 
 const format_bgra8: u32 = 87; // DXGI_FORMAT_B8G8R8A8_UNORM, as the renderer writes
-const device_removed: u32 = 0x887A0005;
-const device_reset: u32 = 0x887A0007;
 
 extern "d3d11" fn D3D11CreateDevice(adapter: ?*anyopaque, driver: u32, software: ?*anyopaque, flags: u32, levels: ?[*]const u32, n_levels: u32, sdk: u32, device: *?*Com, level: ?*u32, context: *?*Com) callconv(.winapi) HRESULT;
 
@@ -119,6 +117,8 @@ pub const Presenter = struct {
     /// wherever the renderer got there first — and the faster the renderer,
     /// the more of it tears.
     upload_tex: ?*Com = null,
+    /// The HRESULT of the last `present` (for `NANOUI_TRACE`).
+    last_hr: u32 = 0,
 
     /// A device (hardware, else WARP) and a flip-sequential swap chain for
     /// `hwnd`, `width` × `height` pixels.
@@ -253,8 +253,11 @@ pub const Presenter = struct {
     }
 
     /// Shows the back buffer, waiting for the next vertical blank when
-    /// `vsync` is set. False when the device was lost: the caller drops this
-    /// presenter and makes another.
+    /// `vsync` is set. False on any failure: the caller drops this presenter
+    /// and makes another for the next frame. A chain that keeps failing goes
+    /// on accepting presents and showing nothing, which used to leave a
+    /// window blank until something rebuilt the chain — a resize, and
+    /// nothing else.
     pub fn present(p: *Presenter) bool {
         // SyncInterval 1 waits for the refresh, 0 presents at once. A drag
         // resize presents at once: the sizes it passes through are shown as
@@ -262,7 +265,11 @@ pub const Presenter = struct {
         const sync: u32 = if (p.vsync and !p.resizing) 1 else 0;
         const hr = p.swap.slot(*const fn (*Com, u32, u32) callconv(.winapi) HRESULT, 8)(p.swap, sync, 0); // Present
         const code: u32 = @bitCast(hr);
-        return !(code == device_removed or code == device_reset);
+        p.last_hr = code;
+        // `DXGI_STATUS_OCCLUDED` is positive and not a failure: the frame is
+        // simply not on screen. A negative one is a lost device, a lost
+        // desktop or a chain that can no longer present.
+        return hr >= 0;
     }
 
     /// The device and context the swap chain was made on, so that a
