@@ -115,6 +115,13 @@ pub fn textArea(c: *Context, buffer: *tf.TextBuffer, opts: AreaOptions) tf.Resul
         n.style.border_width = 1 + focus_t;
     }
     var result: tf.Result = .{ .focused = it.focused };
+    // Asked for the keys (`TextBuffer.focus`), as a text field is.
+    if (buffer.want_focus) {
+        buffer.want_focus = false;
+        c.focus = it.id;
+        result.focused = true;
+        c.changed = true;
+    }
     const e = tf.editState(c, it.id, buffer) orelse return result;
     // Wrapped in the width it had: none yet in its first frame, so another follows.
     const w: f32 = if (it.rect) |r| @max(1, r.w - pad.horizontal()) else 1e6;
@@ -156,6 +163,13 @@ pub fn textArea(c: *Context, buffer: *tf.TextBuffer, opts: AreaOptions) tf.Resul
                     vertical(c, buffer.text(), style, w, e, m == .move_down or m == .select_down, m == .select_up or m == .select_down);
                     continue;
                 },
+                // Tab and Shift-Tab move the focus, as in a text field
+                // (AppKit sends insertTab: here: the window's own Tab
+                // handling skips multiline fields).
+                .insert_tab => {
+                    c.focusCycle(c.input.shift);
+                    continue;
+                },
                 else => {},
             };
             tf.apply(buffer, e, op, field, c.clipboard, &result);
@@ -174,6 +188,7 @@ pub fn textArea(c: *Context, buffer: *tf.TextBuffer, opts: AreaOptions) tf.Resul
                 result.submitted = true;
             },
             .escape => c.focus = 0,
+            .tab => c.focusCycle(c.input.shift),
             else => {},
         };
         textedit.commitUndo(c, buffer, e, &result, false, took_undo);
