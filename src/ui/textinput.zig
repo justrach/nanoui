@@ -132,16 +132,29 @@ fn stringOf(obj: objc.Object) []const u8 {
     return objc.fromNSString(obj);
 }
 
-fn insertText(obj: objc.Object, _: objc.SEL, str: objc.Object, _: NSRange) callconv(.c) void {
+/// The text an input method replaces (the accent menu's held letter, a
+/// reconversion), selected first: `replacement` is UTF-16, ignored when
+/// NSNotFound or while composing (the marked text is what is replaced).
+fn selectReplacement(s: *Surface, replacement: NSRange) void {
+    if (replacement.location == not_found) return;
+    const f = focusedOf(s) orelse return;
+    if (f.marked != null) return;
+    const b = clampRange(f.text, replacement) orelse return;
+    push(s, .{ .select = .{ .anchor = b[0], .caret = b[1] } });
+}
+
+fn insertText(obj: objc.Object, _: objc.SEL, str: objc.Object, replacement: NSRange) callconv(.c) void {
     const s = objc.getZig(Surface, obj) orelse return;
     const t = stringOf(str);
     // Control characters arrive as commands, not text.
     if (t.len == 1 and (t[0] < 0x20 or t[0] == 0x7f)) return;
+    selectReplacement(s, replacement);
     push(s, .{ .insert = dupe(s, t) });
 }
 
-fn setMarkedText(obj: objc.Object, _: objc.SEL, str: objc.Object, sel: NSRange, _: NSRange) callconv(.c) void {
+fn setMarkedText(obj: objc.Object, _: objc.SEL, str: objc.Object, sel: NSRange, replacement: NSRange) callconv(.c) void {
     const s = objc.getZig(Surface, obj) orelse return;
+    selectReplacement(s, replacement);
     const t = dupe(s, stringOf(str));
     const loc: cf.CFIndex = if (sel.location == not_found) 0 else @intCast(@min(sel.location, t.len * 2));
     const len: cf.CFIndex = if (sel.location == not_found) 0 else @intCast(@min(sel.length, t.len * 2));
