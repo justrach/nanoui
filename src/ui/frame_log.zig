@@ -24,7 +24,11 @@ pub const Record = struct {
     sync: bool,
     gpu_ms: f64 = 0,
     /// When the frame reached the display (`MTLDrawable.presentedTime`),
-    /// 0 until Metal reports it; -1 when Metal dropped it unshown.
+    /// 0 until Metal reports it; -1 when Metal reports 0. That is not
+    /// always "never shown": a newer drawable can take its vsync (the
+    /// compositor runs below a 240 Hz display's rate), and on macOS 27 a
+    /// drawable shown after its layer's `drawableSize` changed (any live
+    /// resize) reports 0 too. Count frames on screen with a capture.
     presented_t: f64 = 0,
     nodes: usize,
     instances: usize,
@@ -132,7 +136,6 @@ pub const FrameLog = struct {
         }
     }
 
-
     pub fn setPresented(self: *FrameLog, idx: usize, t: f64) void {
         self.acquire();
         defer self.release();
@@ -176,13 +179,13 @@ pub const FrameLog = struct {
         var aw: std.Io.Writer.Allocating = .fromArrayList(self.gpa, &self.jsonl);
         for (self.records.items[self.flushed..]) |r| {
             aw.writer.print(
-                "{{\"t\":{d:.6},\"kind\":\"{s}\",\"interval_ms\":{d:.3},\"duration\":{d:.6},\"dt\":{d:.6},\"build_ms\":{d:.3},\"layout_ms\":{d:.3},\"paint_ms\":{d:.3},\"after_frame_ms\":{d:.3},\"drawable_wait_ms\":{d:.3},\"encode_ms\":{d:.3},\"sync\":{},\"gpu_ms\":{d:.3},\"nodes\":{d},\"instances\":{d},\"atlas_reset\":{},\"queued\":{d}}}\n",
+                "{{\"t\":{d:.6},\"kind\":\"{s}\",\"interval_ms\":{d:.3},\"duration\":{d:.6},\"dt\":{d:.6},\"build_ms\":{d:.3},\"layout_ms\":{d:.3},\"paint_ms\":{d:.3},\"after_frame_ms\":{d:.3},\"drawable_wait_ms\":{d:.3},\"encode_ms\":{d:.3},\"sync\":{},\"gpu_ms\":{d:.3},\"presented_t\":{d:.6},\"nodes\":{d},\"instances\":{d},\"atlas_reset\":{},\"queued\":{d}}}\n",
                 .{
-                    r.t,              @tagName(r.kind), r.interval_ms,    r.duration,
-                    r.dt,             r.build_ms,       r.layout_ms,      r.paint_ms,
-                    r.after_frame_ms, r.drawable_wait_ms, r.encode_ms,    r.sync,
-                    r.gpu_ms,         r.nodes,          r.instances,      r.atlas_reset,
-                    r.queued,
+                    r.t,              @tagName(r.kind),   r.interval_ms, r.duration,
+                    r.dt,             r.build_ms,         r.layout_ms,   r.paint_ms,
+                    r.after_frame_ms, r.drawable_wait_ms, r.encode_ms,   r.sync,
+                    r.gpu_ms,         r.presented_t,      r.nodes,       r.instances,
+                    r.atlas_reset,    r.queued,
                 },
             ) catch break;
         }
