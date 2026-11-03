@@ -51,6 +51,22 @@ pub const App = struct {
     /// Files the system asks the app to open (Finder's Open With, `open -a`,
     /// a file named when it was launched); without it they're ignored.
     open_files: ?OpenFiles = null,
+    /// Opened in the background by an update's restart (`NANOUI_RESTORE=quiet`,
+    /// update_auto.zig): until it has finished launching, the app doesn't
+    /// activate and its windows open behind; the updater puts them back.
+    quiet: bool = false,
+    /// Told when the app goes out of sight: it resigns active, or a window
+    /// hides or is covered (an update waiting may go in).
+    away_hook: ?AwayHook = null,
+
+    pub const AwayHook = struct {
+        ctx: *anyopaque,
+        func: *const fn (ctx: *anyopaque) void,
+    };
+
+    pub fn wentAway(self: *App) void {
+        if (self.away_hook) |h| h.func(h.ctx);
+    }
 
     pub const OpenFiles = struct {
         ctx: *anyopaque,
@@ -98,6 +114,7 @@ pub const App = struct {
             .delegate = delegate,
             .flags = flags,
             .debug = init.environ_map.get("NANOUI_DEBUG") != null,
+            .quiet = std.mem.eql(u8, init.environ_map.get("NANOUI_RESTORE") orelse "", "quiet"),
         };
         // A plain binary (not an .app bundle) still gets a Dock icon and
         // menus; hidden runs (tests, snapshots) get neither, nor focus.
@@ -283,7 +300,15 @@ pub const App = struct {
 };
 
 fn didFinishLaunching(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
-    if (objc.getZig(App, self_obj)) |app| if (app.flags.hidden) return;
+    if (objc.getZig(App, self_obj)) |app| {
+        if (app.flags.hidden) return;
+        // Opened quietly by an update's restart: launching takes no focus,
+        // and windows made from now on come forward as usual.
+        if (app.quiet) {
+            app.quiet = false;
+            return;
+        }
+    }
     const nsapp = objc.msg(objc.Object, objc.class("NSApplication"), "sharedApplication", .{});
     objc.msg(void, nsapp, "activateIgnoringOtherApps:", .{objc.YES});
 }
@@ -349,10 +374,12 @@ fn continueActivity(self_obj: objc.Object, _: objc.SEL, _: objc.Object, activity
 
 fn becameActive(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
     const app = objc.getZig(App, self_obj) orelse return;
+    app.quiet = false;
     if (app.options.on_active) |f| f(app.options.ctx, true);
 }
 
 fn resignedActive(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
     const app = objc.getZig(App, self_obj) orelse return;
     if (app.options.on_active) |f| f(app.options.ctx, false);
+    app.wentAway();
 }

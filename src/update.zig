@@ -25,7 +25,9 @@ const builtin = @import("builtin");
 const mac = builtin.os.tag == .macos;
 const objc = if (mac) @import("objc.zig") else struct {};
 const portable = @import("update_portable.zig");
+const auto_mod = @import("update_auto.zig");
 const App = @import("nanoui.zig").App;
+pub const Auto = auto_mod.Auto;
 const desktop = if (mac) @import("desktop.zig") else struct {};
 
 pub const Callback = struct {
@@ -86,6 +88,17 @@ pub const Updater = struct {
     next_version_len: usize = 0,
     next_staged_buf: [1024]u8 = undefined,
     next_staged_len: usize = 0,
+    /// Restarting into updates out of sight (`autoRestart`, update_auto.zig):
+    /// its options, the app, its timers waiting, and the environment the
+    /// relaunch is given.
+    auto: ?Auto = null,
+    app: ?*App = null,
+    auto_waits: u32 = 0,
+    away_waits: u32 = 0,
+    relaunch_env: ?[]const u8 = null,
+    /// What the restart before this launch left (`restore.json`).
+    restored: ?std.json.Parsed(auto_mod.Restore) = null,
+    restored_state: []u8 = &.{},
 
     /// Starts checking, if this build can update itself. Call from `main`,
     /// on the main thread; `deinit` before the app ends.
@@ -93,6 +106,7 @@ pub const Updater = struct {
         const u = try init.gpa.create(Updater);
         u.* = .{ .gpa = init.gpa, .io = init.io, .options = options };
         if (comptime mac) u.detect(init.environ_map) catch return u else portable.detect(u, init.environ_map) catch return u;
+        if (comptime mac) auto_mod.load(u, init.environ_map);
         u.phase.store(.idle, .release);
         App.after(options.first_ms, u, tick);
         return u;
@@ -107,6 +121,25 @@ pub const Updater = struct {
             else => {},
         }
         u.free();
+    }
+
+    /// Restarts into each update by itself, when nobody would see it, and
+    /// comes back as it was (update_auto.zig). Call once the app's windows
+    /// exist: a launch such a restart opened puts them back. macOS only.
+    pub fn autoRestart(u: *Updater, app: *App, auto: Auto) void {
+        auto_mod.enable(u, app, auto);
+    }
+
+    /// In the launch an automatic restart opened, the version it came from.
+    pub fn updatedFrom(u: *const Updater) ?[]const u8 {
+        const r = u.restored orelse return null;
+        return r.value.from;
+    }
+
+    /// In that launch, what `Auto.save` wrote before the restart.
+    pub fn restoredState(u: *const Updater) ?[]const u8 {
+        if (u.restored == null) return null;
+        return u.restored_state;
     }
 
     /// A check is running (it may find a version newer than one waiting).
@@ -174,11 +207,16 @@ pub const Updater = struct {
             std.log.info("nanoui: update not installed: {t}", .{e});
             return false;
         };
-        if (comptime mac) relaunch(u.io, u.bundle) else portable.relaunch(u);
+        if (comptime mac) relaunch(u.io, u.bundle, u.relaunch_env) else portable.relaunch(u);
         return true;
     }
 
     fn free(u: *Updater) void {
+        if (comptime mac) {
+            if (u.app) |a| a.away_hook = null;
+        }
+        if (u.restored) |r| r.deinit();
+        if (u.restored_state.len > 0) u.gpa.free(u.restored_state);
         for ([_][]const u8{ u.feed, u.bundle, u.current, u.cache }) |s| if (s.len > 0) u.gpa.free(s);
         u.gpa.destroy(u);
     }
@@ -225,6 +263,7 @@ pub const Updater = struct {
         u.adopt();
         u.working.store(false, .release);
         if (u.options.changed) |cb| cb.func(cb.ctx);
+        auto_mod.consider(u);
     }
 
     /// Finds, downloads and verifies a newer version: true once it's staged.
@@ -396,11 +435,15 @@ pub fn swap(gpa: std.mem.Allocator, io: std.Io, staged: []const u8, bundle: []co
 }
 
 /// Opens the bundle once this process has exited, from a shell of its own.
-fn relaunch(io: std.Io, bundle: []const u8) void {
+/// An automatic restart passes `env` (`NANOUI_RESTORE=quiet|active`); a
+/// quiet one opens in the background.
+fn relaunch(io: std.Io, bundle: []const u8, env: ?[]const u8) void {
     var pid: [16]u8 = undefined;
     const p = std.fmt.bufPrint(&pid, "{d}", .{std.c.getpid()}) catch return;
+    const restore = env orelse "";
+    const bg = if (std.mem.endsWith(u8, restore, "=quiet")) "-g" else "";
     _ = std.process.spawn(io, .{
-        .argv = &.{ "/bin/sh", "-c", "while /bin/kill -0 \"$0\" 2>/dev/null; do sleep 0.2; done; /usr/bin/open \"$1\"", p, bundle },
+        .argv = &.{ "/bin/sh", "-c", "while /bin/kill -0 \"$0\" 2>/dev/null; do sleep 0.2; done; if [ -n \"$2\" ]; then exec /usr/bin/open $3 --env \"$2\" \"$1\"; fi; exec /usr/bin/open \"$1\"", p, bundle, restore, bg },
         .stdin = .ignore,
         .stdout = .ignore,
         .stderr = .ignore,

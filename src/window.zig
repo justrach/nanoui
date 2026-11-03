@@ -140,7 +140,11 @@ pub const Window = struct {
         }
         if (options.always_on_top or options.floating) self.setAlwaysOnTop(true);
         if (options.opacity < 1) self.setOpacity(options.opacity);
-        if (!app.flags.hidden and options.visible) objc.msg(void, nswindow, "makeKeyAndOrderFront:", .{@as(?objc.Object, null)});
+        // Opened quietly by an update's restart: behind, not key, until the
+        // updater puts it back as it was (update_auto.zig).
+        if (!app.flags.hidden and options.visible) {
+            if (app.quiet) objc.msg(void, nswindow, "orderBack:", .{@as(?objc.Object, null)}) else objc.msg(void, nswindow, "makeKeyAndOrderFront:", .{@as(?objc.Object, null)});
+        }
         if (app.debug) self.logFrame();
         return self;
     }
@@ -249,6 +253,7 @@ pub const Window = struct {
     pub fn hide(self: *Window) void {
         objc.msg(void, self.nswindow, "orderOut:", .{@as(?objc.Object, null)});
         if (self.surface) |s| s.is_visible = false;
+        self.app.wentAway();
     }
 
     /// Whether a popover just hid itself (a click on what opens it, which
@@ -357,6 +362,7 @@ fn primaryHeight() f64 {
 fn occlusionChanged(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
     const w = objc.getZig(Window, self_obj) orelse return;
     if (w.surface) |s| s.occlusionChanged();
+    if (objc.msg(objc.NSUInteger, w.nswindow, "occlusionState", .{}) & 2 == 0) w.app.wentAway();
 }
 
 fn screenChanged(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {

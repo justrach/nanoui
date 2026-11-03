@@ -98,6 +98,12 @@ pub const App = struct {
         }
         // Where other threads' calls for the main thread arrive (`onMain`).
         @import("fdwatch.zig").prepare() catch {};
+        // `kv.standard()` kept between launches, in the app's data
+        // directory; never for headless runs (tests, snapshots).
+        if (self.gui and !flags.hidden) if (@import("desktop.zig").path(gpa, .data, options.name)) |dir| {
+            defer gpa.free(dir);
+            @import("../basics/kv.zig").attach(init.io, dir);
+        } else |_| {};
         return self;
     }
 

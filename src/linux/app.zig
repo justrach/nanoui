@@ -62,6 +62,12 @@ pub const App = struct {
             if (self.debug) std.debug.print("nanoui: GTK {d}\n", .{@as(u8, if (gtk.v4) 4 else 3)});
             self.gui = true;
         }
+        // `kv.standard()` kept between launches, in the app's data
+        // directory; never for headless runs (tests, snapshots).
+        if (!headless and !flags.hidden) if (@import("desktop.zig").path(gpa, .data, options.name)) |dir| {
+            defer gpa.free(dir);
+            @import("../basics/kv.zig").attach(init.io, dir);
+        } else |_| {};
         return self;
     }
 

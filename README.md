@@ -489,14 +489,18 @@ What you need, an app's build.zig, and what isn't there yet:
       <a href="https://github.com/gstohl/nanomail"><img src="docs/images/nanomail-dark.png" alt="nanomail: a message with links and a picture, shared mailboxes in the sidebar"></a>
       <p><a href="https://github.com/gstohl/nanomail"><strong>nanomail</strong></a>: a JMAP mail client for macOS and iOS. It shows rich mail with links and pictures, loading pictures from the web only when you ask. New mail arrives by push, and mailboxes others share with you appear with what you may do in them. It signs in with a password, a token, or OAuth in the browser.</p>
     </td>
-    <td width="50%" valign="top"></td>
+    <td width="50%" valign="top">
+      <a href="https://github.com/justrach/nanolight"><img src="docs/images/nanolight.jpg" alt="Nanolight: its panel has found Safari from &quot;saf&quot;"></a>
+      <p><a href="https://github.com/justrach/nanolight"><strong>nanolight</strong></a>: a launcher for the Mac, Windows and Linux. It finds apps as you type (initials and typos too), does math, and completes Google searches inline, showing the results in its own panel. It runs Raycast extensions and script commands, and asks Grok or searches X a row away.</p>
+    </td>
   </tr>
 </table>
 
 Download them for macOS:
 [nanoterm](https://github.com/justrach/nanoterm/releases/latest/download/nanoterm-macos-arm64.dmg) ·
 [nanomon](https://github.com/justrach/nanomon/releases/latest/download/nanomon-macos-arm64.dmg) ·
-[nanostudio](https://github.com/justrach/nanostudio/releases/latest/download/nanostudio-macos-arm64.dmg).
+[nanostudio](https://github.com/justrach/nanostudio/releases/latest/download/nanostudio-macos-arm64.dmg) ·
+[nanolight](https://github.com/justrach/nanolight/releases/latest/download/nanolight-macos-arm64.dmg).
 nanomail builds from source for now (`zig build`; its README has iOS).
 
 They live in `apps/` as submodules, and each also builds on its own, fetching
@@ -561,8 +565,8 @@ Rules for working here, by hand or with an agent, are in
 nanoui is a subset of what full frameworks offer. Pages work on macOS and
 Windows so far, accessibility is only on iOS and macOS's built-in controls,
 there are no notifications, channels or plugins yet, and bundling is only for
-iOS and Android. Apps update themselves from GitHub releases on macOS
-(`nanoui.Updater`). Bound methods run on the main thread.
+iOS and Android. Apps update themselves from GitHub releases on macOS, even
+restarting unseen (`nanoui.Updater`). Bound methods run on the main thread.
 
 ## License
 
@@ -579,15 +583,12 @@ nanoui stands on the shoulders of these projects:
   means:
   - the Objective-C runtime called directly, with runtime classes for
     delegates;
-  - a batched outbox with one evaluation per main-loop turn;
-  - events held until the page is ready;
-  - a generated, typed client;
-  - native UI drawn by the framework;
+  - a batched outbox (one evaluation per main-loop turn), held events;
+  - a generated, typed client, and native UI drawn by the framework;
   - Liquid Glass drawn by its own renderers, ported from mygo's glass plugin.
 - **[GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui)** by
   [Zed Industries](https://zed.dev). From GPUI, nanoui takes:
-  - elements styled by method chains;
-  - the virtualized `uniform_list`;
+  - elements styled by method chains, and the virtualized `uniform_list`;
   - layouts cached across frames, with glyphs rasterized once into an atlas;
   - Gaussian shadows;
   - its general idea of a fast, GPU-drawn native UI.
