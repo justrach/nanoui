@@ -195,6 +195,32 @@ test "d3d11: a coloured quad keeps its channels" {
     try testing.expectEqual([4]u8{ 255, 0, 0, 255 }, blue);
 }
 
+test "d3d11: ClearType coverage blends each color channel" {
+    const gpa = testing.allocator;
+    var maybe = try renderer();
+    if (maybe == null) return error.SkipZigTest;
+    var r = &maybe.?;
+    defer r.deinit();
+    const gray = [_]u8{128};
+    const native = [_]u8{ 64, 128, 192, 255 };
+    r.sync(.{ .pixels = &gray, .size = 1, .native_pixels = &native }, 1, .{}, 0);
+    const glyph = [_]gpu.Instance{.{
+        .rect = .{ 0, 0, 1, 1 },
+        .color = .{ 0.8, 0.6, 0.4, 1 },
+        .uv = .{ 0, 0, 1, 1 },
+        .kind = gpu.Kind.text,
+    }};
+    r.draw(&glyph, .{ .w = 1, .h = 1 }, 1, .{ .r = 0.2, .g = 0.4, .b = 0.6, .a = 1 }, null);
+    const px = try r.read(gpa);
+    defer px.deinit(gpa);
+    // BGRA: round(background * (1 - RGB coverage) + foreground * RGB coverage).
+    const expected = [_]u8{ 115, 128, 89, 255 };
+    std.debug.print("[ClearType] got {any}, want {any} ", .{ px.bytes[0..4], expected });
+    for (px.bytes[0..4], expected) |actual, want| {
+        try testing.expect(@abs(@as(i16, actual) - @as(i16, want)) <= 2);
+    }
+}
+
 // `shader.hlsl`'s `Instance` must be the same size as `gpu.zig`'s, because the
 // vertex shader walks the structured buffer by that stride: a shader struct that
 // is smaller steps too little and every instance after the first reads another's

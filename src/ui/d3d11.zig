@@ -11,6 +11,7 @@ const types = @import("types.zig");
 const gpu = @import("gpu.zig");
 const glass = @import("glass.zig");
 const raster = @import("raster.zig");
+const text_blend = @import("text_blend.zig");
 const source = @embedFile("shader.hlsl");
 
 const api = @import("d3d11_glue.zig");
@@ -36,6 +37,7 @@ const D3DCompile = api.d3dCompile;
 const check = api.check;
 const must = api.must;
 const bgra8 = api.bgra8;
+const rgba8 = api.rgba8;
 const r8_unorm = api.r8_unorm;
 const bind_constant = api.bind_constant;
 const bind_shader_resource = api.bind_shader_resource;
@@ -98,6 +100,15 @@ fn shader(device: *Com, comptime entry: [:0]const u8, comptime target: [:0]const
     return out orelse error.ShaderCompile;
 }
 
+extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
+
+/// NANOUI_D3D_RGB_TEXT=0 is deliberately only an A/B diagnostic: it restores
+/// the old scalar glyph branch without changing the GDI or CPU renderer.
+fn rgbTextEnabled() bool {
+    const value = getenv("NANOUI_D3D_RGB_TEXT") orelse return true;
+    return !std.mem.eql(u8, std.mem.span(value), "0");
+}
+
 /// The GPU renderer: one device, every program, and the frame it draws.
 pub const Renderer = struct {
     device: *Com,
@@ -118,12 +129,16 @@ pub const Renderer = struct {
     instance_bytes: usize = 0,
     atlas: ?*Com = null,
     atlas_srv: ?*Com = null,
+    native_atlas: ?*Com = null,
+    native_atlas_srv: ?*Com = null,
     images: ?*Com = null,
     images_srv: ?*Com = null,
     atlas_size: u32 = 0,
     atlas_generation: u64 = std.math.maxInt(u64),
     images_size: u32 = 0,
     images_generation: u64 = std.math.maxInt(u64),
+    text_params: text_blend.Params = .{},
+    rgb_text: bool = true,
     frame: Target = .{},
     /// The size the last frame was drawn at, which the frame texture may be
     /// larger than (it is grown, never shrunk): what `read` and the copy to
@@ -194,6 +209,7 @@ pub const Renderer = struct {
             .rasterizer = undefined,
             .sampler = undefined,
             .params = undefined,
+            .rgb_text = rgbTextEnabled(),
         };
         // The six shaders are in `r` already: if a state object or the params
         // buffer cannot be made, they go with it.
@@ -214,6 +230,8 @@ pub const Renderer = struct {
         if (r.instances) |b| b.release();
         if (r.atlas_srv) |t| t.release();
         if (r.atlas) |t| t.release();
+        if (r.native_atlas_srv) |t| t.release();
+        if (r.native_atlas) |t| t.release();
         if (r.images_srv) |t| t.release();
         if (r.images) |t| t.release();
         for ([_]*Com{ r.params, r.sampler, r.rasterizer, r.blend, r.quad_vs, r.quad_ps, r.glass_ps, r.pass_vs, r.down_ps, r.blur_ps }) |s| s.release();
@@ -228,16 +246,28 @@ pub const Renderer = struct {
 
     /// Brings the GPU's copies of the glyph and picture atlases up to date.
     pub fn sync(r: *Renderer, mask: raster.Mask, mask_generation: u64, pictures: raster.Pictures, pictures_generation: u64) void {
+        r.text_params = mask.text_params;
         if (mask.size > 0 and (mask_generation != r.atlas_generation or mask.size != r.atlas_size)) {
             if (r.atlas_srv) |t| t.release();
             r.atlas_srv = null;
             if (r.atlas) |t| t.release();
+            if (r.native_atlas_srv) |t| t.release();
+            r.native_atlas_srv = null;
+            if (r.native_atlas) |t| t.release();
+            r.native_atlas = null;
             r.atlas = texture2D(r.device, r8_unorm, mask.size, mask.size, bind_shader_resource);
             r.atlas_size = mask.size;
             r.atlas_generation = mask_generation;
             if (r.atlas) |t| {
                 uploadAtlas(r.context, t, mask.pixels, mask.size, 1);
                 r.atlas_srv = textureSrv(r.device, t);
+            }
+            if (mask.native_pixels.len >= @as(usize, mask.size) * mask.size * 4) {
+                r.native_atlas = texture2D(r.device, rgba8, mask.size, mask.size, bind_shader_resource);
+                if (r.native_atlas) |t| {
+                    uploadAtlas(r.context, t, mask.native_pixels, mask.size, 4);
+                    r.native_atlas_srv = textureSrv(r.device, t);
+                }
             }
         }
         if (pictures.size > 0 and (pictures_generation != r.images_generation or pictures.size != r.images_size)) {
@@ -354,8 +384,8 @@ pub const Renderer = struct {
         g.slot(*const fn (*Com, ?*Com, ?*const anyopaque, u32) callconv(.winapi) void, PSSetShader)(g, if (pane) r.glass_ps else r.quad_ps, null, 0);
         var inst = [1]?*Com{r.instance_srv};
         g.slot(*const fn (*Com, u32, u32, [*]const ?*Com) callconv(.winapi) void, VSSetShaderResources)(g, 0, 1, &inst);
-        var views = [4]?*Com{ r.instance_srv, r.atlas_srv, r.images_srv, r.a.srv };
-        g.slot(*const fn (*Com, u32, u32, [*]const ?*Com) callconv(.winapi) void, PSSetShaderResources)(g, 0, 4, &views);
+        var views = [5]?*Com{ r.instance_srv, r.atlas_srv, r.images_srv, r.a.srv, r.native_atlas_srv };
+        g.slot(*const fn (*Com, u32, u32, [*]const ?*Com) callconv(.winapi) void, PSSetShaderResources)(g, 0, 5, &views);
         // The instance offset goes through `Params`: StartInstanceLocation
         // only moves vertex-buffer reads, not this structured buffer's.
         g.slot(*const fn (*Com, u32, u32, u32, u32) callconv(.winapi) void, DrawInstanced)(g, 4, @intCast(count), 0, 0);
@@ -442,6 +472,10 @@ pub const Renderer = struct {
         var p: Params = extra;
         p.viewport = .{ size.w, size.h };
         p.scale = scale;
+        p.rgb_text = if (r.rgb_text) 1 else 0;
+        p.gamma = r.text_params.gamma;
+        p.contrast = r.text_params.contrast;
+        p.grayscale_contrast = r.text_params.grayscale_contrast;
         // A dynamic buffer is written by mapping it, one call each way; that is
         // what `D3D11_USAGE_DYNAMIC` is for.
         var mapped: Mapped = undefined;

@@ -33,8 +33,12 @@ cbuffer Params : register(b0) {
     float  pad0;         // 60  (d3d11.zig's `pane`)
     int2   dir;          // 64  blur: (1, 0) or (0, 1)
     int    start_instance; // 72  the first instance of this draw
-    int    pad1;         // 76
-};                       // 80 bytes
+    float  rgb_text;     // 76  0: grayscale reverse proof; 1: native RGB
+    float4 text_gamma;   // 80  DirectWrite's coverage correction
+    float  text_contrast; // 96
+    float  gray_contrast; // 100
+    float2 pad2;         // 104
+};                       // 112 bytes
 
 // One quad, byte-identical to shader.metal's `Instance` and to gpu.zig's.
 struct Instance {
@@ -63,6 +67,7 @@ struct Instance {
 StructuredBuffer<Instance> instances : register(t0);
 Texture2D<float4> atlas : register(t1);
 Texture2D<float4> images : register(t2);
+Texture2D<float4> native_atlas : register(t4);
 SamplerState sampler_atlas : register(s1);
 SamplerState sampler_images : register(s2);
 
@@ -80,6 +85,20 @@ struct Varyings {
     nointerpolation float4 i_clip : TEXCOORD7;
     nointerpolation float4 i_misc : TEXCOORD8;
 };
+
+// Target 1 is the destination's per-channel inverse blend factor. Ordinary
+// premultiplied drawing repeats alpha; ClearType supplies its RGB coverage.
+struct Pixel {
+    float4 color : SV_Target0;
+    float4 coverage : SV_Target1;
+};
+
+Pixel scalar_pixel(float4 c) {
+    Pixel o;
+    o.color = c;
+    o.coverage = float4(c.aaa, c.a);
+    return o;
+}
 
 Varyings quad_vs(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     // DrawInstanced's StartInstanceLocation only offsets vertex-buffer reads:
@@ -287,6 +306,46 @@ float4 triangle_color(Varyings v) {
     return float4(v.i_color.rgb * alpha, alpha);
 }
 
+float text_coverage(float a, float intensity, float lightness, bool subpixel) {
+    float k = (subpixel ? text_contrast : gray_contrast) * clamp(3.0 - 4.0 * lightness, 0.0, 1.0);
+    float v = a * (k + 1.0) / (a * k + 1.0);
+    float correction = (text_gamma[0] * intensity + text_gamma[1]) * v + text_gamma[2] * intensity + text_gamma[3];
+    return clamp(v + v * (1.0 - v) * correction, 0.0, 1.0);
+}
+
+Pixel glyph_pixel(Varyings v, float clip_cover) {
+    float opacity = v.i_color.a * clip_cover;
+    // A truncated line fading out: `border_width` points before `radius`.
+    if (v.i_misc.y > 0.0) opacity *= clamp((v.i_misc.x - v.v_world.x) / v.i_misc.y, 0.0, 1.0);
+    float gray = atlas.SampleLevel(sampler_atlas, v.v_uv, 0).r;
+    if (rgb_text > 0.5) {
+        // Native glyphs are nearest-sampled, as raster.zig does. The RGB
+        // texel's alpha is a tag: 1 ClearType, 128/255 native grayscale.
+        uint2 side;
+        atlas.GetDimensions(side.x, side.y);
+        int2 at = clamp(int2(v.v_uv * float2(side)), int2(0, 0), int2(side) - 1);
+        float4 native = native_atlas.Load(int3(at, 0));
+        float lightness = 0.30 * v.i_color.r + 0.59 * v.i_color.g + 0.11 * v.i_color.b;
+        if (native.a > 0.75) {
+            float3 coverage = float3(
+                text_coverage(native.r, v.i_color.r, lightness, true),
+                text_coverage(native.g, v.i_color.g, lightness, true),
+                text_coverage(native.b, v.i_color.b, lightness, true)) * opacity;
+            Pixel o;
+            o.color = float4(v.i_color.rgb * coverage, dot(coverage, float3(1.0, 1.0, 1.0)) / 3.0);
+            o.coverage = float4(coverage, o.color.a);
+            return o;
+        }
+        if (native.a > 0.0) {
+            float intensity = 0.25 * v.i_color.r + 0.5 * v.i_color.g + 0.25 * v.i_color.b;
+            float a = text_coverage(gray, intensity, lightness, false) * opacity;
+            return scalar_pixel(float4(v.i_color.rgb * a, a));
+        }
+    }
+    float a = gray * opacity;
+    return scalar_pixel(float4(v.i_color.rgb * a, a));
+}
+
 float4 shade(Varyings v) {
     float kind = v.i_misc.z;
     // A line and a triangle are drawn by their own geometry. One variable and
@@ -297,12 +356,6 @@ float4 shade(Varyings v) {
     if (kind == 6.0) shape = line_color(v);
     if (kind == 7.0) shape = triangle_color(v);
     if (kind == 6.0 || kind == 7.0) return shape;
-    if (kind == 1.0) {
-        float a = atlas.SampleLevel(sampler_atlas, v.v_uv, 0).r * v.i_color.a;
-        // A truncated line fading out: `border_width` points before `radius`.
-        if (v.i_misc.y > 0.0) a *= clamp((v.i_misc.x - v.v_world.x) / v.i_misc.y, 0.0, 1.0);
-        return float4(v.i_color.rgb * a, a);
-    }
     float2 half_size = v.i_rect.zw * 0.5;
     float2 p = v.v_local - half_size;
     float r = min(v.i_misc.x, min(half_size.x, half_size.y));
@@ -337,9 +390,10 @@ float4 shade(Varyings v) {
     return c * coverage;
 }
 
-float4 quad_ps(Varyings v) : SV_Target {
+Pixel quad_ps(Varyings v) {
     float clip_cover = clip_coverage(v);
-    return shade(v) * clip_cover;
+    if (v.i_misc.z == 1.0) return glyph_pixel(v, clip_cover);
+    return scalar_pixel(shade(v) * clip_cover);
 }
 
 // A pane of glass reads the backdrop d3d11.zig averaged and blurred for it:
@@ -393,7 +447,7 @@ float3 glass_tone(float3 c, float4 tone) {
     return clamp(t + (c - l) * k, 0.0, 1.0);
 }
 
-float4 glass_ps(Varyings v) : SV_Target {
+Pixel glass_ps(Varyings v) {
     float clip_cover = clip_coverage(v);
     // The pane's edge, antialiased as a quad's.
     float2 hp = v.i_rect.zw * 0.5;
@@ -421,7 +475,7 @@ float4 glass_ps(Varyings v) : SV_Target {
         // Light from above and below: the more the edge faces it, the lighter.
         c += (abs(n.y) - c) * a;
     }
-    return float4(c, 1.0) * coverage;
+    return scalar_pixel(float4(c, 1.0) * coverage);
 }
 
 // One triangle over the whole target: a pass computes each texel.
