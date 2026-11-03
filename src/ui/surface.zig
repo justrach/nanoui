@@ -47,6 +47,9 @@ pub const Surface = struct {
     /// The pace asked of the link: 0 is the display's, -1 unset.
     link_fps: f32 = -1,
     max_fps: f32 = 60,
+    /// The most frames a second the app wants (0: the screen's maximum):
+    /// a 120 Hz budget on a 240 Hz screen, or a battery saver.
+    fps_cap: f32 = 0,
     link_duration: f64 = 0,
     last_present_target: f64 = 0,
     paced: bool = false,
@@ -225,13 +228,20 @@ pub const Surface = struct {
 
     fn updateMaxFps(self: *Surface) void {
         const screen = objc.msg(?objc.Object, self.window.nswindow, "screen", .{});
-        const fps: f32 = if (screen) |sc| @floatFromInt(@max(60, objc.msg(objc.NSInteger, sc, "maximumFramesPerSecond", .{}))) else 60;
+        const screen_fps: f32 = if (screen) |sc| @floatFromInt(@max(60, objc.msg(objc.NSInteger, sc, "maximumFramesPerSecond", .{}))) else 60;
+        const fps = if (self.fps_cap > 0) @min(self.fps_cap, screen_fps) else screen_fps;
         if (fps != self.max_fps) {
             self.max_fps = fps;
             const cur = self.link_fps;
             self.link_fps = -1;
             if (cur >= 0) self.setRate(if (cur == 0) null else 1 / cur);
         }
+    }
+
+    /// Caps the display link's pace at `fps` (0 lifts the cap).
+    pub fn setFpsCap(self: *Surface, fps: f32) void {
+        self.fps_cap = fps;
+        self.updateMaxFps();
     }
 
     pub fn refreshAppearance(self: *Surface) void {
