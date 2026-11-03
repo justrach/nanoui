@@ -117,7 +117,10 @@ pub fn handleUndoShortcuts(c: *Context, b: *tf.TextBuffer, e: *EditState, r: *tf
 pub fn commitUndo(c: *Context, b: *tf.TextBuffer, e: *EditState, r: *const tf.Result, took_text: bool, took_key: bool) void {
     if (c.paste_op) e.undo.group = false;
     var typing = !c.paste_op and !took_text and !took_key and c.input.key == null and (c.input.chars.len > 0 or c.input.ops.len > 0);
-    for (c.input.ops) |op| typing = typing and op == .insert;
+    // An input method's composition is typing too: each update of the
+    // marked text joins the run, so undo after 日本 does not bring back
+    // the kana it was composed from (NSTextView: one step).
+    for (c.input.ops) |op| typing = typing and (op == .insert or op == .set_marked or op == .unmark);
     e.undo.commit(b.text(), e.caret, r.changed, typing);
 }
 
