@@ -464,13 +464,17 @@ pub const Renderer = struct {
         const tex_w = objc.msg(objc.NSUInteger, texture, "width", .{});
         const tex_h = objc.msg(objc.NSUInteger, texture, "height", .{});
         const scale: f32 = @as(f32, @floatFromInt(tex_w)) / size.w;
-        var first: usize = 0;
+        // What an opaque quad over the whole frame hides is never drawn:
+        // the quad becomes the clear.
+        const cover = gpu.lastCover(instances, size);
+        var first: usize = if (cover) |k| k + 1 else 0;
+        const frame_clear: types.Color = if (cover) |k| .{ .r = instances[k].color[0], .g = instances[k].color[1], .b = instances[k].color[2], .a = 1 } else clear;
         var cleared = false;
         while (true) {
             const split_at = nextSplit(instances, first);
             const end = split_at orelse instances.len;
             if (end > first or !cleared) {
-                const enc = pass(cmd, texture, if (cleared) null else clear);
+                const enc = pass(cmd, texture, if (cleared) null else frame_clear);
                 cleared = true;
                 if (end > first) self.drawRun(enc, buffer, atlas, size, instances, first, end, held);
                 objc.msg(void, enc, "endEncoding", .{});
