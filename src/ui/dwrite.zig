@@ -39,6 +39,38 @@ const GlyphRun = extern struct {
 const Key = struct { face: usize, simulations: u32 };
 pub const Bitmap = struct { bytes: []const u8, rgb: []const u8, w: u32, h: u32, stride: u32, x: f32, y: f32 };
 
+/// A non-null owner makes DirectWrite borrow the database's bytes instead of
+/// copying the whole file. It owns nothing itself; TextSystem.deinit releases
+/// this cache's faces before the database frees those bytes.
+const Owner = extern struct {
+    vtable: [*]const *const anyopaque,
+    refs: u32 = 1,
+};
+var owner_vtable: [3]*const anyopaque = .{ @ptrCast(&ownerQuery), @ptrCast(&ownerAddRef), @ptrCast(&ownerRelease) };
+var font_owner: Owner = .{ .vtable = &owner_vtable };
+
+fn ownerQuery(self: *Owner, iid: *const Guid, out: *?*anyopaque) callconv(.winapi) i32 {
+    const unknown: Guid = .{ .a = 0, .b = 0, .c = 0, .d = .{ 0xc0, 0, 0, 0, 0, 0, 0, 0x46 } };
+    if (!std.meta.eql(iid.*, unknown)) {
+        out.* = null;
+        return @bitCast(@as(u32, 0x80004002)); // E_NOINTERFACE
+    }
+    out.* = @ptrCast(self);
+    _ = ownerAddRef(self);
+    return 0;
+}
+fn ownerAddRef(self: *Owner) callconv(.winapi) u32 {
+    return @atomicRmw(u32, &self.refs, .Add, 1, .monotonic) + 1;
+}
+fn ownerRelease(self: *Owner) callconv(.winapi) u32 {
+    return @atomicRmw(u32, &self.refs, .Sub, 1, .monotonic) - 1;
+}
+
+/// The singleton's outstanding references, checked by the teardown test.
+pub fn testOwnerReferences() u32 {
+    return if (@import("builtin").is_test) @atomicLoad(u32, &font_owner.refs, .monotonic) else 0;
+}
+
 pub const Cache = struct {
     unavailable: bool = false,
     factory: ?*Com = null,
@@ -55,6 +87,8 @@ pub const Cache = struct {
     scratch: std.ArrayList(u8) = .empty,
     /// Audits reject a silent fallback to the unhinted portable rasterizer.
     failures: usize = 0,
+    /// Regression tests use the old null-owner copy to compare its pixels.
+    force_copy: bool = false,
 
     pub fn deinit(self: *Cache, gpa: std.mem.Allocator) void {
         if (enabled) {
@@ -126,9 +160,11 @@ pub const Cache = struct {
         const factory = self.factory.?;
         const loader = self.loader.?;
         var file: ?*Com = null;
-        // A null owner makes DirectWrite own a copy of the bytes, independent
-        // of the font database's lifetime. No GDI family-name substitution.
-        if (loader.method(4, *const fn (*Com, *Com, [*]const u8, u32, ?*Com, *?*Com) callconv(.winapi) i32)(loader, factory, rf.font.data.ptr, @intCast(rf.font.data.len), null, &file) < 0) return error.DirectWriteFontFile;
+        // Borrow the font database's bytes for the font file's lifetime. A
+        // null owner is retained only as the old rendering path's test
+        // control; it makes DirectWrite allocate its own whole-file copy.
+        const owner: ?*Com = if (self.force_copy) null else @ptrCast(&font_owner);
+        if (loader.method(4, *const fn (*Com, *Com, [*]const u8, u32, ?*Com, *?*Com) callconv(.winapi) i32)(loader, factory, rf.font.data.ptr, @intCast(rf.font.data.len), owner, &file) < 0) return error.DirectWriteFontFile;
         const ff = file orelse return error.DirectWriteFontFile;
         defer ff.release();
         var supported: i32 = 0;
