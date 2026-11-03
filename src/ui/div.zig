@@ -149,8 +149,21 @@ pub const Div = struct {
     pub fn roundedFull(d: Div) Div {
         return d.set("radius", 1e4);
     }
+    /// Circular corners rather than Apple's continuous ones: with
+    /// `roundedFull`, a true circle or capsule, not a squircle.
+    pub fn circular(d: Div) Div {
+        return d.set("corner_circular", true);
+    }
     pub fn shadow(d: Div, s: types.Shadow) Div {
         return d.set("shadow", @as(?types.Shadow, s));
+    }
+    /// The border in dashes, as GPUI's `border_dashed`.
+    pub fn dashed(d: Div) Div {
+        return d.set("border_dashed", true);
+    }
+    /// Layered shadows, after `shadow`: `.shadows(&ui.Shadow.lg)`.
+    pub fn shadows(d: Div, list: []const types.Shadow) Div {
+        return d.set("shadows", list);
     }
     pub fn shadowSm(d: Div) Div {
         return d.shadow(.{ .color = d.c.theme.shadow.alpha(0.6), .blur = 3, .y = 1 });
@@ -177,6 +190,11 @@ pub const Div = struct {
     pub fn scrollY(d: Div) Div {
         return d.set("scroll", true);
     }
+    /// How a scrolling box shows its bar: `.always`, or `.{ .overlay = color }`
+    /// to show it only while the box scrolls, as touch platforms do.
+    pub fn scrollbar(d: Div, v: types.Scrollbar) Div {
+        return d.set("scrollbar", v);
+    }
     pub fn absolute(d: Div) Div {
         return d.set("absolute", true);
     }
@@ -194,6 +212,24 @@ pub const Div = struct {
     }
     pub fn scale(d: Div, v: f32) Div {
         return d.set("scale", v);
+    }
+    /// Turned in the plane by `v` radians (clockwise).
+    pub fn rotate(d: Div, v: f32) Div {
+        return d.set("rotation", v);
+    }
+    /// Turned `v` radians about the vertical axis through its pivot, seen
+    /// from `perspective` points away (0: flat), as a card turns over.
+    pub fn turn(d: Div, v: f32, perspective: f32) Div {
+        _ = d.set("perspective", perspective);
+        return d.set("turn", v);
+    }
+    /// Where `rotate` and `turn` pivot, in fractions of its rect.
+    pub fn pivot(d: Div, x: f32, y: f32) Div {
+        return d.set("rotation_anchor", types.Point{ .x = x, .y = y });
+    }
+    /// Drawn on one side of a turned plane only (`Style.face`).
+    pub fn face(d: Div, v: types.Face) Div {
+        return d.set("face", v);
     }
     /// Takes a `ui.motion` frame: its offset, scale and opacity, and the
     /// size, radius and background it animates. Last, so what it animates
@@ -231,12 +267,25 @@ pub const Div = struct {
         return it.clicked;
     }
 
+    /// Asked for its context menu in this frame: a right-click (or a
+    /// Control-click on the Mac) on it or inside it.
+    pub fn secondaryClicked(d: Div) bool {
+        const it = d.c.interact(d.index, .{});
+        if (it.secondary_clicked) d.c.changed = true;
+        return it.secondary_clicked;
+    }
+
     pub fn hovered(d: Div) bool {
         return d.c.interact(d.index, .{}).hovered;
     }
 
     pub fn end(d: Div) void {
         d.c.end();
+    }
+
+    /// The box's id: scroll-linked motion and tests name it this way.
+    pub fn id(d: Div) u64 {
+        return d.c.node(d.index).id;
     }
 };
 

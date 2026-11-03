@@ -51,10 +51,18 @@ pub const Window = struct {
         self.setTitle(options.title);
         g.gtk_window_set_default_size(win, @intFromFloat(options.width), @intFromFloat(options.height));
         g.gtk_window_set_resizable(win, @intFromBool(options.resizable));
+        if (!options.decorations) g.gtk_window_set_decorated(win, 0);
+        // Out of the taskbar and the pager. GTK 4 dropped both hints (on
+        // Wayland, a window can't ask), so there it is a no-op.
+        if (options.skip_taskbar and !gtk.v4) {
+            gtk.v3.gtk_window_set_skip_taskbar_hint(win, 1);
+            gtk.v3.gtk_window_set_skip_pager_hint(win, 1);
+        }
         gtk.connect(win, "destroy", @ptrCast(&onDestroy), self);
         self.surface = try Surface.create(self, self.view.?, options.theme);
         if (options.x != null and options.y != null) self.setPosition(options.x.?, options.y.?) else self.center();
         if (options.always_on_top) self.setAlwaysOnTop(true);
+        if (options.opacity < 1) self.setOpacity(options.opacity);
         if (!app.flags.hidden and options.visible) self.show();
         return self;
     }
@@ -144,6 +152,21 @@ pub const Window = struct {
     pub fn setAlwaysOnTop(self: *Window, on: bool) void {
         const win = self.gtkwindow orelse return;
         if (!gtk.v4) gtk.v3.gtk_window_set_keep_above(win, @intFromBool(on));
+    }
+
+    /// The window's opacity, 0 to 1; it shows where a compositor runs.
+    pub fn setOpacity(self: *Window, opacity: f64) void {
+        const win = self.gtkwindow orelse return;
+        gtk.api.gtk_widget_set_opacity(win, std.math.clamp(opacity, 0, 1));
+    }
+
+    /// The screen's size in points. GTK 4 doesn't say (nor, there, where a
+    /// window is), so it is the window's own size.
+    pub fn monitorSize(self: *Window) [2]f64 {
+        if (!gtk.v4) if (gtk.v3.gdk_screen_get_default()) |s| {
+            return .{ @floatFromInt(gtk.v3.gdk_screen_get_width(s)), @floatFromInt(gtk.v3.gdk_screen_get_height(s)) };
+        };
+        return self.contentSize();
     }
 
     pub fn isFullScreen(self: *Window) bool {

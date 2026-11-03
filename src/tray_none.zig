@@ -1,4 +1,4 @@
-//! Tray icons where nanoui has none yet (Linux, Windows).
+//! Tray icons where nanoui has none yet (Linux, Windows, Android).
 pub const Click = struct { ctx: *anyopaque, func: *const fn (ctx: *anyopaque, tray: *Tray) void };
 pub const Anchor = struct { x: f64, y: f64, width: f64, height: f64 };
 

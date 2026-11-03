@@ -1,4 +1,4 @@
-//! HTTP where nanoui uses no system client (Linux, Windows): each request
+//! HTTP where nanoui uses no system client (Linux, Windows, Android): each request
 //! on a thread of its own through http-zig (HTTP/2 over TLS with ALPN,
 //! HTTP/1.1 where a server has no h2; plain `http://` by std's client),
 //! raced against its timeout, its answer then taken to the main thread.
@@ -164,7 +164,7 @@ pub fn fetch(gpa: std.mem.Allocator, req: http.Request, answer: *http.Answer, ct
 /// The main thread's queue is there (GLib loaded; Windows' message window).
 fn canPost() bool {
     return switch (builtin.os.tag) {
-        .linux => @import("linux/gtk.zig").load(),
+        .linux => if (builtin.abi.isAndroid()) @import("android/activity.zig").looper != null else @import("linux/gtk.zig").load(),
         .windows => if (@import("windows/fdwatch.zig").prepare()) true else |_| false,
         else => false,
     };
@@ -174,7 +174,9 @@ fn canPost() bool {
 /// (tests on a platform without one), which is the main thread then.
 fn post(ctx: *anyopaque, deliver: *const fn (?*anyopaque) callconv(.c) void) void {
     switch (builtin.os.tag) {
-        .linux => if (@import("linux/gtk.zig").load()) return @import("linux/app.zig").App.after(0, ctx, deliver),
+        .linux => if (builtin.abi.isAndroid()) {
+            if (@import("android/activity.zig").looper != null) return @import("android/calls.zig").after(0, ctx, deliver);
+        } else if (@import("linux/gtk.zig").load()) return @import("linux/app.zig").App.after(0, ctx, deliver),
         .windows => if (@import("windows/fdwatch.zig").post(ctx, deliver)) return,
         else => {},
     }
@@ -185,7 +187,8 @@ fn work(job: *Job) void {
     const gpa = job.gpa;
     var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io = threaded.io();
+    // Android's resolver is its C library's (Zig's own asks /etc/resolv.conf's servers).
+    const io = if (builtin.abi.isAndroid()) @import("android/lookup.zig").io(&threaded) else threaded.io();
     race(io, job);
     const ctx = job.ctx;
     const deliver = job.deliver;

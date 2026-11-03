@@ -361,7 +361,7 @@ fn command(c: *Context, b: *tf.TextBuffer, e: *EditState, opts: tf.Options, r: *
         '~' => {
             var j = at;
             for (0..n) |_| if (j < le) {
-                b.buf[j] = flipCase(b.buf[j]);
+                b.buf.items[j] = flipCase(b.buf.items[j]);
                 j = nextChar(s, j);
             };
             e.caret = j;
@@ -432,13 +432,13 @@ fn prefixed(c: *Context, b: *tf.TextBuffer, e: *EditState, r: *tf.Result, p: u8,
         'r' => {
             if (k.vim_visual) {
                 const sel = selection(s, e);
-                @memset(b.buf[sel[0]..sel[1]], ch);
+                @memset(b.buf.items[sel[0]..sel[1]], ch);
                 k.vim_visual = false;
                 e.caret = sel[0];
             } else {
                 // `n` characters, if the line has them.
                 const le = km.lineEnd(s, e.caret);
-                if (e.caret + n <= le) @memset(b.buf[e.caret .. e.caret + n], ch);
+                if (e.caret + n <= le) @memset(b.buf.items[e.caret .. e.caret + n], ch);
                 e.caret = @min(e.caret + n -| 1, le -| 1);
             }
             r.changed = true;
@@ -507,7 +507,7 @@ fn visual(c: *Context, b: *tf.TextBuffer, e: *EditState, opts: tf.Options, r: *t
             e.caret = sel[0] + ins -| 1;
         },
         '~', 'u', 'U' => {
-            for (b.buf[sel[0]..sel[1]]) |*x| x.* = switch (ch) {
+            for (b.buf.items[sel[0]..sel[1]]) |*x| x.* = switch (ch) {
                 'u' => std.ascii.toLower(x.*),
                 'U' => std.ascii.toUpper(x.*),
                 else => flipCase(x.*),

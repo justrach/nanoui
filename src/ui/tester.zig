@@ -90,6 +90,8 @@ pub const Tester = struct {
 
     pub fn frame(t: *Tester) void {
         _ = frame_mod.run(&t.ctx, t.view, &t.text, &t.instances, t.size, t.scale, t.theme, t.dt, t.time);
+        // The simulated clock is the real one here: a view reads its rate off it.
+        t.ctx.frame_time = t.dt;
         t.time += t.dt;
     }
 
@@ -135,6 +137,13 @@ pub const Tester = struct {
         t.ctx.pointerDown();
         t.frame();
         t.ctx.pointerUp();
+        t.frame();
+    }
+
+    /// A right-click at (x, y): a box's context menu.
+    pub fn secondaryClick(t: *Tester, x: f32, y: f32) void {
+        t.moveTo(x, y);
+        t.ctx.secondaryDown();
         t.frame();
     }
 
@@ -189,6 +198,39 @@ pub const Tester = struct {
         t.ctx.updateHot();
     }
 
+    /// A click with the right button (a context menu) or the middle one.
+    pub fn rightClick(t: *Tester, x: f32, y: f32) void {
+        t.clickWith(.right, x, y);
+    }
+
+    pub fn middleClick(t: *Tester, x: f32, y: f32) void {
+        t.clickWith(.middle, x, y);
+    }
+
+    fn clickWith(t: *Tester, button: @import("input.zig").Button, x: f32, y: f32) void {
+        t.ctx.input.button = button;
+        t.click(x, y);
+        t.ctx.input.button = .left;
+    }
+
+    /// The modifier keys change alone, as a window's `flagsChanged:`.
+    pub fn setMods(t: *Tester, m: struct { cmd: bool = false, ctrl: bool = false, alt: bool = false, shift: bool = false }) void {
+        t.ctx.input.cmd = m.cmd;
+        t.ctx.input.ctrl = m.ctrl;
+        t.ctx.input.alt = m.alt;
+        t.ctx.input.shift = m.shift;
+        t.ctx.input.mods_changed = true;
+        t.frame();
+    }
+
+    /// A sideways scroll of `dx` at `x`, `y` (`input.scroll.x`).
+    pub fn hscroll(t: *Tester, x: f32, y: f32, dx: f32) void {
+        t.ctx.input.mouse = .{ .x = x, .y = y };
+        t.ctx.input.scroll = .{ .x = dx };
+        t.frame();
+        t.ctx.updateHot();
+    }
+
     /// Pinches about (x, y): spread by `factor`, the fingers moved together
     /// by (dx, dy), as two fingers on a touch screen do.
     pub fn pinch(t: *Tester, x: f32, y: f32, factor: f32, dx: f32, dy: f32) void {
@@ -199,11 +241,19 @@ pub const Tester = struct {
         t.ctx.updateHot();
     }
 
+    /// Drops links (`urls`) or `text` at `x`, `y`, as from another app.
+    pub fn drop(t: *Tester, x: f32, y: f32, urls: []const []const u8, text_: []const u8) void {
+        t.ctx.input.drag_over = .{ .x = x, .y = y };
+        t.frame();
+        t.ctx.input.drag_over = null;
+        t.ctx.input.drop = .{ .point = .{ .x = x, .y = y }, .urls = urls, .text = text_ };
+        t.frame();
+    }
     /// The rectangle of the text `s` in the last frame.
     pub fn findText(t: *Tester, s: []const u8) ?types.Rect {
         for (t.ctx.nodes.items) |n| switch (n.content) {
             .text => |tx| if (std.mem.eql(u8, tx.str, s)) return n.rect,
-            .icon, .image, .texture, .canvas, .none => {},
+            .icon, .image, .texture, .hole, .canvas, .none => {},
         };
         return null;
     }
@@ -216,7 +266,7 @@ pub const Tester = struct {
     pub fn containsText(t: *Tester, s: []const u8) bool {
         for (t.ctx.nodes.items) |n| switch (n.content) {
             .text => |tx| if (std.mem.indexOf(u8, tx.str, s) != null) return true,
-            .icon, .image, .texture, .canvas, .none => {},
+            .icon, .image, .texture, .hole, .canvas, .none => {},
         };
         return false;
     }
@@ -254,7 +304,9 @@ pub const Tester = struct {
     /// `type:TEXT`, `key:enter|backspace|tab|escape|left|right`,
     /// `scroll:DY` (at the pointer), `wait:SECONDS` (simulated time),
     /// `live:SECONDS` (the real event loop: replies, processes, timers),
-    /// `resize:WxH`.
+    /// `resize:WxH`; `at:X,Y` and `hover:X,Y` (a click, or the pointer, at
+    /// points), `chord:cmd+shift+n` (a key combination, as a window offers
+    /// it), `snap:PNG` (the frame so far, written: one per step of a run).
     pub fn runScript(t: *Tester, script: []const u8) !void {
         var steps = std.mem.splitScalar(u8, script, ';');
         while (steps.next()) |raw| {
@@ -283,6 +335,18 @@ pub const Tester = struct {
                     runFor(0.05);
                     t.frame();
                 }
+            } else if (std.mem.eql(u8, op, "at") or std.mem.eql(u8, op, "hover")) {
+                const comma = std.mem.indexOfScalar(u8, arg, ',') orelse return error.BadPoint;
+                const x = try std.fmt.parseFloat(f32, std.mem.trim(u8, arg[0..comma], " "));
+                const y = try std.fmt.parseFloat(f32, std.mem.trim(u8, arg[comma + 1 ..], " "));
+                if (op[0] == 'a') t.click(x, y) else t.moveTo(x, y);
+            } else if (std.mem.eql(u8, op, "chord")) {
+                const s = ctx_mod.Shortcut.parse(arg) orelse return error.UnknownKey;
+                _ = t.shortcut(s.native());
+            } else if (std.mem.eql(u8, op, "snap")) {
+                t.settle(2);
+                try t.screenshot(arg);
+                continue;
             } else if (std.mem.eql(u8, op, "resize")) {
                 const x = std.mem.indexOfScalar(u8, arg, 'x') orelse return error.BadSize;
                 t.resize(try std.fmt.parseFloat(f32, arg[0..x]), try std.fmt.parseFloat(f32, arg[x + 1 ..]));

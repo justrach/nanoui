@@ -36,10 +36,12 @@ pub fn lineOf(lines: []const Line, at: usize) usize {
     return k;
 }
 
-/// The caret's x in its line.
+/// The caret's x in its line. A line's `end` leaves its trailing spaces out
+/// (nothing of them is drawn), but the caret can sit among and after them, up
+/// to `stop`: measure through them to it.
 pub fn caretX(c: *Context, s: []const u8, style: types.TextStyle, l: Line, at: usize) f32 {
-    const to = @min(@max(at, l.start), l.end);
-    return c.text.caretX(s[l.start..l.end], style, to - l.start);
+    const to = @min(@max(at, l.start), l.stop);
+    return c.text.caretX(s[l.start..to], style, to - l.start);
 }
 
 /// The byte nearest to `x` on line `l`.
@@ -74,9 +76,9 @@ pub const Drawn = struct {
 /// over a spacer as tall as the lines): selection, text, composition and
 /// caret. When `follow` (the caret moved, the text changed), scrolled to
 /// keep the caret in view within `view_h`; else where the wheel left it.
-pub fn draw(c: *Context, s: []const u8, e: *EditState, style: types.TextStyle, lines: []const Line, view_h: f32, focused: bool, follow: bool, block: bool, placeholder: []const u8, suggestion: []const u8) Drawn {
+pub fn draw(c: *Context, s: []const u8, e: *EditState, style: types.TextStyle, lines: []const Line, view_h: f32, focused: bool, follow: bool, block: bool, placeholder: []const u8, placeholder_color: types.Color, suggestion: []const u8) Drawn {
     const th = c.theme;
-    const lh = c.text.font(style).lineHeight();
+    const lh = c.text.lineHeight(style);
     const k = lineOf(lines, e.caret);
     const cx = caretX(c, s, style, lines[k], e.caret);
     const cy = @as(f32, @floatFromInt(k)) * lh;
@@ -106,7 +108,7 @@ pub fn draw(c: *Context, s: []const u8, e: *EditState, style: types.TextStyle, l
             _ = c.leaf(.{ .absolute = true, .width = .{ .px = x1 - x0 }, .height = .{ .px = 1.5 }, .background = th.text, .offset = .{ .x = x0, .y = y + lh - 1 } }, .none, null);
         };
     }
-    if (s.len == 0) _ = c.leaf(.{ .absolute = true }, .{ .text = .{ .str = placeholder, .style = style, .color = th.muted } }, null);
+    if (s.len == 0) _ = c.leaf(.{ .absolute = true }, .{ .text = .{ .str = placeholder, .style = style, .color = placeholder_color } }, null);
     if (suggestion.len > 0 and focused and e.caret == s.len)
         _ = c.leaf(.{ .absolute = true, .offset = .{ .x = cx, .y = cy } }, .{ .text = .{ .str = suggestion, .style = style, .color = th.muted.alpha(0.8) } }, null);
     if (focused and hi == lo) {

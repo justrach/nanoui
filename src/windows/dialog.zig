@@ -14,7 +14,7 @@ pub const freePaths = dialog_types.freePaths;
 pub fn open(gpa: std.mem.Allocator, opts: OpenOptions) !?[][]u8 {
     var file: [4096]u16 = @splat(0);
     var title: [256]u16 = undefined;
-    var ofn: w.OPENFILENAMEW = .{ .lpstrFile = &file, .nMaxFile = file.len, .lpstrTitle = if (opts.title.len > 0) w.wide(&title, opts.title) else null, .Flags = 0x00080000 | 0x00001000 }; // explorer, file must exist
+    var ofn: w.OPENFILENAMEW = .{ .lpstrFile = &file, .nMaxFile = file.len, .lpstrTitle = if (opts.title.len > 0) w.wide(&title, opts.title) else null, .Flags = w.OFN_EXPLORER | w.OFN_FILEMUSTEXIST | w.OFN_NOCHANGEDIR };
     if (w.GetOpenFileNameW(&ofn) == 0) return null;
     const out = try gpa.alloc([]u8, 1);
     errdefer gpa.free(out);
@@ -26,7 +26,7 @@ pub fn save(gpa: std.mem.Allocator, opts: SaveOptions) !?[]u8 {
     var file: [4096]u16 = @splat(0);
     _ = w.wide(&file, opts.name);
     var title: [256]u16 = undefined;
-    var ofn: w.OPENFILENAMEW = .{ .lpstrFile = &file, .nMaxFile = file.len, .lpstrTitle = if (opts.title.len > 0) w.wide(&title, opts.title) else null, .Flags = 0x00080000 | 0x00000002 }; // explorer, ask to overwrite
+    var ofn: w.OPENFILENAMEW = .{ .lpstrFile = &file, .nMaxFile = file.len, .lpstrTitle = if (opts.title.len > 0) w.wide(&title, opts.title) else null, .Flags = w.OFN_EXPLORER | w.OFN_OVERWRITEPROMPT | w.OFN_NOCHANGEDIR };
     if (w.GetSaveFileNameW(&ofn) == 0) return null;
     return try std.unicode.utf16LeToUtf8Alloc(gpa, std.mem.sliceTo(&file, 0));
 }

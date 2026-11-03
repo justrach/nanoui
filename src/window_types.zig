@@ -16,6 +16,17 @@ pub const PageOptions = struct {
     assets: []const Asset = &.{},
     /// Web Inspector (right click > Inspect Element).
     inspectable: bool = true,
+    /// Pages the window can switch between, shown as a bar on every one of
+    /// them (the app's own and every remote page): `{ "Local", "/" }`,
+    /// `{ "Docs", "https://example.com/" }`. Empty: no bar.
+    pages: []const PageEntry = &.{},
+};
+
+/// One entry of `PageOptions.pages`.
+pub const PageEntry = struct {
+    title: []const u8,
+    /// A path from the app's assets, or an absolute `http(s)://` URL.
+    url: []const u8,
 };
 
 pub const Content = union(enum) {
@@ -40,6 +51,17 @@ pub fn Callback(comptime Window: type) type {
     };
 }
 
+/// Asked before the window closes (its close button, ⌘W): false keeps it.
+pub fn ShouldClose(comptime Window: type) type {
+    return struct {
+        ctx: *anyopaque,
+        func: *const fn (ctx: *anyopaque, window: *Window) bool,
+    };
+}
+
+/// A window, or a panel (`NSPanel`: a floating palette, a popover's window).
+pub const Kind = enum { window, panel };
+
 pub fn Options(comptime Window: type) type {
     return struct {
         title: []const u8 = "",
@@ -49,6 +71,35 @@ pub fn Options(comptime Window: type) type {
         min_height: f64 = 150,
         resizable: bool = true,
         title_bar: TitleBar = .default,
+        /// Whether the window has a title bar and a resizable frame at all.
+        /// `false` is a borderless window: no title bar, no border and no
+        /// drag-to-resize — the application draws or moves it,
+        /// `ui.Context.window_drag` moves one. On Windows that is `WS_POPUP`
+        /// (no system shadow either); on macOS a borderless NSWindow that
+        /// still takes keys; on GTK an undecorated window.
+        ///
+        /// Independent of `title_bar`, which is about what the title bar looks
+        /// like when there is one.
+        decorations: bool = true,
+        /// Window opacity, 0 to 1. 1 is opaque and the normal path. macOS
+        /// and GTK set the window's alpha; on Windows, below 1 the window is
+        /// translucent, and that costs the GPU renderer there:
+        /// `SetLayeredWindowAttributes` has no effect on a DXGI flip-model
+        /// swap chain, so the frame is drawn by GDI while the
+        /// window is translucent and the GPU is picked up again at 1. One CPU
+        /// copy per frame while translucent is the price; see
+        /// `src/windows/surface_gpu.zig`.
+        ///
+        /// At 0 the window is invisible, which is a way to fade one out
+        /// (`setOpacity`) but not a way to hide it — use `show`/`hide`.
+        opacity: f64 = 1,
+        /// Keeps the window out of the taskbar and out of Alt-Tab
+        /// (`WS_EX_TOOLWINDOW` on Windows; the skip-taskbar and skip-pager
+        /// hints on GTK 3, which GTK 4 no longer has). The Mac lists apps,
+        /// not windows, so there the window leaves Command-` and the Window
+        /// menu. For a sidebar or a utility window that belongs to another
+        /// application.
+        skip_taskbar: bool = false,
         /// Native UI's colors, fixed; the system's light or dark when null.
         theme: ?ui.Theme = null,
         /// Where the window opens, in screen points from the primary screen's
@@ -65,6 +116,25 @@ pub fn Options(comptime Window: type) type {
         full_bleed: bool = false,
         /// Called as the window closes, before it is freed.
         on_close: ?Callback(Window) = null,
+        /// Called after the window resized.
+        on_resize: ?Callback(Window) = null,
+        /// Called as it enters or leaves full screen: read `isFullScreen()`.
+        on_fullscreen: ?Callback(Window) = null,
+        /// Called as it becomes or stops being the key window: read `isFocused()`.
+        on_key: ?Callback(Window) = null,
+        should_close: ?ShouldClose(Window) = null,
+        /// Its frame is kept in the defaults under this name, and restored.
+        frame_autosave: ?[]const u8 = null,
+        kind: Kind = .window,
+        /// Above other windows (a floating panel's level).
+        floating: bool = false,
+        /// On every Space, and beside full-screen windows.
+        all_spaces: bool = false,
+        /// A panel that takes clicks without making its app active.
+        non_activating: bool = false,
+        /// Never merged into another window's tabs.
+        tabbing_disallowed: bool = true,
+        // Where a platform has none of these (Linux, Windows), they are ignored.
         content: Content,
     };
 }

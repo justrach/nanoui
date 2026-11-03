@@ -1,9 +1,12 @@
 //! OpenGL 3.3 core, loaded when first used (as GTK is, `linux/gtk.zig`):
 //! no headers and no libraries at build time. Through libglvnd's
 //! libOpenGL every function goes to whichever context is current, GLX or
-//! EGL; where there is no libglvnd, libGL exports them. Each function is
-//! looked up by the name of its field.
+//! EGL; where there is no libglvnd, libGL exports them. OpenGL ES 3 has
+//! the same functions (`loadEs`): Android's libGLESv3, or libGLESv2 where
+//! Mesa has it (the tests draw with both). Each function is looked up by
+//! the name of its field.
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub const Api = struct {
     glGetError: *const fn () callconv(.c) u32,
@@ -64,21 +67,37 @@ pub const Api = struct {
 };
 
 pub var api: Api = undefined;
-var loaded = false;
+var loaded: enum { none, gl, es } = .none;
 
 /// Loads OpenGL's functions; false when it is not installed.
 pub fn load() bool {
-    if (loaded) return true;
+    if (loaded == .gl) return true;
     const lib = std.c.dlopen("libOpenGL.so.0", .{ .NOW = true }) orelse
         std.c.dlopen("libGL.so.1", .{ .NOW = true }) orelse return false;
+    if (!from(lib)) return false;
+    loaded = .gl;
+    return true;
+}
+
+/// Loads OpenGL ES 3's functions instead; false when it is not installed.
+pub fn loadEs() bool {
+    if (loaded == .es) return true;
+    const name = if (builtin.abi.isAndroid()) "libGLESv3.so" else "libGLESv2.so.2";
+    const lib = std.c.dlopen(name, .{ .NOW = true }) orelse return false;
+    if (!from(lib)) return false;
+    loaded = .es;
+    return true;
+}
+
+fn from(lib: *anyopaque) bool {
     inline for (@typeInfo(Api).@"struct".field_names) |name| {
         const sym = std.c.dlsym(lib, name) orelse {
             std.log.warn("nanoui: OpenGL lacks {s}", .{name});
+            loaded = .none;
             return false;
         };
         @field(api, name) = @ptrCast(@alignCast(sym));
     }
-    loaded = true;
     return true;
 }
 
@@ -93,6 +112,7 @@ pub const TEXTURE0 = 0x84C0;
 pub const R8 = 0x8229;
 pub const RED = 0x1903;
 pub const RGBA8 = 0x8058;
+pub const RGBA = 0x1908;
 pub const BGRA = 0x80E1;
 pub const TEXTURE_MAG_FILTER = 0x2800;
 pub const TEXTURE_MIN_FILTER = 0x2801;

@@ -1,6 +1,6 @@
 .{
     .name = .nanoui,
-    .version = "0.6.4",
+    .version = "0.10.0",
     .fingerprint = 0xd93ac916310aedc1,
     .minimum_zig_version = "0.17.0",
     .dependencies = .{
@@ -16,7 +16,12 @@
         "build.zig",
         "build.zig.zon",
         "src",
+        "LICENSE",
+        "THIRD_PARTY_NOTICES.md",
+        "third_party/licenses",
         // build.zig imports tools/ios/bundle.zig; apps run sim.sh and zig-lib.sh.
         "tools/ios",
+        // build.zig imports tools/android/apk.zig (and pack.zig); apps run run.sh.
+        "tools/android",
     },
 }

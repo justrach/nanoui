@@ -5,7 +5,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 
-pub const Scene = enum { boxes, text, scroll, list, dashboard };
+pub const Scene = enum { boxes, text, scroll, list, dashboard, springs, letters };
 
 pub const State = struct {
     scene: Scene,
@@ -19,6 +19,8 @@ pub const State = struct {
             .scroll => scroll(s, c),
             .list => list(s, c),
             .dashboard => dashboard(s, c),
+            .springs => springs(s, c),
+            .letters => letters(s, c),
         }
     }
 };
@@ -117,6 +119,55 @@ fn dashboard(s: *State, c: *ui.Context) void {
             ui.end(c);
             ui.textf(c, .{ .size = 11 }, "updated {d}s ago", .{s.frame % 60});
         }
+    }
+}
+
+/// 2 000 boxes whose targets move every frame, through `ui.motion`.
+fn springs(s: *State, c: *ui.Context) void {
+    const t = s.time;
+    const root = ui.div(c).column().sizeFull().p(8).gap(2);
+    defer root.end();
+    for (0..40) |r| {
+        const row = ui.div(c).row().gap(2);
+        defer row.end();
+        for (0..50) |col| {
+            const n = r * 50 + col;
+            const i: f32 = @floatFromInt(n);
+            ui.keyInt(c, n);
+            const f = ui.motion.frame(c, .{
+                .target = .{
+                    .y = 4 * @sin(t * 3 + i * 0.1),
+                    .background = hsl(@mod(t * 60 + i * 3, 360)),
+                },
+                .transition = .{ .spring = .{} },
+            });
+            const box = ui.div(c).w(14).h(14).rounded(3).motion(f);
+            box.end();
+        }
+    }
+}
+
+fn letters(s: *State, c: *ui.Context) void {
+    const root = ui.div(c).column().sizeFull().p(16).gap(10);
+    defer root.end();
+    const lines = [_][]const u8{
+        "Springs keep their speed when the target turns",
+        "Tweens ease from where they are, not from the start",
+        "Presence waits for a box to leave before it is gone",
+        "Layout glides a shuffled row to its new place",
+        "Letters enter one after another, then sit still",
+    };
+    const round = s.frame / 45;
+    for (lines, 0..) |line, i| {
+        ui.key(c, c.print("L{d}-{d}", .{ i, round }));
+        const wrap = ui.div(c);
+        defer wrap.end();
+        ui.motion.letters(c, line, .{ .size = 16 }, .{
+            .unit = .letters,
+            .enter = .{ .y = 8, .opacity = 0 },
+            .stagger_each = 0.012,
+            .transition = .{ .tween = .{ .duration = 0.25, .ease = .ease_out } },
+        });
     }
 }
 

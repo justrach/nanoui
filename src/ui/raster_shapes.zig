@@ -8,6 +8,33 @@ const std = @import("std");
 const gpu = @import("gpu.zig");
 const raster = @import("raster.zig");
 
+/// A line, a triangle, or a hole (`gpu.Kind`).
+pub fn draw(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize) void {
+    if (i.kind == gpu.Kind.segment) return segment(out, i, scale, b);
+    if (i.kind == gpu.Kind.triangle) return triangle(out, i, scale, b);
+    hole(out, i, scale, b);
+}
+
+/// Cuts a rounded box out of the frame, as the hole pipeline does: every
+/// channel scaled by one minus its coverage.
+fn hole(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize) void {
+    const hw = i.rect[2] * 0.5;
+    const hh = i.rect[3] * 0.5;
+    const r = @min(@abs(i.radius), @min(hw, hh));
+    const inv = 1 / scale;
+    for (b[1]..b[3]) |y| {
+        const py = (@as(f32, @floatFromInt(y)) + 0.5) * inv - (i.rect[1] + hh);
+        for (b[0]..b[2]) |x| {
+            const px = (@as(f32, @floatFromInt(x)) + 0.5) * inv - (i.rect[0] + hw);
+            const sd = raster.cornerSdf(px, py, hw, hh, r);
+            const aa = @max(sd[1] * inv, 0.0001) * 0.5;
+            const keep = raster.smoothstep(-aa, aa, sd[0]);
+            const at = (y * out.width + x) * 4;
+            for (out.bytes[at .. at + 4]) |*ch| ch.* = @intFromFloat(@round(@as(f32, @floatFromInt(ch.*)) * keep));
+        }
+    }
+}
+
 /// The x (points) between which row `wy` crosses the convex polygon `v`
 /// (either way round); null when it misses it.
 fn span(v: []const [2]f32, wy: f32) ?[2]f32 {
@@ -133,4 +160,100 @@ pub fn triangle(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize
             raster.blend(out.bytes, row + x * 4, c[0] * a, c[1] * a, c[2] * a, a);
         }
     }
+}
+
+// Shadows as the shader draws them: a box's coverage blurred by a
+// Gaussian, exact along x with erf, sampled eight times along y.
+fn gaussian(x: f32, sigma: f32) f32 {
+    return @exp(-(x * x) / (2 * sigma * sigma)) / (@sqrt(2 * std.math.pi) * sigma);
+}
+
+fn erf(x: f32) f32 {
+    const s: f32 = if (x < 0) -1 else 1;
+    const a = @abs(x);
+    var y = 1 + (0.278393 + (0.230389 + 0.078108 * (a * a)) * a) * a;
+    y *= y;
+    return s - s / (y * y);
+}
+
+fn blurAlongX(x: f32, y: f32, sigma: f32, corner: f32, hw: f32, hh: f32) f32 {
+    const delta = @min(hh - corner - @abs(y), 0);
+    const curved = hw - corner + @sqrt(@max(0, corner * corner - delta * delta));
+    const k = @sqrt(@as(f32, 0.5)) / sigma;
+    const lo = 0.5 + 0.5 * erf((x - curved) * k);
+    const hi = 0.5 + 0.5 * erf((x + curved) * k);
+    return hi - lo;
+}
+
+/// Y samples of each shadow's Gaussian: 8, as the shader. Hill-climb's
+/// `--cheap-shadow` sets 1 (faster, but no longer Metal's pixels).
+pub var shadow_samples: u32 = 8;
+
+pub fn shadowAlpha(px: f32, py: f32, hw: f32, hh: f32, corner: f32, sigma: f32) f32 {
+    const c = @abs(corner);
+    const n = @min(@max(shadow_samples, 1), 8);
+    const low = py - hh;
+    const high = py + hh;
+    const start = std.math.clamp(-3 * sigma, low, high);
+    const end = std.math.clamp(3 * sigma, low, high);
+    const step = (end - start) / @as(f32, @floatFromInt(n));
+    var y = start + step * 0.5;
+    var alpha: f32 = 0;
+    for (0..n) |_| {
+        alpha += blurAlongX(px, py - y, sigma, c, hw, hh) * gaussian(y, sigma) * step;
+        y += step;
+    }
+    return alpha;
+}
+
+pub fn shadowDither(x: usize, y: usize) f32 {
+    const ux: u32 = @truncate(x);
+    const uy: u32 = @truncate(y);
+    var h1: u32 = (ux *% 1664525 +% uy *% 1013904223) ^ 0x68bc21eb;
+    h1 ^= h1 >> 15;
+    h1 *%= 0x85ebca6b;
+    h1 ^= h1 >> 13;
+    var h2: u32 = (ux *% 22695477 +% uy *% 2891336453) ^ 0x02e5be93;
+    h2 ^= h2 >> 15;
+    h2 *%= 0xc2b2ae35;
+    h2 ^= h2 >> 13;
+    const v1 = @as(f32, @floatFromInt(h1 & 0xffff)) / 65535.0;
+    const v2 = @as(f32, @floatFromInt(h2 & 0xffff)) / 65535.0;
+    return (v1 + v2 - 1.0) * (0.5 / 255.0);
+}
+
+/// A dashed border's coverage at (`x`, `y`) from the box's centre, as
+/// GPUI lays dashes (shader.metal's `dash_cover`); `px` is a pixel's size.
+pub fn dashCover(x: f32, y: f32, hw: f32, hh: f32, r: f32, w: f32, px: f32) f32 {
+    const pi = std.math.pi;
+    const dv = 1 / (3 * w);
+    const sx = (2 * hw - 2 * r) * dv;
+    const sy = (2 * hh - 2 * r) * dv;
+    const cq = r * pi * 0.5 * dv;
+    const qx = @abs(x) - (hw - r);
+    const qy = @abs(y) - (hh - r);
+    const t: f32 = if (r > 0 and qx > 0 and qy > 0) blk: {
+        const vx = x - std.math.sign(x) * (hw - r);
+        const vy = y - std.math.sign(y) * (hh - r);
+        const ang = std.math.atan2(vy, vx);
+        break :blk if (x >= 0 and y < 0)
+            sx + (ang + pi * 0.5) * r * dv
+        else if (x >= 0)
+            sx + cq + sy + ang * r * dv
+        else if (y >= 0)
+            2 * sx + 2 * cq + sy + (ang - pi * 0.5) * r * dv
+        else
+            2 * sx + 3 * cq + 2 * sy + (ang + pi) * r * dv;
+    } else if ((hh - @abs(y)) < (hw - @abs(x)))
+        (if (y < 0) (x + hw - r) * dv else sx + 2 * cq + sy + (hw - r - x) * dv)
+    else
+        (if (x > 0) sx + cq + (y + hh - r) * dv else 2 * sx + 3 * cq + sy + (hh - r - y) * dv);
+    const max_t = 2 * (sx + sy) + 4 * cq;
+    if (max_t < 1) return 1;
+    const period = max_t / @floor(max_t);
+    const len: f32 = 2.0 / 3.0;
+    const u = t + period * 0.5 - len * 0.5;
+    const centered = u - period * @floor(u / period) - period * 0.5;
+    const sd = (@abs(centered) - len * 0.5) / dv;
+    return std.math.clamp(0.5 - sd / px, 0, 1);
 }

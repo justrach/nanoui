@@ -20,6 +20,10 @@ extern "c" fn CFDictionaryGetValue(dict: *anyopaque, key: *const anyopaque) ?*an
 const first: u8 = 0x20;
 const count = 0x7f - 0x20;
 
+pub fn isSimpleAscii(s: []const u8) bool {
+    for (s) |c| if (c < first or c >= 0x7f) return false;
+    return true;
+}
 /// What CoreText makes of a short string: its glyphs and their x positions.
 const Shaped = struct {
     n: usize = 0,

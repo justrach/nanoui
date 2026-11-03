@@ -1,7 +1,13 @@
-//! The glyph atlas: each glyph rasterized once per font and quarter pixel
-//! of horizontal position, at the display's scale, into one R8 texture the
-//! renderer samples. Shelf packed; it grows when full, then resets.
+//! The glyph atlas: each glyph rasterized once per font, quarter pixel of
+//! horizontal position and stroke weight, at the display's scale, into one
+//! R8 texture the renderer samples. Shelf packed; it grows when full, then
+//! resets.
+//!
+//! Strokes are thickened as macOS thickens them with font smoothing on:
+//! more for lighter text, so light text on a dark ground doesn't read thin
+//! (`dilationFor`; the levels AppKit and GPUI use).
 const std = @import("std");
+const builtin = @import("builtin");
 const objc = @import("../objc.zig");
 const cf = @import("cf.zig");
 const types = @import("types.zig");
@@ -10,11 +16,13 @@ extern "c" fn CTFontGetBoundingRectsForGlyphs(font: cf.CTFontRef, orientation: u
 extern "c" fn CTFontDrawGlyphs(font: cf.CTFontRef, glyphs: [*]const u16, positions: [*]const objc.CGPoint, count: usize, ctx: cf.CGContextRef) void;
 extern "c" fn CGContextDrawImage(ctx: cf.CGContextRef, rect: objc.CGRect, image: *anyopaque) void;
 extern "c" fn CGContextTranslateCTM(ctx: cf.CGContextRef, tx: f64, ty: f64) void;
+extern "c" fn CGContextSetAllowsFontSmoothing(ctx: cf.CGContextRef, v: bool) void;
+extern "c" fn CGColorSpaceCreateDeviceGray() ?cf.CGColorSpaceRef;
 extern "c" fn UIGraphicsPushContext(ctx: cf.CGContextRef) void;
 extern "c" fn UIGraphicsPopContext() void;
 
-/// The atlas starts small and doubles when full, up to `max_size`.
-const initial_size: u32 = 512;
+/// The atlas starts at 2048 so cold start never grows it, up to `max_size`.
+const initial_size: u32 = 2048;
 const max_size: u32 = 4096;
 const pad: u32 = 1;
 /// Horizontal positions are snapped to quarters of a pixel.
@@ -30,7 +38,35 @@ pub const Sprite = struct {
     h: f32,
 };
 
-const Key = struct { font: u16, glyph: u16, bin: u8 };
+const Key = struct { font: u16, glyph: u16, bin: u8, dilation: u8 };
+
+/// How much CoreGraphics thickens text of this colour, 0 to 4: the level it
+/// picks from the fill's luminance with font smoothing on, none when the
+/// user turned smoothing off (`AppleFontSmoothing` 0).
+pub fn dilationFor(r: f32, g: f32, b: f32) u8 {
+    if (!smoothingAllowed()) return 0;
+    const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    return @intFromFloat(std.math.clamp(@floor(4 * luminance + 0.5), 0, 4));
+}
+
+/// Tests and other platforms set this; null asks macOS once.
+pub var smoothing_allowed: ?bool = null;
+
+fn smoothingAllowed() bool {
+    if (smoothing_allowed) |v| return v;
+    if (builtin.os.tag != .macos) return true;
+    var allowed = true;
+    const key = cf.string("AppleFontSmoothing");
+    defer cf.CFRelease(@ptrCast(key));
+    if (cf.CFPreferencesCopyAppValue(key, cf.kCFPreferencesCurrentApplication)) |v| {
+        defer cf.CFRelease(v);
+        // Only an explicit 0 turns smoothing off.
+        var n: i64 = 1;
+        if (cf.CFGetTypeID(v) == cf.CFNumberGetTypeID() and cf.CFNumberGetValue(v, cf.number_sint64, &n)) allowed = n != 0;
+    }
+    smoothing_allowed = allowed;
+    return allowed;
+}
 const SymbolKey = struct { name: u64, size_bits: u32, weight: u8 };
 
 pub const Atlas = struct {
@@ -48,6 +84,7 @@ pub const Atlas = struct {
     /// are then stale: the frame must be painted again.
     reset_during_frame: bool = false,
     pixels: std.ArrayList(u8) = .empty,
+    font_smoothing: ?bool = null,
 
     pub fn init(gpa: std.mem.Allocator, device: objc.Object) Atlas {
         return .{ .gpa = gpa, .device = device, .texture = makeTexture(device, initial_size) };
@@ -95,17 +132,29 @@ pub const Atlas = struct {
     }
 
     /// The sprite of `glyph` of `font` (whose id is `font_id`) drawn at
-    /// `bin` quarters of a pixel right of a pixel boundary; null for blank
-    /// glyphs (spaces).
-    pub fn glyph(a: *Atlas, font_id: u16, font: cf.CTFontRef, g: u16, bin: u8) ?Sprite {
-        const key: Key = .{ .font = font_id, .glyph = g, .bin = bin };
+    /// `bin` quarters of a pixel right of a pixel boundary, its strokes
+    /// thickened `dilation` levels; null for blank glyphs (spaces).
+    pub fn glyph(a: *Atlas, font_id: u16, font: cf.CTFontRef, g: u16, bin: u8, dilation: u8) ?Sprite {
+        const key: Key = .{ .font = font_id, .glyph = g, .bin = bin, .dilation = dilation };
         if (a.sprites.get(key)) |sp| return sp;
-        const sp = a.rasterize(font, g, bin);
+        const sp = a.rasterize(font, g, bin, dilation);
         a.sprites.put(a.gpa, key, sp) catch {};
         return sp;
     }
+    fn smoothFonts(a: *Atlas) bool {
+        if (a.font_smoothing) |s| return s;
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        const defaults = objc.msg(objc.Object, objc.class("NSUserDefaults"), "standardUserDefaults", .{});
+        const key = objc.nsString("AppleFontSmoothing");
+        const obj = objc.msg(?objc.Object, defaults, "objectForKey:", .{key});
+        const s = if (obj != null) objc.msg(objc.NSInteger, defaults, "integerForKey:", .{key}) != 0 else true;
+        a.font_smoothing = s;
+        return s;
+    }
 
-    fn rasterize(a: *Atlas, font: cf.CTFontRef, g: u16, bin: u8) ?Sprite {
+
+    fn rasterize(a: *Atlas, font: cf.CTFontRef, g: u16, bin: u8, dilation: u8) ?Sprite {
         const scale = a.scale;
         var glyphs = [1]u16{g};
         const bounds = CTFontGetBoundingRectsForGlyphs(font, 0, &glyphs, null, 1);
@@ -118,28 +167,55 @@ pub const Atlas = struct {
         const y1 = @ceil((bounds.origin.y + bounds.size.height) * s);
         const w: u32 = @as(u32, @intFromFloat(x1 - x0)) + 2 * pad;
         const h: u32 = @as(u32, @intFromFloat(y1 - y0)) + 2 * pad;
-        if (w > max_size or h > max_size) return null;
-        const origin = a.allocate(w, h) orelse blk: {
+        const total_w: u32 = w * 2;
+        if (total_w > max_size or h > max_size) return null;
+        const origin = a.allocate(total_w, h) orelse blk: {
             a.makeRoom();
-            break :blk a.allocate(w, h) orelse return null;
+            break :blk a.allocate(total_w, h) orelse return null;
         };
 
         a.pixels.resize(a.gpa, w * h) catch return null;
         @memset(a.pixels.items, 0);
-        const ctx = cf.CGBitmapContextCreate(a.pixels.items.ptr, w, h, 8, w, null, cf.image_alpha_only) orelse return null;
+        const gray = cf.CGColorSpaceCreateDeviceGray() orelse return null;
+        defer cf.CGColorSpaceRelease(gray);
+        const ctx = cf.CGBitmapContextCreate(a.pixels.items.ptr, w, h, 8, w, gray, cf.image_alpha_only) orelse return null;
         defer cf.CGContextRelease(ctx);
+        const smooth = a.smoothFonts();
         cf.CGContextSetShouldAntialias(ctx, true);
-        cf.CGContextSetShouldSmoothFonts(ctx, false);
+
         cf.CGContextSetAllowsFontSubpixelPositioning(ctx, true);
         cf.CGContextSetShouldSubpixelPositionFonts(ctx, true);
-        cf.CGContextSetGrayFillColor(ctx, 1, 1);
+        // Smoothing thickens strokes by the fill's luminance; the alpha
+        // drawn is the same whatever the fill.
+        cf.CGContextSetShouldSmoothFonts(ctx, dilation > 0);
+        cf.CGContextSetGrayFillColor(ctx, @as(f64, @floatFromInt(dilation)) * 0.25, 1);
         // The glyph's origin, in pixels from the bitmap's bottom left.
         CGContextTranslateCTM(ctx, @as(f64, pad) - x0 + sub, @as(f64, pad) - y0);
         cf.CGContextScaleCTM(ctx, s, s);
         const at = [1]objc.CGPoint{.{}};
         CTFontDrawGlyphs(font, &glyphs, &at, 1, ctx);
-
         a.upload(origin, w, h);
+
+        // Dark-on-light mask (AppKit's stem dilation for dark ink on light backgrounds).
+        if (CGColorSpaceCreateDeviceGray()) |light_gray| {
+            defer cf.CGColorSpaceRelease(light_gray);
+            @memset(a.pixels.items, 255);
+            if (cf.CGBitmapContextCreate(a.pixels.items.ptr, w, h, 8, w, light_gray, 0)) |lctx| {
+                defer cf.CGContextRelease(lctx);
+                cf.CGContextSetShouldAntialias(lctx, true);
+                CGContextSetAllowsFontSmoothing(lctx, smooth);
+                cf.CGContextSetShouldSmoothFonts(lctx, smooth);
+                cf.CGContextSetAllowsFontSubpixelPositioning(lctx, true);
+                cf.CGContextSetShouldSubpixelPositionFonts(lctx, true);
+                cf.CGContextSetGrayFillColor(lctx, 0, 1);
+                CGContextTranslateCTM(lctx, @as(f64, pad) - x0 + sub, @as(f64, pad) - y0);
+                cf.CGContextScaleCTM(lctx, s, s);
+                CTFontDrawGlyphs(font, &glyphs, &at, 1, lctx);
+                for (a.pixels.items) |*px| px.* = 255 - px.*;
+                a.upload(.{ origin[0] + w, origin[1] }, w, h);
+            }
+        }
+
         const as: f32 = @floatFromInt(a.size);
         const fw: f32 = @floatFromInt(w);
         const fh: f32 = @floatFromInt(h);
@@ -179,25 +255,22 @@ pub const Atlas = struct {
         const h: u32 = @intFromFloat(@ceil(sz.height * scale));
         if (w + 2 * pad > max_size or h + 2 * pad > max_size) return null;
         const rect: objc.CGRect = .{ .origin = .{ .x = pad, .y = pad }, .size = .{ .width = @floatFromInt(w), .height = @floatFromInt(h) } };
-        const bw = w + 2 * pad;
-        const bh = h + 2 * pad;
-        const origin = a.allocate(bw, bh) orelse blk: {
-            a.makeRoom();
-            break :blk a.allocate(bw, bh) orelse return null;
-        };
+        const dw = w + 2 * pad;
+        const dh = h + 2 * pad;
         // AppKit draws the symbol, into color (it can't into a mask), and
         // the mask keeps its coverage: the symbol's CGImage holds only the
         // strokes' outlines on recent macOS.
-        const rgba = a.gpa.alloc(u8, bw * bh * 4) catch return null;
-        defer a.gpa.free(rgba);
+        a.pixels.resize(a.gpa, dw * dh * 5) catch return null;
+        const mask = a.pixels.items[0 .. dw * dh];
+        const rgba = a.pixels.items[dw * dh ..][0 .. dw * dh * 4];
         @memset(rgba, 0);
         const space = cf.CGColorSpaceCreateWithName(cf.kCGColorSpaceSRGB) orelse return null;
         defer cf.CGColorSpaceRelease(space);
-        const ctx = cf.CGBitmapContextCreate(rgba.ptr, bw, bh, 8, bw * 4, space, 2 | (2 << 12)) orelse return null;
+        const ctx = cf.CGBitmapContextCreate(rgba.ptr, dw, dh, 8, dw * 4, space, 2 | (2 << 12)) orelse return null;
         defer cf.CGContextRelease(ctx);
         if (objc.uikit) {
             // UIKit draws top down: flip the bitmap's coordinates to its own.
-            CGContextTranslateCTM(ctx, 0, @floatFromInt(bh));
+            CGContextTranslateCTM(ctx, 0, @floatFromInt(dh));
             cf.CGContextScaleCTM(ctx, 1, -1);
             UIGraphicsPushContext(ctx);
             objc.msg(void, img, "drawInRect:", .{rect});
@@ -209,22 +282,26 @@ pub const Atlas = struct {
             objc.msg(void, img, "drawInRect:fromRect:operation:fraction:", .{ rect, objc.CGRect{}, @as(objc.NSUInteger, 2), @as(f64, 1) });
             objc.msg(void, objc.class("NSGraphicsContext"), "restoreGraphicsState", .{});
         }
-        a.pixels.resize(a.gpa, bw * bh) catch return null;
-        for (a.pixels.items, 0..) |*m, i| m.* = rgba[i * 4 + 3];
-        a.upload(origin, bw, bh);
+        for (mask, 0..) |*m, i| m.* = rgba[i * 4 + 3];
+        a.pixels.shrinkRetainingCapacity(dw * dh);
+        const origin = a.allocate(dw, dh) orelse blk: {
+            a.makeRoom();
+            break :blk a.allocate(dw, dh) orelse return null;
+        };
+        a.upload(origin, dw, dh);
         const as: f32 = @floatFromInt(a.size);
         const p: f32 = @as(f32, pad) / scale;
         return .{
             .uv = .{
                 @as(f32, @floatFromInt(origin[0])) / as,
                 @as(f32, @floatFromInt(origin[1])) / as,
-                @as(f32, @floatFromInt(origin[0] + bw)) / as,
-                @as(f32, @floatFromInt(origin[1] + bh)) / as,
+                @as(f32, @floatFromInt(origin[0] + dw)) / as,
+                @as(f32, @floatFromInt(origin[1] + dh)) / as,
             },
             .x = -p,
             .y = -p,
-            .w = @as(f32, @floatFromInt(bw)) / scale,
-            .h = @as(f32, @floatFromInt(bh)) / scale,
+            .w = @as(f32, @floatFromInt(dw)) / scale,
+            .h = @as(f32, @floatFromInt(dh)) / scale,
         };
     }
 

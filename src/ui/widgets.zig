@@ -15,6 +15,11 @@ pub fn key(c: *Context, k: []const u8) void {
     c.next_key = k;
 }
 
+/// The same, for a list of numbered items: no formatted string.
+pub fn keyInt(c: *Context, n: u64) void {
+    c.next_key_int = n;
+}
+
 pub fn column(c: *Context, style: Style) void {
     var s = style;
     s.direction = .column;
@@ -97,11 +102,14 @@ pub const IconOptions = struct {
     frame: ?f32 = null,
     weight: types.Weight = .regular,
     color: ?Color = null,
+    /// Turned clockwise about its centre, in radians (SwiftUI's
+    /// `rotationEffect`); laid out as if it were not.
+    rotation: f32 = 0,
 };
 
 /// An SF Symbol: `ui.icon(c, "star.fill", .{ .color = c.theme.accent })`.
 pub fn icon(c: *Context, name: []const u8, opts: IconOptions) void {
-    const style: Style = if (opts.frame) |f| .{ .width = .{ .px = f }, .height = .{ .px = f } } else .{};
+    const style: Style = if (opts.frame) |f| .{ .width = .{ .px = f }, .height = .{ .px = f }, .rotation = opts.rotation } else .{ .rotation = opts.rotation };
     _ = c.leaf(style, .{ .icon = .{ .name = name, .size = opts.size, .weight = opts.weight, .color = opts.color orelse c.theme.text } }, null);
 }
 
@@ -128,12 +136,50 @@ pub const ImageOptions = struct {
 /// A picture; false (and nothing drawn) if it can't be decoded.
 pub fn image(c: *Context, opts: ImageOptions) bool {
     const k = @import("images.zig").Images.key(opts.key);
-    // Sized from the decoded picture; packed only when it is drawn.
+    // Sized from the picture's header; decoded at device size and packed only when drawn.
     const e = c.text.images.info(k, opts.bytes) orelse return false;
     const w: f32 = @as(f32, @floatFromInt(e.width)) / @max(opts.scale, 0.5);
     const h: f32 = @as(f32, @floatFromInt(e.height)) / @max(opts.scale, 0.5);
     const s = @min(1, @min(opts.max_width / @max(w, 1), opts.max_height / @max(h, 1)));
     _ = c.leaf(.{ .width = .{ .px = @round(w * s) }, .height = .{ .px = @round(h * s) }, .radius = opts.radius }, .{ .image = .{ .key = k, .bytes = opts.bytes, .opacity = opts.opacity, .tint = opts.tint } }, null);
+    return true;
+}
+
+pub const SvgOptions = struct {
+    /// Names the document: the same key, size and color are drawn once.
+    key: []const u8,
+    /// The SVG source, kept by the caller while it is shown (an
+    /// `@embedFile`, say).
+    bytes: []const u8,
+    /// The box's side in points: the document's viewBox is fitted in it.
+    size: f32 = 16,
+    /// A box of another shape, instead of `size` square.
+    width: ?f32 = null,
+    height: ?f32 = null,
+    /// Draws the document's shape in this one color (an icon that follows
+    /// the theme). Null draws its own colors, `currentColor` as the
+    /// theme's text.
+    color: ?Color = null,
+    opacity: f32 = 1,
+};
+
+/// An SVG document drawn at the screen's pixel density: an icon, a mark.
+/// False (and nothing drawn) if it can't be read.
+pub fn svg(c: *Context, opts: SvgOptions) bool {
+    const w = opts.width orelse opts.size;
+    const h = opts.height orelse opts.size;
+    const pw: u32 = @intFromFloat(@max(1, @round(w * c.scale)));
+    const ph: u32 = @intFromFloat(@max(1, @round(h * c.scale)));
+    // Tinted, it's drawn white and filled with the color as it's painted;
+    // otherwise currentColor is the theme's text, part of what it's kept by.
+    const cur = if (opts.color != null) Color{ .r = 1, .g = 1, .b = 1 } else c.theme.text;
+    var hasher = std.hash.Wyhash.init(0x5c6);
+    hasher.update(opts.key);
+    hasher.update(std.mem.asBytes(&[2]u32{ pw, ph }));
+    hasher.update(std.mem.asBytes(&[4]f32{ cur.r, cur.g, cur.b, cur.a }));
+    const k = hasher.final();
+    _ = c.text.images.infoSvg(k, opts.bytes, .{ .width = pw, .height = ph, .current = .{ cur.r, cur.g, cur.b, cur.a } }) orelse return false;
+    _ = c.leaf(.{ .width = .{ .px = w }, .height = .{ .px = h } }, .{ .image = .{ .key = k, .bytes = opts.bytes, .opacity = opts.opacity, .tint = opts.color, .snap = true } }, null);
     return true;
 }
 
@@ -144,6 +190,15 @@ pub fn texture(c: *Context, style: types.Style, source: @import("gpu.zig").Textu
     const slot: u32 = @intCast(c.textures.items.len);
     c.textures.append(c.gpa, source) catch return;
     _ = c.leaf(style, .{ .texture = .{ .slot = slot, .uv = uv, .opacity = opacity } }, null);
+}
+
+/// A see-through box filling its parent, its corners rounded by `radius`:
+/// what's under the frame (a native view: `nanoui.map`) shows there, and
+/// takes the touches that land on it. Returns its id.
+pub fn hole(c: *Context, name: []const u8, radius: f32) u64 {
+    const i = c.leaf(.{ .width = .fill, .height = .fill }, .{ .hole = radius }, name);
+    c.node(i).interactive = true;
+    return c.node(i).id;
 }
 
 pub fn heading(c: *Context, str: []const u8) void {
@@ -179,6 +234,7 @@ pub fn button(c: *Context, title: []const u8, opts: ButtonOptions) Interaction {
     }, null);
     defer c.end();
     var it = c.interact(i, .{});
+    c.addA11y(i, .button, if (title.len > 0) title else opts.icon, "", false, !opts.disabled);
     if (opts.disabled) {
         it.clicked = false;
         it.hovered = false;
@@ -216,6 +272,7 @@ pub fn checkbox(c: *Context, title: []const u8, value: *bool) bool {
     const th = c.theme;
     const it = pressable(c, .{ .direction = .row, .gap = 8, .align_items = .center, .control = true }, null);
     defer c.end();
+    c.addA11y(c.stack.items[c.stack.items.len - 1], .checkbox, title, "", value.*, true);
     if (it.clicked) {
         value.* = !value.*;
         c.changed = true;
@@ -246,6 +303,7 @@ pub fn toggle(c: *Context, title: []const u8, value: *bool) bool {
     const th = c.theme;
     const it = pressable(c, .{ .direction = .row, .gap = 10, .align_items = .center, .control = true }, null);
     defer c.end();
+    c.addA11y(c.stack.items[c.stack.items.len - 1], .switch_toggle, title, "", value.*, true);
     if (it.clicked) {
         value.* = !value.*;
         c.changed = true;
@@ -275,6 +333,8 @@ pub const SliderOptions = struct {
     min: f32 = 0,
     max: f32 = 1,
     width: types.Length = .{ .px = 200 },
+    /// What VoiceOver calls it ("Volume"); the text left of it otherwise.
+    label: []const u8 = "",
 };
 
 /// A slider over `value`; returns true while it changes it.
@@ -284,7 +344,19 @@ pub fn slider(c: *Context, value: *f32, opts: SliderOptions) bool {
     const i = c.open(.{ .direction = .row, .width = opts.width, .height = .{ .px = 22 }, .align_items = .center, .control = true }, null);
     defer c.end();
     const it = c.interact(i, .{});
+    // VoiceOver reads it, and swipes step it a tenth of its range.
+    const range = opts.max - opts.min;
+    const shown = if (opts.min == 0 and opts.max == 1) c.print("{d:.0}%", .{value.* * 100}) else c.print("{d:.1}", .{value.*});
+    c.adjustable(i, .{ .label = opts.label, .value = shown });
     var changed = false;
+    if (it.a11y_step != 0) {
+        const v = std.math.clamp(value.* + @as(f32, @floatFromInt(it.a11y_step)) * range / 10, opts.min, opts.max);
+        if (v != value.*) {
+            value.* = v;
+            changed = true;
+            c.changed = true;
+        }
+    }
     if (it.pressed) if (it.rect) |r| {
         const t = std.math.clamp((c.input.mouse.x - r.x - knob / 2) / @max(1, r.w - knob), 0, 1);
         const v = opts.min + t * (opts.max - opts.min);
@@ -329,6 +401,7 @@ pub fn segmented(c: *Context, options: []const []const u8, selected: *usize) boo
     for (options, 0..) |opt, idx| {
         const it = pressable(c, .{ .padding = .xy(14, 5), .radius = 7, .align_items = .center, .control = true }, null);
         defer c.end();
+        c.addA11y(c.stack.items[c.stack.items.len - 1], .radio_button, opt, "", selected.* == idx, true);
         if (it.clicked and selected.* != idx) {
             selected.* = idx;
             changed = true;

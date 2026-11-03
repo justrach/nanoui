@@ -3,6 +3,7 @@
 //! that is not installed falls back to the system's; a family without
 //! italics is slanted, as browsers synthesize them.
 const std = @import("std");
+const builtin = @import("builtin");
 const objc = @import("../objc.zig");
 const cf = @import("cf.zig");
 const types = @import("types.zig");
@@ -19,6 +20,26 @@ extern "c" fn CTFontCreateCopyWithAttributes(font: cf.CTFontRef, size: f64, matr
 extern "c" fn CTFontCopyFamilyName(font: cf.CTFontRef) cf.CFStringRef;
 extern "c" fn CTFontGetSymbolicTraits(font: cf.CTFontRef) u32;
 extern "c" fn CFStringCompare(a: cf.CFStringRef, b: cf.CFStringRef, options: u64) cf.CFIndex;
+
+extern "c" fn CGDataProviderCreateWithData(info: ?*anyopaque, data: [*]const u8, size: usize, release: ?*const anyopaque) ?*anyopaque;
+extern "c" fn CGFontCreateWithDataProvider(provider: *anyopaque) ?*anyopaque;
+extern "c" fn CTFontManagerRegisterGraphicsFont(font: *anyopaque, err: ?*?*anyopaque) bool;
+extern "c" fn CFErrorGetCode(err: *anyopaque) cf.CFIndex;
+
+/// Registers a font file's bytes (kept by the caller) for this process, so
+/// its family is found by name.
+pub fn registerData(bytes: []const u8) bool {
+    const provider = CGDataProviderCreateWithData(null, bytes.ptr, bytes.len, null) orelse return false;
+    defer cf.CFRelease(provider);
+    const font = CGFontCreateWithDataProvider(provider) orelse return false;
+    defer cf.CFRelease(font);
+    var err: ?*anyopaque = null;
+    if (CTFontManagerRegisterGraphicsFont(font, &err)) return true;
+    const e = err orelse return false;
+    defer cf.CFRelease(e);
+    // Already registered (the same font twice) is as good.
+    return CFErrorGetCode(e) == 105;
+}
 
 const Transform = extern struct { a: f64, b: f64, c: f64, d: f64, tx: f64, ty: f64 };
 const italic_trait: u32 = 1 << 0;
@@ -86,4 +107,54 @@ fn named(name: []const u8, size: f32, weight: types.Weight, italic: bool) ?cf.CT
         return CTFontCreateCopyWithAttributes(f, size, &slant, null);
     }
     return f;
+}
+
+extern "c" fn CTFontCopyFontDescriptor(font: cf.CTFontRef) *anyopaque;
+extern "c" fn CTFontDescriptorCreateCopyWithFeature(desc: *anyopaque, feature_type: *anyopaque, selector: *anyopaque) ?*anyopaque;
+/// `kNumberSpacingType`, `kMonospacedNumbersSelector` (SFNTLayoutTypes.h).
+const number_spacing: i32 = 6;
+const monospaced_numbers: i32 = 0;
+
+/// `base` with monospaced (tabular) digits, released.
+pub fn tabular(base: cf.CTFontRef) cf.CTFontRef {
+    defer cf.CFRelease(base);
+    const kind = CFNumberCreate(null, kCFNumberSInt32Type, &number_spacing) orelse return @ptrCast(cf.CFRetain(base));
+    defer cf.CFRelease(kind);
+    const sel = CFNumberCreate(null, kCFNumberSInt32Type, &monospaced_numbers) orelse return @ptrCast(cf.CFRetain(base));
+    defer cf.CFRelease(sel);
+    const own = CTFontCopyFontDescriptor(base);
+    defer cf.CFRelease(own);
+    const desc = CTFontDescriptorCreateCopyWithFeature(own, kind, sel) orelse return @ptrCast(cf.CFRetain(base));
+    defer cf.CFRelease(desc);
+    // Size 0 and no matrix: the font's own (an italic's slant kept).
+    return CTFontCreateCopyWithAttributes(base, 0, null, desc) orelse @ptrCast(cf.CFRetain(base));
+}
+
+extern "c" const NSFontDescriptorSystemDesignRounded: objc.Object;
+extern "c" const UIFontDescriptorSystemDesignRounded: objc.Object;
+extern "c" const NSFontDescriptorSystemDesignSerif: objc.Object;
+extern "c" const UIFontDescriptorSystemDesignSerif: objc.Object;
+
+/// `base` in the system's rounded design (SF Rounded), released; `base`
+/// itself where the face has none (a named family).
+pub fn rounded(base: cf.CTFontRef) cf.CTFontRef {
+    return withDesign(base, if (builtin.os.tag == .ios) UIFontDescriptorSystemDesignRounded else NSFontDescriptorSystemDesignRounded);
+}
+
+/// `base` in the system's serif design (New York), released; `base`
+/// itself where the face has none.
+pub fn serif(base: cf.CTFontRef) cf.CTFontRef {
+    return withDesign(base, if (builtin.os.tag == .ios) UIFontDescriptorSystemDesignSerif else NSFontDescriptorSystemDesignSerif);
+}
+
+fn withDesign(base: cf.CTFontRef, design: objc.Object) cf.CTFontRef {
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    const font: objc.Object = @ptrCast(base);
+    const desc = objc.msg(objc.Object, font, "fontDescriptor", .{});
+    const round = objc.msg(?objc.Object, desc, "fontDescriptorWithDesign:", .{design}) orelse return base;
+    // Size 0: the descriptor's own.
+    const made = objc.msg(?objc.Object, objc.class(objc.font_class), "fontWithDescriptor:size:", .{ round, @as(f64, 0) }) orelse return base;
+    cf.CFRelease(base);
+    return @ptrCast(objc.retain(made));
 }

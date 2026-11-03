@@ -1,0 +1,12 @@
+[package]
+name = "slint-nanoui-bench"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+slint = { version = "1.10", default-features = false, features = [
+    "std",
+    "compat-1-2",
+    "backend-winit-x11",
+    "renderer-software",
+] }

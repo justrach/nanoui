@@ -1,18 +1,21 @@
 //! The glyph atlas where nanoui shapes text itself: each glyph rasterized
-//! once per font and quarter pixel of horizontal position, at the
-//! display's scale, by nanoui's TrueType rasterizer into one byte-per-texel
-//! image in memory, which the CPU renderer samples (and GPU renderers
-//! upload when `generation` changes). Shelf packed; it grows when full,
-//! then resets. Icons come from `icons.zig`.
+//! once per font, size, and native horizontal phase, at the
+//! display's scale, into one byte-per-texel image in memory, which the
+//! CPU renderer samples (and GPU renderers upload when `generation`
+//! changes). Shelf packed; it grows when full, then resets. Icons come
+//! from `icons.zig`.
 const std = @import("std");
 const font = @import("tt/font.zig");
 const tt_raster = @import("tt/raster.zig");
 const icons = @import("icons.zig");
+const windows = @import("dwrite.zig");
 
 const initial_size: u32 = 512;
 const max_size: u32 = 4096;
 const pad: u32 = 1;
-pub const subpixel_bins = 4;
+// Common multiple of DirectWrite's 6 (ClearType), 8 (natural), 4
+// (symmetric), and 2 (high-DPI downsampled) positions per physical pixel.
+pub const subpixel_bins = if (windows.enabled) 24 else 4;
 
 /// A glyph in the atlas, placed relative to its pen position on the
 /// baseline, in points.
@@ -43,6 +46,9 @@ pub const Atlas = struct {
     size: u32 = initial_size,
     scale: f32 = 2,
     pixels: []u8,
+    /// RGB coverage plus a tag: 255 ClearType, 128 native grayscale,
+    /// zero portable glyph/icon. Parallel to the existing scalar atlas.
+    native_pixels: []u8,
     sprites: std.AutoHashMapUnmanaged(Key, ?Sprite) = .empty,
     symbols: std.AutoHashMapUnmanaged(SymbolKey, ?Sprite) = .empty,
     shelf_x: u32 = 0,
@@ -54,23 +60,33 @@ pub const Atlas = struct {
     /// Bumped when it starts over: a glyph may now be where another was.
     resets: u64 = 0,
     scratch: std.ArrayList(u8) = .empty,
+    native: windows.Cache = .{},
+    phase_counts: std.AutoHashMapUnmanaged(u16, u8) = .empty,
 
     pub fn init(gpa: std.mem.Allocator) Atlas {
-        const px = gpa.alloc(u8, @as(usize, initial_size) * initial_size) catch return .{ .gpa = gpa, .pixels = &.{}, .size = 0 };
+        const px = gpa.alloc(u8, @as(usize, initial_size) * initial_size) catch return .{ .gpa = gpa, .pixels = &.{}, .native_pixels = &.{}, .size = 0 };
         @memset(px, 0);
-        return .{ .gpa = gpa, .pixels = px };
+        const rgb = gpa.alloc(u8, if (windows.enabled) px.len * 4 else 0) catch {
+            gpa.free(px);
+            return .{ .gpa = gpa, .pixels = &.{}, .native_pixels = &.{}, .size = 0 };
+        };
+        @memset(rgb, 0);
+        return .{ .gpa = gpa, .pixels = px, .native_pixels = rgb };
     }
 
     pub fn deinit(a: *Atlas) void {
+        a.native.deinit(a.gpa);
+        a.phase_counts.deinit(a.gpa);
         a.sprites.deinit(a.gpa);
         a.symbols.deinit(a.gpa);
         a.scratch.deinit(a.gpa);
         a.gpa.free(a.pixels);
+        a.gpa.free(a.native_pixels);
     }
 
     /// The texels, as the CPU renderer samples them.
     pub fn mask(a: *const Atlas) @import("raster.zig").Mask {
-        return .{ .pixels = a.pixels, .size = a.size };
+        return .{ .pixels = a.pixels, .size = a.size, .native_pixels = a.native_pixels, .text_params = a.native.blending };
     }
 
     /// For the test against Metal: texels are already in memory.
@@ -81,6 +97,7 @@ pub const Atlas = struct {
     pub fn setScale(a: *Atlas, scale: f32) void {
         if (scale == a.scale) return;
         a.scale = scale;
+        a.phase_counts.clearRetainingCapacity();
         a.reset();
     }
 
@@ -91,6 +108,7 @@ pub const Atlas = struct {
         a.shelf_y = 0;
         a.shelf_h = 0;
         @memset(a.pixels, 0);
+        @memset(a.native_pixels, 0);
         a.generation += 1;
         a.resets += 1;
     }
@@ -102,8 +120,16 @@ pub const Atlas = struct {
                 a.reset_during_frame = true;
                 return;
             };
+            const native_bigger = a.gpa.alloc(u8, if (windows.enabled) bigger.len * 4 else 0) catch {
+                a.gpa.free(bigger);
+                a.reset();
+                a.reset_during_frame = true;
+                return;
+            };
             a.gpa.free(a.pixels);
+            a.gpa.free(a.native_pixels);
             a.pixels = bigger;
+            a.native_pixels = native_bigger;
             a.size *= 2;
         }
         a.reset();
@@ -151,17 +177,56 @@ pub const Atlas = struct {
         a.generation += 1;
     }
 
-    /// The sprite of glyph `g` of run font `font_id`, drawn `bin` quarters
-    /// of a pixel right of a pixel boundary; null for blank glyphs.
+    /// The sprite of glyph `g` of run font `font_id`, drawn `bin` /
+    /// `subpixel_bins` physical pixels right of a boundary; null if blank.
     pub fn glyph(a: *Atlas, font_id: u16, rf: RunFont, g: u16, bin: u8) ?Sprite {
-        const key: Key = .{ .font = font_id, .glyph = g, .bin = bin };
+        const key: Key = .{
+            .font = font_id,
+            .glyph = g,
+            .bin = bin,
+        };
         if (a.sprites.get(key)) |sp| return sp;
         const sp = a.rasterize(rf, g, bin);
         a.sprites.put(a.gpa, key, sp) catch {};
         return sp;
     }
 
+    pub fn positions(a: *Atlas, id: u16, rf: RunFont) u8 {
+        if (!windows.enabled) return 4;
+        if (a.phase_counts.get(id)) |n| return n;
+        const n = a.native.positions(a.gpa, rf, a.scale) catch {
+            a.native.failures += 1;
+            return 4;
+        };
+        a.phase_counts.put(a.gpa, id, n) catch {};
+        return n;
+    }
+
     fn rasterize(a: *Atlas, rf: RunFont, g: u16, bin: u8) ?Sprite {
+        if (windows.enabled) {
+            const bitmap = (a.native.rasterize(a.gpa, rf, g, a.scale, @as(f32, @floatFromInt(bin)) / subpixel_bins) catch {
+                a.native.failures += 1;
+                return a.rasterizePortable(rf, g, bin);
+            }) orelse return null;
+            // Native coverage is already grid-fitted. Keep its texels at
+            // 1:1 physical pixels; no second smoothing or bitmap scaling.
+            const w = bitmap.w + 2 * pad;
+            const h = bitmap.h + 2 * pad;
+            const at = a.place(w, h) orelse return null;
+            a.scratch.resize(a.gpa, w * h) catch return null;
+            @memset(a.scratch.items, 0);
+            for (0..bitmap.h) |y| @memcpy(a.scratch.items[(y + pad) * w + pad ..][0..bitmap.w], bitmap.bytes[y * bitmap.stride ..][0..bitmap.w]);
+            a.blit(at, w, h, a.scratch.items);
+            for (0..bitmap.h) |y| {
+                const dst = ((at[1] + @as(u32, @intCast(y)) + pad) * a.size + at[0] + pad) * 4;
+                @memcpy(a.native_pixels[dst..][0 .. bitmap.w * 4], bitmap.rgb[y * bitmap.w * 4 ..][0 .. bitmap.w * 4]);
+            }
+            return .{ .uv = a.uv(at, w, h), .x = (bitmap.x - @as(f32, pad)) / a.scale, .y = (-bitmap.y - @as(f32, pad)) / a.scale, .w = @as(f32, @floatFromInt(w)) / a.scale, .h = @as(f32, @floatFromInt(h)) / a.scale };
+        }
+        return a.rasterizePortable(rf, g, bin);
+    }
+
+    fn rasterizePortable(a: *Atlas, rf: RunFont, g: u16, bin: u8) ?Sprite {
         const f = rf.font;
         const b = f.bounds(g) orelse return null;
         const ps = rf.size * a.scale / f.units_per_em;
@@ -215,23 +280,22 @@ pub const Atlas = struct {
         // text they sit beside, as SF Symbols are.
         const side_pt = point_size * 1.2;
         const side: u32 = @intFromFloat(@ceil(side_pt * a.scale));
-        const w = side + 2 * pad;
-        const h = side + 2 * pad;
-        const at = a.place(w, h) orelse return null;
-        var r = tt_raster.Raster.init(a.gpa, w, h) catch return null;
+        const dw = side + 2 * pad;
+        var r = tt_raster.Raster.init(a.gpa, dw, dw) catch return null;
         defer r.deinit(a.gpa);
         const k = @as(f32, @floatFromInt(side)) / 24;
         icons.draw(icon, &r, k, @floatFromInt(pad), 1.6 + 0.35 * @as(f32, @floatFromInt(weight)));
-        a.scratch.resize(a.gpa, w * h) catch return null;
+        a.scratch.resize(a.gpa, dw * dw) catch return null;
         r.coverage(a.scratch.items);
-        a.blit(at, w, h, a.scratch.items);
+        const at = a.place(dw, dw) orelse return null;
+        a.blit(at, dw, dw, a.scratch.items);
         const pp = @as(f32, pad) / a.scale;
         return .{
-            .uv = a.uv(at, w, h),
+            .uv = a.uv(at, dw, dw),
             .x = -pp,
             .y = -pp,
-            .w = @as(f32, @floatFromInt(w)) / a.scale,
-            .h = @as(f32, @floatFromInt(h)) / a.scale,
+            .w = @as(f32, @floatFromInt(dw)) / a.scale,
+            .h = @as(f32, @floatFromInt(dw)) / a.scale,
         };
     }
 };

@@ -19,7 +19,7 @@ pub fn spanStyle(base: types.TextStyle, s: types.Span) types.TextStyle {
     if (s.italic) st.italic = true;
     if (s.mono and !base.mono) {
         st.mono = true;
-        st.size = base.size * mono_scale;
+        st.size = base.size * base.mono_scale;
     }
     return st;
 }

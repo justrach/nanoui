@@ -1,0 +1,7 @@
+[package]
+name = "iced-nanoui-bench"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+iced = { version = "0.13", default-features = false, features = ["tiny-skia", "tokio"] }

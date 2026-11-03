@@ -193,6 +193,14 @@ test "layout: boxes the layout moves glide from where they were" {
     try testing.expectApproxEqAbs(@as(f32, 40), yOf(&t, 0xff0000).?, 0.01);
 }
 
+test "animated colors stay inside the renderer's unit range" {
+    var f: motion.Frame = .{};
+    motion.setChannel(&f, 7, -0.2);
+    motion.setChannel(&f, 8, 1.2);
+    motion.setChannel(&f, 10, 1.1);
+    try testing.expectEqual(ui.Color{ .r = 0, .g = 1, .b = 0, .a = 1 }, f.background.?);
+}
+
 test "keyframes play a pass, then back with yoyo, and stop at the end" {
     var s: Swap = .{};
     var t: ui.Tester = undefined;

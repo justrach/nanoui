@@ -1,4 +1,4 @@
-//! PNG to pixels, where nanoui decodes images itself (Linux, Windows, and
+//! PNG to pixels, where nanoui decodes images itself (Linux, Windows, Android, and
 //! `-Dportable`): every color type (gray, RGB, palette with transparency,
 //! gray and RGB with alpha) at 1–16 bits, the five row filters, Adam7
 //! interlacing. Out: premultiplied BGRA, as the renderers draw.

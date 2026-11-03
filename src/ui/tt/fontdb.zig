@@ -1,4 +1,4 @@
-//! The fonts installed: found in the system's font folders once, each
+﻿//! The fonts installed: found in the system's font folders once, each
 //! face known by its family, weight, italics and width, and loaded when
 //! first used. Matching a style picks the family's nearest face; a
 //! character a font lacks is found in the fallback families, then in any
@@ -11,6 +11,13 @@ pub const Face = struct {
     path: []const u8,
     index: u32,
     style: font.Style,
+    /// A font the app brought (`ui.registerFont`): its bytes, not a file.
+    memory: ?[]const u8 = null,
+
+    fn read(f: Face, db: *Db) ![]u8 {
+        if (f.memory) |m| return db.gpa.dupe(u8, m);
+        return std.Io.Dir.cwd().readFileAlloc(db.io, f.path, db.gpa, .limited(256 << 20));
+    }
 };
 
 const Loaded = struct {
@@ -18,11 +25,17 @@ const Loaded = struct {
     font: font.Font,
 };
 
-/// Families tried when the theme names none (or one not installed).
-const sans = [_][]const u8{ "Inter", "Geist", "Segoe UI", "Noto Sans", "Cantarell", "Ubuntu", "DejaVu Sans", "Liberation Sans", "Arial", "Helvetica" };
-const monos = [_][]const u8{ "JetBrains Mono", "Geist Mono", "Cascadia Mono", "Consolas", "Noto Sans Mono", "DejaVu Sans Mono", "Ubuntu Mono", "Liberation Mono", "Menlo", "Courier New" };
+const android = builtin.abi.isAndroid();
+/// Families tried when the theme names none (or one not installed):
+/// Android's own first there.
+const sans = (if (android) [_][]const u8{"Roboto"} else [_][]const u8{}) ++ [_][]const u8{ "Inter", "Geist", "Segoe UI", "Noto Sans", "Cantarell", "Ubuntu", "DejaVu Sans", "Liberation Sans", "Arial", "Helvetica" };
+const monos = (if (android) [_][]const u8{ "Droid Sans Mono", "Cutive Mono" } else [_][]const u8{}) ++ [_][]const u8{ "JetBrains Mono", "Geist Mono", "Cascadia Mono", "Consolas", "Noto Sans Mono", "DejaVu Sans Mono", "Ubuntu Mono", "Liberation Mono", "Menlo", "Courier New" };
+/// Families a CJK string needs when the UI family has no glyph for it:
+/// Windows, macOS and Linux each name theirs. Kept ahead of the symbol
+/// fallbacks so a hanzi never lands in a partial-coverage font.
+const cjk = [_][]const u8{ "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", "SimSun", "MS Gothic" };
 /// Where characters a font lacks are looked for first.
-const fallbacks = [_][]const u8{ "Noto Sans", "DejaVu Sans", "Segoe UI Symbol", "Noto Sans Symbols", "Noto Sans Symbols2", "Arial Unicode MS", "Symbola" };
+const fallbacks = cjk ++ [_][]const u8{ "Noto Sans", "DejaVu Sans", "Segoe UI Symbol", "Noto Sans Symbols", "Noto Sans Symbols2", "Arial Unicode MS", "Symbola" };
 
 extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
 
@@ -40,6 +53,8 @@ pub const Db = struct {
     scanned: bool = false,
     /// Characters' fallback faces, found once (null: none has it).
     found: std.AutoHashMapUnmanaged(u21, ?u32) = .empty,
+    /// How many of the app's fonts (`font_registry`) are added.
+    bundled: usize = 0,
 
     pub fn init(gpa: std.mem.Allocator, io: std.Io) Db {
         return .{ .gpa = gpa, .io = io };
@@ -57,8 +72,27 @@ pub const Db = struct {
         db.found.deinit(db.gpa);
     }
 
-    /// Adds the faces of the fonts in the system's font folders.
+    /// Adds the faces of fonts the app registered since last asked.
+    fn addBundled(db: *Db) void {
+        const all = @import("../font_registry.zig").registered();
+        while (db.bundled < all.len) : (db.bundled += 1) db.addMemory(all[db.bundled]);
+    }
+
+    /// Adds the faces of a font file's bytes, kept by the caller.
+    pub fn addMemory(db: *Db, data: []const u8) void {
+        for (0..font.faces(data)) |i| {
+            const t = font.Tables.read(data, i) catch continue;
+            const style = font.Style.read(data, t);
+            if (style.family_len == 0) continue;
+            const owned = db.gpa.dupe(u8, "") catch return;
+            db.faces.append(db.gpa, .{ .path = owned, .index = @intCast(i), .style = style, .memory = data }) catch db.gpa.free(owned);
+        }
+    }
+
+    /// Adds the faces of the fonts in the system's font folders, after
+    /// those the app brought.
     pub fn scan(db: *Db) void {
+        db.addBundled();
         if (db.scanned) return;
         db.scanned = true;
         var buf: [1024]u8 = undefined;
@@ -72,7 +106,9 @@ pub const Db = struct {
                 for ([_][]const u8{ "/System/Library/Fonts", "/Library/Fonts" }) |d| db.scanDir(d);
                 if (env("HOME")) |home| db.scanDir(std.fmt.bufPrint(&buf, "{s}/Library/Fonts", .{home}) catch return);
             },
-            else => {
+            else => if (android) {
+                for ([_][]const u8{ "/system/fonts", "/product/fonts" }) |d| db.scanDir(d);
+            } else {
                 for ([_][]const u8{ "/usr/share/fonts", "/usr/local/share/fonts" }) |d| db.scanDir(d);
                 if (env("HOME")) |home| {
                     db.scanDir(std.fmt.bufPrint(&buf, "{s}/.local/share/fonts", .{home}) catch return);
@@ -154,7 +190,7 @@ pub const Db = struct {
     pub fn load(db: *Db, face: u32) ?*const font.Font {
         if (db.loaded.get(face)) |l| return &l.font;
         const f = db.faces.items[face];
-        const data = std.Io.Dir.cwd().readFileAlloc(db.io, f.path, db.gpa, .limited(256 << 20)) catch return null;
+        const data = f.read(db) catch return null;
         const parsed = font.Font.init(data, f.index) catch {
             db.gpa.free(data);
             return null;
@@ -192,7 +228,7 @@ pub const Db = struct {
             if (i > 0 and std.mem.eql(u8, db.faces.items[i - 1].style.name(), db.faces.items[i].style.name())) continue;
             tries += 1;
             const face = db.faces.items[i];
-            const data = std.Io.Dir.cwd().readFileAlloc(db.io, face.path, db.gpa, .limited(256 << 20)) catch continue;
+            const data = face.read(db) catch continue;
             defer db.gpa.free(data);
             const f = font.Font.init(data, face.index) catch continue;
             if (f.glyphIndex(cp) != 0) return @intCast(i);

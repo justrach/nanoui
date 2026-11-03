@@ -3,6 +3,15 @@
 //! spring retargeted mid-flight keeps its position and its velocity.
 const std = @import("std");
 
+/// The last closed-form solution: channels of one spring share a clock.
+var cache: struct {
+    t: f64 = -1,
+    stiffness: f32 = 0,
+    damping: f32 = 0,
+    mass: f32 = 0,
+    m: [4]f64 = .{ 0, 0, 0, 0 },
+} = .{};
+
 pub const Spring = struct {
     stiffness: f32 = 240,
     damping: f32 = 26,
@@ -34,6 +43,16 @@ pub const Spring = struct {
     /// `seconds`: x = m[0] x0 + m[1] v0, v = m[2] x0 + m[3] v0, the exact
     /// solution of m x'' + c x' + k x = 0.
     pub fn matrix(s: Spring, seconds: f64) [4]f64 {
+        // Many channels of the same spring share a clock: the last
+        // solution is reused when stiffness, damping, mass and t match.
+        if (seconds == cache.t and s.stiffness == cache.stiffness and s.damping == cache.damping and s.mass == cache.mass)
+            return cache.m;
+        const m = s.compute(seconds);
+        cache = .{ .t = seconds, .stiffness = s.stiffness, .damping = s.damping, .mass = s.mass, .m = m };
+        return m;
+    }
+
+    fn compute(s: Spring, seconds: f64) [4]f64 {
         const k: f64 = s.stiffness;
         const c: f64 = s.damping;
         const m: f64 = s.mass;

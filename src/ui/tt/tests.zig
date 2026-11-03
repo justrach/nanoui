@@ -55,3 +55,19 @@ test "a font's metrics, characters, advances, kerning and outlines" {
     try std.testing.expect(ink > w * h / 5);
     try std.testing.expect(px[(h / 2) * w + 2] > 128);
 }
+
+test "a font the app brings is found by its family, from its bytes" {
+    const gpa = std.testing.allocator;
+    const data = load(gpa) orelse return error.SkipZigTest;
+    defer gpa.free(data);
+    var db = @import("fontdb.zig").Db.init(gpa, std.testing.io);
+    defer db.deinit();
+    // Only this font: no folders scanned.
+    db.scanned = true;
+    db.addMemory(data);
+    const family = db.faces.items[0].style.name();
+    const face = db.family(family, 400, false).?;
+    const f = db.load(face).?;
+    try std.testing.expect(f.glyphIndex('A') != 0);
+    try std.testing.expect(db.family("No Such Family", 400, false) == null);
+}

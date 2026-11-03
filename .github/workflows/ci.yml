@@ -1,7 +1,8 @@
 # Tests nanoui on every push to main and every pull request: the line
 # limit, the unit and widget tests on macOS (Metal, and nanoui's own text
 # and CPU renderer) with builds for Windows and iOS, the Linux tests under
-# a virtual display, and the Windows tests on Windows.
+# a virtual display (OpenGL and OpenGL ES by Mesa) with a build for
+# Android, and the Windows tests on Windows.
 name: CI
 
 on:
@@ -44,10 +45,10 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.17.0
-      - name: GTK, Mesa's OpenGL (llvmpipe), fonts and a virtual display
+      - name: GTK, Mesa's OpenGL and OpenGL ES (llvmpipe), fonts and a virtual display
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libgtk-3-0t64 libgtk-4-1 libegl1 libegl-mesa0 libgl1-mesa-dri fonts-dejavu-core fonts-noto-core xvfb xauth zsh
+          sudo apt-get install -y --no-install-recommends libgtk-3-0t64 libgtk-4-1 libegl1 libegl-mesa0 libgles2 libgl1-mesa-dri fonts-dejavu-core fonts-noto-core xvfb xauth zsh
       - run: zig build test-bin --prefix zig-out/linux
       - run: xvfb-run -a zig-out/linux/bin/nanoui-tests
       # A live window under each GTK: GTK 4 where it's installed, GTK 3 when asked.
@@ -66,6 +67,9 @@ jobs:
           "$nui" doctor
           "$nui" start ci-app --dir "$RUNNER_TEMP/ci-app" --local "$PWD"
           cd "$RUNNER_TEMP/ci-app" && xvfb-run -a "$nui" test && xvfb-run -a "$nui" snapshot --out shot.png --script "click:Increment" --json
+      # Android: the runner has its SDK, NDK and Java (ANDROID_HOME, ANDROID_NDK_HOME).
+      - run: zig build -Dtarget=aarch64-linux-android
+      - run: zig build test-tools
 
   windows:
     runs-on: windows-2025

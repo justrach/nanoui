@@ -5,6 +5,7 @@
 //! `defineClass` registers classes at run time whose methods are Zig
 //! functions, routed back to Zig objects through one pointer ivar.
 const std = @import("std");
+const builtin = @import("builtin");
 
 /// UIKit (iOS), not AppKit: the few classes the shared Apple code names
 /// differ (`UIFont` for `NSFont`, `UIImage` for `NSImage`).
@@ -33,6 +34,8 @@ extern "c" fn objc_getProtocol(name: [*:0]const u8) ?Protocol;
 extern "c" fn sel_registerName(name: [*:0]const u8) SEL;
 extern "c" fn objc_msgSend() void;
 extern "c" fn objc_msgSendSuper() void;
+extern "c" fn objc_msgSend_stret() void;
+extern "c" fn objc_msgSendSuper_stret() void;
 extern "c" fn objc_allocateClassPair(superclass: Class, name: [*:0]const u8, extra: usize) ?Class;
 extern "c" fn objc_registerClassPair(cls: Class) void;
 extern "c" fn class_addMethod(cls: Class, name: SEL, imp: *const anyopaque, types: [*:0]const u8) BOOL;
@@ -65,7 +68,10 @@ pub fn msg(comptime R: type, target: anytype, selector: [:0]const u8, args: anyt
         break :blk p;
     };
     const F = @Fn(&params, &@splat(.{}), R, .{ .@"callconv" = .c });
-    const f: *const F = @ptrCast(&objc_msgSend);
+    const f: *const F = if (comptime needsStret(R))
+        @ptrCast(&objc_msgSend_stret)
+    else
+        @ptrCast(&objc_msgSend);
     return @call(.auto, f, .{ target, sel(selector) } ++ args);
 }
 
@@ -84,9 +90,18 @@ pub fn msgSuper(comptime R: type, target: Object, superclass: Class, selector: [
         break :blk p;
     };
     const F = @Fn(&params, &@splat(.{}), R, .{ .@"callconv" = .c });
-    const f: *const F = @ptrCast(&objc_msgSendSuper);
+    const f: *const F = if (comptime needsStret(R))
+        @ptrCast(&objc_msgSendSuper_stret)
+    else
+        @ptrCast(&objc_msgSendSuper);
     const s: Super = .{ .receiver = target, .super_class = superclass };
     return @call(.auto, f, .{ &s, sel(selector) } ++ args);
+}
+
+/// x86_64 returns structs larger than 16 bytes via a hidden pointer,
+/// which needs objc_msgSend_stret. arm64 has no stret variant.
+fn needsStret(comptime R: type) bool {
+    return builtin.cpu.arch == .x86_64 and @sizeOf(R) > 16;
 }
 
 pub fn alloc(comptime class_name: [:0]const u8) Object {
@@ -121,7 +136,9 @@ pub const Pool = struct {
 
 /// An autoreleased NSString copied from `s`.
 pub fn nsString(s: []const u8) Object {
-    const str = msg(Object, alloc("NSString"), "initWithBytes:length:encoding:", .{ s.ptr, s.len, @as(NSUInteger, 4) });
+    const str = msg(?Object, alloc("NSString"), "initWithBytes:length:encoding:", .{ s.ptr, s.len, @as(NSUInteger, 4) }) orelse
+        msg(?Object, alloc("NSString"), "initWithBytes:length:encoding:", .{ s.ptr, s.len, @as(NSUInteger, 5) }) orelse
+        return msg(Object, class("NSString"), "string", .{});
     autorelease(str);
     return str;
 }
@@ -168,19 +185,20 @@ fn class_by_name(name: [:0]const u8) Class {
     return objc_getClass(name) orelse std.debug.panic("objc: no class {s}", .{name});
 }
 
-fn ivarSlot(obj: Object) *?*anyopaque {
-    const iv = class_getInstanceVariable(object_getClass(obj), zig_ivar) orelse
-        @panic("objc: object has no zig ivar");
+fn ivarSlot(obj: Object) ?*?*anyopaque {
+    const iv = class_getInstanceVariable(object_getClass(obj), zig_ivar) orelse return null;
     const base: [*]u8 = @ptrCast(obj);
     return @ptrCast(@alignCast(base + @as(usize, @intCast(ivar_getOffset(iv)))));
 }
 
 pub fn setZig(obj: Object, ptr: ?*anyopaque) void {
-    ivarSlot(obj).* = ptr;
+    (ivarSlot(obj) orelse @panic("objc: object has no zig ivar")).* = ptr;
 }
 
+/// Null too for an object of a class `defineClass` didn't make (a plain `WKWebView`).
 pub fn getZig(comptime T: type, obj: Object) ?*T {
-    return @ptrCast(@alignCast(ivarSlot(obj).*));
+    const slot = ivarSlot(obj) orelse return null;
+    return @ptrCast(@alignCast(slot.*));
 }
 
 // libdispatch: work posted to the main thread, without blocks.
@@ -217,6 +235,10 @@ const BlockDescriptor = extern struct { reserved: usize = 0, size: usize };
 /// A block calling `invoke(ctx, args...)`. Build it where it is passed;
 /// the callee copies it if it keeps it.
 pub fn Block(comptime Ctx: type, comptime Args: []const type) type {
+    return BlockRet(Ctx, Args, void);
+}
+
+pub fn BlockRet(comptime Ctx: type, comptime Args: []const type, comptime Ret: type) type {
     return extern struct {
         isa: *anyopaque,
         flags: i32 = 0,
@@ -236,33 +258,38 @@ pub fn Block(comptime Ctx: type, comptime Args: []const type) type {
                 break :blk p;
             };
             const Trampoline = struct {
-                fn call(block: *const Self, args: anytype) void {
-                    @call(.auto, func, .{block.ctx} ++ args);
+                fn call(block: *const Self, args: anytype) Ret {
+                    return @call(.auto, func, .{block.ctx} ++ args);
                 }
             };
-            const F = @Fn(&params, &@splat(.{}), void, .{ .@"callconv" = .c });
+            const F = @Fn(&params, &@splat(.{}), Ret, .{ .@"callconv" = .c });
             const invoke: *const F = switch (Args.len) {
                 0 => &struct {
-                    fn f(b: *const Self) callconv(.c) void {
-                        Trampoline.call(b, .{});
+                    fn f(b: *const Self) callconv(.c) Ret {
+                        return Trampoline.call(b, .{});
                     }
                 }.f,
                 1 => &struct {
-                    fn f(b: *const Self, a: Args[0]) callconv(.c) void {
-                        Trampoline.call(b, .{a});
+                    fn f(b: *const Self, a: Args[0]) callconv(.c) Ret {
+                        return Trampoline.call(b, .{a});
                     }
                 }.f,
                 2 => &struct {
-                    fn f(b: *const Self, a: Args[0], c: Args[1]) callconv(.c) void {
-                        Trampoline.call(b, .{ a, c });
+                    fn f(b: *const Self, a: Args[0], c: Args[1]) callconv(.c) Ret {
+                        return Trampoline.call(b, .{ a, c });
                     }
                 }.f,
                 3 => &struct {
-                    fn f(b: *const Self, a: Args[0], c: Args[1], d: Args[2]) callconv(.c) void {
-                        Trampoline.call(b, .{ a, c, d });
+                    fn f(b: *const Self, a: Args[0], c: Args[1], d: Args[2]) callconv(.c) Ret {
+                        return Trampoline.call(b, .{ a, c, d });
                     }
                 }.f,
-                else => @compileError("objc.Block: up to 3 arguments"),
+                4 => &struct {
+                    fn f(b: *const Self, a: Args[0], c: Args[1], d: Args[2], e: Args[3]) callconv(.c) Ret {
+                        return Trampoline.call(b, .{ a, c, d, e });
+                    }
+                }.f,
+                else => @compileError("objc.Block: up to 4 arguments"),
             };
             return .{ .isa = @ptrCast(&_NSConcreteStackBlock), .invoke = @ptrCast(invoke), .descriptor = &descriptor_value, .ctx = ctx };
         }
@@ -275,3 +302,4 @@ pub extern "c" fn dispatch_semaphore_wait(sem: dispatch_semaphore_t, timeout: u6
 pub extern "c" fn dispatch_semaphore_signal(sem: dispatch_semaphore_t) isize;
 pub extern "c" fn dispatch_release(obj: *anyopaque) void;
 pub const DISPATCH_TIME_FOREVER: u64 = std.math.maxInt(u64);
+pub extern "c" fn NSAccessibilityPostNotificationWithUserInfo(element: Object, notification: Object, user_info: ?Object) void;

@@ -121,3 +121,63 @@ test "a row stays hovered while the pointer is on its button, and the click is t
     try t.clickText("git status");
     try testing.expectEqual(@as(u32, 1), r.row_clicks);
 }
+
+const Menu = struct {
+    asked: u32 = 0,
+    clicks: u32 = 0,
+    button_clicks: u32 = 0,
+    focused_field: bool = false,
+    field: ui.TextBuffer = .{},
+
+    fn view(m: *Menu, c: *ui.Context) void {
+        const root = ui.div(c).column().p(20).gap(8);
+        defer root.end();
+        _ = ui.textField(c, &m.field, .{ .placeholder = "note" });
+        const row = ui.div(c).row().p(8).gap(8).itemsCenter().hover(c.theme.surface);
+        defer row.end();
+        ui.text(c, "release notes", .{ .size = 13 });
+        if (ui.button(c, "Open", .{ .size = 12 }).clicked) m.button_clicks += 1;
+        if (row.secondaryClicked()) m.asked += 1;
+        if (row.clicked()) m.clicks += 1;
+    }
+};
+
+test "a right-click asks for a box's context menu, from inside it too, and is no click" {
+    var m: Menu = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&m, Menu.view), .{ .width = 420, .height = 200 });
+    defer t.deinit();
+    t.settle(1);
+    const label = t.findText("release notes").?;
+    t.secondaryClick(label.x + 4, label.y + label.h / 2);
+    try testing.expectEqual(@as(u32, 1), m.asked);
+    try testing.expectEqual(@as(u32, 0), m.clicks);
+    // Once: the next frame doesn't ask again.
+    t.settle(1);
+    try testing.expectEqual(@as(u32, 1), m.asked);
+    // On the row's button, the row's menu still; the button isn't clicked.
+    const open = t.findText("Open").?;
+    t.secondaryClick(open.x + open.w / 2, open.y + open.h / 2);
+    try testing.expectEqual(@as(u32, 2), m.asked);
+    try testing.expectEqual(@as(u32, 0), m.button_clicks);
+    // Outside the row, nothing; a left click is a click, not a menu.
+    t.secondaryClick(400, 190);
+    try testing.expectEqual(@as(u32, 2), m.asked);
+    t.click(label.x + 4, label.y + label.h / 2);
+    try testing.expectEqual(@as(u32, 1), m.clicks);
+    try testing.expectEqual(@as(u32, 2), m.asked);
+}
+
+test "a right-click keeps the focus where it was" {
+    var m: Menu = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&m, Menu.view), .{ .width = 420, .height = 200 });
+    defer t.deinit();
+    t.settle(1);
+    try t.clickText("note");
+    t.settle(1);
+    const before = t.ctx.focus;
+    try testing.expect(before != 0);
+    t.secondaryClick(400, 190);
+    try testing.expectEqual(before, t.ctx.focus);
+}

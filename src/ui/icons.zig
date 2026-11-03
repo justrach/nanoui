@@ -1,4 +1,4 @@
-//! Icons where there are no SF Symbols (Linux, Windows): the symbols
+//! Icons where there are no SF Symbols (Linux, Windows, Android): the symbols
 //! nanoui's widgets and apps name, drawn as line icons on a 24-unit grid
 //! in the manner of Lucide — strokes with round ends, a few filled shapes,
 //! and cut-outs for the filled ones — by the TrueType rasterizer.
@@ -43,6 +43,7 @@ pub const all = [_]Icon{
     .{ .name = "xmark", .ops = &.{ .{ .line = &.{ .{ 6, 6 }, .{ 18, 18 } } }, .{ .line = &.{ .{ 18, 6 }, .{ 6, 18 } } } } },
     .{ .name = "sidebar.left", .ops = &.{ .{ .loop = &.{ .{ 3, 5 }, .{ 21, 5 }, .{ 21, 19 }, .{ 3, 19 } } }, .{ .line = &.{ .{ 9.5, 5 }, .{ 9.5, 19 } } } } },
     .{ .name = "plus", .ops = &.{ .{ .line = &.{ .{ 12, 5 }, .{ 12, 19 } } }, .{ .line = &.{ .{ 5, 12 }, .{ 19, 12 } } } } },
+    .{ .name = "minus", .ops = &.{.{ .line = &.{ .{ 5, 12 }, .{ 19, 12 } } }} },
     .{ .name = "chevron.down", .ops = &.{.{ .line = &.{ .{ 6, 9 }, .{ 12, 15 }, .{ 18, 9 } } }} },
     .{ .name = "chevron.up", .ops = &.{.{ .line = &.{ .{ 6, 15 }, .{ 12, 9 }, .{ 18, 15 } } }} },
     .{ .name = "chevron.right", .ops = &.{.{ .line = &.{ .{ 9, 6 }, .{ 15, 12 }, .{ 9, 18 } } }} },

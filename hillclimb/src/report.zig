@@ -5,7 +5,6 @@
 const std = @import("std");
 const main = @import("main.zig");
 
-extern "c" fn clock_gettime_nsec_np(clock: c_int) u64;
 
 const history_path = "history.jsonl";
 
@@ -53,7 +52,9 @@ pub fn appendHistory(init: std.process.Init, label: []const u8, results: []const
     var aw: std.Io.Writer.Allocating = .init(gpa);
     defer aw.deinit();
     try aw.writer.writeAll(old);
-    const entry: Entry = .{ .time = clock_gettime_nsec_np(0) / std.time.ns_per_s, .label = label, .results = results };
+    var ts: std.c.timespec = undefined;
+    _ = std.c.clock_gettime(.REALTIME, &ts);
+    const entry: Entry = .{ .time = @intCast(ts.sec), .label = label, .results = results };
     try std.json.Stringify.value(entry, .{}, &aw.writer);
     try aw.writer.writeByte('\n');
     try cwd.writeFile(init.io, .{ .sub_path = history_path, .data = aw.written() });

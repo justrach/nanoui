@@ -1,7 +1,7 @@
 //! HTTP requests, answered on the main thread: the system's own client
 //! on macOS and iOS (NSURLSession: its TLS, proxies, caches and
-//! certificates), so an app need bring none; on Linux and Windows,
-//! http-zig's (HTTP/2 over TLS, HTTP/1.1 where a server has no h2), each
+//! certificates), so an app need bring none; on Linux, Windows and
+//! Android, http-zig's (HTTP/2 over TLS, HTTP/1.1 where a server has no h2), each
 //! request on a thread of its own (`http_portable.zig`).
 //!
 //!     nanoui.http.fetch(gpa, .{ .url = "https://example.com/data.json" }, state, State.loaded);
@@ -23,8 +23,8 @@ pub const Request = struct {
     method: []const u8 = "GET",
     headers: []const Header = &.{},
     body: []const u8 = "",
-    /// Seconds without a byte before it gives up (on Linux and Windows,
-    /// for the whole answer).
+    /// Seconds without a byte before it gives up (on Linux, Windows and
+    /// Android, for the whole answer).
     timeout: f64 = 30,
 };
 

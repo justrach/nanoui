@@ -67,6 +67,15 @@ Pradhan, under the MIT License; its `src/tls_client.zig` is derived from Zig's
 standard library TLS client (MIT, Zig contributors). It is a dependency
 (`build.zig.zon`), fetched only for those targets, not copied here.
 
+## Windows Terminal
+
+Windows text alpha correction (`src/ui/text_blend.zig`) is adapted from
+Microsoft's [Windows Terminal renderer](https://github.com/microsoft/terminal/tree/98c8c795ebc2560af55e72beba3fa5fd31ceef64), `src/renderer/atlas/dwrite_helpers.cpp`
+and `dwrite_helpers.hlsl`, Copyright (c) Microsoft Corporation. Its gamma
+ratios and foreground-dependent contrast/alpha correction reproduce
+Direct2D text compositing. The MIT license is kept verbatim in
+[`third_party/licenses/Windows-Terminal-MIT.txt`](third_party/licenses/Windows-Terminal-MIT.txt).
+
 ## Apps
 
 [nanoterm](https://github.com/justrach/nanoterm) and
@@ -74,3 +83,7 @@ standard library TLS client (MIT, Zig contributors). It is a dependency
 repositories with their own licenses and notices. Both use CodeGraff's
 colors and run graff as a separate program; CodeGraff is distributed under
 its modified AGPLv3 terms, as their notices say.
+
+## Stageshow (.agents/skills/stageshow)
+
+Agent skill by Benji Taylor, MIT. Source: https://github.com/benjitaylor/skills/tree/802057409787133703c56001080169e347305572/stageshow. App icons and brand assets inside keep their own licenses; see that folder's NOTICE.md and kit/brands/SOURCES.md.

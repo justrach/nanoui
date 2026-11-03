@@ -21,6 +21,7 @@ pub const Click = menu_types.Click(Item);
 pub const MenuItem = menu_types.MenuItem(Item);
 
 /// An item of a built menu: its state, changeable while the menu shows.
+/// Items live until their menu is destroyed, or their submenu rebuilt.
 pub const Item = struct {
     menu: *Menu,
     ns: objc.Object,
@@ -28,13 +29,19 @@ pub const Item = struct {
     kind: Kind,
     checked: bool,
     click: ?Click,
-    /// The radio group: items [group_start, group_end) of the menu's list.
-    group_start: u32 = 0,
-    group_end: u32 = 0,
+    selector: ?[:0]const u8 = null,
+    on_open: ?Click = null,
+    /// The submenu it holds, if it holds one.
+    submenu: ?objc.Object = null,
+    /// The item whose submenu it is in (null in the menu itself).
+    parent: ?*Item = null,
+    /// Radio items of one run share a group (0: none).
+    group: u32 = 0,
+    gone: bool = false,
 
     pub fn setChecked(it: *Item, on: bool) void {
         if (on and it.kind == .radio) {
-            for (it.menu.items.items[it.group_start..it.group_end]) |*other| other.applyChecked(false);
+            for (it.menu.items.items) |other| if (other.group == it.group) other.applyChecked(false);
         }
         it.applyChecked(on);
     }
@@ -53,13 +60,46 @@ pub const Item = struct {
         defer pool.pop();
         objc.msg(void, it.ns, "setTitle:", .{objc.nsString(label)});
     }
+
+    /// Replaces the key combination ("Cmd+Shift+T"; "" for none).
+    pub fn setAccelerator(it: *Item, accel: []const u8) void {
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        const a = parseAccelerator(accel);
+        var buf: [8]u8 = undefined;
+        objc.msg(void, it.ns, "setKeyEquivalent:", .{objc.nsString(a.keyString(&buf))});
+        objc.msg(void, it.ns, "setKeyEquivalentModifierMask:", .{a.mods});
+    }
+
+    /// Replaces the items of its submenu (made if it had none) with
+    /// `template`'s; the old ones' `Item`s are freed. Other items keep theirs.
+    pub fn setSubmenu(it: *Item, template: []const MenuItem) error{OutOfMemory}!void {
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        const m = it.menu;
+        const sub = it.submenu orelse blk: {
+            const title = objc.msg(objc.Object, it.ns, "title", .{});
+            const sub = objc.msg(objc.Object, objc.alloc("NSMenu"), "initWithTitle:", .{title});
+            defer objc.release(sub);
+            objc.msg(void, sub, "setAutoenablesItems:", .{objc.NO});
+            if (it.on_open != null) objc.msg(void, sub, "setDelegate:", .{m.target});
+            objc.msg(void, it.ns, "setSubmenu:", .{sub});
+            it.submenu = sub;
+            break :blk sub;
+        };
+        m.dropUnder(it);
+        objc.msg(void, sub, "removeAllItems", .{});
+        try m.build(sub, template, it);
+    }
 };
 
 pub const Menu = struct {
     gpa: std.mem.Allocator,
     ns: objc.Object,
     target: objc.Object,
-    items: std.ArrayList(Item) = .empty,
+    app_name: []const u8,
+    items: std.ArrayList(*Item) = .empty,
+    next_group: u32 = 1,
     /// The window menu, for `NSApp.windowsMenu`.
     windows_menu: ?objc.Object = null,
 
@@ -70,14 +110,17 @@ pub const Menu = struct {
         errdefer gpa.destroy(self);
         const target_class = objc.defineClass(.{
             .name = "NanoUIMenuTarget",
-            .methods = &.{.{ .name = "itemClicked:", .imp = &itemClicked, .types = "v@:@" }},
+            .protocols = &.{"NSMenuDelegate"},
+            .methods = &.{
+                .{ .name = "itemClicked:", .imp = &itemClicked, .types = "v@:@" },
+                .{ .name = "menuNeedsUpdate:", .imp = &menuNeedsUpdate, .types = "v@:@" },
+            },
         });
         const target = objc.msg(objc.Object, target_class, "new", .{});
         objc.setZig(target, self);
-        self.* = .{ .gpa = gpa, .ns = objc.new("NSMenu"), .target = target };
-        // Items keep pointers into the list: size it first.
-        try self.items.ensureTotalCapacity(gpa, countItems(template, app_name));
-        try self.build(self.ns, app_name, template);
+        self.* = .{ .gpa = gpa, .ns = objc.new("NSMenu"), .target = target, .app_name = app_name };
+        errdefer self.destroyItems();
+        try self.build(self.ns, template, null);
         objc.msg(void, self.ns, "setAutoenablesItems:", .{objc.NO});
         return self;
     }
@@ -86,13 +129,18 @@ pub const Menu = struct {
         objc.setZig(self.target, null);
         objc.release(self.target);
         objc.release(self.ns);
-        self.items.deinit(self.gpa);
+        self.destroyItems();
         self.gpa.destroy(self);
+    }
+
+    fn destroyItems(self: *Menu) void {
+        for (self.items.items) |it| self.gpa.destroy(it);
+        self.items.deinit(self.gpa);
     }
 
     /// The item whose template had `id`.
     pub fn item(self: *Menu, id: []const u8) ?*Item {
-        for (self.items.items) |*it| if (std.mem.eql(u8, it.id, id)) return it;
+        for (self.items.items) |it| if (std.mem.eql(u8, it.id, id)) return it;
         return null;
     }
 
@@ -105,76 +153,94 @@ pub const Menu = struct {
         _ = objc.msg(objc.BOOL, self.ns, "popUpMenuPositioningItem:atLocation:inView:", .{ @as(?objc.Object, null), at, view });
     }
 
-    fn build(self: *Menu, menu: objc.Object, app_name: []const u8, template: []const MenuItem) error{OutOfMemory}!void {
-        var group_start: ?u32 = null;
+    /// Keeps `fields` as an item of the menu.
+    fn track(self: *Menu, fields: Item) error{OutOfMemory}!*Item {
+        const it = try self.gpa.create(Item);
+        it.* = fields;
+        self.items.append(self.gpa, it) catch |e| {
+            self.gpa.destroy(it);
+            return e;
+        };
+        return it;
+    }
+
+    /// Frees the items inside `holder`'s submenu, however deep.
+    fn dropUnder(self: *Menu, holder: *Item) void {
+        // Decided before anything is freed: the parent chains are all live.
+        for (self.items.items) |x| {
+            var p = x.parent;
+            while (p) |q| : (p = q.parent) if (q == holder) {
+                x.gone = true;
+                break;
+            };
+        }
+        var kept: usize = 0;
+        for (self.items.items) |x| {
+            if (x.gone) {
+                self.gpa.destroy(x);
+            } else {
+                self.items.items[kept] = x;
+                kept += 1;
+            }
+        }
+        self.items.shrinkRetainingCapacity(kept);
+    }
+
+    fn build(self: *Menu, menu: objc.Object, template: []const MenuItem, parent: ?*Item) error{OutOfMemory}!void {
+        var group: u32 = 0;
         for (template) |t| {
             if (t.role) |r| if (expand(r)) |items| {
-                const sub = t.submenu orelse items;
-                try self.addSubmenu(menu, app_name, if (t.label.len > 0) t.label else wholeMenuTitle(r, app_name), sub);
-                if (r == .window_menu) self.windows_menu = objc.msg(objc.Object, objc.msg(objc.Object, objc.msg(objc.Object, menu, "itemArray", .{}), "lastObject", .{}), "submenu", .{});
-                group_start = null;
+                const holder = try self.addSubmenu(menu, if (t.label.len > 0) t.label else wholeMenuTitle(r, self.app_name), t, t.submenu orelse items, parent);
+                if (r == .window_menu) self.windows_menu = holder.submenu;
+                group = 0;
                 continue;
             };
             if (t.is_separator) {
                 objc.msg(void, menu, "addItem:", .{objc.msg(objc.Object, objc.class("NSMenuItem"), "separatorItem", .{})});
-                group_start = null;
+                group = 0;
                 continue;
             }
             if (t.hidden) continue;
             if (t.submenu) |sub| {
-                try self.addSubmenu(menu, app_name, t.label, sub);
-                group_start = null;
+                _ = try self.addSubmenu(menu, t.label, t, sub, parent);
+                group = 0;
                 continue;
             }
-            const index: u32 = @intCast(self.items.items.len);
-            const ns = makeItem(t, app_name);
+            if (t.kind == .radio) {
+                if (group == 0) {
+                    group = self.next_group;
+                    self.next_group += 1;
+                }
+            } else group = 0;
+            const ns = makeItem(t, self.app_name);
+            defer objc.release(ns);
+            const it = try self.track(.{ .menu = self, .ns = ns, .id = t.id, .kind = t.kind, .checked = t.checked, .click = t.click, .selector = t.selector, .group = group, .parent = parent });
             objc.msg(void, menu, "addItem:", .{ns});
-            objc.release(ns);
-            if (t.role == null or t.click != null) {
+            if ((t.role == null and t.selector == null) or t.click != null) {
                 objc.msg(void, ns, "setTarget:", .{self.target});
                 objc.msg(void, ns, "setAction:", .{objc.sel("itemClicked:")});
             }
-            objc.msg(void, ns, "setTag:", .{@as(objc.NSInteger, index)});
-            if (t.kind == .radio) {
-                if (group_start == null) group_start = index;
-            } else group_start = null;
-            self.items.appendAssumeCapacity(.{ .menu = self, .ns = ns, .id = t.id, .kind = t.kind, .checked = t.checked, .click = t.click });
-            const it = &self.items.items[index];
-            if (t.kind == .radio) {
-                const gs = group_start.?;
-                for (self.items.items[gs .. index + 1]) |*member| {
-                    member.group_start = gs;
-                    member.group_end = index + 1;
-                }
-            }
+            objc.msg(void, ns, "setTag:", .{@as(objc.NSInteger, @bitCast(@intFromPtr(it)))});
             it.applyChecked(t.checked);
         }
     }
 
-    fn addSubmenu(self: *Menu, menu: objc.Object, app_name: []const u8, title: []const u8, template: []const MenuItem) error{OutOfMemory}!void {
+    fn addSubmenu(self: *Menu, menu: objc.Object, title: []const u8, t: MenuItem, template: []const MenuItem, parent: ?*Item) error{OutOfMemory}!*Item {
         const holder = objc.new("NSMenuItem");
         defer objc.release(holder);
         objc.msg(void, holder, "setTitle:", .{objc.nsString(title)});
+        decorate(holder, t);
         const sub = objc.msg(objc.Object, objc.alloc("NSMenu"), "initWithTitle:", .{objc.nsString(title)});
         defer objc.release(sub);
         objc.msg(void, sub, "setAutoenablesItems:", .{objc.NO});
-        try self.build(sub, app_name, template);
+        if (t.on_open != null) objc.msg(void, sub, "setDelegate:", .{self.target});
         objc.msg(void, holder, "setSubmenu:", .{sub});
         objc.msg(void, menu, "addItem:", .{holder});
+        const it = try self.track(.{ .menu = self, .ns = holder, .id = t.id, .kind = .normal, .checked = false, .click = null, .on_open = t.on_open, .submenu = sub, .parent = parent });
+        try self.build(sub, template, it);
+        return it;
     }
 };
-
-fn countItems(template: []const MenuItem, app_name: []const u8) usize {
-    var n: usize = 0;
-    for (template) |t| {
-        if (t.role) |r| if (expand(r)) |items| {
-            n += countItems(t.submenu orelse items, app_name);
-            continue;
-        };
-        if (t.submenu) |sub| n += countItems(sub, app_name) else n += 1;
-    }
-    return n;
-}
 
 /// The items of a whole-menu role.
 fn expand(r: Role) ?[]const MenuItem {
@@ -234,7 +300,7 @@ fn makeItem(t: MenuItem, app_name: []const u8) objc.Object {
             info.label;
         if (accel.len == 0) accel = info.accel;
         action = info.action;
-    }
+    } else if (t.selector) |sel| action = sel;
     const parsed = parseAccelerator(accel);
     var key_buf: [8]u8 = undefined;
     const key = parsed.keyString(&key_buf);
@@ -242,9 +308,25 @@ fn makeItem(t: MenuItem, app_name: []const u8) objc.Object {
         objc.nsString(label), objc.sel(action), objc.nsString(key),
     });
     if (key.len > 0) objc.msg(void, ns, "setKeyEquivalentModifierMask:", .{parsed.mods});
+    decorate(ns, t);
+    return ns;
+}
+
+/// What an item and a submenu's holder share: state, tooltip, picture.
+fn decorate(ns: objc.Object, t: MenuItem) void {
     if (t.disabled) objc.msg(void, ns, "setEnabled:", .{objc.NO});
     if (t.tooltip.len > 0) objc.msg(void, ns, "setToolTip:", .{objc.nsString(t.tooltip)});
-    return ns;
+    if (t.alternate) objc.msg(void, ns, "setAlternate:", .{objc.YES});
+    if (t.image_png.len > 0) {
+        const data = objc.msg(objc.Object, objc.class("NSData"), "dataWithBytes:length:", .{ @as(*const anyopaque, t.image_png.ptr), t.image_png.len });
+        const img = objc.msg(?objc.Object, objc.alloc("NSImage"), "initWithData:", .{data}) orelse return;
+        defer objc.release(img);
+        objc.msg(void, img, "setSize:", .{objc.CGSize{ .width = 16, .height = 16 }});
+        objc.msg(void, ns, "setImage:", .{img});
+    } else if (t.image_symbol.len > 0) {
+        const img = objc.msg(?objc.Object, objc.class("NSImage"), "imageWithSystemSymbolName:accessibilityDescription:", .{ objc.nsString(t.image_symbol), @as(?objc.Object, null) }) orelse return;
+        objc.msg(void, ns, "setImage:", .{img});
+    }
 }
 
 pub const Accelerator = menu_types.Accelerator;
@@ -256,13 +338,24 @@ pub const parseAccelerator = menu_types.parseAccelerator;
 
 fn itemClicked(self_obj: objc.Object, _: objc.SEL, sender: objc.Object) callconv(.c) void {
     const menu = objc.getZig(Menu, self_obj) orelse return;
-    const tag: usize = @intCast(objc.msg(objc.NSInteger, sender, "tag", .{}));
-    if (tag >= menu.items.items.len) return;
-    const it = &menu.items.items[tag];
+    const tag: usize = @bitCast(objc.msg(objc.NSInteger, sender, "tag", .{}));
+    // The item, if it is still the menu's.
+    const it = for (menu.items.items) |x| {
+        if (@intFromPtr(x) == tag) break x;
+    } else return;
     switch (it.kind) {
         .checkbox => it.setChecked(!it.checked),
         .radio => it.setChecked(true),
         .normal => {},
     }
     if (it.click) |c| c.func(c.ctx, it);
+}
+
+/// A submenu is about to show: its item's `on_open` may refill it.
+fn menuNeedsUpdate(self_obj: objc.Object, _: objc.SEL, sub: objc.Object) callconv(.c) void {
+    const menu = objc.getZig(Menu, self_obj) orelse return;
+    for (menu.items.items) |it| if (it.submenu) |s| if (s == sub) {
+        if (it.on_open) |c| c.func(c.ctx, it);
+        return;
+    };
 }

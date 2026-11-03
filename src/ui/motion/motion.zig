@@ -27,6 +27,19 @@ pub const Keyframes = @import("keyframes.zig").Keyframes;
 pub const keyframes = @import("keyframes.zig").keyframes;
 pub const layoutShift = @import("layout.zig").shift;
 pub const Store = store.Store;
+pub const scroll = @import("scroll.zig");
+pub const drag = @import("drag.zig").drag;
+pub const Drag = @import("drag.zig").Drag;
+pub const DragOptions = @import("drag.zig").Options;
+pub const Axis = @import("drag.zig").Axis;
+pub const share = @import("share.zig").share;
+pub const shareId = @import("share.zig").idOf;
+pub const letters = @import("text.zig").text;
+pub const TextUnit = @import("text.zig").Unit;
+pub const TextOptions = @import("text.zig").Options;
+pub const roll = @import("roll.zig").roll;
+pub const RollOptions = @import("roll.zig").Options;
+pub const Pull = @import("pull.zig").Pull;
 const Color = types.Color;
 
 /// Where a box is headed; what's left null is left alone.
@@ -41,6 +54,10 @@ pub const Target = struct {
     height: ?f32 = null,
     radius: ?f32 = null,
     background: ?Color = null,
+    /// Turned in the plane, and about the vertical axis (`Style.rotation`,
+    /// `Style.turn`), radians, about `Style.rotation_anchor`.
+    rotation: ?f32 = null,
+    turn: ?f32 = null,
 
     /// `base` with what `patch` sets put over it.
     pub fn overlay(base: Target, patch: Target) Target {
@@ -65,6 +82,8 @@ pub const Target = struct {
             8 => if (t.background) |c| c.g else null,
             9 => if (t.background) |c| c.b else null,
             10 => if (t.background) |c| c.a else null,
+            11 => t.rotation,
+            12 => t.turn,
             else => null,
         };
     }
@@ -73,7 +92,7 @@ pub const Target = struct {
 /// Where a channel rests when no target names it: in place, full size, seen.
 fn rest(i: usize) ?f32 {
     return switch (i) {
-        0, 1 => 0,
+        0, 1, 11, 12 => 0,
         2, 3 => 1,
         else => null,
     };
@@ -105,6 +124,8 @@ pub const Frame = struct {
     height: ?f32 = null,
     radius: ?f32 = null,
     background: ?Color = null,
+    rotation: f32 = 0,
+    turn: f32 = 0,
     /// Something is still moving.
     animating: bool = false,
     /// It has hover or press targets: its box must take the pointer.
@@ -121,6 +142,8 @@ pub const Frame = struct {
         if (f.height) |h| s.height = .{ .px = @max(0, h) };
         if (f.radius) |r| s.radius = @max(0, r);
         if (f.background) |b| s.background = b;
+        s.rotation += f.rotation;
+        s.turn += f.turn;
         if (f.layout != 0) s.layout_motion = f.layout;
     }
 };
@@ -129,7 +152,7 @@ pub const Frame = struct {
 /// before the box (use `ui.key` first for a list's items).
 pub fn frame(c: *Context, m: Motion) Frame {
     const id = c.peekId(null);
-    const got = c.motion.get(c.gpa, id, c.frame) orelse return still(m.target);
+    const got = c.motion_store.get(c.gpa, id, c.frame) orelse return still(m.target);
     const s = got.state;
     if (got.fresh) s.mounted = true;
     return step(c, s, id, m, if (got.fresh) m.initial else null, false);
@@ -141,12 +164,12 @@ pub fn frame(c: *Context, m: Motion) Frame {
 pub fn present(c: *Context, key: []const u8, show: bool, m: Motion) ?Frame {
     c.next_key = key;
     const id = c.peekId(null);
-    const known = c.motion.map.getPtr(id);
+    const known = c.motion_store.map.getPtr(id);
     if (!show and (known == null or !known.?.mounted)) {
         c.next_key = null;
         return null;
     }
-    const got = c.motion.get(c.gpa, id, c.frame) orelse return if (show) still(m.target) else null;
+    const got = c.motion_store.get(c.gpa, id, c.frame) orelse return if (show) still(m.target) else null;
     const s = got.state;
     const entering = !s.mounted;
     if (show) {
@@ -167,10 +190,10 @@ pub fn present(c: *Context, key: []const u8, show: bool, m: Motion) ?Frame {
 /// box now open.
 pub fn number(c: *Context, key: []const u8, value: f32, tr: Transition) f32 {
     const id = scoped(c, key);
-    const got = c.motion.get(c.gpa, id, c.frame) orelse return value;
+    const got = c.motion_store.get(c.gpa, id, c.frame) orelse return value;
     const ch = &got.state.ch[0];
     if (got.fresh) ch.* = .at(value);
-    ch.retarget(value, if (c.reduced_motion) .instant else tr, 0, c.time);
+    ch.retarget(value, if (c.reduced_motion or c.reduce_motion) .instant else tr, 0, c.time);
     ch.sample(c.time);
     if (ch.moving) c.animationFrame();
     return @floatCast(ch.value);
@@ -207,14 +230,17 @@ pub fn setChannel(f: *Frame, i: usize, v: f32) void {
         6 => f.radius = v,
         7...10 => {
             var b = f.background orelse Color{};
+            const value = std.math.clamp(v, 0, 1);
             switch (i) {
-                7 => b.r = v,
-                8 => b.g = v,
-                9 => b.b = v,
-                else => b.a = v,
+                7 => b.r = value,
+                8 => b.g = value,
+                9 => b.b = value,
+                else => b.a = value,
             }
             f.background = b;
         },
+        11 => f.rotation = v,
+        12 => f.turn = v,
         else => {},
     }
 }
@@ -234,7 +260,7 @@ fn step(c: *Context, s: *State, id: u64, m: Motion, initial: ?Target, leaving: b
             goal = goal.overlay(p);
         };
     }
-    const tr: Transition = if (c.reduced_motion) .instant else m.transition;
+    const tr: Transition = if (c.reduced_motion or c.reduce_motion) .instant else m.transition;
     var f: Frame = .{ .gestures = m.hover != null or m.press != null, .layout = if (m.layout) id else 0 };
     if (m.layout) s.layout_transition = m.transition;
     for (0..store.channels) |i| {
@@ -268,4 +294,10 @@ test {
     _ = @import("easing.zig");
     _ = @import("spring.zig");
     _ = @import("channel.zig");
+    _ = @import("scroll.zig");
+    _ = @import("drag.zig");
+    _ = @import("share.zig");
+    _ = @import("text.zig");
+    _ = @import("roll.zig");
+    _ = @import("pull.zig");
 }

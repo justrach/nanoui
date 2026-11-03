@@ -3,7 +3,8 @@
 //! mostly up or down over something that scrolls scrolls it instead, and
 //! the press it began is canceled; let go moving, it keeps going and slows
 //! as iOS's scroll views do (a fling), until a touch stops it or it meets
-//! an end. A second finger makes a pinch: the press is canceled, and the
+//! an end. Held past an end, it rubber-bands and springs back when let go.
+//! A second finger makes a pinch: the press is canceled, and the
 //! fingers' spread and movement come as `input.zoom` and `input.pan`.
 const std = @import("std");
 const objc = @import("../objc.zig");
@@ -159,6 +160,7 @@ fn pinchStart(s: *Surface, first: objc.Object, second: objc.Object) void {
     }
     st.second = second;
     st.scrolling = false;
+    s.ctx.scroll_holding = false;
     st.stopper = true;
     st.spread = spreadOf(a, b);
     st.middle = .{ .x = (a.x + b.x) / 2, .y = (a.y + b.y) / 2 };
@@ -221,6 +223,8 @@ fn moved(obj: objc.Object, _: objc.SEL, touches: objc.Object, event: ?objc.Objec
         }
     }
     if (st.scrolling) {
+        // Held: past an end the box rubber-bands (and can be pulled to refresh).
+        s.ctx.scroll_holding = true;
         scrollBy(s, st.start, dy);
         s.frame();
     } else if (!st.stopper) {
@@ -252,6 +256,8 @@ fn ended(obj: objc.Object, _: objc.SEL, touches: objc.Object, event: ?objc.Objec
     st.finger = null;
     if (st.scrolling) {
         st.scrolling = false;
+        s.ctx.scroll_holding = false;
+        s.requestFrame();
         // Let go moving: a fling. Held still first: none.
         const recent = cf.CACurrentMediaTime() - st.last_time < 0.08;
         if (recent and @abs(st.velocity) > 3 * min_speed) {
@@ -282,6 +288,7 @@ fn cancelled(obj: objc.Object, _: objc.SEL, touches: objc.Object, _: ?objc.Objec
     if (followed(s, touches) == null and !second) return;
     const pressing = !st.scrolling and !st.stopper;
     st.* = .{};
+    s.ctx.scroll_holding = false;
     // The system took the touch (a gesture, a call): nothing is clicked.
     s.ctx.input.mouse = away;
     s.ctx.updateHot();

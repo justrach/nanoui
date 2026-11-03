@@ -1,0 +1,12 @@
+[package]
+name = "gpui-nanoui-bench"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+gpui = { version = "0.2.2", features = ["test-support"] }
+
+# zed-async-tar still wants xattr 0.2.3; that crate names libc::ENOATTR,
+# which Linux libc 0.2.182+ no longer exports. The path crate uses ENODATA.
+[patch.crates-io]
+xattr = { path = "vendor/xattr" }
