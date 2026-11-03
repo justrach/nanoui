@@ -126,7 +126,28 @@ pub const Options = struct {
     line_height: f32 = 0,
     /// The placeholder's color; the theme's muted text if null.
     placeholder_color: ?types.Color = null,
+    /// What typed, pasted or composed-and-committed text keeps: each code
+    /// point mapped (a full-width digit to ASCII) or dropped (null), before
+    /// it reaches the text or the undo history. A key it drops entirely
+    /// leaves the selection alone; a dropped composition is still taken
+    /// out. A timecode field's digits, a number field's.
+    filter: ?*const fn (cp: u21) ?u21 = null,
 };
+
+/// `t` through `filter`, into `out` (truncated to it).
+fn filtered(filter: *const fn (u21) ?u21, t: []const u8, out: []u8) []const u8 {
+    var n: usize = 0;
+    var it = (std.unicode.Utf8View.init(t) catch return "").iterator();
+    while (it.nextCodepoint()) |cp| {
+        const kept = filter(cp) orelse continue;
+        var enc: [4]u8 = undefined;
+        const len = std.unicode.utf8Encode(kept, &enc) catch continue;
+        if (n + len > out.len) break;
+        @memcpy(out[n .. n + len], enc[0..len]);
+        n += len;
+    }
+    return out[0..n];
+}
 
 pub const Result = struct {
     changed: bool = false,
@@ -170,7 +191,10 @@ pub fn apply(buffer: *TextBuffer, e: *EditState, op: ctx_mod.TextOp, opts: Optio
     const line_start = if (opts.multiline) keymap.lineStart(s, e.caret) else 0;
     const line_end = if (opts.multiline) keymap.lineEnd(s, e.caret) else s.len;
     switch (op) {
-        .insert => |t| {
+        .insert => |t_in| {
+            var fbuf: [1024]u8 = undefined;
+            const t = if (opts.filter) |f| filtered(f, t_in, &fbuf) else t_in;
+            if (t.len == 0 and t_in.len > 0 and e.marked == null) return;
             const range = e.marked orelse .{ lo, hi };
             const n = buffer.replace(range[0], range[1], t);
             e.caret = range[0] + n;
