@@ -172,23 +172,6 @@ pub const Surface = struct {
         self.link_fps = -1;
     }
 
-    /// Detaches the link for a live resize. A layer a CAMetalDisplayLink
-    /// drives may not be asked for `nextDrawable` (AppKit throws
-    /// CAMetalLayerInvalidOperation), so a resize's own frame could never
-    /// present: the window showed the last drawable stretched to the new
-    /// size until the link's next frame. Without the link, `frame` takes a
-    /// drawable itself and presents in the resize's transaction.
-    pub fn stopLink(self: *Surface) void {
-        const link = self.display_link orelse return;
-        objc.msg(void, link, "setPaused:", .{objc.YES});
-        if (objc.msg(objc.BOOL, link, "respondsToSelector:", .{objc.sel("setDelegate:")}))
-            objc.msg(void, link, "setDelegate:", .{@as(?objc.Object, null)});
-        objc.msg(void, link, "invalidate", .{});
-        objc.release(link);
-        self.display_link = null;
-        self.paced = false;
-    }
-
     pub fn destroy(self: *Surface) void {
         self.dead = true;
         self.force_destroy = !self.window.app.running;
@@ -298,12 +281,7 @@ pub const Surface = struct {
 
     pub fn frame(self: *Surface) void {
         if (self.in_frame or self.dead) return;
-        // No link (a live resize): this frame presents, at the size it was
-        // laid out at, in the transaction that resized the window.
-        self.renderer.given_drawable = if (self.display_link == null and self.visible())
-            objc.msg(?objc.Object, self.renderer.layer, "nextDrawable", .{})
-        else
-            null;
+        self.renderer.given_drawable = null;
         self.full_pending = true;
         const now = @max(cf.CACurrentMediaTime(), self.last_frame_time);
         const fallback_dur = 1.0 / @as(f64, @max(60.0, self.max_fps));
@@ -344,7 +322,9 @@ pub const Surface = struct {
         const native_changed = if (self.after_frame) |af| af(self.after_frame_ctx, self) else false;
         if (self.dead) return;
         const after_frame_ms = if (self.frame_log != null) (cf.CACurrentMediaTime() - t_af0) * 1000 else 0;
-        const sync = native_changed or self.ctx.live_resizing or self.geometry_changed or self.pending_sync;
+        // In the window's transaction only when native views moved with
+        // the frame: a resize alone presents on the link's schedule.
+        const sync = native_changed or self.pending_sync;
         self.geometry_changed = false;
         self.pending_sync = false;
         self.afterFocus();
@@ -390,7 +370,7 @@ pub const Surface = struct {
         const c = &self.ctx;
         const elapsed = (now - self.start_time) - c.caret_moved_at;
         const recent_typing = c.focused_text != null and c.caret_moved_at > 0 and elapsed >= 0 and elapsed < 0.35;
-        const more = c.animating or hot_changed or c.input.down or recent_typing or self.scroll.active(now);
+        const more = self.ctx.live_resizing or c.animating or hot_changed or c.input.down or recent_typing or self.scroll.active(now);
         if (self.display_link != null) {
             if (more) {
                 self.setRate(null);

@@ -469,17 +469,18 @@ fn metalDisplayLinkNeedsUpdate(obj: objc.Object, _: objc.SEL, _: objc.Object, up
 fn liveResizeStart(obj: objc.Object, _: objc.SEL) callconv(.c) void {
     objc.msgSuper(void, obj, objc.class("NSView"), "viewWillStartLiveResize", .{});
     const s = surfaceOf(obj) orelse return;
+    // The link keeps drawing through the drag, at every vsync, at the
+    // size of the moment: frames presented in the resize's transaction
+    // instead stall the main thread on `waitUntilScheduled` (2-18 resize
+    // steps a second instead of the drag's 180).
     s.ctx.live_resizing = true;
-    s.renderer.setLiveResize(true);
-    s.stopLink();
+    s.requestFrame();
 }
 
 fn liveResizeEnd(obj: objc.Object, _: objc.SEL) callconv(.c) void {
     objc.msgSuper(void, obj, objc.class("NSView"), "viewDidEndLiveResize", .{});
     const s = surfaceOf(obj) orelse return;
     s.ctx.live_resizing = false;
-    s.frame();
-    s.startLink();
     s.requestFrame();
 }
 
@@ -487,6 +488,9 @@ fn setFrameSize(obj: objc.Object, _: objc.SEL, size: objc.CGSize) callconv(.c) v
     objc.msgSuper(void, obj, objc.class("NSView"), "setFrameSize:", .{size});
     const s = surfaceOf(obj) orelse return;
     s.updateGeometry();
+    // In a drag the link's next frame lays out at this size: a frame now
+    // would have no drawable to present.
+    if (s.ctx.live_resizing) return s.requestFrame();
     s.frame();
 }
 
