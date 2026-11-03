@@ -64,11 +64,14 @@ pub const Window = struct {
     /// Window opacity, 0 to 1. Below 1 the surface draws with GDI: see
     /// `setOpacity` for why the GPU path cannot show it.
     opacity: f64 = 1,
+    /// `Options.transparent`: the frame is the window, alpha and all
+    /// (`layered.zig`).
+    transparent: bool = false,
 
     pub fn create(app: *App, options: Options) !*Window {
         const self = try app.gpa.create(Window);
         errdefer app.gpa.destroy(self);
-        self.* = .{ .app = app, .title_bar = options.title_bar, .on_close = options.on_close, .should_close = options.should_close, .on_resize = options.on_resize, .on_key = options.on_key, .on_fullscreen = options.on_fullscreen, .width = options.width, .height = options.height, .theme = options.theme, .min_width = options.min_width, .min_height = options.min_height, .opacity = options.opacity };
+        self.* = .{ .app = app, .title_bar = options.title_bar, .on_close = options.on_close, .should_close = options.should_close, .on_resize = options.on_resize, .on_key = options.on_key, .on_fullscreen = options.on_fullscreen, .width = options.width, .height = options.height, .theme = options.theme, .min_width = options.min_width, .min_height = options.min_height, .opacity = options.opacity, .transparent = options.transparent and !options.decorations };
         // A page is made once the window it fills exists, below.
         var page_options: ?PageOptions = null;
         switch (options.content) {
@@ -97,7 +100,7 @@ pub const Window = struct {
         // `SetLayeredWindowAttributes` do anything at all.
         var ex: u32 = 0;
         if (options.skip_taskbar) ex |= w.WS_EX_TOOLWINDOW;
-        if (options.opacity < 1) ex |= w.WS_EX_LAYERED;
+        if (options.opacity < 1 or self.transparent) ex |= w.WS_EX_LAYERED;
         const hwnd = w.CreateWindowExW(ex, class_name, w.wide(&title, options.title), style, w.CW_USEDEFAULT, w.CW_USEDEFAULT, 100, 100, null, null, inst, null) orelse return error.CreateWindow;
         self.hwnd = hwnd;
         _ = w.SetWindowLongPtrW(hwnd, w.GWLP_USERDATA, @bitCast(@intFromPtr(self)));
@@ -137,6 +140,12 @@ pub const Window = struct {
     /// comes back at 1 (`surface_gpu.zig` has the gate).
     pub fn setOpacity(self: *Window, opacity: f64) void {
         self.opacity = std.math.clamp(opacity, 0, 1);
+        // A transparent window's frames carry the opacity themselves:
+        // `SetLayeredWindowAttributes` would stop `UpdateLayeredWindow`.
+        if (self.transparent) {
+            if (self.surface) |s| s.requestFrame();
+            return;
+        }
         const h = self.hwnd orelse return;
         if (self.opacity < 1) {
             const ex = w.GetWindowLongPtrW(h, w.GWL_EXSTYLE);

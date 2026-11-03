@@ -18,7 +18,7 @@ const Surface = surface.Surface;
 /// lost on a flip-model swap chain, so below 1 everything D3D — draw *and*
 /// present — stands down for GDI.
 pub fn wantsGpu(self: *Surface) bool {
-    return self.window.opacity >= 1 and !self.no_d3d and !self.no_gpu;
+    return self.window.opacity >= 1 and !self.window.transparent and !self.no_d3d and !self.no_gpu;
 }
 
 /// The frame drawn by Direct3D 11 straight into the swap chain's back buffer,
@@ -147,7 +147,17 @@ pub fn present(self: *Surface, h: w.HWND) bool {
 
 /// What the last frame drew, for the damage the CPU path reports to GDI.
 pub fn shown(self: *Surface) canvas.Frame {
-    return .{ .instances = self.instances.items, .text = &self.text, .clear = self.ctx.theme.background, .size = self.size, .scale = self.scale, .textures = self.ctx.textures.items };
+    const clear = if (self.window.transparent) types.Color.transparent else self.ctx.theme.background;
+    return .{ .instances = self.instances.items, .text = &self.text, .clear = clear, .size = self.size, .scale = self.scale, .textures = self.ctx.textures.items };
+}
+
+/// A transparent window's frame: drawn by the canvas (only what changed)
+/// and given to the system whole, alpha and all (`layered.zig`).
+fn presentLayered(self: *Surface, h: w.HWND) void {
+    self.pixels.draw(self.gpa, shown(self));
+    const px = &self.pixels;
+    if (!self.layered.present(h, px.bytes, px.width, px.height, self.window.opacity))
+        std.log.warn("nanoui: UpdateLayeredWindow failed", .{});
 }
 
 /// Asks Windows to paint the client area again. Called once per frame that
@@ -155,6 +165,8 @@ pub fn shown(self: *Surface) canvas.Frame {
 /// every size a drag passes through is drawn twice.
 pub fn invalidate(self: *Surface) void {
     const h = self.window.hwnd orelse return;
+    // A layered window is shown the frame now: no WM_PAINT draws it.
+    if (self.window.transparent) return presentLayered(self, h);
     // A GPU frame draws the whole client area, so there is no damage to work
     // out (and no CPU pixels to keep for it). The CPU path still finds what
     // changed.
@@ -184,6 +196,7 @@ pub fn paint(self: *Surface, h: w.HWND) void {
         defer self.in_frame = false;
         self.buildFrame();
     }
+    if (self.window.transparent) return presentLayered(self, h);
     // The GPU draws the whole frame, and no CPU rasterising happens at all —
     // but not while translucent: `SetLayeredWindowAttributes` has no effect on
     // a DXGI flip-model swap chain, so a GPU frame would not fade. Below 1 the

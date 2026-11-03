@@ -150,7 +150,9 @@ pub const Renderer = struct {
         if (!r.es) g.glDisable(gl.FRAMEBUFFER_SRGB);
         g.glBindFramebuffer(gl.FRAMEBUFFER, r.frame.fbo);
         g.glViewport(0, 0, @intCast(w), @intCast(h));
-        g.glClearColor(clear.r, clear.g, clear.b, 1);
+        // Opaque, but a clear of nothing at all is kept (a transparent
+        // window's, whose GL area has an alpha channel).
+        g.glClearColor(clear.r, clear.g, clear.b, if (clear.a == 0) 0 else 1);
         g.glClear(gl.COLOR_BUFFER_BIT);
         if (instances.len > 0) {
             g.glBindBuffer(gl.ARRAY_BUFFER, r.vbo);
