@@ -229,6 +229,35 @@ pub const Engine = struct {
         return change;
     }
 
+    /// As `restyleSubtree` for what a script changed at `node`: its ancestors
+    /// go first, one by one, when a rule's `:has` could reach them.
+    pub fn restyleChanged(e: *Engine, node: *dom.Node) Allocator.Error!Change {
+        if (e.generation == 0 or e.index_dirty) {
+            try e.restyleAll();
+            return .layout;
+        }
+        if (e.index.?.uses_has) {
+            var chain: std.ArrayList(*dom.Node) = .empty;
+            defer chain.deinit(e.gpa);
+            var at = node.parent;
+            while (at) |a| : (at = a.parent) if (a.kind == .element) try chain.append(e.gpa, a);
+            e.match_ctx = .{ .doc = e.doc };
+            var i = chain.items.len;
+            while (i > 0) {
+                i -= 1;
+                const a = chain.items[i];
+                var change: Change = .none;
+                _ = try e.styleOne(a, a, &change);
+                // It changed: all under it follows, `node` among it.
+                if (change != .none) {
+                    const below = try e.restyleSubtree(a);
+                    return change.max(below);
+                }
+            }
+        }
+        return e.restyleSubtree(node);
+    }
+
     fn current(e: *const Engine, n: *const dom.Node) ?*const Style {
         return if (n.style_generation == e.generation) n.computed else null;
     }

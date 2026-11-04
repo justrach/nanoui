@@ -142,6 +142,7 @@ examples/             hello (webview), counter and gallery (native UI), browser 
 hillclimb/            headless benchmarks against mygo (its own package)
 apps/nanoterm/        the first app: a Warp-like terminal with ACP agents
 apps/nanomon/         a small activity monitor (libproc, Mach, /proc)
+apps/nanobrowser/     a web browser with its own engine, no webview (HTML, CSS, layout, JavaScript); its README says what it is not
 apps/nanomail/        a JMAP mail client for macOS and iOS
 site/                 the website (its own repo): Next.js on Cloudflare Workers, a gallery
 tools/lines.zig       the 600-line check

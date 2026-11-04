@@ -7,10 +7,6 @@ const css = @import("css.zig");
 
 const gpa = std.testing.allocator;
 
-fn monotonicNow() u64 {
-    return std.c.mach_absolute_time();
-}
-
 test "5000 elements under 500 rules, repeatedly" {
     var ar = std.heap.ArenaAllocator.init(gpa);
     defer ar.deinit();
@@ -64,12 +60,12 @@ test "5000 elements under 500 rules, repeatedly" {
     engine.setSheets(&.{sheet});
     engine.setViewport(.{ .width = 1200, .height = 800 });
 
-    const start = monotonicNow();
+    const io = std.testing.io;
+    const start = std.Io.Clock.awake.now(io);
     for (0..3) |_| try engine.restyleAll();
-    const elapsed_ns = machToNs(monotonicNow() - start);
-    std.debug.print("\n{d} elements, {d} rules: 3 restyles in {d} ms (Debug)\n", .{ elements, sheet.rules.len, elapsed_ns / 1_000_000 });
+    const elapsed = start.durationTo(std.Io.Clock.awake.now(io)).toSeconds();
     // 10 seconds per restyle would mean something has gone quadratic.
-    try std.testing.expect(elapsed_ns < 30 * std.time.ns_per_s);
+    try std.testing.expect(elapsed < 30);
 
     // Hovering costs only what it touches.
     const target = doc.getElementById("i5").?;
@@ -82,10 +78,4 @@ test "5000 elements under 500 rules, repeatedly" {
     const link = (try css.querySelector(doc.node, "a.link", a)).?;
     try std.testing.expect(link.before != null);
     try std.testing.expect(link.computed.?.box_sizing == .border_box);
-}
-
-fn machToNs(ticks: u64) u64 {
-    var info: std.c.mach_timebase_info_data = undefined;
-    _ = std.c.mach_timebase_info(&info);
-    return ticks * info.numer / info.denom;
 }

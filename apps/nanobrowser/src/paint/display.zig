@@ -413,7 +413,7 @@ const Builder = struct {
             const node = textOwner(run, x);
             const line: Rect = .{ .x = run.x + at.tx, .y = run.line_top + at.ty, .w = run.w, .h = run.line_h };
             if (st.pointer_events) try b.add(list, .{ .kind = .hit, .rect = line, .clip = at.clip, .node = node });
-            if (st.visibility != .visible) continue;
+            if (st.visibility != .visible or run.font.size <= 0) continue;
             const metrics = b.m.metrics(b.m.ctx, run.font);
             try b.decorations(run, metrics, at, list);
             if (run.word_spacing == 0) {

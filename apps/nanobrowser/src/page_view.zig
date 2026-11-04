@@ -23,6 +23,8 @@ const Fonts = struct {
 
     fn width(ctx: *anyopaque, text: []const u8, font: box.Font) f32 {
         const f: *Fonts = @ptrCast(@alignCast(ctx));
+        // CoreText reads size 0 as its default: `font-size: 0` takes no room.
+        if (font.size <= 0) return 0;
         var h = std.hash.Wyhash.init(@intFromBool(font.italic) + 2 * @as(u64, @intFromBool(font.mono)) + 4 * @as(u64, @intFromBool(font.serif)) + 8 * @as(u64, font.weight));
         h.update(std.mem.asBytes(&font.size));
         h.update(text);
@@ -35,6 +37,7 @@ const Fonts = struct {
 
     fn metrics(ctx: *anyopaque, font: box.Font) box.Metrics {
         const f: *Fonts = @ptrCast(@alignCast(ctx));
+        if (font.size <= 0) return .{ .ascent = 0, .descent = 0, .gap = 0 };
         const m = f.c.text.font(replay.textStyle(font));
         return .{ .ascent = m.ascent, .descent = m.descent, .gap = m.leading };
     }
@@ -64,14 +67,45 @@ pub fn prepare(p: *Page, c: *ui.Context, w: f32, h: f32) void {
         p.engine.setViewport(.{ .width = w, .height = h, .dark = p.dark });
         p.doc.touchStyle();
     }
-    if (p.doc.style_dirty) {
-        loader.scan(p);
-        p.engine.restyleAll() catch {};
-        p.doc.style_dirty = false;
-        p.doc.layout_dirty = true;
-        p.title_stale = true;
-    }
+    flushStyle(p);
     if (p.doc.layout_dirty or p.list == null) relayout(p, c);
+}
+
+/// Style brought up to date, as far as what changed reaches. Layout follows
+/// when the style is any different, or the tree was already.
+pub fn flushStyle(p: *Page) void {
+    const d = p.doc;
+    if (!d.style_dirty) return;
+    loader.scan(p);
+    p.title_stale = true;
+    d.style_dirty = false;
+    if (d.dirty_all) {
+        p.engine.restyleAll() catch {};
+        d.dirty_all = false;
+        d.dirty_nodes.clearRetainingCapacity();
+        d.layout_dirty = true;
+        return;
+    }
+    var seen: std.AutoHashMapUnmanaged(*dom.Node, void) = .empty;
+    defer seen.deinit(p.gpa);
+    for (d.dirty_nodes.items) |n| seen.put(p.gpa, n, {}) catch {};
+    for (d.dirty_nodes.items) |n| {
+        if (!seen.remove(n)) continue;
+        // Under one already done, or no longer in the document: nothing to do.
+        var covered = false;
+        var connected = false;
+        var at: ?*dom.Node = n;
+        while (at) |x| : (at = x.parent) {
+            if (x.kind == .document) connected = true;
+            if (x != n and seen.contains(x)) covered = true;
+        }
+        if (covered or !connected) continue;
+        const target = if (n.kind == .document) d.documentElement() orelse continue else n;
+        const change = p.engine.restyleChanged(target) catch .layout;
+        if (change != .none) d.layout_dirty = true;
+    }
+    d.dirty_nodes.clearRetainingCapacity();
+    d.style_dirty = false;
 }
 
 pub fn relayout(p: *Page, c: *ui.Context) void {
@@ -116,6 +150,14 @@ pub fn view(p: *Page, c: *ui.Context, rect: box.Rect) void {
         p.busy -= 1;
         p.maybeFree();
     }
+    p.origin = .{ rect.x, rect.y };
+    web.frameStart(p);
+    defer web.frameEnd(p, c);
+    if (p.dead) return;
+    prepare(p, c, rect.w, rect.h);
+    if (p.list != null) p.list.?.resolve(rect.x, rect.y, rect.w, rect.h);
+    web.frameLaid(p);
+    if (p.dead) return;
     prepare(p, c, rect.w, rect.h);
     if (p.list == null) {
         _ = c.leaf(.{ .absolute = true, .fixed = true, .offset = .{ .x = rect.x, .y = rect.y }, .width = .{ .px = rect.w }, .height = .{ .px = rect.h }, .background = c.theme.background }, .none, null);
@@ -127,6 +169,7 @@ pub fn view(p: *Page, c: *ui.Context, rect: box.Rect) void {
     l.resolve(rect.x, rect.y, rect.w, rect.h);
 
     const canvas = if (l.canvas.a > 0) replay.color(l.canvas) else if (c.theme.dark and p.state == .failed) c.theme.background else ui.Color.white;
+    c.next_key_int = @intFromPtr(p);
     const root = c.open(.{
         .absolute = true,
         .fixed = true,
@@ -155,14 +198,26 @@ pub fn view(p: *Page, c: *ui.Context, rect: box.Rect) void {
         if (p.list == null) return;
         p.list.?.resolve(rect.x, rect.y, rect.w, rect.h);
     }
+    web.keys(p, c);
+    if (p.dead) return;
+    var wheel_taken = false;
+    if (inside and (c.input.scroll.y != 0 or c.input.scroll.x != 0)) {
+        wheel_taken = web.wheel(p, hovered, mouse.x, mouse.y, -c.input.scroll.x, -c.input.scroll.y, .{ .ctrl = c.input.ctrl, .shift = c.input.shift, .alt = c.input.alt, .meta = c.input.cmd });
+        if (p.dead) return;
+    }
+    if (p.doc.layout_dirty or p.doc.style_dirty) prepare(p, c, rect.w, rect.h);
+    if (p.list == null) return;
     const shown = &p.list.?;
-    if (inside and (c.input.scroll.y != 0 or c.input.scroll.x != 0)) wheel(p, shown, mouse.x, mouse.y, c.input.scroll.x, c.input.scroll.y);
+    shown.resolve(rect.x, rect.y, rect.w, rect.h);
+    if (inside and !wheel_taken and (c.input.scroll.y != 0 or c.input.scroll.x != 0)) wheel(p, shown, mouse.x, mouse.y, c.input.scroll.x, c.input.scroll.y);
     if (inside) keyScroll(p, c, shown, rect.h);
     shown.resolve(rect.x, rect.y, rect.w, rect.h);
+    web.paintStart(p);
     replay.replay(c, shown, Replay{ .p = p }, rect);
     @import("find.zig").draw(p, c, shown, rect);
     scrollbar(c, shown, rect);
     controls.selectList(p, c, rect);
+    web.paintEnd(p);
 }
 
 fn wheel(p: *Page, l: *display.List, x: f32, y: f32, dx: f32, dy: f32) void {

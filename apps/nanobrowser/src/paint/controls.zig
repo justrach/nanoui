@@ -62,6 +62,9 @@ fn field(p: *Page, c: *ui.Context, b: *const box.Box, x: f32, y: f32, opacity: f
     const dx = content.x - b.x;
     const dy = content.y - b.y;
     const line = c.text.lineHeight(replay.textStyle(box.fontOf(st)));
+    // Keyed by its element, as the field in it is: what is drawn before it
+    // comes and goes (its own `:focus` shadow), and the field keeps the keys.
+    c.next_key_int = @intFromPtr(n);
     _ = c.open(.{
         .absolute = true,
         .offset = .{ .x = x + dx, .y = y + (if (multi) dy else dy + @max(0, (content.h - line) / 2) - 2) },
@@ -73,6 +76,7 @@ fn field(p: *Page, c: *ui.Context, b: *const box.Box, x: f32, y: f32, opacity: f
     }, null);
     defer c.end();
     c.next_key_int = @intFromPtr(n);
+    if (web.takeFocusRequest(p, n)) c.focus = c.peekId(null);
     const lines: f32 = @max(1, content.h / @max(line, 1));
     const r = ui.textField(c, buf, .{
         .placeholder = n.attr("placeholder") orelse "",
@@ -85,7 +89,20 @@ fn field(p: *Page, c: *ui.Context, b: *const box.Box, x: f32, y: f32, opacity: f
         .color = ink(st),
         .placeholder_color = ink(st).alpha(0.45),
     });
-    if (r.focused and p.doc.focus != n) p.doc.focus = n;
+    if (r.focused and p.field_focus != n) {
+        p.field_focus = n;
+        if (p.doc.focus != n) {
+            const old = p.doc.focus;
+            p.doc.focus = n;
+            web.focusChanged(p, old, n);
+        }
+    } else if (!r.focused and p.field_focus == n) {
+        p.field_focus = null;
+        if (p.doc.focus == n) {
+            p.doc.focus = null;
+            web.focusChanged(p, n, null);
+        }
+    }
     if (r.changed) {
         n.value = p.arena().dupe(u8, buf.text()) catch n.value;
         web.simpleEvent(p, n, "input");

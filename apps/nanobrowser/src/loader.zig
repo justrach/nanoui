@@ -14,6 +14,9 @@ const Allocator = std.mem.Allocator;
 /// Pictures asked for at once: Linux and Windows give each its own thread.
 const max_pictures = 6;
 /// The most one response may hold; more is treated as failed by what it was for.
+const net = @import("web/net.zig");
+const web = @import("web/web.zig");
+
 const headers = [_]http.Header{
     .{ .name = "User-Agent", .value = page_mod.user_agent },
     .{ .name = "Accept", .value = "text/html,application/xhtml+xml,image/png,image/jpeg,image/gif,image/svg+xml,text/css,*/*;q=0.8" },
@@ -34,12 +37,15 @@ pub const Sheets = struct {
     slots: std.ArrayList(Slot) = .empty,
     /// `<style>` and `<link>` elements seen, and what `<style>` held.
     seen: std.AutoHashMapUnmanaged(*dom.Node, u64) = .empty,
+    /// Where each of those elements' sheet goes.
+    slot_of: std.AutoHashMapUnmanaged(*dom.Node, u32) = .empty,
     flat: std.ArrayList(*const css.Sheet) = .empty,
 
     pub fn deinit(s: *Sheets, gpa: Allocator) void {
         for (s.slots.items) |*x| x.imports.deinit(gpa);
         s.slots.deinit(gpa);
         s.seen.deinit(gpa);
+        s.slot_of.deinit(gpa);
         s.flat.deinit(gpa);
     }
 
@@ -103,11 +109,22 @@ const Req = struct {
     },
 };
 
-fn send(p: *Page, url: []const u8, method: []const u8, body: []const u8, kind: @FieldType(Req, "kind")) void {
+fn send(p: *Page, url_in: []const u8, method: []const u8, body: []const u8, kind: @FieldType(Req, "kind")) void {
+    // A page from the web doesn't reach the disk: this asks for nothing, and
+    // what it was for fails the usual way.
+    const is_document = kind == .document;
+    const url = if (!is_document and !net.allowed(p.final_url, url_in)) "data:," else url_in;
     const r = p.gpa.create(Req) catch return;
     r.* = .{ .page = p, .gpa = p.gpa, .kind = kind };
     p.pending += 1;
-    http.fetch(p.gpa, .{ .url = url, .method = method, .body = body, .headers = &headers, .timeout = 30 }, r, answered);
+    var with_cookie: [headers.len + 1]http.Header = undefined;
+    @memcpy(with_cookie[0..headers.len], &headers);
+    var list: []const http.Header = &headers;
+    if (net.cookieLine(p.arena(), url)) |line| {
+        with_cookie[headers.len] = .{ .name = "Cookie", .value = line };
+        list = &with_cookie;
+    }
+    http.fetch(p.gpa, .{ .url = url, .method = method, .body = body, .headers = list, .timeout = 30 }, r, answered);
 }
 
 pub fn fetchDocument(p: *Page, url: []const u8, req: Page.Load) void {
@@ -119,14 +136,20 @@ fn answered(r: *Req, res: http.Response) void {
     const kind = r.kind;
     r.gpa.destroy(r);
     p.pending -= 1;
-    defer p.maybeFree();
+    p.busy += 1;
+    defer {
+        p.busy -= 1;
+        p.maybeFree();
+    }
     if (p.dead) return;
+    net.storeCookies(res, res.url);
     switch (kind) {
         .document => p.documentArrived(res.status, res.body, res.url, res.header("content-type") orelse "", res.err),
         .sheet => |slot| sheetArrived(p, slot, res),
         .picture => |u| pictureArrived(p, u, res),
         .icon => |k| iconArrived(p, k, res),
     }
+    if (p.dead) return;
     p.finishLoadCheck();
     if (p.state == .done) p.host.loaded(p.host.ctx, p);
     p.redraw();
@@ -179,6 +202,7 @@ pub fn scan(p: *Page) void {
             inlineSvg(p, n);
         }
     }
+    if (dropGone(p)) changed = true;
     if (changed) p.sheets.apply(p);
     if (!p.icon_asked and p.state != .failed and !std.mem.startsWith(u8, p.final_url, "file:")) {
         p.icon_asked = true;
@@ -196,17 +220,57 @@ fn inlineSvg(p: *Page, n: *dom.Node) void {
 }
 
 fn styleElement(p: *Page, n: *dom.Node) bool {
-    const text = n.textContent(p.arena()) catch return false;
-    const h = std.hash.Wyhash.hash(0, text);
+    // Looked at on every restyle: nothing is copied unless it changed.
+    var hasher = std.hash.Wyhash.init(0);
+    var k = n.first_child;
+    while (k) |x| : (k = x.next) if (x.kind == .text) hasher.update(x.data);
+    const h = hasher.final();
     const gop = p.sheets.seen.getOrPut(p.gpa, n) catch return false;
     if (gop.found_existing and gop.value_ptr.* == h) return false;
     gop.value_ptr.* = h;
+    const text = n.textContent(p.arena()) catch return false;
     const media = n.attr("media");
     const sheet = css.parseSheetMedia(p.arena(), text, baseOf(p), media) catch return false;
-    const slot = p.sheets.add(p.gpa, true) catch return false;
+    // A `<style>` whose text changed keeps its place.
+    const slot_gop = p.sheets.slot_of.getOrPut(p.gpa, n) catch return false;
+    if (!slot_gop.found_existing) slot_gop.value_ptr.* = p.sheets.add(p.gpa, true) catch return false;
+    const slot = slot_gop.value_ptr.*;
     p.sheets.slots.items[slot].sheet = sheet;
+    p.sheets.slots.items[slot].imports.clearRetainingCapacity();
     askImports(p, slot, sheet);
     return true;
+}
+
+fn connected(n: *const dom.Node) bool {
+    var at: ?*const dom.Node = n;
+    while (at) |x| : (at = x.parent) if (x.kind == .document) return true;
+    return false;
+}
+
+/// Sheets whose element left the document go with it. True when any went.
+fn dropGone(p: *Page) bool {
+    var any = false;
+    var it = p.sheets.slot_of.iterator();
+    while (it.next()) |e| {
+        if (connected(e.key_ptr.*)) continue;
+        const slot = &p.sheets.slots.items[e.value_ptr.*];
+        if (slot.sheet != null) any = true;
+        slot.sheet = null;
+        slot.imports.clearRetainingCapacity();
+        // Back in the document, it is asked for again.
+        _ = p.sheets.seen.remove(e.key_ptr.*);
+    }
+    return any;
+}
+
+/// A `<link>`'s address or kind changed: look at it again.
+pub fn forget(p: *Page, n: *dom.Node) void {
+    _ = p.sheets.seen.remove(n);
+    if (p.sheets.slot_of.get(n)) |i| {
+        p.sheets.slots.items[i].sheet = null;
+        p.sheets.slots.items[i].imports.clearRetainingCapacity();
+    }
+    p.doc.touchStyle();
 }
 
 fn linkElement(p: *Page, n: *dom.Node, changed: *bool) void {
@@ -224,8 +288,9 @@ fn linkElement(p: *Page, n: *dom.Node, changed: *bool) void {
     if (gop.found_existing) return;
     gop.value_ptr.* = 0;
     const u = resolve(p, href) orelse return;
-    const slot = p.sheets.add(p.gpa, true) catch return;
-    send(p, u, "GET", "", .{ .sheet = slot });
+    const slot_gop = p.sheets.slot_of.getOrPut(p.gpa, n) catch return;
+    if (!slot_gop.found_existing) slot_gop.value_ptr.* = p.sheets.add(p.gpa, true) catch return;
+    send(p, u, "GET", "", .{ .sheet = slot_gop.value_ptr.* });
     _ = changed;
 }
 
@@ -235,8 +300,19 @@ fn hasWord(list: []const u8, word: []const u8) bool {
     return false;
 }
 
+/// A `<link>`'s fate, for its `load` or `error` event.
+fn sheetDone(p: *Page, slot: u32, ok: bool) void {
+    var it = p.sheets.slot_of.iterator();
+    while (it.next()) |e| if (e.value_ptr.* == slot) {
+        if (e.key_ptr.*.isTag("link")) web.imageDone(p, e.key_ptr.*, ok);
+        return;
+    };
+}
+
 fn sheetArrived(p: *Page, slot: u32, res: http.Response) void {
-    if (res.status < 200 or res.status >= 300) return;
+    const ok = res.status >= 200 and res.status < 300;
+    defer sheetDone(p, slot, ok);
+    if (!ok) return;
     const a = p.arena();
     const text = a.dupe(u8, res.body) catch return;
     const base = if (res.url.len > 0) a.dupe(u8, res.url) catch p.final_url else p.final_url;
@@ -290,9 +366,27 @@ fn imageElement(p: *Page, n: *dom.Node) void {
     const pic = want(p, u) orelse return;
     if (pic.state == .here) {
         n.image = pic.bytes;
+        web.imageDone(p, n, true);
         return;
     }
+    if (pic.state == .failed) return web.imageDone(p, n, false);
     pic.nodes.append(p.gpa, n) catch {};
+}
+
+/// Asks for an element's picture, wherever it is: `new Image()` isn't in the
+/// document for `scan` to find.
+pub fn askImage(p: *Page, n: *dom.Node) void {
+    imageElement(p, n);
+    pump(p);
+}
+
+/// `img.complete`: nothing to wait for, or it has come or failed.
+pub fn imageComplete(p: *Page, n: *const dom.Node) bool {
+    if (sourceOf(n) == null) return true;
+    if (n.image.len > 0) return true;
+    if (n.image_key.len == 0) return false;
+    const pic = p.pictures.map.get(n.image_key) orelse return false;
+    return pic.state == .here or pic.state == .failed;
 }
 
 fn want(p: *Page, u: []const u8) ?*Picture {
@@ -327,10 +421,17 @@ fn pump(p: *Page) void {
             if (http.decodeData(p.arena(), u)) |bytes| {
                 pic.bytes = bytes;
                 pic.state = .here;
-                for (pic.nodes.items) |n| n.image = bytes;
+                for (pic.nodes.items) |n| {
+                    n.image = bytes;
+                    web.imageDone(p, n, true);
+                }
                 pic.nodes.clearRetainingCapacity();
                 p.doc.touchLayout();
-            } else |_| pic.state = .failed;
+            } else |_| {
+                pic.state = .failed;
+                for (pic.nodes.items) |n| web.imageDone(p, n, false);
+                pic.nodes.clearRetainingCapacity();
+            }
             continue;
         }
         pic.state = .asked;
@@ -345,11 +446,16 @@ fn pictureArrived(p: *Page, u: []const u8, res: http.Response) void {
     const pic = p.pictures.map.get(u) orelse return;
     if (res.status < 200 or res.status >= 300 or res.body.len == 0) {
         pic.state = .failed;
+        for (pic.nodes.items) |n| web.imageDone(p, n, false);
+        pic.nodes.clearRetainingCapacity();
         return;
     }
     pic.bytes = p.arena().dupe(u8, res.body) catch "";
     pic.state = .here;
-    for (pic.nodes.items) |n| n.image = pic.bytes;
+    for (pic.nodes.items) |n| {
+        n.image = pic.bytes;
+        web.imageDone(p, n, true);
+    }
     pic.nodes.clearRetainingCapacity();
     // An intrinsic size is now known.
     p.doc.touchLayout();

@@ -18,4 +18,5 @@ test {
     _ = @import("shell/switcher.zig");
     _ = @import("text_search.zig");
     _ = @import("tests_browser.zig");
+    _ = @import("web/tests.zig");
 }

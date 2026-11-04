@@ -222,12 +222,42 @@ fn marker(g: *Gen, b: *Box, n: *dom.Node, s: *const Style) Error!void {
 }
 
 fn children(g: *Gen, n: *dom.Node, s: *const Style) Error!void {
+    // A shadow host renders its shadow tree; its own children go by its slots.
+    if (n.first_child) |first| if (first.is_shadow) return element(g, first);
+    if (!n.is_shadow and n.isTag("slot")) if (shadowHostOf(n)) |host| {
+        if (try slotted(g, n, host, s)) return;
+    };
     var k = n.first_child;
-    while (k) |x| : (k = x.next) switch (x.kind) {
+    while (k) |x| : (k = x.next) try child(g, x, s);
+}
+
+fn child(g: *Gen, x: *dom.Node, s: *const Style) Error!void {
+    switch (x.kind) {
         .element => try element(g, x),
         .text => if (x.data.len > 0) try push(g, .{ .tag = .text, .node = x, .text = x.data, .style = s }),
         else => {},
-    };
+    }
+}
+
+fn shadowHostOf(n: *const dom.Node) ?*dom.Node {
+    var at = n.parent;
+    while (at) |a| : (at = a.parent) if (a.is_shadow) return a.parent;
+    return null;
+}
+
+/// The children of `host` this `<slot>` takes. False when none: it then shows its own.
+fn slotted(g: *Gen, slot: *dom.Node, host: *dom.Node, s: *const Style) Error!bool {
+    const name = slot.attr("name") orelse "";
+    var any = false;
+    var k = host.first_child;
+    while (k) |x| : (k = x.next) {
+        if (x.is_shadow) continue;
+        const wants = if (x.kind == .element) x.attr("slot") orelse "" else "";
+        if (!std.mem.eql(u8, wants, name)) continue;
+        any = true;
+        try child(g, x, s);
+    }
+    return any;
 }
 
 fn pseudo(g: *Gen, n: *dom.Node, sp: ?*const Style) Error!void {

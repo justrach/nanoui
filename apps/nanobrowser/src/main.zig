@@ -9,8 +9,10 @@ const ui = nanoui.ui;
 const Browser = @import("shell/browser.zig").Browser;
 const address = @import("shell/address.zig");
 const theme = @import("shell/theme.zig");
+const web = @import("web/web.zig");
 
 pub fn main(init: std.process.Init) !void {
+    web.setLogging(init.environ_map.get("NANOBROWSER_LOG") != null);
     const app = try nanoui.App.create(init, .{ .name = "nanobrowser" });
     defer app.destroy();
     var browser: Browser = .{ .gpa = app.gpa };

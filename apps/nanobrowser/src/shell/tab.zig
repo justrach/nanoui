@@ -5,7 +5,9 @@ const nanoui = @import("nanoui");
 const Page = @import("../page.zig").Page;
 const address = @import("address.zig");
 
-pub const Entry = struct { url: []u8, scroll: f32 = 0 };
+/// `doc`: the page this entry is a state of, when scripts pushed it
+/// (`history.pushState`, a fragment): going there needs no load.
+pub const Entry = struct { url: []u8, scroll: f32 = 0, doc: ?*Page = null };
 
 pub const Tab = struct {
     gpa: std.mem.Allocator,
@@ -92,6 +94,7 @@ pub const Tab = struct {
         if (!t.canGoBack()) return;
         t.keepScroll();
         t.at -= 1;
+        if (t.sameDocument()) return t.page.?.stepHistory(-1);
         t.show(.{});
     }
 
@@ -99,7 +102,27 @@ pub const Tab = struct {
         if (!t.canGoForward()) return;
         t.keepScroll();
         t.at += 1;
+        if (t.sameDocument()) return t.page.?.stepHistory(1);
         t.show(.{});
+    }
+
+    fn sameDocument(t: *const Tab) bool {
+        const d = t.history.items[t.at].doc orelse return false;
+        return t.page == d;
+    }
+
+    /// The page's scripts pushed a state: a new entry, ahead of here given up.
+    pub fn pushed(t: *Tab, page: *Page, to: []const u8) void {
+        if (t.history.items.len == 0) return;
+        const copy = t.gpa.dupe(u8, to) catch return;
+        for (t.history.items[t.at + 1..]) |e| t.gpa.free(e.url);
+        t.history.items.len = t.at + 1;
+        t.history.items[t.at].doc = page;
+        t.history.append(t.gpa, .{ .url = copy, .doc = page }) catch {
+            t.gpa.free(copy);
+            return;
+        };
+        t.at = t.history.items.len - 1;
     }
 
     pub fn reload(t: *Tab) void {

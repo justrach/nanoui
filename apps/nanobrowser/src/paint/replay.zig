@@ -50,6 +50,9 @@ pub fn replay(c: *ui.Context, l: *const display.List, host: anytype, rect: Rect)
             ox = rect.x;
             oy = rect.y;
             if (wanted != 0) {
+                // By what it clips, not by what was drawn before it: a field
+                // inside keeps its id, and with it the keys.
+                c.next_key_int = if (clip.node) |n| @intFromPtr(n) else wanted;
                 _ = c.open(.{
                     .absolute = true,
                     .offset = .{ .x = clip.visible.x - rect.x, .y = clip.visible.y - rect.y },

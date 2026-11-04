@@ -55,12 +55,16 @@ pub const Page = struct {
     gradients: gradient.Cache,
     /// Controls' editors (`paint/controls.zig`), freed with the page.
     editors: std.ArrayList(*nanoui.ui.TextBuffer) = .empty,
+    /// The field that last had the keyboard, to tell when it loses it.
+    field_focus: ?*dom.Node = null,
     /// The `<select>` whose list is open.
     open_select: ?*dom.Node = null,
     last_press: ?*dom.Node = null,
     find: find_mod.Find = .{},
     /// What the pointer was last over, to tell scripts it moved.
     pointer: [2]f32 = .{ -1, -1 },
+    /// Where the page's rectangle last was in the window: scripts' coordinates start here.
+    origin: [2]f32 = .{ 0, 0 },
 
     /// Scripts: null until the document has any (or none ever).
     js: ?*web.World = null,
@@ -75,6 +79,17 @@ pub const Page = struct {
         redraw: *const fn (ctx: *anyopaque) void,
         /// It settled on a URL and a title.
         loaded: *const fn (ctx: *anyopaque, page: *Page) void,
+        /// The window's context for measuring text outside a frame; null until
+        /// a frame has drawn.
+        uiContext: *const fn (ctx: *anyopaque) ?*nanoui.ui.Context,
+        /// The size a page has in the window, for one not drawn yet.
+        viewport: *const fn (ctx: *anyopaque) [2]f32,
+        /// The page moved to another address by itself (`history`, a fragment).
+        urlChanged: *const fn (ctx: *anyopaque, page: *Page, pushed: bool) void,
+        /// `history.go` past the entries the document itself pushed.
+        history: *const fn (ctx: *anyopaque, page: *Page, by: i32) void,
+        /// Holds a dying page to the next frame: this frame's strings may be its.
+        retire: *const fn (ctx: *anyopaque, page: *Page) void,
     };
 
     pub const Navigation = struct {
@@ -110,7 +125,8 @@ pub const Page = struct {
     /// Lets the page go; it is freed when the last thing holding it is done.
     pub fn destroy(p: *Page) void {
         p.dead = true;
-        p.maybeFree();
+        p.busy += 1;
+        p.host.retire(p.host.ctx, p);
     }
 
     /// Called as requests and frames finish.
@@ -142,7 +158,8 @@ pub const Page = struct {
     }
 
     pub fn isLoading(p: *const Page) bool {
-        return p.state == .fetching or p.pending > 0;
+        const scripts_own: u32 = if (p.js) |w| w.net_pending else 0;
+        return p.state == .fetching or p.pending > scripts_own;
     }
 
     pub fn title(p: *Page) []const u8 {
@@ -196,7 +213,23 @@ pub const Page = struct {
         if (!p.dead) p.host.redraw(p.host.ctx);
     }
 
+    /// The page is at `to` now, without loading anything.
+    pub fn setUrl(p: *Page, to: []const u8, pushed: bool) void {
+        const copy = p.gpa.dupe(u8, to) catch return;
+        p.gpa.free(p.final_url);
+        p.final_url = copy;
+        p.doc.url = copy;
+        if (!p.dead) p.host.urlChanged(p.host.ctx, p, pushed);
+    }
+
+    /// The tab went back or forward within what this document pushed.
+    pub fn stepHistory(p: *Page, by: i32) void {
+        web.historyStep(p, by);
+    }
+
     pub fn navigate(p: *Page, to: Navigation) void {
+        // A page from the web doesn't open files.
+        if (std.ascii.startsWithIgnoreCase(to.url, "file:") and !std.ascii.startsWithIgnoreCase(p.final_url, "file:")) return;
         if (!p.dead) p.host.navigate(p.host.ctx, p, to);
     }
 
@@ -218,6 +251,12 @@ pub const Page = struct {
 
     /// The document's bytes came: parse them, then ask for what they name.
     pub fn documentArrived(p: *Page, status: u16, body: []const u8, final: []const u8, content_type: []const u8, err: []const u8) void {
+        // Its scripts might navigate away: the page outlasts this call.
+        p.busy += 1;
+        defer {
+            p.busy -= 1;
+            p.maybeFree();
+        }
         if (final.len > 0 and !std.mem.eql(u8, final, p.final_url)) {
             const copy = p.gpa.dupe(u8, final) catch p.final_url;
             if (copy.ptr != p.final_url.ptr) {
@@ -236,8 +275,10 @@ pub const Page = struct {
             html.parseDocument(p.doc, source) catch {};
         }
         p.title_stale = true;
+        web.parsed(p);
         loader.scan(p);
         web.begin(p);
+        if (p.dead) return;
         p.finishLoadCheck();
         p.host.loaded(p.host.ctx, p);
         p.redraw();
@@ -246,6 +287,7 @@ pub const Page = struct {
     /// Everything it asked for has come.
     pub fn finishLoadCheck(p: *Page) void {
         if (p.state == .parsed and p.pending == 0) p.state = .done;
+        web.loadCheck(p);
     }
 };
 

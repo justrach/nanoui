@@ -39,6 +39,13 @@ pub const Browser = struct {
     title_set: u64 = 0,
     /// The frame drew and something it didn't own moved on: draw another.
     dirty: bool = false,
+    /// The context of the last frame, and the page's size in it: pages measure
+    /// text with it when a script asks for geometry outside a frame.
+    context: ?*ui.Context = null,
+    page_size: [2]f32 = .{ 1280, 800 },
+    /// Pages let go of in this frame: what it has drawn may still read their
+    /// strings, so they are freed when the next one starts.
+    retired: std.ArrayList(*Page) = .empty,
 
     pub fn init(b: *Browser) !void {
         try b.newTab(null);
@@ -55,10 +62,28 @@ pub const Browser = struct {
             b.gpa.free(o.title);
         }
         b.visited.deinit(b.gpa);
+        b.freeRetired();
+        b.retired.deinit(b.gpa);
+    }
+
+    fn retire(ctx: *anyopaque, page: *Page) void {
+        const b: *Browser = @ptrCast(@alignCast(ctx));
+        b.retired.append(b.gpa, page) catch {
+            page.busy -= 1;
+            page.maybeFree();
+        };
+    }
+
+    fn freeRetired(b: *Browser) void {
+        for (b.retired.items) |page| {
+            page.busy -= 1;
+            page.maybeFree();
+        }
+        b.retired.clearRetainingCapacity();
     }
 
     fn host(b: *Browser) Page.Host {
-        return .{ .ctx = b, .navigate = navigated, .redraw = redrawn, .loaded = pageLoaded };
+        return .{ .ctx = b, .navigate = navigated, .redraw = redrawn, .loaded = pageLoaded, .uiContext = uiContext, .viewport = viewport, .urlChanged = urlChanged, .history = historyAsked, .retire = retire };
     }
 
     fn redrawn(ctx: *anyopaque) void {
@@ -81,6 +106,34 @@ pub const Browser = struct {
         defer b.gpa.free(body);
         // After this frame's work on the page that asked: it is about to go.
         if (to.post) t.post(dest, body) else t.go(dest);
+        redrawn(ctx);
+    }
+
+    fn uiContext(ctx: *anyopaque) ?*ui.Context {
+        const b: *Browser = @ptrCast(@alignCast(ctx));
+        return b.context;
+    }
+
+    fn viewport(ctx: *anyopaque) [2]f32 {
+        const b: *Browser = @ptrCast(@alignCast(ctx));
+        return b.page_size;
+    }
+
+    /// `history.pushState` or a fragment: the tab's entry is the new address.
+    fn urlChanged(ctx: *anyopaque, page: *Page, pushed: bool) void {
+        const b: *Browser = @ptrCast(@alignCast(ctx));
+        const t = b.tabOf(page) orelse return;
+        if (pushed) t.pushed(page, page.url()) else t.settled(page.url());
+        redrawn(ctx);
+    }
+
+    /// `history.go` past what the document itself pushed: the tab's own.
+    fn historyAsked(ctx: *anyopaque, page: *Page, by: i32) void {
+        const b: *Browser = @ptrCast(@alignCast(ctx));
+        const t = b.tabOf(page) orelse return;
+        var left = by;
+        while (left < 0) : (left += 1) t.back();
+        while (left > 0) : (left -= 1) t.forward();
         redrawn(ctx);
     }
 
@@ -198,6 +251,8 @@ pub const Browser = struct {
     pub fn view(b: *Browser, c: *ui.Context) void {
         const p = theme.of(c);
         b.dirty = false;
+        b.context = c;
+        b.freeRetired();
         b.shortcuts(c);
         b.keepTitle();
         _ = c.open(.{ .width = .fill, .height = .fill, .background = p.ground }, "browser");
@@ -230,6 +285,7 @@ pub const Browser = struct {
 
     /// A tab's page in a rectangle, or the field alone on an empty tab.
     fn pageIn(b: *Browser, c: *ui.Context, t: *Tab, x: f32, y: f32, w: f32, h: f32, side: bool) void {
+        b.page_size = .{ w, h };
         if (t.page) |page| {
             page.view(c, .{ .x = x, .y = y, .w = w, .h = h });
             return;

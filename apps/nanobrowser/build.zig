@@ -25,11 +25,15 @@ pub fn build(b: *std.Build) void {
     run.addPassthruArgs();
     b.step("run", "Run nanobrowser").dependOn(&run.step);
 
-    const tests = b.addTest(.{ .root_module = b.createModule(.{
+    const filters = b.option([]const []const u8, "test-filter", "Run only tests with this in their name") orelse &.{};
+    const tests = b.addTest(.{ .filters = filters, .root_module = b.createModule(.{
         .root_source_file = b.path("src/tests.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{.{ .name = "nanoui", .module = nanoui }},
     }) });
     b.step("test", "Run the tests").dependOn(&b.addRunArtifact(tests).step);
+    // The tests as a program, for another machine (Linux in a container).
+    const test_bin = b.addInstallArtifact(tests, .{ .dest_sub_path = if (target.result.os.tag == .windows) "nanobrowser-tests.exe" else "nanobrowser-tests" });
+    b.step("test-bin", "Install the tests as zig-out/bin/nanobrowser-tests").dependOn(&test_bin.step);
 }

@@ -47,6 +47,8 @@ pub const Index = struct {
     tags: Map = .empty,
     universal: List = .empty,
     state_deps: std.ArrayList(StateDep) = .empty,
+    /// Some author rule uses `:has`: a change can reach its ancestors.
+    uses_has: bool = false,
     quirks: bool = false,
 
     pub fn init(gpa: Allocator) Index {
@@ -74,6 +76,12 @@ pub const Index = struct {
                     .ua = ua,
                 });
                 if (selector.uses_state and !ua) try ix.state_deps.append(ix.arena.allocator(), .{ .sel = selector });
+                if (!ua and !ix.uses_has) {
+                    for (selector.compounds) |*c| for (c.simples) |x| switch (x) {
+                        .has => ix.uses_has = true,
+                        else => {},
+                    };
+                }
             }
         }
     }

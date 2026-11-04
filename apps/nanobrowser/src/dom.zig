@@ -42,6 +42,15 @@ pub const Node = struct {
     css_vars: ?*const anyopaque = null,
     style_generation: u32 = 0,
 
+    /// `hasClass`'s filter, and the attribute text it is of.
+    class_filter: u64 = 0,
+    class_src: [*]const u8 = "".ptr,
+    class_src_len: usize = 0,
+
+    /// A shadow root's stand-in: an element that is its host's first child, not
+    /// seen as a child by scripts. What is in it is what the host renders.
+    is_shadow: bool = false,
+
     /// The node's JS object (`web/`), its listeners, its layout box.
     js_object: ?*anyopaque = null,
     listeners: ?*anyopaque = null,
@@ -78,7 +87,7 @@ pub const Node = struct {
     pub fn setAttr(n: *Node, name: []const u8, value: []const u8) Allocator.Error!void {
         const gpa = n.doc.arena;
         const v = try gpa.dupe(u8, value);
-        n.doc.touchStyle();
+        n.doc.touchAttr(n, name);
         for (n.attrs.items) |*a| if (std.mem.eql(u8, a.name, name)) {
             a.value = v;
             return;
@@ -89,14 +98,32 @@ pub const Node = struct {
     pub fn removeAttr(n: *Node, name: []const u8) void {
         for (n.attrs.items, 0..) |a, i| if (std.mem.eql(u8, a.name, name)) {
             _ = n.attrs.orderedRemove(i);
-            n.doc.touchStyle();
+            n.doc.touchAttr(n, name);
             return;
         };
     }
 
-    /// Whether the `class` attribute lists `name`.
+    fn classBit(name: []const u8) u64 {
+        const mix = @as(u32, name[0]) *% 31 +% @as(u32, name[name.len - 1]) *% 17 +% @as(u32, @truncate(name.len));
+        return @as(u64, 1) << @intCast(mix & 63);
+    }
+
+    /// Whether the `class` attribute lists `name`. Style matching asks this all
+    /// the time, and mostly the answer is no: each node keeps a little filter
+    /// of its classes, good until the attribute's text is replaced.
     pub fn hasClass(n: *const Node, name: []const u8) bool {
         const list = n.attr("class") orelse return false;
+        if (name.len == 0) return false;
+        if (n.class_src != list.ptr or n.class_src_len != list.len) {
+            var bits: u64 = 0;
+            var words = std.mem.tokenizeAny(u8, list, " \t\r\n\x0c");
+            while (words.next()) |w| bits |= classBit(w);
+            const self = @constCast(n);
+            self.class_src = list.ptr;
+            self.class_src_len = list.len;
+            self.class_filter = bits;
+        }
+        if (n.class_filter & classBit(name) == 0) return false;
         var it = std.mem.tokenizeAny(u8, list, " \t\r\n\x0c");
         while (it.next()) |c| if (std.mem.eql(u8, c, name)) return true;
         return false;
@@ -151,7 +178,7 @@ pub const Node = struct {
         child.prev = if (ref) |r| r.prev else n.last_child;
         if (child.prev) |p| p.next = child else n.first_child = child;
         if (ref) |r| r.prev = child else n.last_child = child;
-        n.doc.touchStyle();
+        n.doc.touchTree(n);
     }
 
     pub fn appendChild(n: *Node, child: *Node) void {
@@ -166,7 +193,7 @@ pub const Node = struct {
         n.parent = null;
         n.prev = null;
         n.next = null;
-        n.doc.touchStyle();
+        n.doc.touchTree(p);
     }
 
     pub fn removeChildren(n: *Node) void {
@@ -237,6 +264,11 @@ pub const Document = struct {
     focus: ?*Node = null,
     /// No doctype: quirks mode.
     quirks: bool = false,
+    /// Goes up as style is touched: what live collections know themselves by.
+    generation: u32 = 0,
+    /// What a restyle has to look at: everything, or under just these.
+    dirty_all: bool = true,
+    dirty_nodes: std.ArrayList(*Node) = .empty,
 
     pub fn create(arena: Allocator) Allocator.Error!*Document {
         const d = try arena.create(Document);
@@ -246,9 +278,47 @@ pub const Document = struct {
         return d;
     }
 
+    /// Everything's style may have changed.
     pub fn touchStyle(d: *Document) void {
+        d.generation +%= 1;
         d.style_dirty = true;
         d.layout_dirty = true;
+        d.dirty_all = true;
+    }
+
+    fn inDocument(d: *const Document, n: *const Node) bool {
+        var at: ?*const Node = n;
+        while (at) |x| : (at = x.parent) if (x == d.node) return true;
+        return false;
+    }
+
+    /// The style of what's under `n` may have changed: only that restyles.
+    fn touchUnder(d: *Document, n: *Node) void {
+        d.style_dirty = true;
+        if (d.dirty_all) return;
+        if (d.dirty_nodes.items.len >= 256) {
+            d.dirty_all = true;
+            return;
+        }
+        d.dirty_nodes.append(d.arena, n) catch {
+            d.dirty_all = true;
+        };
+    }
+
+    /// An attribute of `n` changed. Layout follows only if style did. What
+    /// selects by it reaches its siblings at most, unless it is the inline style.
+    fn touchAttr(d: *Document, n: *Node, name: []const u8) void {
+        d.generation +%= 1;
+        if (!d.inDocument(n)) return;
+        d.touchUnder(if (std.mem.eql(u8, name, "style")) n else n.parent orelse n);
+    }
+
+    /// `n`'s children changed.
+    fn touchTree(d: *Document, n: *Node) void {
+        d.generation +%= 1;
+        if (!d.inDocument(n)) return;
+        d.layout_dirty = true;
+        d.touchUnder(n);
     }
 
     pub fn touchLayout(d: *Document) void {

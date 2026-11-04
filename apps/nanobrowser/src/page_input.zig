@@ -24,10 +24,23 @@ pub fn pointer(p: *Page, c: *ui.Context, it: ui.Interaction, node: ?*dom.Node, x
         p.last_press = node;
         setState(p, &p.doc.active, node);
         if (node) |n| {
-            if (isFocusable(n)) setState(p, &p.doc.focus, n);
-            _ = web.mouseEvent(p, n, "mousedown", x, y, modifiers(c));
+            const prevented = web.mouseEvent(p, n, "mousedown", x, y, modifiers(c));
+            if (p.dead) return;
+            if (!prevented) {
+                const was = p.doc.focus;
+                const target = focusTarget(n);
+                if (target != was) {
+                    setState(p, &p.doc.focus, target);
+                    web.focusChanged(p, was, target);
+                    if (p.dead) return;
+                }
+            }
         }
     }
+    if (c.input.secondary and it.hovered) if (node) |n| {
+        _ = web.mouseEvent(p, n, "contextmenu", x, y, modifiers(c));
+        if (p.dead) return;
+    };
     if (c.input.released) {
         setState(p, &p.doc.active, null);
         if (it.hovered) if (node) |n| {
@@ -78,18 +91,35 @@ fn cursorOf(node: ?*dom.Node) ui.Cursor {
     return .arrow;
 }
 
+/// What a press at `n` gives the focus to: it or a focusable ancestor.
+fn focusTarget(n: *dom.Node) ?*dom.Node {
+    var at: ?*dom.Node = n;
+    while (at) |x| : (at = x.parentElement()) if (isFocusable(x)) return x;
+    return null;
+}
+
 fn isFocusable(n: *const dom.Node) bool {
     return n.isTag("a") or n.isTag("button") or n.isTag("input") or n.isTag("select") or n.isTag("textarea") or n.hasAttr("tabindex");
 }
 
 fn click(p: *Page, c: *ui.Context, node: *dom.Node, x: f32, y: f32) void {
-    if (web.mouseEvent(p, node, "click", x, y, modifiers(c))) return;
+    const m = modifiers(c);
+    if (web.mouseEvent(p, node, "click", x, y, m)) return;
     if (p.dead) return;
+    if (c.input.click_count == 2) {
+        _ = web.mouseEvent(p, node, "dblclick", x, y, m);
+        if (p.dead) return;
+    }
+    activate(p, node, x, y, m, c.input.cmd or c.input.ctrl);
+}
+
+/// What a click does when no script stopped it: from a person, or `el.click()`.
+pub fn activate(p: *Page, node: *dom.Node, x: f32, y: f32, m: web.Modifiers, new_tab: bool) void {
     var at: ?*dom.Node = node;
     while (at) |n| : (at = n.parentElement()) {
-        if (n.isTag("a")) if (n.attr("href")) |href| return follow(p, c, n, href);
-        if (n.isTag("area")) if (n.attr("href")) |href| return follow(p, c, n, href);
-        if (n.isTag("label")) return labelClick(p, c, n, x, y);
+        if (n.isTag("a")) if (n.attr("href")) |href| return follow(p, new_tab, n, href);
+        if (n.isTag("area")) if (n.attr("href")) |href| return follow(p, new_tab, n, href);
+        if (n.isTag("label")) return labelClick(p, m, n, x, y);
         if (n.isTag("input")) return inputClick(p, n);
         if (n.isTag("button")) return buttonClick(p, n);
         if (n.isTag("summary")) if (n.parentElement()) |d| if (d.isTag("details")) {
@@ -104,17 +134,23 @@ fn click(p: *Page, c: *ui.Context, node: *dom.Node, x: f32, y: f32) void {
     p.open_select = null;
 }
 
-fn follow(p: *Page, c: *const ui.Context, a: *dom.Node, href: []const u8) void {
-    if (href.len > 0 and href[0] == '#') return fragment(p, href[1..]);
+fn follow(p: *Page, new_tab: bool, a: *dom.Node, href: []const u8) void {
+    if (href.len > 0 and href[0] == '#') {
+        if (href.len > 1 and !new_tab) if (loader.linkFrom(p, href)) |to| web.hashNavigated(p, to);
+        return fragment(p, href[1..]);
+    }
     if (std.ascii.startsWithIgnoreCase(href, "javascript:")) {
         web.runUrl(p, href["javascript:".len..]);
         return;
     }
     const to = loader.linkFrom(p, href) orelse return;
     // The same page but for its fragment: no load.
-    if (samePage(to, p.url())) if (std.mem.indexOfScalar(u8, to, '#')) |i| return fragment(p, to[i + 1 ..]);
+    if (samePage(to, p.url())) if (std.mem.indexOfScalar(u8, to, '#')) |i| {
+        web.hashNavigated(p, to);
+        return fragment(p, to[i + 1 ..]);
+    };
     const blank = if (a.attr("target")) |t| std.mem.eql(u8, t, "_blank") else false;
-    p.navigate(.{ .url = to, .new_tab = blank or c.input.cmd or c.input.ctrl });
+    p.navigate(.{ .url = to, .new_tab = blank or new_tab });
 }
 
 fn samePage(a: []const u8, b: []const u8) bool {
@@ -139,10 +175,10 @@ fn named(p: *Page, name: []const u8) ?*dom.Node {
     return null;
 }
 
-fn labelClick(p: *Page, c: *ui.Context, label: *dom.Node, x: f32, y: f32) void {
+fn labelClick(p: *Page, m: web.Modifiers, label: *dom.Node, x: f32, y: f32) void {
     const target = if (label.attr("for")) |id| p.doc.getElementById(id) else firstControl(label);
     const n = target orelse return;
-    if (web.mouseEvent(p, n, "click", x, y, modifiers(c))) return;
+    if (web.mouseEvent(p, n, "click", x, y, m)) return;
     if (n.isTag("input")) inputClick(p, n);
 }
 
@@ -181,7 +217,7 @@ pub fn isChecked(n: *const dom.Node) bool {
     return n.checked orelse n.hasAttr("checked");
 }
 
-fn uncheckGroup(root: *dom.Node, n: *dom.Node) void {
+pub fn uncheckGroup(root: *dom.Node, n: *dom.Node) void {
     const name = n.attr("name") orelse return;
     var at = root.first_child;
     while (at) |x| : (at = x.nextInTree(root)) {
@@ -208,7 +244,7 @@ pub fn formOf(n: *dom.Node) ?*dom.Node {
     return null;
 }
 
-fn reset(p: *Page, form: *dom.Node) void {
+pub fn reset(p: *Page, form: *dom.Node) void {
     var at = form.first_child;
     while (at) |x| : (at = x.nextInTree(form)) {
         x.value = null;
@@ -224,7 +260,14 @@ fn reset(p: *Page, form: *dom.Node) void {
 
 /// Sends a form, `submitter` the button that did it, when scripts let it.
 pub fn submit(p: *Page, form: *dom.Node, submitter: ?*dom.Node) void {
+    if (web.deferSubmit(p, form, submitter)) return;
     if (web.submitEvent(p, form)) return;
+    if (p.dead) return;
+    sendForm(p, form, submitter);
+}
+
+/// Sends a form, no event asked: `form.submit()`.
+pub fn sendForm(p: *Page, form: *dom.Node, submitter: ?*dom.Node) void {
     const a = p.arena();
     const body = encode(a, form, submitter) catch return;
     const action = form.attr("action") orelse "";
