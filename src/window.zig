@@ -309,6 +309,13 @@ pub const Window = struct {
         if (self.surface) |s| s.requestFrame();
     }
 
+    /// `redraw` from any thread (a decoder's): lock-free, coalesced, drawn
+    /// at the display's next refresh. Only while the window is open: stop
+    /// the thread before closing it.
+    pub fn redrawFromAnyThread(self: *Window) void {
+        if (self.surface) |s| s.requestFrameFromAnyThread();
+    }
+
     pub fn setTitle(self: *Window, title: []const u8) void {
         const pool = objc.Pool.push();
         defer pool.pop();

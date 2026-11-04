@@ -42,6 +42,10 @@ pub const Clipboard = input.Clipboard;
 pub const EditState = input.EditState;
 pub const Input = input.Input;
 
+/// Asks for a frame from any thread (`Context.requestFrameFromAnyThread`).
+pub const Waker = struct { ctx: *anyopaque, wake: *const fn (ctx: *anyopaque) void };
+pub const FocusRing = struct { color: types.Color, width: f32 = 2 };
+
 pub const Interaction = struct {
     id: u64,
     rect: ?types.Rect,
@@ -192,6 +196,14 @@ pub const Context = struct {
     focusable_ids: std.ArrayList(u64) = .empty,
     last_focusable_ids: std.ArrayList(u64) = .empty,
     clipboard: Clipboard = .{},
+    /// Who draws this context's frames, woken from other threads
+    /// (`requestFrameFromAnyThread`): the window's surface, or a Tester.
+    waker: ?Waker = null,
+    /// The focused box was a text field in the last frame (Tab is its).
+    focus_is_text: bool = false,
+    /// Drawn round a focused box that isn't a text field (`interact`'s
+    /// `focusable`): a border of this color and width (null: none).
+    focus_ring: ?FocusRing = null,
     /// The key of the next box, for ids that survive reordering.
     next_key: ?[]const u8 = null,
     next_key_int: ?u64 = null,
@@ -311,7 +323,8 @@ pub const Context = struct {
         c.noteModality();
         c.tooltip = .{};
         if (c.frame == 0 and c.nodes.capacity == 0) c.warmMaps();
-        if (c.input.key == .tab and c.focus == 0 and c.last_focusable_ids.items.len > 0) {
+        // Tab moves the focus on, unless a text field has it (it takes Tab).
+        if (c.input.key == .tab and (c.focus == 0 or !c.focus_is_text) and c.last_focusable_ids.items.len > 0) {
             hooks.focusCycle(c, c.input.shift);
             c.input.key = null;
         }
@@ -355,6 +368,7 @@ pub const Context = struct {
     pub fn finish(c: *Context) void {
         c.building = false;
         if (c.focus != 0 and std.mem.indexOfScalar(u64, c.focusable_ids.items, c.focus) == null) c.focus = 0;
+        c.focus_is_text = c.focus != 0 and c.focused_text != null;
         std.mem.swap(std.ArrayList(u64), &c.last_focusable_ids, &c.focusable_ids);
         if (c.right_press) {
             c.input.down = false;
@@ -513,6 +527,13 @@ pub const Context = struct {
     /// views that animate from `time` every frame.
     pub fn animationFrame(c: *Context) void {
         c.animating = true;
+    }
+
+    /// From any thread (a decoder's, a worker's): a frame is wanted, drawn
+    /// at the display's next refresh. Lock-free; many asks before it runs
+    /// are one frame. Not after the window has closed.
+    pub fn requestFrameFromAnyThread(c: *const Context) void {
+        if (c.waker) |w| w.wake(w.ctx);
     }
 
     /// Whether the pointer is over text that selects (as last painted):

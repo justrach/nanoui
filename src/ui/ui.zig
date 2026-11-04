@@ -220,6 +220,8 @@ test {
     _ = types;
     _ = device;
     _ = @import("panes.zig");
+    _ = @import("tests_tester_verbs.zig");
+    _ = @import("tester_script.zig");
     _ = @import("layout.zig");
     _ = textfield;
     _ = @import("tests.zig");

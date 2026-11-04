@@ -17,6 +17,7 @@ const ui = @import("ui.zig");
 const Window = @import("../window.zig").Window;
 const a11y = @import("a11y.zig");
 const events = @import("surface_events.zig");
+const thread_wake = @import("surface_thread_wake.zig");
 const frame_log_mod = @import("frame_log.zig");
 pub const FrameLog = frame_log_mod.FrameLog;
 pub const KeysReleased = struct { ctx: ?*anyopaque, func: *const fn (ctx: ?*anyopaque, s: *Surface) void };
@@ -42,6 +43,8 @@ pub const Surface = struct {
     last_frame_time: f64 = 0,
     start_time: f64 = 0,
     tick_scheduled: bool = false,
+    /// Another thread asked for a frame and the main queue hasn't run it.
+    wake_pending: std.atomic.Value(bool) = .init(false),
     /// Paces animation frames at the display's refresh (CADisplayLink).
     display_link: ?objc.Object = null,
     /// The pace asked of the link: 0 is the display's, -1 unset.
@@ -123,6 +126,7 @@ pub const Surface = struct {
         };
         if (text.portable and !window.app.flags.hidden) self.text.enablePersistence(window.app.options.name);
         self.ctx = .init(gpa, &self.text);
+        self.ctx.waker = .{ .ctx = self, .wake = thread_wake.fromContext };
         // Pictures go straight to the GPU before any view callback can run a frame.
         self.text.images.sink = .{ .ctx = &self.renderer, .upload = @import("metal.zig").Renderer.uploadImage };
         self.refreshAppearance();
@@ -197,8 +201,11 @@ pub const Surface = struct {
             self.pacing_log.close();
             if (self.frame_log) |*fl| fl.deinit();
         }
-        if (self.force_destroy or (!self.tick_scheduled and self.wake.pending == 0)) self.gpa.destroy(self);
+        if (self.force_destroy or (!self.tick_scheduled and !self.wake_pending.load(.acquire) and self.wake.pending == 0)) self.gpa.destroy(self);
     }
+
+    /// From any thread: a frame at the display's next refresh (`surface_thread_wake.zig`).
+    pub const requestFrameFromAnyThread = thread_wake.request;
 
     fn finishFrame(self: *Surface) void {
         self.in_frame = false;
@@ -573,17 +580,7 @@ pub const Surface = struct {
         objc.msg(void, self.nsview, "setToolTip:", .{if (self.tip) |t| objc.nsString(t) else @as(?objc.Object, null)});
     }
 
-    fn scheduleTick(self: *Surface) void {
-        if (self.tick_scheduled) return;
-        self.tick_scheduled = true;
-        objc.dispatchAfter(std.time.ns_per_s / 120, self, tick);
-    }
-    fn tick(ptr: ?*anyopaque) callconv(.c) void {
-        const self: *Surface = @ptrCast(@alignCast(ptr));
-        self.tick_scheduled = false;
-        if (self.dead) return self.finishDestroy();
-        self.frame();
-    }
+    const scheduleTick = thread_wake.scheduleTick;
     pub fn toView(self: *Surface, p: objc.CGPoint) types.Point {
         const local = objc.msg(objc.CGPoint, self.nsview, "convertPoint:fromView:", .{ p, @as(?objc.Object, null) });
         return .{ .x = @floatCast(local.x), .y = @floatCast(local.y) };
