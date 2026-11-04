@@ -71,6 +71,22 @@ jobs:
             NANOUI_GTK=$v NANOUI_DEBUG=1 timeout 90 xvfb-run -a zig-out/bin/hello --nanoui-wait=60 "--nanoui-eval=$js" > page$v.txt 2>&1
             grep -q "nanoui: GTK $v" page$v.txt && grep -q "page: Hello, Ada!" page$v.txt || { cat page$v.txt; exit 1; }
           done
+      - name: "Probe: the hello page with WebKitGTK's sandbox as the system leaves it"
+        continue-on-error: true
+        run: |
+          echo "bwrap: $(command -v bwrap || echo none); proxy: $(command -v xdg-dbus-proxy || echo none)"
+          echo "userns restricted: $(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo unknown)"
+          dpkg -s libwebkitgtk-6.0-4 | grep -E '^(Version|Depends|Recommends)' | tr ',' '\n' | grep -E 'Version|bubblewrap|xdg-dbus-proxy' || true
+          ls /etc/apparmor.d 2>/dev/null | grep -iE 'bwrap|webkit' || echo "no bwrap or webkit apparmor profile"
+          probe() {
+            label=$1; shift
+            js='import("/nanoui.js").then(async (m) => { nanoui.log(await m.Greeter.greet("Ada")); nanoui.window.close(); })'
+            env "$@" timeout 40 xvfb-run -a zig-out/bin/hello --nanoui-wait=30 "--nanoui-eval=$js" > probe.txt 2>&1
+            echo "== $label rc=$?"
+            grep -E "page:|bwrap|uid map|web process|panic" probe.txt | cut -c1-160 | head -6 || true
+          }
+          probe "GTK 4, WebKitGTK 6.0" NANOUI_GTK=4
+          probe "GTK 3, WebKitGTK 4.1" NANOUI_GTK=3
       - run: zig build test-nui
       - name: nui makes an app that builds, passes its test and renders
         run: |
