@@ -16,6 +16,7 @@ const input = @import("input.zig");
 const capture = @import("capture.zig");
 const apps = @import("apps.zig");
 const windows = @import("windows.zig");
+const hit = @import("hit.zig");
 const target = @import("../target.zig");
 
 extern "c" fn dispatch_queue_create(label: [*:0]const u8, attr: ?*anyopaque) objc.dispatch_queue_t;
@@ -23,32 +24,87 @@ extern "c" fn dispatch_async_f(queue: objc.dispatch_queue_t, ctx: ?*anyopaque, w
 extern "c" fn getpid() c_int;
 extern "c" fn usleep(us: c_uint) c_int;
 
+/// What one agent is working on. Agents connect one socket each: refs from
+/// one's tree mean nothing to another, and neither moves the other's target.
+pub const Session = struct {
+    refs: ax.Refs,
+    /// The app it last read or opened.
+    last: ?i32 = null,
+};
+
+pub const Sessions = struct {
+    gpa: std.mem.Allocator,
+    map: std.AutoHashMapUnmanaged(u64, *Session) = .empty,
+
+    pub fn get(s: *Sessions, conn: u64) !*Session {
+        const gop = try s.map.getOrPut(s.gpa, conn);
+        if (gop.found_existing) return gop.value_ptr.*;
+        errdefer _ = s.map.remove(conn);
+        const session = try s.gpa.create(Session);
+        session.* = .{ .refs = .{ .gpa = s.gpa } };
+        gop.value_ptr.* = session;
+        return session;
+    }
+
+    pub fn remove(s: *Sessions, conn: u64) void {
+        const kv = s.map.fetchRemove(conn) orelse return;
+        kv.value.refs.deinit();
+        s.gpa.destroy(kv.value);
+    }
+
+    pub fn deinit(s: *Sessions) void {
+        var it = s.map.valueIterator();
+        while (it.next()) |v| {
+            v.*.refs.deinit();
+            s.gpa.destroy(v.*);
+        }
+        s.map.deinit(s.gpa);
+    }
+};
+
 pub const Mac = struct {
     gpa: std.mem.Allocator,
     queue: objc.dispatch_queue_t,
-    /// The last tree's elements: the queue's alone.
-    refs: ax.Refs,
+    /// Each agent's refs and target: the queue's alone.
+    sessions: Sessions,
     /// The kill switch as the queue sees it.
     stopped: std.atomic.Value(bool) = .init(false),
     /// The whole-screen switch as the queue sees it.
     whole_screen: std.atomic.Value(bool) = .init(false),
-    /// The app the agent last read or opened: the queue's alone.
-    last: ?i32 = null,
     self_pid: i32,
 
     pub fn init(gpa: std.mem.Allocator) Mac {
         ax.setTimeout(2.0);
-        return .{ .gpa = gpa, .queue = dispatch_queue_create("nanocua.tools", null), .refs = .{ .gpa = gpa }, .self_pid = getpid() };
+        return .{ .gpa = gpa, .queue = dispatch_queue_create("nanocua.tools", null), .sessions = .{ .gpa = gpa }, .self_pid = getpid() };
     }
 
     pub fn backend(m: *Mac) mcp.Backend {
-        return .{ .ptr = m, .call = call };
+        return .{ .ptr = m, .call = call, .closed = closed };
     }
 
     fn call(ptr: *anyopaque, tool: tools.Tool, args: tools.Args, reply: *mcp.Reply) void {
         const m: *Mac = @ptrCast(@alignCast(ptr));
         const job = Job.create(m, tool, args, reply) catch return reply.fail("nanocua is out of memory");
         dispatch_async_f(m.queue, job, Job.run);
+    }
+
+    const Closed = struct {
+        mac: *Mac,
+        conn: u64,
+
+        fn run(ctx: ?*anyopaque) callconv(.c) void {
+            const c: *Closed = @ptrCast(@alignCast(ctx));
+            c.mac.sessions.remove(c.conn);
+            c.mac.gpa.destroy(c);
+        }
+    };
+
+    /// After any calls of its still waiting on the queue.
+    fn closed(ptr: *anyopaque, conn: u64) void {
+        const m: *Mac = @ptrCast(@alignCast(ptr));
+        const c = m.gpa.create(Closed) catch return;
+        c.* = .{ .mac = m, .conn = conn };
+        dispatch_async_f(m.queue, c, Closed.run);
     }
 };
 
@@ -61,12 +117,43 @@ pub fn screenRecording() bool {
     return capture.allowed();
 }
 
-/// Asks for a permission: the system's prompt, then its Settings pane.
-pub fn request(which: enum { accessibility, screen }) void {
+/// Keeps nanocua's window above other apps' while a question waits: macOS may
+/// refuse to bring an app forward that nobody clicked.
+pub fn raise(window: *nanoui.Window, on: bool) void {
+    const floating: objc.NSInteger = 3;
+    objc.msg(void, window.nswindow, "setLevel:", .{if (on) floating else @as(objc.NSInteger, 0)});
+    if (on) objc.msg(void, window.nswindow, "orderFrontRegardless", .{});
+}
+
+pub const Permission = enum(usize) { accessibility = 1, screen = 2 };
+
+/// Asks for a permission: the system's prompt, then its Settings pane. After
+/// this frame, not during it: some of these calls run the event loop while they
+/// wait, and a frame started inside a frame leaves its boxes open.
+pub fn request(which: Permission) void {
+    objc.dispatchMain(@ptrFromInt(@backingInt(which)), asked);
+}
+
+fn asked(ctx: ?*anyopaque) callconv(.c) void {
+    const which: Permission = @fromBackingInt(@intCast(@intFromPtr(ctx)));
     switch (which) {
         .accessibility => if (!cf.trusted(true)) openSettings("Privacy_Accessibility"),
-        .screen => if (!cf.CGRequestScreenCaptureAccess()) openSettings("Privacy_ScreenCapture"),
+        .screen => if (!cf.CGRequestScreenCaptureAccess()) {
+            capture.register();
+            openSettings("Privacy_ScreenCapture");
+            // macOS may not list the app even so, and only a person can add it.
+            revealApp();
+        },
     }
+}
+
+/// Shows this app in Finder, ready to drag into a System Settings list.
+fn revealApp() void {
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    const bundle = objc.msg(objc.Object, objc.class("NSBundle"), "mainBundle", .{});
+    const path = objc.fromNSString(objc.msg(?objc.Object, bundle, "bundlePath", .{}));
+    if (std.mem.endsWith(u8, path, ".app")) nanoui.shell.showInFolder(path);
 }
 
 fn openSettings(pane: []const u8) void {
@@ -77,6 +164,7 @@ fn openSettings(pane: []const u8) void {
 
 const Job = struct {
     mac: *Mac,
+    session: *Session = undefined,
     tool: tools.Tool,
     reply: *mcp.Reply,
     arena: std.heap.ArenaAllocator,
@@ -140,7 +228,10 @@ const Job = struct {
     fn run(ctx: ?*anyopaque) callconv(.c) void {
         const j: *Job = @ptrCast(@alignCast(ctx));
         const pool = objc.Pool.push();
-        j.perform() catch |e| j.fail("{s}", .{@errorName(e)});
+        if (j.mac.sessions.get(j.reply.conn)) |session| {
+            j.session = session;
+            j.perform() catch |e| j.fail("{s}", .{@errorName(e)});
+        } else |e| j.fail("{s}", .{@errorName(e)});
         pool.pop();
         objc.dispatchMain(j, deliver);
     }
@@ -178,12 +269,12 @@ const Job = struct {
             .get_ui_tree => {
                 if (!accessibility()) return j.fail("nanocua has no Accessibility permission: ask the user to grant it in nanocua's window.", .{});
                 const named = j.namedPid() orelse return;
-                const pid = named orelse m.last orelse
+                const pid = named orelse j.session.last orelse
                     ax.focusedPid() orelse return j.fail("No app has the keyboard focus: pass pid or app.", .{});
                 if (pid == m.self_pid) return j.fail("That is nanocua itself, which agents don't see. Pass pid or app (see list_apps).", .{});
                 const max: usize = @intCast(std.math.clamp(j.max_nodes orelse 400, 1, 2000));
-                try ax.writeTree(&m.refs, w, pid, .{ .max_nodes = max });
-                m.last = pid;
+                try ax.writeTree(&j.session.refs, w, pid, .{ .max_nodes = max });
+                j.session.last = pid;
             },
             .screenshot => try j.screenshot(),
             .click => {
@@ -193,14 +284,22 @@ const Job = struct {
                     const el = j.element(r) orelse return;
                     const t = j.events(ax.pidOf(el)) orelse return;
                     if (button == .left and count == 1 and ax.perform(el, "AXPress")) return w.print("Pressed [{d}].", .{r});
-                    const c = ax.center(el) orelse return j.fail("[{d}] has no frame to click.", .{r});
-                    input.click(t, c[0], c[1], button, count);
-                    return w.print("Clicked [{d}] at {d:.0},{d:.0}.", .{ r, c[0], c[1] });
+                    const f = ax.frame(el) orelse return j.fail("[{d}] has no frame to click.", .{r});
+                    const c = j.inWindow(t, f) orelse return j.fail("[{d}] is out of sight in its window: scroll to it first.", .{r});
+                    const aimed = j.aim(t, c[0], c[1]) orelse return;
+                    input.click(aimed, c[0], c[1], button, count);
+                    return j.sent(aimed, "a click to", c);
                 }
                 const t = j.events(null) orelse return;
                 const p = j.point(t) orelse return;
-                input.click(t, p[0], p[1], button, count);
-                try w.print("Clicked at {d:.0},{d:.0}.", .{ p[0], p[1] });
+                const aimed = j.aim(t, p[0], p[1]) orelse return;
+                if (aimed == .app and button == .left and count == 1) {
+                    var buf: [64]u8 = undefined;
+                    if (hit.press(&buf, aimed.app.pid, p[0], p[1])) |what|
+                        return w.print("Pressed the {s} at {d:.0},{d:.0}.", .{ what, p[0], p[1] });
+                }
+                input.click(aimed, p[0], p[1], button, count);
+                try j.sent(aimed, "a click to", p);
             },
             .type_text => {
                 const text = j.text orelse return j.fail("type_text needs text.", .{});
@@ -212,7 +311,7 @@ const Job = struct {
                 } else null;
                 const t = j.events(el_pid) orelse return;
                 if (el) |e| {
-                    if (!ax.focus(e)) if (ax.center(e)) |c| input.click(t, c[0], c[1], .left, 1);
+                    if (!ax.focus(e)) if (ax.center(e)) |c| if (j.aim(t, c[0], c[1])) |aimed| input.click(aimed, c[0], c[1], .left, 1);
                     _ = usleep(60_000);
                 }
                 if (!j.keyboardIsOthers(t)) return;
@@ -230,23 +329,28 @@ const Job = struct {
             },
             .scroll => {
                 var el_pid: ?i32 = null;
-                const center = if (j.ref) |r| blk: {
+                var el_frame: ?[4]f64 = null;
+                if (j.ref) |r| {
                     const el = j.element(r) orelse return;
                     el_pid = ax.pidOf(el);
-                    break :blk ax.center(el) orelse return j.fail("[{d}] has no frame.", .{r});
-                } else null;
+                    el_frame = ax.frame(el) orelse return j.fail("[{d}] has no frame.", .{r});
+                }
                 const t = j.events(el_pid) orelse return;
-                const p = center orelse j.point(t) orelse return;
+                const p = if (el_frame) |f|
+                    j.inWindow(t, f) orelse return j.fail("[{d}] is out of sight in its window.", .{j.ref.?})
+                else
+                    j.point(t) orelse return;
+                const aimed = j.aim(t, p[0], p[1]) orelse return;
                 const dx = j.dx orelse 0;
                 const dy: f64 = j.dy orelse if (dx == 0) 3 else 0;
-                input.scroll(t, p[0], p[1], dx, dy);
-                try w.print("Scrolled {d} down, {d} right at {d:.0},{d:.0}.", .{ dy, dx, p[0], p[1] });
+                try j.scrollAt(aimed, p, dx, dy);
             },
             .move_mouse => {
                 const t = j.events(null) orelse return;
                 const p = j.point(t) orelse return;
-                input.move(t, p[0], p[1]);
-                try w.print("Moved to {d:.0},{d:.0}.", .{ p[0], p[1] });
+                const aimed = j.aim(t, p[0], p[1]) orelse return;
+                input.move(aimed, p[0], p[1]);
+                try if (aimed == .hid) w.print("Moved the pointer to {d:.0},{d:.0}.", .{ p[0], p[1] }) else j.sent(aimed, "a hover to", p);
             },
             .set_value => {
                 const r = j.ref orelse return j.fail("set_value needs ref.", .{});
@@ -267,7 +371,7 @@ const Job = struct {
                 // A later get_ui_tree without app reads this one. (One just
                 // launching isn't in the running list yet.)
                 if (apps.pidNamed(n)) |pid| if (pid != m.self_pid) {
-                    m.last = pid;
+                    j.session.last = pid;
                 };
             },
         }
@@ -285,7 +389,7 @@ const Job = struct {
 
     /// The element behind ref `r`, unless it is missing or nanocua's.
     fn element(j: *Job, r: i64) ?cf.AXUIElementRef {
-        const el = j.mac.refs.get(r) orelse {
+        const el = j.session.refs.get(r) orelse {
             j.fail("No element [{d}]: refs come from the last get_ui_tree.", .{r});
             return null;
         };
@@ -315,7 +419,7 @@ const Job = struct {
             .whole_screen = j.whole_screen,
             .allowed = m.whole_screen.load(.acquire),
             .pid = named orelse el_pid,
-            .last = m.last,
+            .last = j.session.last,
             .self = m.self_pid,
         });
         switch (r) {
@@ -325,10 +429,65 @@ const Job = struct {
             },
             .whole_screen => return .hid,
             .app => |pid| {
-                m.last = pid;
+                j.session.last = pid;
                 return .{ .app = .{ .pid = pid, .window = if (windows.main(pid)) |w| w.id else 0 } };
             },
         }
+    }
+
+    /// Where to aim at an element so that the event lands in its window: on the
+    /// real pointer its middle, in an app the middle of what shows.
+    fn inWindow(j: *Job, t: input.Target, f: [4]f64) ?[2]f64 {
+        _ = j;
+        const middle: [2]f64 = .{ f[0] + f[2] / 2, f[1] + f[3] / 2 };
+        if (t == .hid) return middle;
+        const w = windows.at(t.app.pid, middle[0], middle[1]) orelse windows.main(t.app.pid) orelse return null;
+        return target.visiblePoint(f, windows.box(w));
+    }
+
+    /// `t` aimed at the window under x, y. An app's window must be there: an
+    /// event anywhere else goes nowhere, and saying so beats pretending.
+    fn aim(j: *Job, t: input.Target, x: f64, y: f64) ?input.Target {
+        if (t == .hid) return t;
+        const w = windows.at(t.app.pid, x, y) orelse {
+            if (windows.main(t.app.pid)) |m| {
+                const b = windows.box(m);
+                j.fail("{d:.0},{d:.0} isn't in a window of that app. Its main window is at {d:.0},{d:.0} sized {d:.0}x{d:.0}.", .{ x, y, b[0], b[1], b[2], b[3] });
+            } else j.fail("That app has no window to act in.", .{});
+            return null;
+        };
+        return .{ .app = .{ .pid = t.app.pid, .window = w.id, .origin = .{ w.frame.origin.x, w.frame.origin.y } } };
+    }
+
+    /// Reports events that can't be confirmed, which is every event sent into
+    /// an app: macOS doesn't say whether it acted on them.
+    fn sent(j: *Job, t: input.Target, what: []const u8, p: [2]f64) !void {
+        const w = &j.out.writer;
+        if (t == .hid) return w.print("Sent {s} the screen at {d:.0},{d:.0}.", .{ what, p[0], p[1] });
+        try w.print("Sent {s} the app at {d:.0},{d:.0}. Not confirmed: apps can ignore events in the background, so check with get_ui_tree or screenshot.", .{ what, p[0], p[1] });
+    }
+
+    /// Scrolls and says what really happened: with a scroll bar to read, it knows.
+    fn scrollAt(j: *Job, t: input.Target, p: [2]f64, dx: f64, dy: f64) !void {
+        const w = &j.out.writer;
+        if (t == .hid) {
+            input.scroll(t, p[0], p[1], dx, dy);
+            return w.print("Scrolled the screen {d} down, {d} right at {d:.0},{d:.0}.", .{ dy, dx, p[0], p[1] });
+        }
+        const pid = t.app.pid;
+        const before = hit.position(pid, p[0], p[1]);
+        input.scroll(t, p[0], p[1], dx, dy);
+        if (!before.known()) return j.sent(t, "a scroll to", p);
+        // Scrolling can animate.
+        _ = usleep(200_000);
+        if (hit.position(pid, p[0], p[1]).moved(before))
+            return w.print("Scrolled {d} down, {d} right at {d:.0},{d:.0}.", .{ dy, dx, p[0], p[1] });
+        if (before.atEnd(dx, dy)) return w.print("Nothing moved: it's already at the end that way.", .{});
+        hit.scrollBars(pid, p[0], p[1], dx, dy);
+        _ = usleep(50_000);
+        if (hit.position(pid, p[0], p[1]).moved(before))
+            return w.print("Scrolled at {d:.0},{d:.0} through its scroll bars: about {d} down, {d} right.", .{ p[0], p[1], dy, dx });
+        j.fail("Nothing scrolled at {d:.0},{d:.0}: the app ignored it. It may not be scrollable there, or need whole_screen.", .{ p[0], p[1] });
     }
 
     /// x and y. On the real pointer, not over nanocua's own windows.
@@ -365,7 +524,7 @@ const Job = struct {
             .whole_screen = j.whole_screen,
             .allowed = m.whole_screen.load(.acquire),
             .pid = named,
-            .last = m.last,
+            .last = j.session.last,
             .self = m.self_pid,
         });
         const max: u32 = @intCast(std.math.clamp(j.max_size orelse 1280, 64, 2560));
@@ -387,7 +546,7 @@ const Job = struct {
             .app => |pid| blk: {
                 const w = windows.main(pid) orelse return j.fail("App {d} has no window to capture.", .{pid});
                 rect = w.frame;
-                m.last = pid;
+                j.session.last = pid;
                 break :blk capture.window(m.gpa, w.id, w.frame, max);
             },
         };
@@ -401,3 +560,17 @@ const Job = struct {
         try j.out.writer.print("The image is {d}x{d} px of the region at {d:.0},{d:.0} sized {d:.0}x{d:.0} points: pixel (px, py) is the point ({d:.0} + px*{d:.4}, {d:.0} + py*{d:.4}).", .{ shot.width, shot.height, rect.origin.x, rect.origin.y, rect.size.width, rect.size.height, rect.origin.x, sx, rect.origin.y, sy });
     }
 };
+
+test "agents don't share refs or a target; a closed agent's are freed" {
+    var s: Sessions = .{ .gpa = std.testing.allocator };
+    defer s.deinit();
+    const a = try s.get(1);
+    const b = try s.get(2);
+    try std.testing.expect(a != b);
+    a.last = 42;
+    try std.testing.expectEqual(@as(?i32, null), b.last);
+    try std.testing.expectEqual(a, try s.get(1));
+    s.remove(1);
+    s.remove(1);
+    try std.testing.expectEqual(@as(?i32, null), (try s.get(1)).last);
+}

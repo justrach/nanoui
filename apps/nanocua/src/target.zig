@@ -31,6 +31,26 @@ pub fn route(a: Ask) Route {
     return .{ .app = pid };
 }
 
+/// Where in `el` (x, y, width, height) to send an event so that it lands inside
+/// `window`: the middle of what they share. An element can be far larger than its
+/// window (a long document's text), and its own middle out of sight.
+pub fn visiblePoint(el: [4]f64, window: [4]f64) ?[2]f64 {
+    const left = @max(el[0], window[0]);
+    const top = @max(el[1], window[1]);
+    const right = @min(el[0] + el[2], window[0] + window[2]);
+    const bottom = @min(el[1] + el[3], window[1] + window[3]);
+    if (right <= left or bottom <= top) return null;
+    return .{ (left + right) / 2, (top + bottom) / 2 };
+}
+
+test "a long element's point stays inside its window" {
+    const window = [4]f64{ 128, 61, 586, 488 };
+    // A document 3000 points tall, as the live test met it.
+    try std.testing.expectEqual(@as(?[2]f64, .{ 421, 305 }), visiblePoint(.{ 128, 61, 586, 3000 }, window));
+    try std.testing.expectEqual(@as(?[2]f64, .{ 150, 80 }), visiblePoint(.{ 140, 70, 20, 20 }, window));
+    try std.testing.expectEqual(@as(?[2]f64, null), visiblePoint(.{ 128, 900, 586, 40 }, window));
+}
+
 test "a call goes into the app it names, else the last one read" {
     try std.testing.expectEqual(Route{ .app = 7 }, route(.{ .pid = 7, .last = 9, .self = 1 }));
     try std.testing.expectEqual(Route{ .app = 9 }, route(.{ .last = 9, .self = 1 }));

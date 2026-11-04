@@ -43,6 +43,19 @@ pub fn allowed() bool {
     return cf.CGPreflightScreenCaptureAccess();
 }
 
+var nothing: u8 = 0;
+
+fn ignore(_: *u8, _: ?objc.Object, _: ?objc.Object) void {}
+
+/// Asks ScreenCaptureKit for what it could capture and ignores the answer:
+/// without permission, this is what gets the app listed in System Settings,
+/// where the permission request alone may not.
+pub fn register() void {
+    const cls = objc_getClass("SCShareableContent") orelse return;
+    var block = objc.Block(u8, &.{ ?objc.Object, ?objc.Object }).init(&nothing, ignore);
+    objc.msg(void, cls, "getShareableContentWithCompletionHandler:", .{@as(*anyopaque, @ptrCast(&block))});
+}
+
 /// A rectangle of the screen.
 pub fn capture(gpa: std.mem.Allocator, rect: cf.CGRect, max_size: u32) Error!Shot {
     // Asking would put up the system's prompt for an agent: only the user
@@ -119,8 +132,8 @@ const Shareable = struct {
 
 const answer_timeout: u64 = 10 * std.time.ns_per_s;
 
-/// ScreenCaptureKit's window with number `id`, retained.
-fn scWindow(gpa: std.mem.Allocator, cls: objc.Class, id: u32) !?objc.Object {
+/// What ScreenCaptureKit could capture, retained.
+fn shareableContent(gpa: std.mem.Allocator, cls: objc.Class) !?objc.Object {
     const wait = try gpa.create(Shareable);
     wait.* = .{ .sem = objc.dispatch_semaphore_create(0) };
     var block = objc.Block(Shareable, &.{ ?objc.Object, ?objc.Object }).init(wait, Shareable.done);
@@ -129,14 +142,44 @@ fn scWindow(gpa: std.mem.Allocator, cls: objc.Class, id: u32) !?objc.Object {
     if (objc.dispatch_semaphore_wait(wait.sem, dispatchTime(answer_timeout)) != 0) return null;
     defer gpa.destroy(wait);
     defer objc.dispatch_release(@ptrCast(wait.sem));
-    const content = wait.content orelse return null;
-    defer objc.release(content);
+    return wait.content;
+}
+
+fn findWindow(content: objc.Object, id: u32) ?objc.Object {
     const list = objc.msg(objc.Object, content, "windows", .{});
     for (0..objc.msg(usize, list, "count", .{})) |i| {
         const w = objc.msg(objc.Object, list, "objectAtIndex:", .{i});
-        if (objc.msg(u32, w, "windowID", .{}) == id) return objc.retain(w);
+        if (objc.msg(u32, w, "windowID", .{}) == id) return w;
     }
     return null;
+}
+
+/// How much of `frame` lies in `other`, in square points.
+pub fn overlap(frame: objc.CGRect, other: objc.CGRect) f64 {
+    const w = @min(frame.origin.x + frame.size.width, other.origin.x + other.size.width) - @max(frame.origin.x, other.origin.x);
+    const h = @min(frame.origin.y + frame.size.height, other.origin.y + other.size.height) - @max(frame.origin.y, other.origin.y);
+    return if (w > 0 and h > 0) w * h else 0;
+}
+
+/// The display showing most of `frame`.
+fn displayOf(content: objc.Object, frame: objc.CGRect) ?objc.Object {
+    const list = objc.msg(objc.Object, content, "displays", .{});
+    var best: ?objc.Object = null;
+    var most: f64 = 0;
+    for (0..objc.msg(usize, list, "count", .{})) |i| {
+        const d = objc.msg(objc.Object, list, "objectAtIndex:", .{i});
+        const shared = overlap(frame, objc.msg(objc.CGRect, d, "frame", .{}));
+        if (shared > most) {
+            most = shared;
+            best = d;
+        }
+    }
+    return best;
+}
+
+/// `frame` in the coordinates of a display at `display`.
+pub fn inDisplay(frame: objc.CGRect, display: objc.CGRect) objc.CGRect {
+    return .{ .origin = .{ .x = frame.origin.x - display.origin.x, .y = frame.origin.y - display.origin.y }, .size = frame.size };
 }
 
 fn grabWindow(gpa: std.mem.Allocator, id: u32, frame: cf.CGRect, max_size: u32) !?CGImageRef {
@@ -144,10 +187,10 @@ fn grabWindow(gpa: std.mem.Allocator, id: u32, frame: cf.CGRect, max_size: u32) 
     const shareable = objc_getClass("SCShareableContent");
     const modern = if (manager) |c| objc.msg(bool, c, "respondsToSelector:", .{objc.sel("captureImageWithFilter:configuration:completionHandler:")}) else false;
     if (!modern or shareable == null) return CGWindowListCreateImage(CGRectNull, list_including_window, id, image_bounds_ignore_framing);
-    const sc = try scWindow(gpa, shareable.?, id) orelse return null;
-    defer objc.release(sc);
-    const filter = objc.msg(objc.Object, objc.alloc("SCContentFilter"), "initWithDesktopIndependentWindow:", .{sc});
-    defer objc.release(filter);
+    const content = try shareableContent(gpa, shareable.?) orelse return null;
+    defer objc.release(content);
+    const sc = findWindow(content, id) orelse return null;
+    const rect: objc.CGRect = .{ .origin = .{ .x = frame.origin.x, .y = frame.origin.y }, .size = .{ .width = frame.size.width, .height = frame.size.height } };
     const config = objc.new("SCStreamConfiguration");
     defer objc.release(config);
     // Retina's pixels, unless that's more than the picture will keep.
@@ -156,6 +199,20 @@ fn grabWindow(gpa: std.mem.Allocator, id: u32, frame: cf.CGRect, max_size: u32) 
     objc.msg(void, config, "setWidth:", .{@as(usize, @intFromFloat(@max(1, @round(frame.size.width * scale))))});
     objc.msg(void, config, "setHeight:", .{@as(usize, @intFromFloat(@max(1, @round(frame.size.height * scale))))});
     objc.msg(void, config, "setShowsCursor:", .{false});
+    // On a display: that display with only this window on it, whatever is in
+    // front, cut to its frame, so pixels map exactly to points. The window's own
+    // filter widens to fit child windows (a floating orb, a popover) and shrinks
+    // the picture, and its source rect isn't in one coordinate system. A window
+    // off the displays (another Space) has only that filter.
+    const display = if (objc.msg(bool, sc, "isOnScreen", .{})) displayOf(content, rect) else null;
+    const filter = if (display) |d| blk: {
+        objc.msg(void, config, "setSourceRect:", .{inDisplay(rect, objc.msg(objc.CGRect, d, "frame", .{}))});
+        if (objc.msg(bool, config, "respondsToSelector:", .{objc.sel("setIncludeChildWindows:")}))
+            objc.msg(void, config, "setIncludeChildWindows:", .{false});
+        const only = objc.msg(objc.Object, objc.class("NSArray"), "arrayWithObject:", .{sc});
+        break :blk objc.msg(objc.Object, objc.alloc("SCContentFilter"), "initWithDisplay:includingWindows:", .{ d, only });
+    } else objc.msg(objc.Object, objc.alloc("SCContentFilter"), "initWithDesktopIndependentWindow:", .{sc});
+    defer objc.release(filter);
     const wait = try gpa.create(Wait);
     wait.* = .{ .sem = objc.dispatch_semaphore_create(0) };
     var block = objc.Block(Wait, &.{ ?*anyopaque, ?objc.Object }).init(wait, Wait.done);
@@ -189,4 +246,16 @@ fn grab(gpa: std.mem.Allocator, rect: cf.CGRect) !?CGImageRef {
 extern "c" fn dispatch_time(when: u64, delta: i64) u64;
 fn dispatchTime(ns: u64) u64 {
     return dispatch_time(0, @intCast(ns));
+}
+
+test "a window's place on its display" {
+    const win: objc.CGRect = .{ .origin = .{ .x = 1500, .y = 100 }, .size = .{ .width = 400, .height = 300 } };
+    const left: objc.CGRect = .{ .size = .{ .width = 1440, .height = 900 } };
+    const right: objc.CGRect = .{ .origin = .{ .x = 1440 }, .size = .{ .width = 1920, .height = 1080 } };
+    try std.testing.expectEqual(@as(f64, 0), overlap(win, left));
+    try std.testing.expectEqual(@as(f64, 120000), overlap(win, right));
+    const placed = inDisplay(win, right);
+    try std.testing.expectEqual(@as(f64, 60), placed.origin.x);
+    try std.testing.expectEqual(@as(f64, 100), placed.origin.y);
+    try std.testing.expectEqual(@as(f64, 400), placed.size.width);
 }

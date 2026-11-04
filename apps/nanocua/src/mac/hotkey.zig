@@ -8,7 +8,7 @@ const EventTypeSpec = extern struct { class: u32, kind: u32 };
 const HotKeyID = extern struct { signature: u32, id: u32 };
 const Handler = *const fn (next: ?*anyopaque, event: ?*anyopaque, user: ?*anyopaque) callconv(.c) i32;
 extern "c" fn GetApplicationEventTarget() *anyopaque;
-extern "c" fn InstallEventHandler(target: *anyopaque, handler: Handler, n: u32, list: [*]const EventTypeSpec, user: ?*anyopaque, out: ?*?*anyopaque) i32;
+extern "c" fn InstallEventHandler(target: *anyopaque, handler: Handler, n: usize, list: [*]const EventTypeSpec, user: ?*anyopaque, out: ?*?*anyopaque) i32;
 extern "c" fn RegisterEventHotKey(code: u32, modifiers: u32, id: HotKeyID, target: *anyopaque, options: u32, out: *?*anyopaque) i32;
 extern "c" fn UnregisterEventHotKey(ref: *anyopaque) i32;
 

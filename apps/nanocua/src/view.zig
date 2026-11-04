@@ -6,6 +6,7 @@ const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const theme = @import("theme.zig");
 const policy = @import("policy.zig");
+const control = @import("control.zig");
 const App = @import("app.zig").App;
 const mac = @import("app.zig").mac;
 
@@ -15,6 +16,7 @@ pub fn view(a: *App, c: *ui.Context) void {
     const page = ui.div(c).column().sizeFull().p(20).gap(14).bg(k.page);
     defer page.end();
     header(c, a, k);
+    question(c, a, k);
     permissions(c, a, k);
     agents(c, a, k);
     activity(c, a, k);
@@ -45,9 +47,34 @@ fn header(c: *ui.Context, a: *App, k: theme.Colors) void {
         ui.text(c, "Lets AI agents see and use this computer, as far as you allow here.", .{ .size = 12, .color = k.secondary, .wrap = true });
     }
     if (p.stopped) {
-        if (ui.button(c, "Resume", .{ .variant = .primary }).clicked) a.setStopped(false);
+        if (ui.button(c, "Resume", .{ .variant = .primary }).clicked) a.fromPanel(.@"resume", true);
     } else if (ui.button(c, "Stop", .{ .variant = .danger }).clicked) a.setStopped(true);
 }
+
+pub const screen_hint = "Turn on nanocua in the list System Settings opened. Not there? Drag nanocua.app from the Finder window into it.";
+
+/// What a program asked for from outside. Only this click turns it on.
+fn question(c: *ui.Context, a: *App, k: theme.Colors) void {
+    const now = a.hub.clock();
+    a.settleRequest();
+    if (now < a.ignored_until) {
+        c.frameIn(@floatCast(a.ignored_until - now));
+        ui.text(c, ignored_click, .{ .size = 12, .color = k.red, .wrap = true });
+    }
+    const r = a.gate.request orelse return;
+    const armed = a.gate.armed(now);
+    c.frameIn(@floatCast(if (armed) r.at + control.lifetime - now else r.at + control.armed_after - now));
+    const d = ui.div(c).column().wFull().p(14).gap(10).bg(k.card).border(k.accent).borderW(2).rounded(12);
+    defer d.end();
+    ui.text(c, c.print("A request from {s}", .{r.from()}), .{ .size = 13, .weight = .semibold, .color = k.accent });
+    ui.text(c, r.want.question(), .{ .size = 14, .color = k.text, .wrap = true });
+    const row = ui.div(c).row().itemsCenter().gap(8);
+    defer row.end();
+    if (ui.button(c, "Allow", .{ .variant = .primary, .disabled = !armed }).clicked) a.answer(true);
+    if (ui.button(c, "Deny", .{}).clicked) a.answer(false);
+}
+
+pub const ignored_click = "That click came from a program, so it was ignored. Only your own mouse or trackpad turns things on.";
 
 fn permissions(c: *ui.Context, a: *App, k: theme.Colors) void {
     if (comptime !mac) return;
@@ -56,6 +83,8 @@ fn permissions(c: *ui.Context, a: *App, k: theme.Colors) void {
     title(c, k, "Permissions");
     permission(c, a, k, "Accessibility", "To read apps' controls, click and type", a.perms.accessibility, .accessibility);
     permission(c, a, k, "Screen Recording", "For screenshots", a.perms.screen, .screen);
+    if (a.asked_screen and !a.perms.screen)
+        ui.text(c, screen_hint, .{ .size = 12, .color = k.accent, .wrap = true });
 }
 
 fn permission(c: *ui.Context, a: *App, k: theme.Colors, name: []const u8, what: []const u8, on: bool, which: App.Ask) void {
@@ -77,9 +106,9 @@ fn agents(c: *ui.Context, a: *App, k: theme.Colors) void {
     defer d.end();
     title(c, k, "Agents");
     var input = a.hub.policy.allow_input;
-    if (ui.toggle(c, "Allow input: clicks, typing, keys, opening apps", &input)) a.setInput(input);
+    if (ui.toggle(c, "Allow input: clicks, typing, keys, opening apps", &input)) a.fromPanel(.input, input);
     var whole = a.hub.policy.allow_whole_screen;
-    if (ui.toggle(c, "Allow whole screen: your pointer and keyboard, pictures of everything", &whole)) a.setWholeScreen(whole);
+    if (ui.toggle(c, "Allow whole screen: your pointer and keyboard, pictures of everything", &whole)) a.fromPanel(.whole_screen, whole);
     ui.text(c, "Off, agents work inside one app at a time, in the background.", .{ .size = 12, .color = k.secondary, .wrap = true });
     if (a.listen_error) |e| {
         ui.text(c, e, .{ .size = 12, .color = k.red, .wrap = true });
@@ -106,10 +135,12 @@ fn agents(c: *ui.Context, a: *App, k: theme.Colors) void {
         }
     }
     if (comptime mac) {
-        const r = ui.div(c).row().itemsCenter().gap(6);
-        defer r.end();
-        ui.text(c, "Stop everything from anywhere:", .{ .size = 12, .color = k.secondary });
-        ui.kbd(c, @import("mac/hotkey.zig").label);
+        if (a.hotkey != null) {
+            const r = ui.div(c).row().itemsCenter().gap(6);
+            defer r.end();
+            ui.text(c, "Stop everything from anywhere:", .{ .size = 12, .color = k.secondary });
+            ui.kbd(c, @import("mac/hotkey.zig").label);
+        } else ui.text(c, "The stop key couldn't be set up: use Stop above, or `graff computer stop`.", .{ .size = 12, .color = k.secondary, .wrap = true });
     }
 }
 

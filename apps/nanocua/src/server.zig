@@ -50,6 +50,8 @@ const Conn = struct {
     fd: c_int,
     watch: ?fdwatch.Watch = null,
     lines: Lines = .{},
+    /// It uses the switches, so it isn't an agent.
+    control: bool = false,
 
     fn readable(ctx: ?*anyopaque) callconv(.c) void {
         if (comptime !supported) return;
@@ -124,8 +126,15 @@ pub const Server = struct {
         return c.id;
     }
 
+    /// Agents connected.
     pub fn clients(s: *const Server) usize {
-        return s.conns.count();
+        var n: usize = 0;
+        for (s.conns.values()) |c| n += @intFromBool(!c.control);
+        return n;
+    }
+
+    pub fn markControl(s: *Server, id: u64) void {
+        if (s.conns.get(id)) |c| c.control = true;
     }
 
     fn changed(s: *Server) void {
@@ -141,6 +150,7 @@ pub const Server = struct {
     fn drop(s: *Server, id: u64) void {
         const kv = s.conns.fetchSwapRemove(id) orelse return;
         const c = kv.value;
+        s.hub.closed(id);
         if (c.watch) |w| w.cancel();
         _ = close(c.fd);
         c.lines.deinit(s.gpa);

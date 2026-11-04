@@ -52,9 +52,11 @@ pub const Tool = enum {
             \\need (canvases, images).
             ,
             .click =>
-            \\Clicks in the app you act in, without moving the user's pointer: an element by ref (pressing it through
-            \\accessibility when it can, else at its center) or x,y in screen points. button: left (default) or right;
-            \\count: 2 for a double click. Some apps ignore background clicks: then use refs, or ask for whole_screen.
+            \\Clicks in the app you act in, without moving the user's pointer: an element by ref, or x,y in screen
+            \\points, inside that app's window. Controls are pressed through accessibility, which is exact. Anything
+            \\else gets a click event that apps can ignore in the background, so the reply says it isn't confirmed:
+            \\check the result. In a window that isn't its app's key window, that first click may only make it key.
+            \\button: left (default) or right; count: 2 for a double click.
             ,
             .type_text =>
             \\Types text into the app you act in, without taking the user's keyboard: into its focused element, or
@@ -66,7 +68,7 @@ pub const Tool = enum {
             ,
             .scroll =>
             \\Scrolls in the app you act in, at x,y (or over element ref), by dy lines (positive scrolls down) and dx
-            \\lines (positive scrolls right).
+            \\lines (positive scrolls right). The reply says whether it moved, when the app has scroll bars to read.
             ,
             .move_mouse =>
             \\Hovers at x,y in screen points in the app you act in. The user's pointer stays put unless whole_screen.

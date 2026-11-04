@@ -23,7 +23,7 @@ pub fn run(init: std.process.Init) !u8 {
     var buf: [512]u8 = undefined;
     var p: Proxy = .{
         .gpa = init.gpa,
-        .path = try sockpath.path(&buf, init.environ_map),
+        .path = try sockpath.path(&buf, init.environ_map, sockpath.realHome()),
         .hub = .{
             .gpa = init.gpa,
             .sink = .{ .ptr = undefined, .send = toStdout },
@@ -147,7 +147,20 @@ const Proxy = struct {
     }
 };
 
-fn connect(path: [:0]const u8) ?c_int {
+/// The app's socket, opening the app if it isn't running; null if it can't.
+pub fn connectOrOpen(path: [:0]const u8) ?c_int {
+    if (connect(path)) |fd| return fd;
+    if (!launch()) return null;
+    // The app starts in well under this; its first launch may ask the user
+    // something first.
+    for (0..100) |_| {
+        _ = usleep(100_000);
+        if (connect(path)) |fd| return fd;
+    }
+    return null;
+}
+
+pub fn connect(path: [:0]const u8) ?c_int {
     var addr: std.c.sockaddr.un = .{ .path = @splat(0) };
     if (path.len >= addr.path.len) return null;
     @memcpy(addr.path[0..path.len], path);

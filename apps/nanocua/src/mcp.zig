@@ -21,6 +21,14 @@ pub const Sink = struct {
 pub const Backend = struct {
     ptr: *anyopaque,
     call: *const fn (ptr: *anyopaque, tool: tools.Tool, args: tools.Args, reply: *Reply) void,
+    /// A connection went away: what it held can go too.
+    closed: ?*const fn (ptr: *anyopaque, conn: u64) void = null,
+};
+
+/// The switches, for `nanocua/*` calls (control.zig). `id` lasts only the call.
+pub const Control = struct {
+    ptr: *anyopaque,
+    func: *const fn (ptr: *anyopaque, conn: u64, id: []const u8, method: []const u8, params: ?std.json.Value) void,
 };
 
 pub const Content = union(enum) {
@@ -46,6 +54,13 @@ pub const Hub = struct {
     changed: ?Callback = null,
     /// Calls not yet answered.
     pending: usize = 0,
+    /// Null where nothing can answer them (`nanocua mcp`'s own hub): agents
+    /// reach the switches only by opening the socket themselves.
+    control: ?Control = null,
+
+    pub fn closed(h: *Hub, conn: u64) void {
+        if (h.backend.closed) |f| f(h.backend.ptr, conn);
+    }
 
     /// Handles one line from connection `conn`.
     pub fn handle(h: *Hub, conn: u64, line: []const u8) void {
@@ -74,6 +89,8 @@ pub const Hub = struct {
             h.sendResult(conn, id, aw.written());
         } else if (std.mem.eql(u8, method, "tools/call")) {
             h.call(conn, id, params);
+        } else if (std.mem.startsWith(u8, method, "nanocua/") and h.control != null) {
+            h.control.?.func(h.control.?.ptr, conn, id, method, params);
         } else h.sendError(conn, id, -32601, "Method not found");
     }
 
@@ -101,14 +118,14 @@ pub const Hub = struct {
         if (h.changed) |c| c.func(c.ptr);
     }
 
-    fn sendResult(h: *Hub, conn: u64, id: []const u8, result: []const u8) void {
+    pub fn sendResult(h: *Hub, conn: u64, id: []const u8, result: []const u8) void {
         var aw: std.Io.Writer.Allocating = .init(h.gpa);
         defer aw.deinit();
         aw.writer.print("{{\"jsonrpc\":\"2.0\",\"id\":{s},\"result\":{s}}}", .{ id, result }) catch return;
         h.sink.send(h.sink.ptr, conn, aw.written());
     }
 
-    fn sendError(h: *Hub, conn: u64, id: []const u8, code: i32, message: []const u8) void {
+    pub fn sendError(h: *Hub, conn: u64, id: []const u8, code: i32, message: []const u8) void {
         var buf: [256]u8 = undefined;
         const line = std.fmt.bufPrint(&buf, "{{\"jsonrpc\":\"2.0\",\"id\":{s},\"error\":{{\"code\":{d},\"message\":\"{s}\"}}}}", .{ id, code, message }) catch return;
         h.sink.send(h.sink.ptr, conn, line);

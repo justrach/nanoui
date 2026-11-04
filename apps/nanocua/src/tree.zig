@@ -32,6 +32,21 @@ fn bare(role: []const u8) []const u8 {
     return if (std.mem.startsWith(u8, role, "AX")) role[2..] else role;
 }
 
+/// A role as it reads in a reply: "Button".
+pub const bareRole = bare;
+
+/// Roles an accessibility press does what a click would.
+const pressed = [_][]const u8{ "Button", "CheckBox", "RadioButton", "PopUpButton", "MenuButton", "MenuItem", "MenuBarItem", "Link", "DisclosureTriangle", "Incrementor" };
+
+pub fn pressable(role: []const u8) bool {
+    return in(bare(role), &pressed);
+}
+
+/// Roles that are likely a control's label or icon, so its control is above.
+pub fn insideControl(role: []const u8) bool {
+    return in(bare(role), &.{ "StaticText", "Image" });
+}
+
 fn in(s: []const u8, list: []const []const u8) bool {
     for (list) |x| if (std.mem.eql(u8, s, x)) return true;
     return false;
@@ -77,6 +92,13 @@ fn quoted(w: *std.Io.Writer, prefix: []const u8, s: []const u8, max: usize) !voi
     };
     if (end < s.len) try w.writeAll("…");
     try w.writeByte('"');
+}
+
+test "what a press reaches" {
+    try std.testing.expect(pressable("AXButton") and pressable("AXLink"));
+    try std.testing.expect(!pressable("AXTextArea") and !pressable("AXGroup"));
+    try std.testing.expect(insideControl("AXStaticText") and !insideControl("AXTextArea"));
+    try std.testing.expectEqualStrings("Button", bareRole("AXButton"));
 }
 
 test "lines name what can be acted on and skip plumbing" {

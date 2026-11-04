@@ -19,6 +19,10 @@ agent ──stdio──▶ nanocua mcp ──unix socket──▶ nanocua (the a
                                                accessibility, input, screenshots
 ```
 
+Everything goes to the one app, so a terminal `graff`, Harness's graff chats and
+any other agent can use it at the same time. Calls run one at a time, and each
+agent keeps its own refs and target app.
+
 The app does all the work, and the agent's `nanocua mcp` only carries lines.
 That matters on macOS: permissions (Accessibility, Screen Recording) belong
 to the app that asks, so you grant them to nanocua once, not to each terminal
@@ -69,10 +73,9 @@ brings the app forward.
 
 ## What you control
 
-- **Stop** (or **⌃⌥⌘.** from anywhere) refuses every call, even looking,
-  including calls already waiting, and stops text being typed, until you press
-  Resume. An agent may be moving the pointer, which is why the keyboard shortcut
-  exists.
+- **Stop** refuses every call, even looking, including calls already waiting, and
+  stops text being typed, until you press Resume. An agent may be moving the
+  pointer, so it's also on a key, **⌃⌥⌘.**, and outside the panel (below).
 - **Allow input** is off at launch: agents can look but not click, type or
   open apps until you turn it on.
 - **Allow whole screen** is off at launch too: agents stay inside one app.
@@ -83,6 +86,34 @@ brings the app forward.
 
 Calls run one at a time on a queue of their own, so a hung app never
 freezes the panel (accessibility calls give up after two seconds).
+
+## From graff and Harness
+
+The switches also show in `graff computer`, `/computer` and Harness's MCP servers
+settings page. All of them run the app's `nanocua ctl`:
+
+```sh
+nanocua ctl status [--json]                what's on, what macOS has granted
+nanocua ctl stop                           refuse every call, at once
+nanocua ctl off input                      turn a switch off, at once
+nanocua ctl allow input                    ask; you answer in nanocua's window
+nanocua ctl grant screen                   open macOS's prompt
+nanocua ctl open                           bring the window forward
+```
+
+Anything can stop nanocua or turn things off. **Nothing outside the window can
+turn things on.** `allow` only puts a question in nanocua's window, and it takes a
+click there, from your own mouse or trackpad. Agents have shells and could run
+this command too; if it turned input on, the switch would protect you from nothing.
+Allow arms after 0.7s, so a click meant for something else can't answer it. A
+question goes away after a minute, and a Deny refuses new ones for 15 seconds.
+
+The same check covers the panel's own switches and Resume, on the way on only.
+Switch Control and Voice Control post their own clicks, so they can turn things
+off here but not on. Release builds refuse nanoui's `--nanoui-*` flags, which
+would otherwise drive this window from a command line. None of this stops a
+determined program running as you, which could tamper with the app itself: it
+closes the easy route. macOS's own permissions stay in System Settings.
 
 ## Adding it to an agent
 
@@ -116,7 +147,8 @@ sh macos/package.sh aarch64-macos /tmp   # /tmp/nanocua.app
 
 Nothing in the tests moves the pointer, types or captures the screen: the policy,
 where calls go, MCP sessions, keys, the tree's text, the socket (over a socket
-pair) and the panel are tested; the macOS backend is compiled, not run.
+pair), the switches from outside and the panel are tested; the macOS backend is
+compiled, not run.
 
 macOS keeps permissions across updates only for an app signed by the same
 identity. Set `CODESIGN_IDENTITY` for `package.sh`; an ad hoc build is asked again
