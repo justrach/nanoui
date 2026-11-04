@@ -101,8 +101,9 @@ test "dock: a divider under the pointer glows there, fading up and out" {
     const px = try t.render(testing.allocator);
     defer px.deinit(testing.allocator);
     // Brightest at the pointer, dark far along the gutter.
-    try testing.expect(brightness(px, x, 80) > brightness(px, x, 260) + 120);
-    try testing.expect(brightness(px, x, 80) > brightness(px, x, 200) + 60);
+    // Brightest at the pointer, fading along the gutter, but lit its whole length.
+    try testing.expect(brightness(px, x, 80) > brightness(px, x, 200) + 120);
+    try testing.expect(brightness(px, x, 290) > 25);
 
     // The pointer leaves: the glow goes out.
     t.moveTo(100, 150);

@@ -40,8 +40,12 @@ pub const Style = struct {
     /// A light in the gutter of the divider under the pointer, brightest
     /// where the pointer is and fading along the gutter (null: none).
     glow: ?Color = null,
-    /// How far along the gutter the glow reaches, in points.
-    glow_length: f32 = 140,
+    /// How far either side of the pointer the line stays bright, in points
+    /// (twice the falloff's width).
+    glow_length: f32 = 180,
+    /// How lit the line is far from the pointer, 0 to 1: it runs the
+    /// gutter's whole length.
+    glow_floor: f32 = 0.22,
     /// Seconds the glow takes to come up or go out.
     glow_fade: f32 = 0.12,
 };
@@ -205,29 +209,41 @@ fn glow(c: *Context, st: *State, style: Style, l: *const dl.Layout, hot: ?dl.Div
     const span_lo = if (vertical) d.rect.y else d.rect.x;
     const span = if (vertical) d.rect.h else d.rect.w;
     const mid = if (vertical) d.rect.x + d.rect.w / 2 else d.rect.y + d.rect.h / 2;
-    // Lights on one line, each shorter and tighter: a wide haze down to a
-    // hot point at the pointer, so the gutter tapers off on both sides.
-    const Light = struct { length: f32, width: f32, blur: f32, alpha: f32 };
-    const lights = [_]Light{
-        .{ .length = 1.0, .width = 10, .blur = 44, .alpha = 0.4 },
-        .{ .length = 0.6, .width = 4, .blur = 16, .alpha = 0.7 },
-        .{ .length = 0.32, .width = 2.5, .blur = 7, .alpha = 0.8 },
-        .{ .length = 0.12, .width = 2, .blur = 3, .alpha = 1 },
-    };
-    for (lights, 0..) |li, i| {
-        const len = @min(style.glow_length * li.length, span);
-        const lo = std.math.clamp(st.glow_along - len / 2, span_lo, span_lo + span - len);
+    // A hairline the gutter's whole length, lit most at the pointer and
+    // fading along it (a Gaussian, drawn as short segments), with a small
+    // bloom where the pointer is.
+    const seg: f32 = 3;
+    const width: f32 = 1.5;
+    const sigma = @max(style.glow_length / 2, 1);
+    const count: usize = @intFromFloat(@ceil(span / seg));
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        const at = span_lo + @as(f32, @floatFromInt(i)) * seg;
+        const len = @min(seg, span_lo + span - at);
+        const dist = (at + len / 2 - st.glow_along) / sigma;
+        const a = style.glow_floor + (1 - style.glow_floor) * @exp(-dist * dist);
         const r: Rect = if (vertical)
-            .{ .x = mid - li.width / 2, .y = lo, .w = li.width, .h = len }
+            .{ .x = mid - width / 2, .y = at, .w = width, .h = len }
         else
-            .{ .x = lo, .y = mid - li.width / 2, .w = len, .h = li.width };
-        var s = abs(r);
-        s.layer = 1;
-        s.radius = li.width / 2;
-        s.shadow = .{ .color = color.alpha(li.alpha * k), .blur = li.blur, .y = 0 };
-        _ = c.open(s, c.print("dock-glow{d}", .{i}));
+            .{ .x = at, .y = mid - width / 2, .w = len, .h = width };
+        var sty = abs(r);
+        sty.layer = 1;
+        sty.background = color.alpha(a * k);
+        _ = c.open(sty, c.print("dock-glow{d}", .{i}));
         c.end();
     }
+    const bloom: f32 = @min(style.glow_length * 0.35, span);
+    const lo = std.math.clamp(st.glow_along - bloom / 2, span_lo, span_lo + span - bloom);
+    const br: Rect = if (vertical)
+        .{ .x = mid - 1, .y = lo, .w = 2, .h = bloom }
+    else
+        .{ .x = lo, .y = mid - 1, .w = bloom, .h = 2 };
+    var bs = abs(br);
+    bs.layer = 1;
+    bs.radius = 1;
+    bs.shadow = .{ .color = color.alpha(0.55 * k), .blur = 10, .y = 0 };
+    _ = c.open(bs, "dock-glow-bloom");
+    c.end();
 }
 
 fn dragOverlay(c: *Context, t: *dock.Tree, st: *State, style: Style, l: *const dl.Layout, bounds: Rect, ctx: anytype, comptime Hooks: type) void {
