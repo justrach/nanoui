@@ -20,7 +20,7 @@ pub const Face = struct {
     memory: ?[]const u8 = null,
 
     fn read(f: Face, db: *Db) !fontmap.Bytes {
-        if (f.memory) |m| return .{ .data = try db.gpa.dupe(u8, m), .heap = true };
+        if (f.memory) |m| return .{ .data = try db.gpa.dupe(u8, m) };
         return fontmap.readFile(db.io, db.gpa, f.path);
     }
 };
@@ -335,11 +335,18 @@ pub const Db = struct {
         return if (db.faces.items.len > 0) 0 else null;
     }
 
-    /// A failed cached disk face invalidates the persistent index. Keeping the
-    /// in-process face indices stable is safe; the next process must rescan.
+    /// Only a changed or missing file invalidates the persistent index. A
+    /// stable unsupported face (for example, no usable cmap) stays cached;
+    /// otherwise every startup would rescan and rewrite the whole index.
     fn discardFailedFace(db: *Db, face: u32) void {
         if (face < db.disk_start or db.faces.items[face].memory != null) return;
         const path = db.cache_path orelse return;
+        const f = db.faces.items[face];
+        const changed = changed: {
+            const stat = std.Io.Dir.cwd().statFile(db.io, f.path, .{}) catch break :changed true;
+            break :changed stat.kind != .file or stat.size != f.size or stat.mtime.nanoseconds != f.mtime;
+        };
+        if (!changed) return;
         std.Io.Dir.cwd().deleteFile(db.io, path) catch |err| {
             if (err != error.FileNotFound) std.Io.Dir.cwd().writeFile(db.io, .{ .sub_path = path, .data = "invalid" }) catch {};
         };

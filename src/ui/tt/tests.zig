@@ -96,24 +96,19 @@ fn glyphCoverage(gpa: std.mem.Allocator, data: []const u8) ![]u8 {
     return pixels;
 }
 
-test "Windows mappings and heap fonts render byte-identical coverage" {
+test "font reads and heap fonts render byte-identical coverage" {
     const gpa = std.testing.allocator;
     const path = fontPath() orelse return error.SkipZigTest;
-    var mapped = try fontmap.readFile(std.testing.io, gpa, path);
-    defer fontmap.freeBytes(std.testing.io, gpa, &mapped);
+    var loaded = try fontmap.readFile(std.testing.io, gpa, path);
+    defer fontmap.freeBytes(std.testing.io, gpa, &loaded);
     var heap = try fontmap.readHeap(std.testing.io, gpa, path);
     defer fontmap.freeBytes(std.testing.io, gpa, &heap);
-    try std.testing.expectEqualSlices(u8, heap.data, mapped.data);
+    try std.testing.expectEqualSlices(u8, heap.data, loaded.data);
     const a = try glyphCoverage(gpa, heap.data);
     defer gpa.free(a);
-    const b = try glyphCoverage(gpa, mapped.data);
+    const b = try glyphCoverage(gpa, loaded.data);
     defer gpa.free(b);
     try std.testing.expectEqualSlices(u8, a, b);
-    if (@import("builtin").os.tag == .windows) {
-        try std.testing.expect(mapped.mapped);
-    } else {
-        try std.testing.expect(mapped.heap and !mapped.mapped);
-    }
 }
 
 test "font index hits without scanning and directory changes rebuild it" {
@@ -244,5 +239,58 @@ test "font index hits without scanning and directory changes rebuild it" {
         try std.testing.expectEqual(@import("fontindex.zig").State.written, db.cache.state);
         try std.testing.expect(db.scan_files > 0);
         try std.testing.expectEqual(faces, db.faces.items.len);
+    }
+}
+
+test "an unsupported cmap does not invalidate other warm font faces" {
+    const gpa = std.testing.allocator;
+    const data = load(gpa) orelse return error.SkipZigTest;
+    defer gpa.free(data);
+    const unsupported = try gpa.dupe(u8, data);
+    defer gpa.free(unsupported);
+    const tables = try font.Tables.read(unsupported, 0);
+    const count = std.mem.readInt(u16, unsupported[tables.cmap + 2 ..][0..2], .big);
+    try std.testing.expect(count > 0);
+    for (0..count) |i| {
+        const record = tables.cmap + 4 + 8 * i;
+        const at = tables.cmap + std.mem.readInt(u32, unsupported[record + 4 ..][0..4], .big);
+        std.mem.writeInt(u16, unsupported[at..][0..2], 0, .big);
+    }
+    try std.testing.expectError(error.Unsupported, font.Font.init(unsupported, 0));
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDir(std.testing.io, "fonts", .default_dir);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "fonts/valid.ttf", .data = data });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "fonts/unsupported.ttf", .data = unsupported });
+    var root_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root_len = try tmp.dir.realPath(std.testing.io, &root_buf);
+    const root = root_buf[0..root_len];
+    const fonts_dir = try std.fs.path.join(gpa, &.{ root, "fonts" });
+    defer gpa.free(fonts_dir);
+    const cache_dir = try std.fs.path.join(gpa, &.{ root, "cache" });
+    defer gpa.free(cache_dir);
+    const cache_path = try std.fs.path.join(gpa, &.{ cache_dir, "font-index-v2.bin" });
+    defer gpa.free(cache_path);
+
+    for (0..3) |run| {
+        var db = fontdb.Db.init(gpa, std.testing.io);
+        defer db.deinit();
+        db.fonts_dir = fonts_dir;
+        db.cache_path = cache_path;
+        db.scan();
+        const expected: @import("fontindex.zig").State = if (run == 0) .written else .hit;
+        try std.testing.expectEqual(expected, db.cache.state);
+        try std.testing.expectEqual(@as(usize, if (run == 0) 2 else 0), db.scan_files);
+        var valid: ?u32 = null;
+        var bad: ?u32 = null;
+        for (db.faces.items, 0..) |face, i| {
+            if (std.mem.endsWith(u8, face.path, "valid.ttf")) valid = @intCast(i);
+            if (std.mem.endsWith(u8, face.path, "unsupported.ttf")) bad = @intCast(i);
+        }
+        try std.testing.expect(db.load(valid.?).?.glyphIndex('A') != 0);
+        try std.testing.expect(db.load(bad.?) == null);
+        try std.testing.expectEqual(expected, db.cache.state);
+        try std.Io.Dir.cwd().access(std.testing.io, cache_path, .{});
     }
 }
