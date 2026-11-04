@@ -191,7 +191,7 @@ pub const Tester = struct {
         t.ctx.input.mouse = .{ .x = x, .y = y };
         if (t.ctx.applyScroll(dy)) {
             t.frame();
-        } else if (t.ctx.wants_wheel) {
+        } else if (t.ctx.wants_wheel or t.ctx.wheelAt()) {
             t.ctx.input.scroll = .{ .y = dy };
             t.frame();
         }
