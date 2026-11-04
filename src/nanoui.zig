@@ -210,4 +210,6 @@ test {
     std.testing.refAllDecls(@import("tray.zig").Tray);
     // The window's own: borderless, out of the window cycle, its alpha.
     _ = @import("tests_window.zig");
+    // Windows opened while running and closed by the app, keys.
+    _ = @import("tests_window_more.zig");
 }

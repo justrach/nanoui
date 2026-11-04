@@ -118,7 +118,14 @@ pub const Menu = struct {
         });
         const target = objc.msg(objc.Object, target_class, "new", .{});
         objc.setZig(target, self);
-        self.* = .{ .gpa = gpa, .ns = objc.new("NSMenu"), .target = target, .app_name = app_name };
+        // Its key equivalents say no while a view captures chords
+        // (`ui.keys.suspendMenuKeyEquivalents`).
+        const menu_class = objc.defineClass(.{
+            .name = "NanoUIMenu",
+            .superclass = "NSMenu",
+            .methods = &.{.{ .name = "performKeyEquivalent:", .imp = &performKeyEquivalent, .types = "c@:@" }},
+        });
+        self.* = .{ .gpa = gpa, .ns = objc.msg(objc.Object, menu_class, "new", .{}), .target = target, .app_name = app_name };
         errdefer self.destroyItems();
         try self.build(self.ns, template, null);
         objc.msg(void, self.ns, "setAutoenablesItems:", .{objc.NO});
@@ -335,6 +342,11 @@ pub const mod_ctrl = menu_types.mod_ctrl;
 pub const mod_alt = menu_types.mod_alt;
 pub const mod_cmd = menu_types.mod_cmd;
 pub const parseAccelerator = menu_types.parseAccelerator;
+
+fn performKeyEquivalent(self_obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) objc.BOOL {
+    if (@import("ui/keys.zig").menu_key_equivalents_suspended) return objc.NO;
+    return objc.msgSuper(objc.BOOL, self_obj, objc.class("NSMenu"), "performKeyEquivalent:", .{event});
+}
 
 fn itemClicked(self_obj: objc.Object, _: objc.SEL, sender: objc.Object) callconv(.c) void {
     const menu = objc.getZig(Menu, self_obj) orelse return;

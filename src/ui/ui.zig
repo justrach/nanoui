@@ -79,6 +79,9 @@ pub const Posture = device.Posture;
 pub const panes = @import("panes.zig").panes;
 pub const Panes = @import("panes.zig").Panes;
 pub const PanesOptions = @import("panes.zig").Options;
+/// Holds the menu bar's key equivalents back while a view captures key
+/// combinations (a shortcut editor): ⌘ chords reach the view instead.
+pub const suspendMenuKeyEquivalents = keys.suspendMenuKeyEquivalents;
 
 pub const key = widgets.key;
 pub const keyInt = widgets.keyInt;
