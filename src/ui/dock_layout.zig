@@ -73,6 +73,16 @@ pub fn layout(t: *const Tree, bounds: Rect) Layout {
     return out;
 }
 
+/// One group alone over `bounds` (a maximized panel's): its header with
+/// every tab and its content, no dividers.
+pub fn soloLayout(t: *const Tree, group_node: u8, bounds: Rect) Layout {
+    var out: Layout = .{};
+    if (!t.validate() or !dock.validGroup(t, group_node)) return out;
+    const safe = Rect{ .x = bounds.x, .y = bounds.y, .w = if (std.math.isFinite(bounds.w)) @max(bounds.w, 0) else 0, .h = if (std.math.isFinite(bounds.h)) @max(bounds.h, 0) else 0 };
+    layoutNode(t, group_node, safe, &out);
+    return out;
+}
+
 /// Where a panel dropped at (x, y) lands: the nearest edge band of the
 /// group under the point (a quarter of its side, at most 80 points), or
 /// its center.
