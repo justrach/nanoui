@@ -53,6 +53,9 @@ pub const Response = struct {
     }
 };
 
+/// A `data:` URL's bytes, owned by `gpa`.
+pub const decodeData = portable.decodeData;
+
 /// Where a link leads from the URL it is on (`http_url.zig`).
 pub const resolve = @import("http_url.zig").resolve;
 
