@@ -68,3 +68,44 @@ test "dock: dividers resize, tabs switch and dock elsewhere" {
     try testing.expectEqual(@as(u8, 3), s.st.layout.group_count);
     try testing.expect(t.hasText("Gamma body") and t.hasText("Beta body") and t.hasText("Alpha body"));
 }
+
+fn glowView(s: *Scene, c: *ui.Context) void {
+    ui.dock.view(c, &s.tree, &s.st, .{ .background = .black, .header = .hex(0x222222), .glow = .hex(0xff3030) }, s, Scene.Hooks);
+}
+
+fn brightness(px: anytype, x: f32, y: f32) u32 {
+    const i = (@as(usize, @intFromFloat(y)) * px.width + @as(usize, @intFromFloat(x))) * 4;
+    return @as(u32, px.bytes[i]) + px.bytes[i + 1] + px.bytes[i + 2];
+}
+
+test "dock: a divider under the pointer glows there, fading up and out" {
+    var s: Scene = .{};
+    try testing.expect(s.tree.insert(0, null));
+    try testing.expect(s.tree.split(1, 0, .right));
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&s, glowView), .{ .width = 400, .height = 300, .scale = 1 });
+    defer t.deinit();
+    t.settle(0.1);
+    try testing.expectEqual(@as(f32, 0), s.st.glow);
+
+    const d = s.st.layout.dividers[0].rect;
+    const x = d.x + d.w / 2;
+    t.moveTo(x, 80);
+    // Partway up after a few frames, then lit.
+    t.advance(0.05);
+    try testing.expect(s.st.glow > 0.1 and s.st.glow < 0.9);
+    t.settle(1);
+    try testing.expectEqual(@as(f32, 1), s.st.glow);
+    try testing.expectApproxEqAbs(@as(f32, 80), s.st.glow_along, 0.5);
+
+    const px = try t.render(testing.allocator);
+    defer px.deinit(testing.allocator);
+    // Brightest at the pointer, dark far along the gutter.
+    try testing.expect(brightness(px, x, 80) > brightness(px, x, 260) + 120);
+    try testing.expect(brightness(px, x, 80) > brightness(px, x, 200) + 60);
+
+    // The pointer leaves: the glow goes out.
+    t.moveTo(100, 150);
+    t.settle(1);
+    try testing.expectEqual(@as(f32, 0), s.st.glow);
+}

@@ -37,6 +37,13 @@ pub const Style = struct {
     /// The landing zone of a dragged tab.
     drop: Color = .{ .r = 0.49, .g = 0.42, .b = 0.96, .a = 0.22 },
     drop_border: Color = .{ .r = 0.49, .g = 0.42, .b = 0.96, .a = 0.9 },
+    /// A light in the gutter of the divider under the pointer, brightest
+    /// where the pointer is and fading along the gutter (null: none).
+    glow: ?Color = null,
+    /// How far along the gutter the glow reaches, in points.
+    glow_length: f32 = 140,
+    /// Seconds the glow takes to come up or go out.
+    glow_fade: f32 = 0.12,
 };
 
 /// What a tab is drawn as.
@@ -58,6 +65,10 @@ pub const State = struct {
     dragging: bool = false,
     divider: ?dl.DividerItem = null,
     divider_last: f32 = 0,
+    /// The glow (`Style.glow`): how lit, on which divider, where along it.
+    glow: f32 = 0,
+    glow_divider: ?dl.DividerItem = null,
+    glow_along: f32 = 0,
     /// The last drop, for the app to persist the layout.
     moved: u32 = 0,
 };
@@ -73,7 +84,12 @@ pub fn view(c: *Context, t: *dock.Tree, st: *State, style: Style, ctx: anytype, 
     st.layout = l;
 
     for (l.groups[0..l.group_count]) |g| group(c, t, st, style, g, bounds, ctx, Hooks);
-    for (l.dividers[0..l.divider_count]) |d| divider(c, t, st, &l, d);
+    var hot: ?dl.DividerItem = null;
+    for (l.dividers[0..l.divider_count]) |d| {
+        if (divider(c, t, st, &l, d)) hot = d;
+    }
+    if (st.press_panel != null) hot = null;
+    glow(c, st, style, &l, hot);
     dragOverlay(c, t, st, style, &l, bounds, ctx, Hooks);
     c.end();
 }
@@ -131,7 +147,8 @@ fn translate(r: Rect, bounds: Rect) Rect {
     return .{ .x = r.x + bounds.x, .y = r.y + bounds.y, .w = r.w, .h = r.h };
 }
 
-fn divider(c: *Context, t: *dock.Tree, st: *State, l: *const dl.Layout, d: dl.DividerItem) void {
+/// Whether the pointer is on the divider or dragging it.
+fn divider(c: *Context, t: *dock.Tree, st: *State, l: *const dl.Layout, d: dl.DividerItem) bool {
     const slop = t.metrics.grab_slop;
     var r = d.rect;
     if (d.axis == .row) {
@@ -159,6 +176,58 @@ fn divider(c: *Context, t: *dock.Tree, st: *State, l: *const dl.Layout, d: dl.Di
         }
     }
     c.end();
+    return (it.hovered and st.divider == null) or mine;
+}
+
+fn glow(c: *Context, st: *State, style: Style, l: *const dl.Layout, hot: ?dl.DividerItem) void {
+    const color = style.glow orelse return;
+    if (hot) |d| {
+        st.glow_divider = d;
+        st.glow_along = if (d.axis == .row) c.input.mouse.y - st.origin.y else c.input.mouse.x - st.origin.x;
+    }
+    // Hovering a divider wants a frame per move, so the light follows.
+    if (hot != null) c.wants_moves = true;
+    const target: f32 = if (hot != null) 1 else 0;
+    if (st.glow != target) {
+        const step = @min(c.dt, 0.05) / @max(style.glow_fade, 0.001);
+        st.glow = if (st.glow < target) @min(target, st.glow + step) else @max(target, st.glow - step);
+        c.animationFrame();
+    }
+    if (st.glow <= 0) return;
+    const was = st.glow_divider orelse return;
+    // The divider as laid out this frame: a drag moves it.
+    const d = for (l.dividers[0..l.divider_count]) |x| {
+        if (x.split == was.split and x.index == was.index) break x;
+    } else return;
+    // Eased, so the light swells and settles rather than ramping.
+    const k = st.glow * st.glow * (3 - 2 * st.glow);
+    const vertical = d.axis == .row;
+    const span_lo = if (vertical) d.rect.y else d.rect.x;
+    const span = if (vertical) d.rect.h else d.rect.w;
+    const mid = if (vertical) d.rect.x + d.rect.w / 2 else d.rect.y + d.rect.h / 2;
+    // Lights on one line, each shorter and tighter: a wide haze down to a
+    // hot point at the pointer, so the gutter tapers off on both sides.
+    const Light = struct { length: f32, width: f32, blur: f32, alpha: f32 };
+    const lights = [_]Light{
+        .{ .length = 1.0, .width = 10, .blur = 44, .alpha = 0.4 },
+        .{ .length = 0.6, .width = 4, .blur = 16, .alpha = 0.7 },
+        .{ .length = 0.32, .width = 2.5, .blur = 7, .alpha = 0.8 },
+        .{ .length = 0.12, .width = 2, .blur = 3, .alpha = 1 },
+    };
+    for (lights, 0..) |li, i| {
+        const len = @min(style.glow_length * li.length, span);
+        const lo = std.math.clamp(st.glow_along - len / 2, span_lo, span_lo + span - len);
+        const r: Rect = if (vertical)
+            .{ .x = mid - li.width / 2, .y = lo, .w = li.width, .h = len }
+        else
+            .{ .x = lo, .y = mid - li.width / 2, .w = len, .h = li.width };
+        var s = abs(r);
+        s.layer = 1;
+        s.radius = li.width / 2;
+        s.shadow = .{ .color = color.alpha(li.alpha * k), .blur = li.blur, .y = 0 };
+        _ = c.open(s, c.print("dock-glow{d}", .{i}));
+        c.end();
+    }
 }
 
 fn dragOverlay(c: *Context, t: *dock.Tree, st: *State, style: Style, l: *const dl.Layout, bounds: Rect, ctx: anytype, comptime Hooks: type) void {
