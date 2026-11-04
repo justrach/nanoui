@@ -55,3 +55,45 @@ test "gradient colors pack into a quad's uv and back" {
     try testing.expectApproxEqAbs(@as(f32, 0.6), c[2], 0.003);
     try testing.expectApproxEqAbs(@as(f32, 1), c[3], 0.003);
 }
+
+/// Four stops whose colors change by two 8-bit steps a pixel, so every
+/// pixel is a whole step: Metal and the CPU must agree exactly.
+const stops = [_]ui.GradientStop{
+    .{ .at = 0, .color = .hex(0x00ff14) },
+    .{ .at = 0.3, .color = .hex(0x3cc350) },
+    .{ .at = 0.6, .color = .hex(0x00ff8c) },
+    .{ .at = 1, .color = .hex(0x50afdc) },
+};
+
+const Stops = struct {
+    fn view(_: *Stops, c: *ui.Context) void {
+        const root = ui.div(c).sizeFull().bg(.black);
+        defer root.end();
+        ui.div(c).absolute().offset(10, 0).w(20).h(100).bg(.white).gradientStops(&stops, null).end();
+        // A meter's level: the lower half of a track, in the track's colors.
+        ui.div(c).absolute().offset(40, 50).w(20).h(50).bg(.white).gradientStops(&stops, .{ .x = 0, .y = -50, .w = 20, .h = 100 }).end();
+    }
+};
+
+test "a gradient of four stops is the same to the pixel on the GPU and the CPU" {
+    const gpa = testing.allocator;
+    var s: Stops = .{};
+    var t: ui.Tester = undefined;
+    try t.init(gpa, .init(&s, Stops.view), .{ .width = 70, .height = 100, .scale = 1 });
+    defer t.deinit();
+    t.settle(0.1);
+    const px = try t.render(gpa);
+    defer px.deinit(gpa);
+    const cpu: gpu.Pixels = .{ .bytes = try gpa.alloc(u8, px.bytes.len), .width = px.width, .height = px.height };
+    defer cpu.deinit(gpa);
+    var pictures = t.text.images.pictures();
+    pictures.gradients = t.ctx.gradients.items;
+    raster.draw(cpu, t.instances.items, .{ .pixels = &.{}, .size = 0 }, pictures, 1, .black);
+    try testing.expectEqualSlices(u8, cpu.bytes, px.bytes);
+    // Each stop's own color at its row, and two steps a pixel between.
+    try testing.expectEqual([3]u8{ 1, 254, 21 }, at(px, 15, 0));
+    try testing.expectEqual([3]u8{ 59, 196, 79 }, at(px, 15, 29));
+    try testing.expectEqual([3]u8{ 79, 176, 219 }, at(px, 15, 99));
+    // The anchored box shows the track's colors where it is.
+    for (50..100) |y| try testing.expectEqual(at(px, 15, y), at(px, 45, y));
+}

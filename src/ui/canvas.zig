@@ -18,6 +18,9 @@ pub const Frame = struct {
     /// The view's textures (`ui.texture`): their pixels change without
     /// their boxes changing, so a frame with any is drawn whole.
     textures: []const gpu.Texture = &.{},
+    /// The frame's gradients of many stops: their colors can change
+    /// without their boxes changing, so a frame with any is drawn whole.
+    gradients: []const [4]f32 = &.{},
 
     fn pixelSize(f: Frame) [2]usize {
         return .{ @intFromFloat(@max(1, @round(f.size.w * f.scale))), @intFromFloat(@max(1, @round(f.size.h * f.scale))) };
@@ -50,7 +53,7 @@ pub const Canvas = struct {
             !std.meta.eql(cv.clear, f.clear) or
             cv.glyph_resets != f.text.atlas.resets or
             cv.picture_resets != f.text.images.resets or
-            f.textures.len > 0)
+            f.textures.len > 0 or f.gradients.len > 0)
             return .{ 0, 0, w, h };
         return raster.damage(w, h, cv.drawn.items, f.instances, f.scale);
     }
@@ -68,6 +71,7 @@ pub const Canvas = struct {
         }
         var pictures = f.text.images.pictures();
         pictures.textures = f.textures;
+        pictures.gradients = f.gradients;
         raster.drawRegion(.{ .bytes = cv.bytes, .width = w, .height = h }, f.instances, f.text.atlas.mask(), pictures, f.scale, f.clear, region);
         cv.clear = f.clear;
         cv.glyph_resets = f.text.atlas.resets;

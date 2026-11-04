@@ -202,7 +202,7 @@ static float corner_sdf(float2 p, float2 half_size, float r_in) {
     return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - cr;
 }
 
-static float4 shade(VOut in, Instance i, texture2d<float> atlas, texture2d<float> images, texture2d<float> layer_tex, texture2d<float> frame);
+static float4 shade(VOut in, Instance i, texture2d<float> atlas, texture2d<float> images, texture2d<float> layer_tex, texture2d<float> frame, constant float4 *grads);
 
 // A dashed border's coverage at `p` (from the box's centre), as GPUI's quad
 // shader lays dashes: twice the border's width long, once it apart, evenly
@@ -288,6 +288,29 @@ static float4 gradient_bottom(float4 uv) {
     return float4(r, uv.z - r * 256.0, b, uv.w - b * 256.0) / 255.0;
 }
 
+// A gradient of many stops (uv.y 2): its data at uv.z in the frame's
+// gradients (gpu.zig's gradientData), `y` points below the quad's top.
+// gpu.zig's `gradientAt` computes the same.
+static float4 gradient_stops(constant float4 *g, float4 uv, float y) {
+    uint at = uint(uv.z);
+    float4 h = g[at];
+    uint n = uint(h.z);
+    if (n == 0u) return float4(0.0);
+    float t = (y - h.x) / max(h.y, 1e-4);
+    if (t <= g[at + 1u].x) return g[at + 2u];
+    for (uint k = 1u; k < n; k++) {
+        float p0 = g[at + 1u + 2u * (k - 1u)].x;
+        float p1 = g[at + 1u + 2u * k].x;
+        if (t <= p1) {
+            float4 c0 = g[at + 2u + 2u * (k - 1u)];
+            float4 c1 = g[at + 2u + 2u * k];
+            float f = (t - p0) / max(p1 - p0, 1e-6);
+            return c0 + (c1 - c0) * f;
+        }
+    }
+    return g[at + 2u * n];
+}
+
 static float clip_coverage(VOut in, Instance i) {
     if (in.screen.x < i.clip.x || in.screen.y < i.clip.y || in.screen.x > i.clip.z || in.screen.y > i.clip.w)
         discard_fragment();
@@ -312,13 +335,14 @@ fragment float4 fs(VOut in [[stage_in]],
                    texture2d<float> atlas [[texture(0)]],
                    texture2d<float> images [[texture(1)]],
                    texture2d<float> layer_tex [[texture(2)]],
-                   texture2d<float> frame [[texture(3)]]) {
+                   texture2d<float> frame [[texture(3)]],
+                   constant float4 *grads [[buffer(3)]]) {
     Instance i = instances[in.inst];
     float clip_cover = clip_coverage(in, i);
-    return shade(in, i, atlas, images, layer_tex, frame) * (clip_cover * in.pulse_alpha);
+    return shade(in, i, atlas, images, layer_tex, frame, grads) * (clip_cover * in.pulse_alpha);
 }
 
-static float4 shade(VOut in, Instance i, texture2d<float> atlas, texture2d<float> images, texture2d<float> layer_tex, texture2d<float> frame) {
+static float4 shade(VOut in, Instance i, texture2d<float> atlas, texture2d<float> images, texture2d<float> layer_tex, texture2d<float> frame, constant float4 *grads) {
     if (i.kind == 11.0) {
         return layer_tex.read(uint2(in.pos.xy)) * i.color.a;
     }
@@ -410,7 +434,8 @@ static float4 shade(VOut in, Instance i, texture2d<float> atlas, texture2d<float
     }
     // Premultiplied: the border is laid over the fill, not mixed with it.
     float4 fill = i.color;
-    if (i.uv.y > 0.5) fill = mix(fill, gradient_bottom(i.uv), clamp(in.local.y / max(i.rect.w, 1e-4), 0.0, 1.0));
+    if (i.uv.y > 1.5) fill = gradient_stops(grads, i.uv, in.local.y);
+    else if (i.uv.y > 0.5) fill = mix(fill, gradient_bottom(i.uv), clamp(in.local.y / max(i.rect.w, 1e-4), 0.0, 1.0));
     float4 c = float4(fill.rgb * fill.a, fill.a);
     if (i.border_width > 0.0 && i.border_color.a > 0.0) {
         float inner = smoothstep(-i.border_width - aa, -i.border_width + aa, d);

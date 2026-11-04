@@ -69,6 +69,8 @@ pub const Surface = struct {
     resizing: bool = false,
     cursor: ctx_mod.Cursor = .arrow,
     custom_cursor: ?*anyopaque = null,
+    /// The app's GPU passes before each frame's (`gpu.BeforeEncode`).
+    before_encode: ?@import("gpu.zig").BeforeEncode = null,
     cursor_dirty: bool = false,
     theme_override: ?Theme = null,
     cached_theme: Theme = Theme.light,
@@ -431,6 +433,8 @@ pub const Surface = struct {
         if (atlas_reset) self.renderer.waitIdle();
         self.renderer.syncImages(&self.text.images);
         self.renderer.textures = c.textures.items;
+        self.renderer.gradients = c.gradients.items;
+        self.renderer.before_encode = self.before_encode;
         const clear = if (self.transparent) types.Color.transparent else c.theme.background;
         const present_at = if (target_in > 0) target_in else if (self.last_present_target > 0) @max(wall_now, self.last_present_target + dur) else wall_now;
         self.renderer.present_at = present_at;

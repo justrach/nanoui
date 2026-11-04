@@ -268,6 +268,7 @@ pub const Surface = struct {
         }
         self.renderer.syncImages(&self.text.images);
         self.renderer.textures = c.textures.items;
+        self.renderer.gradients = c.gradients.items;
         // The renderer draws into the drawable it is given (on the Mac, the
         // CAMetalDisplayLink's): here, the layer's next one.
         self.renderer.given_drawable = objc.msg(?objc.Object, self.renderer.layer, "nextDrawable", .{});

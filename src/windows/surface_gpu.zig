@@ -155,7 +155,7 @@ pub fn present(self: *Surface, h: w.HWND) bool {
 /// What the last frame drew, for the damage the CPU path reports to GDI.
 pub fn shown(self: *Surface) canvas.Frame {
     const clear = if (self.window.transparent) types.Color.transparent else self.ctx.theme.background;
-    return .{ .instances = self.instances.items, .text = &self.text, .clear = clear, .size = self.size, .scale = self.scale, .textures = self.ctx.textures.items };
+    return .{ .instances = self.instances.items, .text = &self.text, .clear = clear, .size = self.size, .scale = self.scale, .textures = self.ctx.textures.items, .gradients = self.ctx.gradients.items };
 }
 
 /// A transparent window's frame: drawn by the canvas (only what changed)
@@ -256,6 +256,7 @@ pub fn verify(self: *Surface) void {
     const whole: gpu.Pixels = .{ .bytes = whole_bytes, .width = px.width, .height = px.height };
     var pictures = self.text.images.pictures();
     pictures.textures = self.ctx.textures.items;
+    pictures.gradients = self.ctx.gradients.items;
     raster.draw(whole, self.instances.items, self.text.atlas.mask(), pictures, self.scale, self.ctx.theme.background);
     var differ: usize = 0;
     for (whole_bytes, px.bytes) |a, b| {

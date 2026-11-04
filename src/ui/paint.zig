@@ -163,7 +163,7 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip_
             .radius = rad,
             // A quad's uv is free: its x marks a dashed border.
             // and its y a gradient (`gpu.gradientUv`).
-            .uv = metal.gradientUv(st.border_dashed, if (fill != null and st.gradient != null) st.gradient.?.alpha(opacity) else null),
+            .uv = if (fill != null and st.gradient_stops.len > 0) gradientStops(c, &st, rect4, opacity) else metal.gradientUv(st.border_dashed, if (fill != null and st.gradient != null) st.gradient.?.alpha(opacity) else null),
             .clip = clip4,
         });
         switch (n.content) {
@@ -560,4 +560,13 @@ fn paintScrollbar(c: *Context, out: *std.ArrayList(metal.Instance), n: ctx_mod.N
         .radius = 2,
         .clip = metal.clip4(visible),
     });
+}
+
+/// A box's gradient of many stops into the frame's gradients, its uv
+/// pointing at them (`gpu.gradientStopsUv`).
+fn gradientStops(c: *Context, st: *const types.Style, rect4: [4]f32, opacity: f32) [4]f32 {
+    const stops = st.gradient_stops[0..@min(st.gradient_stops.len, 16)];
+    const anchor = st.gradient_anchor orelse types.Rect{ .x = 0, .y = 0, .w = rect4[2], .h = rect4[3] };
+    const at = metal.gradientData(c.gpa, &c.gradients, stops, anchor.y, anchor.h, opacity) catch return metal.gradientUv(st.border_dashed, null);
+    return metal.gradientStopsUv(st.border_dashed, at, stops.len);
 }

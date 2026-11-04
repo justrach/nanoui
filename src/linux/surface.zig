@@ -204,7 +204,7 @@ pub const Surface = struct {
     }
 
     pub fn shown(self: *Surface) canvas.Frame {
-        return .{ .instances = self.instances.items, .text = &self.text, .clear = self.clearColor(), .size = self.size, .scale = self.scale, .textures = self.ctx.textures.items };
+        return .{ .instances = self.instances.items, .text = &self.text, .clear = self.clearColor(), .size = self.size, .scale = self.scale, .textures = self.ctx.textures.items, .gradients = self.ctx.gradients.items };
     }
 
     /// What the frame is drawn over: nothing, in a transparent window.

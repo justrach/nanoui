@@ -1,10 +1,20 @@
-//! Pictures and textures on the CPU, as `shader.metal` samples them: bilinear,
-//! their corners rounded, or their shape filled with one color.
+//! Pictures and textures drawn by the CPU renderer (`raster.zig`), as
+//! `shader.metal` draws kinds 3 and 8: sampled bilinear, their corners
+//! rounded. A texture is first made BGRA at its own size
+//! (`texture_cpu.zig`): a pixel buffer's planes converted as the colour
+//! stage converts them on the GPU.
 const std = @import("std");
 const gpu = @import("gpu.zig");
 const raster = @import("raster.zig");
+const texture_cpu = @import("texture_cpu.zig");
 
-/// A BGRA texel of the image atlas, bilinear as Metal's sampler.
+/// A texture the app gave the frame, drawn as `picture` draws the atlas.
+pub fn texture(out: gpu.Pixels, i: *const gpu.Instance, t: gpu.Texture, scale: f32, b: [4]usize) void {
+    var held = texture_cpu.resolve(std.heap.page_allocator, t) orelse return;
+    defer held.deinit(std.heap.page_allocator);
+    picture(out, i, .bgra(held.bgra), scale, b);
+}
+
 /// Pixels to sample: the image atlas, or a texture's rows.
 pub const Source = struct {
     pixels: []const u8,
@@ -16,11 +26,12 @@ pub const Source = struct {
         return .{ .pixels = p.pixels, .w = p.size, .h = p.size, .stride = @as(usize, p.size) * 4 };
     }
 
-    pub fn texture(t: gpu.Texture) Source {
-        return .{ .pixels = t.bgra, .w = t.width, .h = t.height, .stride = if (t.stride > 0) t.stride else @as(usize, t.width) * 4 };
+    fn bgra(b: texture_cpu.Bgra) Source {
+        return .{ .pixels = b.pixels, .w = b.width, .h = b.height, .stride = b.stride };
     }
 };
 
+/// A BGRA texel, bilinear as Metal's sampler.
 fn samplePicture(p: Source, u: f32, v: f32) [4]f32 {
     const fx = u * @as(f32, @floatFromInt(p.w)) - 0.5;
     const fy = v * @as(f32, @floatFromInt(p.h)) - 0.5;
@@ -73,4 +84,3 @@ pub fn picture(out: gpu.Pixels, i: *const gpu.Instance, p: Source, scale: f32, b
         }
     }
 }
-

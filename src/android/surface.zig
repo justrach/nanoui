@@ -244,6 +244,7 @@ pub const Surface = struct {
             .size = self.size,
             .scale = self.scale,
             .textures = self.ctx.textures.items,
+            .gradients = self.ctx.gradients.items,
         });
         const p = &self.pixels;
         if (p.bytes.len == 0) return;
