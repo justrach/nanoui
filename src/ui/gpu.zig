@@ -107,6 +107,26 @@ pub const Texture = struct {
     pixel_buffer: ?*anyopaque = null,
 };
 
+/// A quad's gradient (`Style.gradient`) in its free `uv`: y marks it, z and
+/// w hold the bottom color's 8-bit r·256+g and b·256+a (exact in a float).
+pub fn gradientUv(dashed: bool, bottom: ?types.Color) [4]f32 {
+    const d: f32 = if (dashed) 1 else 0;
+    const c = bottom orelse return .{ d, 0, 0, 0 };
+    const q = struct {
+        fn b(v: f32) f32 {
+            return @round(std.math.clamp(v, 0, 1) * 255);
+        }
+    };
+    return .{ d, 1, q.b(c.r) * 256 + q.b(c.g), q.b(c.b) * 256 + q.b(c.a) };
+}
+
+/// `gradientUv`'s bottom color, unpacked (straight alpha).
+pub fn gradientBottom(uv: [4]f32) [4]f32 {
+    const r = @floor(uv[2] / 256);
+    const b = @floor(uv[3] / 256);
+    return .{ r / 255, (uv[2] - r * 256) / 255, b / 255, (uv[3] - b * 256) / 255 };
+}
+
 pub fn color4(c: types.Color) [4]f32 {
     return .{ c.r, c.g, c.b, c.a };
 }

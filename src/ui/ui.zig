@@ -220,6 +220,7 @@ test {
     _ = types;
     _ = device;
     _ = @import("panes.zig");
+    _ = @import("tests_gradient.zig");
     _ = @import("layout.zig");
     _ = textfield;
     _ = @import("tests.zig");

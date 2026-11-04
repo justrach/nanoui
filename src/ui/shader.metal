@@ -282,6 +282,12 @@ static float4 triangle_color(float2 w, Instance i) {
 
 // How much of the fragment the instance's clip lets through: discarded
 // outside it, cut in its rounded corners.
+// A quad's gradient bottom color, packed in its uv's z and w (gpu.zig).
+static float4 gradient_bottom(float4 uv) {
+    float r = floor(uv.z / 256.0), b = floor(uv.w / 256.0);
+    return float4(r, uv.z - r * 256.0, b, uv.w - b * 256.0) / 255.0;
+}
+
 static float clip_coverage(VOut in, Instance i) {
     if (in.screen.x < i.clip.x || in.screen.y < i.clip.y || in.screen.x > i.clip.z || in.screen.y > i.clip.w)
         discard_fragment();
@@ -403,7 +409,9 @@ static float4 shade(VOut in, Instance i, texture2d<float> atlas, texture2d<float
         coverage = 1.0 - smoothstep(-aa, aa, d);
     }
     // Premultiplied: the border is laid over the fill, not mixed with it.
-    float4 c = float4(i.color.rgb * i.color.a, i.color.a);
+    float4 fill = i.color;
+    if (i.uv.y > 0.5) fill = mix(fill, gradient_bottom(i.uv), clamp(in.local.y / max(i.rect.w, 1e-4), 0.0, 1.0));
+    float4 c = float4(fill.rgb * fill.a, fill.a);
     if (i.border_width > 0.0 && i.border_color.a > 0.0) {
         float inner = smoothstep(-i.border_width - aa, -i.border_width + aa, d);
         float4 b = float4(i.border_color.rgb * i.border_color.a, i.border_color.a);

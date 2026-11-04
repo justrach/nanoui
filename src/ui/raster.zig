@@ -389,6 +389,11 @@ pub inline fn clipCover(i: *const gpu.Instance, wx: f32, wy: f32, inv: f32) f32 
     const aa = @max(sd[1] * inv, 0.0001) * 0.5;
     return 1 - smoothstep(-aa, aa, sd[0]);
 }
+fn mixColor(a: [4]f32, b: [4]f32, t_in: f32) [4]f32 {
+    const t = std.math.clamp(t_in, 0, 1);
+    return .{ a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t, a[3] + (b[3] - a[3]) * t };
+}
+
 fn quad(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize) void {
     const hw = i.rect[2] * 0.5;
     const hh = i.rect[3] * 0.5;
@@ -398,7 +403,9 @@ fn quad(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize) void {
     const r: f32 = if (i.radius < 0) -r_abs else r_abs;
     const bw = i.border_width;
     const has_border = bw > 0 and i.border_color[3] > 0;
-    const c = i.color;
+    const grad = i.uv[1] > 0.5;
+    const bottom = if (grad) gpu.gradientBottom(i.uv) else i.color;
+    var c = i.color;
     const bc = i.border_color;
     // Inside this, a pixel is wholly the fill: no edge, corner or border.
     const corner_ext: f32 = if (r > 0) 1.52866495 * r else r_abs;
@@ -410,10 +417,12 @@ fn quad(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize) void {
         const wy = (@as(f32, @floatFromInt(y)) + 0.5) * inv;
         const row = y * out.width * 4;
         const inner_y = !rot and @abs(wy - cy) < hh - solid;
+        if (grad and !rot) c = mixColor(i.color, bottom, (wy - i.rect[1]) / @max(i.rect[3], 1e-4));
         for (b[0]..b[2]) |x| {
             const wx = (@as(f32, @floatFromInt(x)) + 0.5) * inv;
             const u = unrotate(i, wx, wy);
             if (rot and (u[0] < i.rect[0] or u[1] < i.rect[1] or u[0] > i.rect[0] + i.rect[2] or u[1] > i.rect[1] + i.rect[3])) continue;
+            if (grad and rot) c = mixColor(i.color, bottom, (u[1] - i.rect[1]) / @max(i.rect[3], 1e-4));
             const pxl = u[0] - cx;
             const py = u[1] - cy;
             const cut = clipCover(i, wx, wy, inv);
