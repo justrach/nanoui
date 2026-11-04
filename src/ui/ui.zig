@@ -79,6 +79,13 @@ pub const Posture = device.Posture;
 pub const panes = @import("panes.zig").panes;
 pub const Panes = @import("panes.zig").Panes;
 pub const PanesOptions = @import("panes.zig").Options;
+/// Whether light text on dark is thickened as macOS's font smoothing does
+/// (the default follows the user's `AppleFontSmoothing`). Off draws every
+/// glyph at its outline's own weight, as a renderer of its own would. Set it
+/// before the first frame: glyphs already in the atlas keep their weight.
+pub fn setFontSmoothing(on: bool) void {
+    if (comptime !@import("text.zig").portable) @import("atlas.zig").smoothing_allowed = on;
+}
 
 pub const key = widgets.key;
 pub const keyInt = widgets.keyInt;
