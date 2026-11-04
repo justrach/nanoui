@@ -70,6 +70,7 @@ src/objc.zig          Objective-C runtime, runtime classes, blocks, libdispatch
 src/app.zig           lifecycle, menu bar, trays, services, client generation
 src/dev.zig           --nanoui-* flags: generate, snapshot, script, eval, hidden
 src/window.zig        NSWindow showing a page or native UI, window controls
+src/window_lights.zig the traffic lights kept where a taller top bar wants them
 src/page.zig          the page's platform-free part: the outbox, held messages, the asset table
 src/page_webkit.zig   WKWebView: the view, the scheme handler, the message handler
 src/page_webview2.zig WebView2: the view, the resource filter, the message handler
@@ -117,6 +118,7 @@ src/ui/opengl.zig     the OpenGL 3.3 renderer (Linux), and OpenGL ES 3's (Androi
 src/ui/gl.zig         OpenGL's functions, loaded with dlopen
 src/ui/images.zig     pictures (ui.image): decoded once, packed in a BGRA atlas
 src/ui/png_decode.zig PNG to pixels where ImageIO isn't (Linux, Windows, portable)
+src/ui/jpeg_decode.zig  JPEG likewise, baseline and progressive (jpeg_scan, jpeg_pixels); gif_decode.zig: a GIF's first frame
 src/platform.zig      what differs by OS below the UI (event loop, clipboard)
 src/linux/            GTK 3 backend: app, window, surface (GL area or CPU), dialogs, fd watches
 src/windows/          Win32 backend: app, window, surface (events, frames) +

@@ -102,3 +102,82 @@ test "sink uploads survive render after pre-sink pixels allocation" {
     const idx = (cy * px.width + cx) * 4;
     try testing.expect(px.bytes[idx] > 180 and px.bytes[idx + 1] > 180 and px.bytes[idx + 2] > 180);
 }
+
+const PartState = struct {
+    bytes: []const u8,
+    fn view(s: *PartState, c: *ui.Context) void {
+        // Its left half, stretched over a box twice as wide as tall.
+        _ = ui.image(c, .{ .key = "sides", .bytes = s.bytes, .radius = 0, .box = .{ .w = 40, .h = 20 }, .part = .{ 0, 0, 0.5, 1 } });
+        _ = ui.image(c, .{ .key = "sides", .bytes = s.bytes, .radius = 0, .box = .{ .w = 40, .h = 20 }, .part = .{ 0.5, 0, 1, 1 } });
+    }
+};
+
+test "ui.image shows the part asked for, in the box asked for" {
+    const gpa = testing.allocator;
+    // Red on its left half, blue on its right, 8x8 (BGRA).
+    var raw: [8 * 8 * 4]u8 = undefined;
+    for (0..8) |y| for (0..8) |x| {
+        const px: [4]u8 = if (x < 4) .{ 0, 0, 255, 255 } else .{ 255, 0, 0, 255 };
+        @memcpy(raw[(y * 8 + x) * 4 ..][0..4], &px);
+    };
+    const png = try ui.png.encode(gpa, .{ .bytes = &raw, .width = 8, .height = 8 });
+    defer gpa.free(png);
+    var s: PartState = .{ .bytes = png };
+    var t: ui.Tester = undefined;
+    try t.init(gpa, ui.View.init(&s, PartState.view), .{ .width = 60, .height = 60, .scale = 1 });
+    defer t.deinit();
+    t.frame();
+    const px = try t.render(gpa);
+    defer px.deinit(gpa);
+    const at = struct {
+        fn bgra(p: anytype, x: usize, y: usize) [4]u8 {
+            return p.bytes[(y * p.width + x) * 4 ..][0..4].*;
+        }
+    }.bgra;
+    // Both ends of the first box are red, both ends of the second blue.
+    for ([_][2]usize{ .{ 3, 10 }, .{ 36, 10 } }) |p| {
+        const v = at(px, p[0], p[1]);
+        try testing.expect(v[2] > 200 and v[0] < 60);
+    }
+    for ([_][2]usize{ .{ 3, 30 }, .{ 36, 30 } }) |p| {
+        const v = at(px, p[0], p[1]);
+        try testing.expect(v[0] > 200 and v[2] < 60);
+    }
+    try testing.expectEqual(@as(f32, 8), ui.imageSize(&t.ctx, "sides", png).?.w);
+    try testing.expect(ui.imageSize(&t.ctx, "not", "not a picture") == null);
+}
+
+const FormatState = struct {
+    bytes: []const u8,
+    fn view(s: *FormatState, c: *ui.Context) void {
+        _ = ui.image(c, .{ .key = "picture", .bytes = s.bytes, .radius = 0, .box = .{ .w = 32, .h = 32 } });
+    }
+};
+
+/// Whichever decodes it (ImageIO, or nanoui's own with `-Dportable`), the
+/// picture is the same size and comes out in the same place.
+fn drawsAt(bytes: []const u8, width: f32, height: f32) ![4]u8 {
+    const gpa = testing.allocator;
+    var s: FormatState = .{ .bytes = bytes };
+    var t: ui.Tester = undefined;
+    try t.init(gpa, ui.View.init(&s, FormatState.view), .{ .width = 32, .height = 32, .scale = 1 });
+    defer t.deinit();
+    t.frame();
+    const size = ui.imageSize(&t.ctx, "picture", bytes).?;
+    try testing.expectEqual(width, size.w);
+    try testing.expectEqual(height, size.h);
+    const px = try t.render(gpa);
+    defer px.deinit(gpa);
+    return px.bytes[(16 * px.width + 16) * 4 ..][0..4].*;
+}
+
+test "a GIF and a JPEG draw on every platform" {
+    // One red pixel: GIF89a, a palette of two, LZW's clear, 0, end.
+    const gif = "GIF89a\x01\x00\x01\x00\x80\x00\x00\xff\x00\x00\x00\x00\x00" ++
+        "\x2c\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x44\x01\x00\x3b";
+    const red = try drawsAt(gif, 1, 1);
+    try testing.expect(red[2] > 240 and red[1] < 20 and red[0] < 20);
+    const jpeg = &@import("jpeg_decode_test.zig").real_sips;
+    const px = try drawsAt(jpeg, @floatFromInt(@import("jpeg_decode.zig").size(jpeg).?.width), @floatFromInt(@import("jpeg_decode.zig").size(jpeg).?.height));
+    try testing.expectEqual(@as(u8, 255), px[3]);
+}

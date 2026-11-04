@@ -7,6 +7,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Io = std.Io;
 const http = @import("http.zig");
+const resolveUrl = @import("http_url.zig").resolve;
 
 /// A URL split for a request: "https://host:8443/path?q" → https, host,
 /// 8443, "/path?q".
@@ -110,6 +111,7 @@ pub fn fetch(gpa: std.mem.Allocator, req: http.Request, answer: *http.Answer, ct
         if (decodeData(gpa, req.url)) |bytes| {
             answer.status = 200;
             answer.body = bytes;
+            answer.url = gpa.dupe(u8, req.url) catch "";
         } else |_| answer.err = "not a URL";
         return post(ctx, deliver);
     }
@@ -230,6 +232,7 @@ fn freeAnswer(job: *Job) void {
     job.gpa.free(job.answer.body);
     job.answer.body = &.{};
     job.answer.status = 0;
+    job.answer.freeHead(job.gpa);
 }
 
 fn fail(job: *Job, e: anyerror) void {
@@ -237,46 +240,120 @@ fn fail(job: *Job, e: anyerror) void {
     if (job.answer.err.len == 0) job.answer.err = @errorName(e);
 }
 
-/// The request itself: http-zig over https, std's client over http.
+/// Redirects followed before giving up, as Chrome and Firefox do.
+const max_redirects = 20;
+
+/// The request and its redirects. A 303, and a 301 or 302 after a POST, goes
+/// on as a GET without its body, as browsers do; what proves who is asking
+/// doesn't go on to another host.
 fn send(io: Io, job: *Job) anyerror!void {
     const gpa = job.gpa;
-    const u = try parseUrl(job.url);
+    var url = try gpa.dupe(u8, job.url);
+    defer gpa.free(url);
+    var method: []const u8 = job.method;
+    var body: []const u8 = job.body;
+    var private = true;
+    var hops: usize = 0;
+    while (true) : (hops += 1) {
+        const u = try parseUrl(url);
+        const hop: Hop = .{ .url = url, .u = u, .method = method, .body = body, .private = private };
+        if (std.mem.eql(u8, u.scheme, "http")) try sendPlain(io, job, hop) else try sendTls(io, job, hop);
+        const location = redirectTo(job.answer.*) orelse break;
+        if (hops == max_redirects) return error.TooManyRedirects;
+        const next = try resolveUrl(gpa, url, location);
+        errdefer gpa.free(next);
+        const n = try parseUrl(next);
+        private = private and std.ascii.eqlIgnoreCase(n.host, u.host) and n.port == u.port;
+        const status = job.answer.status;
+        if (status == 303 or ((status == 301 or status == 302) and std.mem.eql(u8, method, "POST"))) {
+            if (!std.mem.eql(u8, method, "HEAD")) method = "GET";
+            body = "";
+        }
+        gpa.free(url);
+        url = next;
+        freeAnswer(job);
+    }
+    job.answer.url = try gpa.dupe(u8, url);
+}
+
+/// One request of a chain.
+const Hop = struct { url: []const u8, u: Url, method: []const u8, body: []const u8, private: bool };
+
+fn redirectTo(a: http.Answer) ?[]const u8 {
+    if (a.status != 301 and a.status != 302 and a.status != 303 and a.status != 307 and a.status != 308) return null;
+    for (a.headers.items) |h| if (std.mem.eql(u8, h.name, "location")) return h.value;
+    return null;
+}
+
+/// Whether the request's header `i` goes on this hop.
+fn sent(job: *const Job, i: usize, hop: Hop) bool {
+    if (hop.private) return true;
+    return !std.mem.eql(u8, job.names[i], "authorization") and !std.mem.eql(u8, job.names[i], "cookie");
+}
+
+/// Linux, Windows and Android: Apple's systems come here only in this file's tests.
+const has_tls = builtin.os.tag != .macos and builtin.os.tag != .ios;
+
+fn sendTls(io: Io, job: *Job, hop: Hop) anyerror!void {
+    if (!has_tls) return error.UnsupportedScheme;
+    const gpa = job.gpa;
     var path_buf: [2048]u8 = undefined;
-    const path = target(u, &path_buf);
-    if (std.mem.eql(u8, u.scheme, "http")) return sendPlain(io, job);
+    const path = target(hop.u, &path_buf);
     const h2 = @import("http_zig");
-    const headers = try gpa.alloc(h2.Header, job.names.len);
-    defer gpa.free(headers);
-    for (headers, job.names, job.values) |*h, n, v| h.* = .{ .name = n, .value = v };
-    const authority = if (u.port == 443) u.host else try std.fmt.allocPrint(gpa, "{s}:{d}", .{ u.host, u.port });
-    defer if (u.port != 443) gpa.free(authority);
-    const s = try h2.Session.open(gpa, io, u.host, u.port);
+    var headers: std.ArrayList(h2.Header) = .empty;
+    defer headers.deinit(gpa);
+    for (job.names, job.values, 0..) |n, v, i| if (sent(job, i, hop)) try headers.append(gpa, .{ .name = n, .value = v });
+    const authority = if (hop.u.port == 443) hop.u.host else try std.fmt.allocPrint(gpa, "{s}:{d}", .{ hop.u.host, hop.u.port });
+    defer if (hop.u.port != 443) gpa.free(authority);
+    const s = try h2.Session.open(gpa, io, hop.u.host, hop.u.port);
     defer s.close();
-    var res = try s.request(.{ .method = job.method, .scheme = "https", .authority = authority, .path = path, .extra = headers, .body = job.body });
+    var res = try s.request(.{ .method = hop.method, .scheme = "https", .authority = authority, .path = path, .extra = headers.items, .body = hop.body });
     defer res.deinit();
+    for (res.headers) |h| if (h.name.len > 0 and h.name[0] != ':') try job.answer.addHeader(gpa, h.name, h.value);
     job.answer.body = try gpa.dupe(u8, res.body);
     job.answer.status = res.status;
 }
 
-fn sendPlain(io: Io, job: *Job) anyerror!void {
+fn sendPlain(io: Io, job: *Job, hop: Hop) anyerror!void {
     const gpa = job.gpa;
     var client: std.http.Client = .{ .allocator = gpa, .io = io };
     defer client.deinit();
-    const extra = try gpa.alloc(std.http.Header, job.names.len);
-    defer gpa.free(extra);
-    for (extra, job.names, job.values) |*h, n, v| h.* = .{ .name = n, .value = v };
+    var extra: std.ArrayList(std.http.Header) = .empty;
+    defer extra.deinit(gpa);
+    for (job.names, job.values, 0..) |n, v, i| if (sent(job, i, hop)) try extra.append(gpa, .{ .name = n, .value = v });
+    const method = std.meta.stringToEnum(std.http.Method, hop.method) orelse return error.UnsupportedMethod;
+    var req = try client.request(method, try std.Uri.parse(hop.url), .{ .redirect_behavior = .unhandled, .extra_headers = extra.items, .keep_alive = false });
+    defer req.deinit();
+    if (hop.body.len > 0) {
+        req.transfer_encoding = .{ .content_length = hop.body.len };
+        var w = try req.sendBodyUnflushed(&.{});
+        try w.writer.writeAll(hop.body);
+        try w.end();
+        try req.connection.?.flush();
+    } else try req.sendBodiless();
+    var response = try req.receiveHead(&.{});
+    // The head's bytes don't outlive reading the body.
+    var it = response.head.iterateHeaders();
+    while (it.next()) |h| try job.answer.addHeader(gpa, h.name, h.value);
+    const status = response.head.status;
+    const window: []u8 = switch (response.head.content_encoding) {
+        .identity => &.{},
+        .zstd => try gpa.alloc(u8, std.compress.zstd.default_window_len),
+        .deflate, .gzip => try gpa.alloc(u8, std.compress.flate.max_window_len),
+        .compress => return error.UnsupportedCompressionMethod,
+    };
+    defer gpa.free(window);
+    var transfer: [64]u8 = undefined;
+    var decompress: std.http.Decompress = undefined;
+    const reader = response.readerDecompressing(&transfer, &decompress, window);
     var aw: Io.Writer.Allocating = .init(gpa);
     defer aw.deinit();
-    const method = std.meta.stringToEnum(std.http.Method, job.method) orelse return error.UnsupportedMethod;
-    const result = try client.fetch(.{
-        .location = .{ .url = job.url },
-        .method = method,
-        .payload = if (job.body.len == 0) null else job.body,
-        .extra_headers = extra,
-        .response_writer = &aw.writer,
-    });
+    _ = reader.streamRemaining(&aw.writer) catch |err| switch (err) {
+        error.ReadFailed => return response.bodyErr().?,
+        else => |e| return e,
+    };
     job.answer.body = try aw.toOwnedSlice();
-    job.answer.status = @intFromEnum(result.status);
+    job.answer.status = @intFromEnum(status);
 }
 
 test "URLs split for a request; data URLs read" {
@@ -303,4 +380,113 @@ test "URLs split for a request; data URLs read" {
     const b = try decodeData(gpa, "data:text/plain;base64,aGVsbG8gemln");
     defer gpa.free(b);
     try std.testing.expectEqualStrings("hello zig", b);
+}
+
+/// A server on a loopback port answering by path, one connection per request.
+const TestServer = struct {
+    server: Io.net.Server,
+    io: Io,
+    requests: usize,
+    port: u16,
+
+    fn run(s: *TestServer) void {
+        for (0..s.requests) |_| {
+            var stream = s.server.accept(s.io) catch return;
+            defer stream.close(s.io);
+            var in_buf: [2048]u8 = undefined;
+            var reader = stream.reader(s.io, &in_buf);
+            var at: usize = 0;
+            var head: [2048]u8 = undefined;
+            while (std.mem.indexOf(u8, head[0..at], "\r\n\r\n") == null and at < head.len) {
+                const byte = reader.interface.takeByte() catch break;
+                head[at] = byte;
+                at += 1;
+            }
+            const req = head[0..at];
+            var out_buf: [512]u8 = undefined;
+            var writer = stream.writer(s.io, &out_buf);
+            const w = &writer.interface;
+            const method = req[0 .. std.mem.indexOfScalar(u8, req, ' ') orelse 0];
+            const has_auth = std.mem.indexOf(u8, req, "authorization:") != null;
+            if (std.mem.indexOf(u8, req, " /start ") != null) {
+                w.print("HTTP/1.1 302 Found\r\nLocation: /a/../end\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", .{}) catch return;
+            } else if (std.mem.indexOf(u8, req, " /post ") != null) {
+                w.print("HTTP/1.1 303 See Other\r\nLocation: /end\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", .{}) catch return;
+            } else if (std.mem.indexOf(u8, req, " /away ") != null) {
+                w.print("HTTP/1.1 302 Found\r\nLocation: http://localhost:{d}/end\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", .{s.port}) catch return;
+            } else if (std.mem.indexOf(u8, req, " /loop ") != null) {
+                w.print("HTTP/1.1 302 Found\r\nLocation: /loop\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", .{}) catch return;
+            } else {
+                var body_buf: [32]u8 = undefined;
+                const body = std.fmt.bufPrint(&body_buf, "{s} {s}", .{ method, if (has_auth) "auth" else "open" }) catch return;
+                w.print("HTTP/1.1 200 OK\r\nX-Thing: Yes\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n{s}", .{ body.len, body }) catch return;
+            }
+            w.flush() catch return;
+        }
+    }
+};
+
+test "plain HTTP follows redirects and keeps the last answer's headers" {
+    const gpa = std.testing.allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const any = try Io.net.IpAddress.parse("127.0.0.1", 0);
+    var ts: TestServer = .{ .server = try any.listen(io, .{ .reuse_address = true }), .io = io, .requests = 2 + 2 + 2 + 21, .port = 0 };
+    ts.port = ts.server.socket.address.getPort();
+    defer ts.server.deinit(io);
+    const thread = try std.Thread.spawn(.{}, TestServer.run, .{&ts});
+    defer thread.join();
+
+    const Try = struct {
+        fn go(i: Io, a: std.mem.Allocator, port: u16, path: []const u8, method: []const u8, body: []const u8, answer: *http.Answer) !void {
+            var names = [_][]u8{try a.dupe(u8, "authorization")};
+            defer a.free(names[0]);
+            var values = [_][]u8{try a.dupe(u8, "secret")};
+            defer a.free(values[0]);
+            const url = try std.fmt.allocPrint(a, "http://127.0.0.1:{d}{s}", .{ port, path });
+            defer a.free(url);
+            var job: Job = .{ .gpa = a, .url = url, .method = @constCast(method), .names = &names, .values = &values, .body = @constCast(body), .timeout_ms = 5000, .answer = answer, .ctx = undefined, .deliver = undefined };
+            return send(i, &job);
+        }
+    };
+
+    var a: http.Answer = .{};
+    defer {
+        gpa.free(a.body);
+        a.freeHead(gpa);
+    }
+    try Try.go(io, gpa, ts.port, "/start", "GET", "", &a);
+    try std.testing.expectEqual(@as(u16, 200), a.status);
+    try std.testing.expectEqualStrings("GET auth", a.body);
+    try std.testing.expect(std.mem.endsWith(u8, a.url, "/end"));
+    var found = false;
+    for (a.headers.items) |h| {
+        if (std.mem.eql(u8, h.name, "x-thing")) found = std.mem.eql(u8, h.value, "Yes");
+    }
+    try std.testing.expect(found);
+
+    var b: http.Answer = .{};
+    defer {
+        gpa.free(b.body);
+        b.freeHead(gpa);
+    }
+    try Try.go(io, gpa, ts.port, "/post", "POST", "form", &b);
+    try std.testing.expectEqualStrings("GET auth", b.body);
+
+    // Another host: what proves who is asking stays behind.
+    var c: http.Answer = .{};
+    defer {
+        gpa.free(c.body);
+        c.freeHead(gpa);
+    }
+    try Try.go(io, gpa, ts.port, "/away", "GET", "", &c);
+    try std.testing.expectEqualStrings("GET open", c.body);
+
+    var d: http.Answer = .{};
+    defer {
+        gpa.free(d.body);
+        d.freeHead(gpa);
+    }
+    try std.testing.expectError(error.TooManyRedirects, Try.go(io, gpa, ts.port, "/loop", "GET", "", &d));
 }

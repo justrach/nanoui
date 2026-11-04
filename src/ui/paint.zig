@@ -70,6 +70,21 @@ fn paintCanvas(c: *Context, out: *std.ArrayList(metal.Instance), cv: *const @imp
     }
 }
 
+/// The pixels a picture needs along its longest side: only part of it in
+/// the box means the whole of it larger, to stay as sharp.
+fn imageSide(im: ctx_mod.Content.Image, rect: [4]f32, scale: f32) u32 {
+    const w = rect[2] / @max(im.part[2] - im.part[0], 0.01);
+    const h = rect[3] / @max(im.part[3] - im.part[1], 0.01);
+    return @intFromFloat(@max(1, @min(1e6, @ceil(@max(w, h) * scale))));
+}
+
+/// The part `p` (0 to 1) of a picture at `uv` in the atlas.
+fn partOf(uv: [4]f32, p: [4]f32) [4]f32 {
+    const w = uv[2] - uv[0];
+    const h = uv[3] - uv[1];
+    return .{ uv[0] + w * p[0], uv[1] + h * p[1], uv[0] + w * p[2], uv[1] + h * p[3] };
+}
+
 /// `scrolled`: how far the scrolling boxes it's in have scrolled it up.
 fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip: types.Rect, opacity_in: f32, selectable_in: bool, scrolled: f32) void {
     const n = c.node(index).*;
@@ -156,12 +171,12 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip:
                     .clip = clip4,
                 });
             },
-            .image => |im| if (c.text.images.get(im.key, im.bytes, @intFromFloat(@max(1, @ceil(@max(rect4[2], rect4[3]) * c.scale))))) |e| push(c, out, .{
+            .image => |im| if (c.text.images.get(im.key, im.bytes, imageSide(im, rect4, c.scale))) |e| push(c, out, .{
                 .rect = if (im.snap) .{ snap(r.x, c.scale), snap(r.y, c.scale), r.w, r.h } else rect4,
                 .color = .{ 1, 1, 1, im.opacity * opacity },
                 // A tint (alpha above 0) fills the picture's shape instead.
                 .border_color = if (im.tint) |t| metal.color4(t) else .{ 0, 0, 0, 0 },
-                .uv = e.uv,
+                .uv = partOf(e.uv, im.part),
                 .radius = rad,
                 .kind = metal.Kind.image,
                 .clip = clip4,

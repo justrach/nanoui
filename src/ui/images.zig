@@ -1,5 +1,6 @@
 //! Pictures the UI shows (`ui.image`): decoded once from the bytes the app
-//! gives (ImageIO on macOS and iOS, nanoui's PNG decoder elsewhere), scaled to at
+//! gives (ImageIO on macOS and iOS, nanoui's PNG, JPEG and GIF decoders
+//! elsewhere), scaled to at
 //! most `max_side` pixels, and packed into one BGRA atlas the renderers
 //! sample (premultiplied). Made on the first picture; when full, emptied
 //! and packed again, and the frame painted again.
@@ -7,6 +8,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const png_decode = @import("png_decode.zig");
+const jpeg_decode = @import("jpeg_decode.zig");
+const gif_decode = @import("gif_decode.zig");
 
 const portable = build_options.portable or !(builtin.os.tag == .macos or builtin.os.tag == .ios);
 const imageio = if (portable) void else @import("image.zig");
@@ -271,8 +274,22 @@ fn probeHeader(bytes: []const u8) ?Info {
     if (bytes.len >= 24 and std.mem.startsWith(u8, bytes, "\x89PNG\r\n\x1a\n") and std.mem.eql(u8, bytes[12..16], "IHDR")) {
         const w = std.mem.readInt(u32, bytes[16..20], .big);
         const h = std.mem.readInt(u32, bytes[20..24], .big);
-        if (w > 0 and h > 0 and @as(u64, w) * h <= 64 * 1024 * 1024) return .{ .width = w, .height = h };
+        return sane(w, h);
     }
+    if (jpeg_decode.matches(bytes)) {
+        const d = jpeg_decode.size(bytes) orelse return null;
+        return sane(d.width, d.height);
+    }
+    if (gif_decode.matches(bytes)) {
+        const d = gif_decode.size(bytes) orelse return null;
+        return sane(d.width, d.height);
+    }
+    return null;
+}
+
+/// A size worth decoding: what the decoders themselves refuse is refused here.
+fn sane(w: u32, h: u32) ?Info {
+    if (w > 0 and h > 0 and @as(u64, w) * h <= 64 * 1024 * 1024) return .{ .width = w, .height = h };
     return null;
 }
 
@@ -301,6 +318,14 @@ fn load(gpa: std.mem.Allocator, bytes: []const u8, side: u32) !Decoded {
 fn decode(gpa: std.mem.Allocator, bytes: []const u8) !Raw {
     if (!portable) {
         const d = try imageio.decode(gpa, bytes);
+        return .{ .width = d.width, .height = d.height, .bgra = d.bgra };
+    }
+    if (jpeg_decode.matches(bytes)) {
+        const d = try jpeg_decode.decode(gpa, bytes);
+        return .{ .width = d.width, .height = d.height, .bgra = d.bgra };
+    }
+    if (gif_decode.matches(bytes)) {
+        const d = try gif_decode.decode(gpa, bytes);
         return .{ .width = d.width, .height = d.height, .bgra = d.bgra };
     }
     const d = try png_decode.decode(gpa, bytes);
