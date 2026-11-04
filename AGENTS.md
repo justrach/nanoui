@@ -2,7 +2,7 @@
 
 nanoui is a desktop application framework in Zig 0.17, after
 [mygo](https://github.com/egoist/mygo). Windows show either a web page in the
-system webview (WKWebView, macOS only for now) with typed Zig ↔ TypeScript
+system webview (WKWebView, WebView2, WebKitGTK) with typed Zig ↔ TypeScript
 IPC, or native UI that nanoui draws itself, in the manner of GPUI: with Metal
 and CoreText on macOS; on Linux (GTK 3, loaded with dlopen) and Windows
 (Win32) with nanoui's own TrueType text (`src/ui/tt/`) and CPU renderer
@@ -72,6 +72,7 @@ src/dev.zig           --nanoui-* flags: generate, snapshot, script, eval, hidden
 src/window.zig        NSWindow showing a page or native UI, window controls
 src/page.zig          the page's platform-free part: the outbox, held messages, the asset table
 src/page_webkit.zig   WKWebView: the view, the scheme handler, the message handler
+src/page_webkitgtk.zig  WebKitGTK: the view, the scheme handler, the message handler
 src/page_webview2.zig WebView2: the view, the resource filter, the message handler
 src/page_webview2_profile.zig  WebView2's profile folder
 src/windows/webview2.zig  WebView2's COM interfaces, by vtable slot
@@ -118,7 +119,8 @@ src/ui/gl.zig         OpenGL's functions, loaded with dlopen
 src/ui/images.zig     pictures (ui.image): decoded once, packed in a BGRA atlas
 src/ui/png_decode.zig PNG to pixels where ImageIO isn't (Linux, Windows, portable)
 src/platform.zig      what differs by OS below the UI (event loop, clipboard)
-src/linux/            GTK 3 backend: app, window, surface (GL area or CPU), dialogs, fd watches
+src/linux/            GTK 3 backend: app, window, surface (GL area or CPU), dialogs, fd watches;
+                      webkit: WebKitGTK, loaded with dlopen
 src/windows/          Win32 backend: app, window, surface (events, frames) +
                       surface_gpu (paint, D3D11 present), d3d (swap chain),
                       ime (IMM32), win32 (the extern layer), desktop, dialog,

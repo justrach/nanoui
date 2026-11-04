@@ -184,7 +184,7 @@ pub const runtime_dts =
     \\  once(event: string, listener: (payload: unknown) => void): () => void;
     \\  log(...values: unknown[]): void;
     \\  window: { close(): void; minimize(): void; toggleMaximize(): void; setTitle(title: string): void };
-    \\  platform: "macos";
+    \\  platform: "macos" | "windows" | "linux";
     \\  version: string;
     \\};
     \\

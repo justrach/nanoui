@@ -40,7 +40,7 @@ Each window shows one of two kinds of interface:
   animations, and views you can test without a window. On macOS it draws with
   Metal and CoreText, in one instanced draw call per frame.
 - **A web page** in the system webview (WKWebView on macOS, WebView2 on
-  Windows). The
+  Windows, WebKitGTK on Linux). The
   frontend calls Zig through a JavaScript client generated from your Zig
   types, with TypeScript declarations.
 
@@ -57,7 +57,7 @@ zig build test           # unit and widget tests
 ```
 
 You need Zig 0.17.0, plus the macOS SDK on a Mac (Xcode or the Command Line
-Tools). Linux apps need GTK 3 at run time and nothing at build time.
+Tools). Linux apps need GTK 3, and WebKitGTK for web pages, only at run time.
 
 `--recursive` also fetches the apps, which live in their own repositories as
 submodules under `apps/`. To fetch them after a plain clone, run
@@ -343,7 +343,7 @@ Android's SDK and NDK). On a Mac, `zig build -Dtarget=x86_64-linux-gnu` or
 | rendering | Metal | Metal | OpenGL ES 3; CPU without it | OpenGL 3.3 in a GtkGLArea; CPU (`src/ui/raster.zig`) without one | CPU, shown by Direct3D 11 (a DXGI flip swap chain; GDI without it) |
 | icons | SF Symbols | SF Symbols | line icons drawn by nanoui (`src/ui/icons.zig`) | the same | the same |
 | SVG (`ui.svg`) | drawn by nanoui (`src/ui/svg.zig`) | the same | the same | the same | the same |
-| pages (webview) | WKWebView | not yet | not yet | not yet | WebView2 |
+| pages (webview) | WKWebView | not yet | not yet | WebKitGTK (loaded with `dlopen`; [docs](docs/linux-pages.md)) | WebView2 |
 | menus | the menu bar | a keyboard's shortcuts | a keyboard's shortcuts | accelerators | accelerators |
 | HTTP (`nanoui.http`) | NSURLSession | NSURLSession | http-zig, names looked up by Android | [http-zig](https://github.com/justrach/http-zig): HTTP/2 over TLS, a thread per request | the same |
 | input methods that compose text | NSTextInputClient: marked text, the text around the caret, the edit menu | UITextInput: marked text (pinyin), autocorrect, ⌘C ⌘X ⌘V | not yet: a software keyboard types keys | GTK's input method, its preedit | not yet: only what arrives as `WM_CHAR` |
@@ -353,7 +353,7 @@ The CPU renderer matches the Metal one pixel for pixel, and a test compares
 them; others compare the OpenGL renderer with the CPU one, with OpenGL 3.3
 and with OpenGL ES 3, in a context without a window. `NANOUI_RENDERER=cpu` draws on the CPU where OpenGL is. `zig build test -Dportable=true` runs the Linux and Windows text and
 renderer on a Mac. Linux is also tested in a container
-(`tools/linux.Dockerfile`: GTK 3 and 4, fonts and a virtual display).
+(`tools/linux.Dockerfile`: GTK 3 and 4, WebKitGTK, fonts, a virtual display).
 
 On Linux nanoui loads GTK 4 when it's installed and GTK 3 otherwise;
 `NANOUI_GTK=3` asks for GTK 3. Both work the same: GTK 4's event
@@ -562,8 +562,8 @@ git push origin v0.2.1`). The release workflow checks that the tag matches
 Rules for working here, by hand or with an agent, are in
 [AGENTS.md](AGENTS.md).
 
-nanoui is a subset of what full frameworks offer. Pages work on macOS and
-Windows so far, accessibility is only on iOS and macOS's built-in controls,
+nanoui is a subset of what full frameworks offer. Pages work on macOS, Windows
+and Linux so far, accessibility is only on iOS and macOS's built-in controls,
 there are no notifications, channels or plugins yet, and bundling is only for
 iOS and Android. Apps update themselves from GitHub releases on macOS, even
 restarting unseen (`nanoui.Updater`). Bound methods run on the main thread.

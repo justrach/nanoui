@@ -13,7 +13,7 @@ fn env(name: [*:0]const u8) ?[]const u8 {
 
 /// The CLIPBOARD selection: GTK 3's, or GTK 4's display's.
 fn board() ?*anyopaque {
-    if (!gtk.load()) return null;
+    if (!gtk.ready()) return null;
     if (gtk.v4) return gtk.v4api.gdk_display_get_clipboard(gtk.api.gdk_display_get_default() orelse return null);
     return gtk.v3.gtk_clipboard_get(gtk.v3.gdk_atom_intern("CLIPBOARD", 0));
 }

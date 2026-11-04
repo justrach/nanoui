@@ -60,7 +60,7 @@ fn pathOf(gpa: std.mem.Allocator, file: *anyopaque) !?[]u8 {
 }
 
 pub fn open(gpa: std.mem.Allocator, opts: OpenOptions) !?[][]u8 {
-    if (!gtk.load()) return error.GtkMissing;
+    if (!gtk.ready()) return error.GtkMissing;
     const g = &gtk.api;
     var tb: [256]u8 = undefined;
     // Open file 0, select folder 2.
@@ -99,7 +99,7 @@ pub fn open(gpa: std.mem.Allocator, opts: OpenOptions) !?[][]u8 {
 }
 
 pub fn save(gpa: std.mem.Allocator, opts: SaveOptions) !?[]u8 {
-    if (!gtk.load()) return error.GtkMissing;
+    if (!gtk.ready()) return error.GtkMissing;
     const g = &gtk.api;
     var tb: [256]u8 = undefined;
     const chooser = g.gtk_file_chooser_native_new(z(&tb, if (opts.title.len > 0) opts.title else "Save"), null, 1, null, null);
@@ -116,7 +116,7 @@ pub fn save(gpa: std.mem.Allocator, opts: SaveOptions) !?[]u8 {
 }
 
 pub fn message(opts: MessageOptions) MessageResult {
-    if (!gtk.load()) return .{ .button = 0 };
+    if (!gtk.ready()) return .{ .button = 0 };
     const g = &gtk.api;
     var tb: [1024]u8 = undefined;
     // Info 0, warning 1, error 3; no buttons of its own (0): ours follow.
