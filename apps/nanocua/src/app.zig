@@ -133,11 +133,24 @@ pub const App = struct {
     /// Turning it off always does.
     pub fn fromPanel(a: *App, want: control.Want, on: bool) void {
         if (on and !a.clickIsReal()) return;
+        // nanoui's windows act on the click that brings them forward, so a click
+        // meant only to focus this window can land here. This switch takes over
+        // the real pointer, so it gets the card, and a second, deliberate click.
+        if (on and want == .whole_screen) return a.askHere(want);
         switch (want) {
             .input => a.setInput(on),
             .whole_screen => a.setWholeScreen(on),
             .@"resume" => a.setStopped(!on),
         }
+    }
+
+    /// The user asking from this window: nobody's waiting, and a Deny of someone
+    /// else's question doesn't hold them back.
+    fn askHere(a: *App, want: control.Want) void {
+        a.settleRequest();
+        a.gate.quiet_until = 0;
+        _ = a.gate.ask(want, "this window", 0, "", a.hub.clock());
+        a.redraw();
     }
 
     fn clickIsReal(a: *App) bool {
@@ -281,7 +294,7 @@ pub const App = struct {
 
     fn finishRequest(a: *App, r: control.Request, outcome: []const u8) void {
         if (!a.hidden) if (a.window) |w| if (a.raise) |f| f(w, false);
-        a.reply(r.conn, r.id(), outcome);
+        if (r.conn != 0) a.reply(r.conn, r.id(), outcome);
         a.redraw();
     }
 

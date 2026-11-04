@@ -7,7 +7,7 @@ const std = @import("std");
 const EventTypeSpec = extern struct { class: u32, kind: u32 };
 const HotKeyID = extern struct { signature: u32, id: u32 };
 const Handler = *const fn (next: ?*anyopaque, event: ?*anyopaque, user: ?*anyopaque) callconv(.c) i32;
-extern "c" fn GetApplicationEventTarget() *anyopaque;
+extern "c" fn GetEventDispatcherTarget() *anyopaque;
 extern "c" fn InstallEventHandler(target: *anyopaque, handler: Handler, n: usize, list: [*]const EventTypeSpec, user: ?*anyopaque, out: ?*?*anyopaque) i32;
 extern "c" fn RegisterEventHotKey(code: u32, modifiers: u32, id: HotKeyID, target: *anyopaque, options: u32, out: *?*anyopaque) i32;
 extern "c" fn UnregisterEventHotKey(ref: *anyopaque) i32;
@@ -28,7 +28,7 @@ pub const HotKey = struct {
 
     /// Registers the key; `hk` must stay where it is.
     pub fn register(hk: *HotKey) bool {
-        const target = GetApplicationEventTarget();
+        const target = GetEventDispatcherTarget();
         const spec = [_]EventTypeSpec{.{ .class = keyboard_class, .kind = hot_key_pressed }};
         if (InstallEventHandler(target, pressed, 1, &spec, hk, null) != 0) return false;
         return RegisterEventHotKey(period, cmd | option | control, .{ .signature = 0x6e637561, .id = 1 }, target, 0, &hk.ref) == 0;

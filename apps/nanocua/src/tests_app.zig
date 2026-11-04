@@ -87,6 +87,11 @@ test "the panel: stop and resume, input, the log, copying the command" {
     try std.testing.expectEqual(@as(usize, 2), rec.calls);
     try t.clickText("Allow whole screen: your pointer and keyboard, pictures of everything");
     t.settle(0.5);
+    try std.testing.expect(!a.hub.policy.allow_whole_screen);
+    a.gate.request.?.at -= 1;
+    t.frame();
+    try t.clickText("Allow");
+    t.settle(0.5);
     try std.testing.expect(a.hub.policy.allow_whole_screen);
     try std.testing.expect(t.hasText("Whole screen"));
     call(&a, 31, "screenshot", "{\"whole_screen\":true}");
@@ -135,10 +140,20 @@ test "the switches stay as the user left them: calls and redraws don't flip them
     t.settle(0.5);
     try std.testing.expect(!a.hub.policy.allow_whole_screen);
 
-    // One click, one flip; off stays off through calls, redraws and the pointer.
+    // A click on the switch only asks: it may have been meant to focus the
+    // window. Allow turns it on, and nobody's waiting to be told.
     try t.clickText(whole);
     t.settle(0.5);
+    try std.testing.expect(!a.hub.policy.allow_whole_screen);
+    try std.testing.expect(t.hasText("A request from this window"));
+    a.gate.request.?.at -= 1;
+    t.frame();
+    try t.clickText("Allow");
+    t.settle(0.5);
     try std.testing.expect(a.hub.policy.allow_whole_screen);
+    try std.testing.expect(!t.hasText("A request from this window"));
+
+    // Off takes one click; off stays off through calls, redraws and the pointer.
     try t.clickText(whole);
     t.settle(0.5);
     try std.testing.expect(!a.hub.policy.allow_whole_screen);

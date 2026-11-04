@@ -79,6 +79,10 @@ pub fn describe(a: std.mem.Allocator, s: control.Status) ![]const u8 {
             "Just denied: try again in a few seconds."
         else if (std.mem.eql(u8, o, "unreachable"))
             "Couldn't reach nanocua: open nanocua.app."
+        else if (std.mem.eql(u8, o, "already_on"))
+            "It's already on: there's nothing to answer."
+        else if (std.mem.eql(u8, o, "already_allowed"))
+            "macOS already allows it."
         else if (std.mem.eql(u8, o, "opened"))
             "macOS's prompt or its settings should be open: turn nanocua on there."
         else
@@ -193,4 +197,5 @@ test "what a person reads" {
     try std.testing.expect(std.mem.indexOf(u8, on, "Accessibility allowed, Screen Recording not allowed") != null);
     try std.testing.expect(std.mem.endsWith(u8, on, "Waiting in nanocua's window: resume\n"));
     try std.testing.expect(std.mem.indexOf(u8, try describe(a, .{ .stopped = true }), "nanocua: stopped") != null);
+    try std.testing.expect(std.mem.startsWith(u8, try describe(a, .{ .outcome = "already_on" }), "It's already on"));
 }

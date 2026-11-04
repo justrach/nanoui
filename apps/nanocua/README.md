@@ -78,7 +78,10 @@ brings the app forward.
   pointer, so it's also on a key, **⌃⌥⌘.**, and outside the panel (below).
 - **Allow input** is off at launch: agents can look but not click, type or
   open apps until you turn it on.
-- **Allow whole screen** is off at launch too: agents stay inside one app.
+- **Allow whole screen** is off at launch too: agents stay inside one app. Its
+  switch asks first, on the same card as requests from outside: the click that
+  brings this window forward also presses what's under it, and this switch hands
+  over the real pointer.
 - nanocua's own window is off limits: agents don't see it in trees and can't
   click, type or set values in it, so an agent can't press its own Resume.
 - **Activity** lists every call: the tool, its arguments, how long it took,

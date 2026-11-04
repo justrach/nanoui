@@ -36,6 +36,7 @@ pub const quiet_after_deny: f64 = 15;
 pub const Request = struct {
     want: Want,
     at: f64,
+    /// 0: nobody's waiting, the user asked in the panel (connections start at 1).
     conn: u64,
     from_buf: [32]u8 = undefined,
     from_len: u8 = 0,
