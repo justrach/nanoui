@@ -38,7 +38,12 @@ fn fire(ptr: ?*anyopaque) callconv(.c) void {
     // None wanted, or this one was overtaken by a later wake.
     if (s.wake.due == 0 or cf.CACurrentMediaTime() < s.wake.due - lead(s) - 0.002) return;
     s.wake.due = 0;
-    if (!s.visible()) return;
+    // Hidden: the frame is owed for when it shows (`occlusionChanged`), or a
+    // caret would come back frozen in one phase until the next input.
+    if (!s.visible()) {
+        s.pending = true;
+        return;
+    }
     s.setRate(null);
     s.setPaced(true);
 }
