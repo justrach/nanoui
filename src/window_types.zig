@@ -62,6 +62,20 @@ pub fn ShouldClose(comptime Window: type) type {
 /// A window, or a panel (`NSPanel`: a floating palette, a popover's window).
 pub const Kind = enum { window, panel };
 
+/// How high a window stacks (NSWindowLevel on macOS): above the menu bar
+/// at `status`, over everything at `screen_saver`. Any other level is a
+/// value of its own (`@fromBackingInt`).
+pub const Level = enum(i32) {
+    normal = 0,
+    floating = 3,
+    modal_panel = 8,
+    main_menu = 24,
+    status = 25,
+    pop_up_menu = 101,
+    screen_saver = 1000,
+    _,
+};
+
 pub fn Options(comptime Window: type) type {
     return struct {
         title: []const u8 = "",
@@ -129,7 +143,17 @@ pub fn Options(comptime Window: type) type {
         /// top left; centered when null.
         x: ?f64 = null,
         y: ?f64 = null,
+        /// The screen it opens on (`App.screens`' `id`): `x` and `y` are
+        /// then from that screen's top left, and without them it is
+        /// centered there. A screen not connected is ignored. macOS.
+        screen: ?u32 = null,
         always_on_top: bool = false,
+        /// Its stacking level (`Window.setLevel`), over `always_on_top`
+        /// and `floating`. macOS.
+        level: ?Level = null,
+        /// Clicks and the pointer pass through it to what is behind (a
+        /// clean feed on a second display, an overlay). macOS.
+        ignores_mouse: bool = false,
         /// Shown at once; otherwise call `show`.
         visible: bool = true,
         /// iOS: the view spans the whole screen, under the status bar and
@@ -146,6 +170,8 @@ pub fn Options(comptime Window: type) type {
         on_close: ?Callback(Window) = null,
         /// Called after the window resized.
         on_resize: ?Callback(Window) = null,
+        /// Called after the window moved: read `frame()`. macOS.
+        on_move: ?Callback(Window) = null,
         /// Called as it enters or leaves full screen: read `isFullScreen()`.
         on_fullscreen: ?Callback(Window) = null,
         /// Called as it becomes or stops being the key window: read `isFocused()`.

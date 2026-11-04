@@ -183,3 +183,60 @@ test "traffic_lights is left alone without a hidden title bar" {
     const win = try app.newWindow(.{ .title = "plain", .width = 300, .height = 200, .visible = false, .traffic_lights = .{ .x = 26, .y = 26 }, .content = .{ .view = .init(&p, Page.view) } });
     try testing.expect(win.lights == null);
 }
+
+const Moves = struct {
+    n: u32 = 0,
+    fn onMove(ctx: *anyopaque, _: *Window) void {
+        const m: *Moves = @ptrCast(@alignCast(ctx));
+        m.n += 1;
+    }
+};
+
+test "level and ignores_mouse are applied on a hidden window, on its screen, told when it moves" {
+    const app = try makeApp(testing.allocator);
+    defer freeApp(app);
+    var p: Page = .{};
+    var buf: [16]@import("screens.zig").Screen = undefined;
+    const all = app.screens(&buf);
+    const on: ?u32 = if (all.len > 0) all[0].id else null;
+    var moves: Moves = .{};
+    const feed = try app.newWindow(.{
+        .title = "feed",
+        .width = 320,
+        .height = 180,
+        .visible = false,
+        .decorations = false,
+        .level = .status,
+        .ignores_mouse = true,
+        .screen = on,
+        .x = 40,
+        .y = 30,
+        .on_move = .{ .ctx = &moves, .func = Moves.onMove },
+        .content = .{ .view = .init(&p, Page.view) },
+    });
+    try testing.expect(!feed.isVisible());
+    try testing.expectEqual(@as(objc.NSInteger, 25), objc.msg(objc.NSInteger, feed.nswindow, "level", .{}));
+    try testing.expectEqual(@import("window.zig").Level.status, feed.level());
+    try testing.expect(yes(feed, "ignoresMouseEvents"));
+    feed.setLevel(.screen_saver);
+    try testing.expectEqual(@as(objc.NSInteger, 1000), objc.msg(objc.NSInteger, feed.nswindow, "level", .{}));
+    feed.setIgnoresMouse(false);
+    try testing.expect(!yes(feed, "ignoresMouseEvents"));
+    // From the screen's top left.
+    if (all.len > 0) {
+        const f = feed.frame();
+        try testing.expectApproxEqAbs(all[0].frame.x + 40, f.x, 0.5);
+        try testing.expectApproxEqAbs(all[0].frame.y + 30, f.y, 0.5);
+    }
+    // Over a frame of its own, still hidden.
+    feed.setFrame(.{ .x = 10, .y = 20, .width = 300, .height = 160 });
+    const g = feed.frame();
+    try testing.expectApproxEqAbs(@as(f64, 10), g.x, 0.5);
+    try testing.expectApproxEqAbs(@as(f64, 160), g.height, 0.5);
+    try testing.expect(moves.n > 0);
+    try testing.expect(!feed.isVisible());
+    // A plain window stacks normally and takes clicks.
+    const plain = try app.newWindow(.{ .title = "plain", .width = 200, .height = 120, .visible = false, .content = .{ .view = .init(&p, Page.view) } });
+    try testing.expectEqual(@import("window.zig").Level.normal, plain.level());
+    try testing.expect(!yes(plain, "ignoresMouseEvents"));
+}
