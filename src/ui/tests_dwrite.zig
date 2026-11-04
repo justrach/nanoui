@@ -2,6 +2,9 @@
 //! glyph positions independently; this change does not replace shaping.
 const std = @import("std");
 const ui = @import("ui.zig");
+const dwrite = @import("dwrite.zig");
+const tt_font = @import("tt/font.zig");
+const atlas_mod = @import("atlas_tt.zig");
 const gpa = std.testing.allocator;
 
 const Sample = struct {
@@ -188,6 +191,51 @@ test "Windows falls back to portable coverage when DirectWrite is unavailable" {
     var ink: usize = 0;
     for (t.text.atlas.pixels) |p| ink += @intFromBool(p > 0);
     try std.testing.expect(ink > 0);
+}
+
+fn readTestFont() ![]u8 {
+    return std.Io.Dir.cwd().readFileAlloc(std.testing.io, "C:\\Windows\\Fonts\\segoeui.ttf", gpa, .limited(64 << 20));
+}
+
+test "DirectWrite borrowed font bytes match the legacy copied path" {
+    const data = try readTestFont();
+    defer gpa.free(data);
+    const borrowed_font = try tt_font.Font.init(data, 0);
+    const copied_font = try tt_font.Font.init(data, 0);
+    const glyph = borrowed_font.glyphIndex('A');
+    const borrowed_run: atlas_mod.RunFont = .{ .font = &borrowed_font, .size = 26 };
+    const copied_run: atlas_mod.RunFont = .{ .font = &copied_font, .size = 26 };
+
+    var borrowed: dwrite.Cache = .{};
+    defer borrowed.deinit(gpa);
+    var copied: dwrite.Cache = .{ .force_copy = true };
+    defer copied.deinit(gpa);
+    const actual = (try borrowed.rasterize(gpa, borrowed_run, glyph, 1, 0.25)) orelse return error.MissingBitmap;
+    const expected = (try copied.rasterize(gpa, copied_run, glyph, 1, 0.25)) orelse return error.MissingBitmap;
+    try std.testing.expectEqual(expected.w, actual.w);
+    try std.testing.expectEqual(expected.h, actual.h);
+    try std.testing.expectEqual(expected.stride, actual.stride);
+    try std.testing.expectEqual(expected.x, actual.x);
+    try std.testing.expectEqual(expected.y, actual.y);
+    try std.testing.expectEqualSlices(u8, expected.bytes, actual.bytes);
+    try std.testing.expectEqualSlices(u8, expected.rgb, actual.rgb);
+}
+
+test "twenty DirectWrite open and close cycles balance font owner references" {
+    const data = try readTestFont();
+    defer gpa.free(data);
+    const f = try tt_font.Font.init(data, 0);
+    const run: atlas_mod.RunFont = .{ .font = &f, .size = 18 };
+    const baseline = dwrite.testOwnerReferences();
+    for (0..20) |_| {
+        {
+            var cache: dwrite.Cache = .{};
+            defer cache.deinit(gpa);
+            _ = (try cache.rasterize(gpa, run, f.glyphIndex('A'), 1, 0)) orelse return error.MissingBitmap;
+            try std.testing.expect(dwrite.testOwnerReferences() > baseline);
+        }
+        try std.testing.expectEqual(baseline, dwrite.testOwnerReferences());
+    }
 }
 
 // Independent Direct2D software renderer. No window, atlas sampling or
