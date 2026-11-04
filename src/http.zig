@@ -141,7 +141,7 @@ fn Pending(comptime Ctx: type, comptime done: fn (Ctx, Response) void) type {
                 {
                     p.status = @intCast(std.math.clamp(objc.msg(objc.NSInteger, res, "statusCode", .{}), 0, 999));
                     s.keepHeaders(res);
-                }
+                } else p.status = 200; // A `data:` address has no HTTP in it, as on the portable path.
                 if (objc.msg(?objc.Object, res, "URL", .{})) |u|
                     p.url = s.gpa.dupe(u8, objc.fromNSString(objc.msg(?objc.Object, u, "absoluteString", .{}))) catch "";
             }
@@ -226,7 +226,7 @@ test "an answer says where it came from" {
         url_ok: bool = false,
         fn done(s: *@This(), r: Response) void {
             s.answered = true;
-            s.url_ok = std.mem.startsWith(u8, r.url, "data:text/plain");
+            s.url_ok = r.status == 200 and std.mem.startsWith(u8, r.url, "data:text/plain");
         }
     };
     var s: State = .{};
