@@ -220,8 +220,17 @@ fn mouseExited(obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void 
 fn magnify(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) void {
     const s = surfaceOf(obj) orelse return;
     setMouse(s, event);
-    s.ctx.input.zoom = @floatCast(@max(0.1, 1 + objc.msg(f64, event, "magnification", .{})));
-    s.frame();
+    const step: f32 = @floatCast(@max(0.1, 1 + objc.msg(f64, event, "magnification", .{})));
+    // A trackpad sends magnify events faster than the display refreshes:
+    // they compound into the next frame, drawn at the display link's pace,
+    // as scrolling is, instead of a frame drawn for each.
+    if (s.visible()) {
+        s.ctx.input.zoom *= step;
+        s.requestFrame();
+    } else {
+        s.ctx.input.zoom = step;
+        s.frame();
+    }
 }
 
 fn scrollPhase(event: objc.Object) input.ScrollPhase {
