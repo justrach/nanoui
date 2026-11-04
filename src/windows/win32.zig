@@ -4,6 +4,8 @@
 const std = @import("std");
 
 pub const HWND = *opaque {};
+/// A dropped-files list (`WM_DROPFILES.wParam`), freed with `DragFinish`.
+pub const HDROP = *opaque {};
 pub const HINSTANCE = *opaque {};
 pub const HDC = *opaque {};
 pub const HCURSOR = *opaque {};
@@ -168,6 +170,10 @@ pub extern "kernel32" fn GlobalUnlock(mem: *anyopaque) callconv(.winapi) BOOL;
 pub extern "kernel32" fn GlobalFree(mem: *anyopaque) callconv(.winapi) ?*anyopaque;
 pub extern "kernel32" fn GetEnvironmentVariableW(name: [*:0]const u16, buf: ?[*]u16, size: u32) callconv(.winapi) u32;
 pub extern "shell32" fn ShellExecuteW(hwnd: ?HWND, op: ?[*:0]const u16, file: [*:0]const u16, params: ?[*:0]const u16, dir: ?[*:0]const u16, show: i32) callconv(.winapi) ?*anyopaque;
+pub extern "shell32" fn DragAcceptFiles(hwnd: HWND, accept: BOOL) callconv(.winapi) void;
+pub extern "shell32" fn DragQueryFileW(hdrop: HDROP, index: u32, file: ?[*]u16, chars: u32) callconv(.winapi) u32;
+pub extern "shell32" fn DragQueryPoint(hdrop: HDROP, point: *POINT) callconv(.winapi) BOOL;
+pub extern "shell32" fn DragFinish(hdrop: HDROP) callconv(.winapi) void;
 pub extern "comdlg32" fn GetOpenFileNameW(ofn: *OPENFILENAMEW) callconv(.winapi) BOOL;
 pub extern "comdlg32" fn GetSaveFileNameW(ofn: *OPENFILENAMEW) callconv(.winapi) BOOL;
 /// OFN_NOCHANGEDIR: a file dialog does not move the process's working
@@ -305,6 +311,8 @@ pub const WM_MOUSELEAVE = 0x02A3;
 /// the window is in its modal sizing loop.
 pub const WM_ENTERSIZEMOVE = 0x0231;
 pub const WM_EXITSIZEMOVE = 0x0232;
+/// WM_DROPFILES: an HDROP in wParam, released with DragFinish after it is read.
+pub const WM_DROPFILES = 0x0233;
 pub const WM_DPICHANGED = 0x02E0;
 pub const WM_APP = 0x8000;
 

@@ -6,6 +6,7 @@ const App = @import("app.zig").App;
 const Surface = @import("surface.zig").Surface;
 const window_types = @import("../window_types.zig");
 const Page = @import("../page_webview2.zig").Page;
+const drop_files = @import("drop_files.zig");
 
 /// The window message a page's queued messages go out on (`Page.flush`):
 /// after the app's own (`WM_APP` onwards, as `fdwatch.zig` allocates them).
@@ -68,6 +69,9 @@ pub const Window = struct {
     /// (`layered.zig`).
     transparent: bool = false,
 
+    /// Resizing changes geometry only, never the foreground window.
+    pub const set_size_flags: u32 = w.SWP_NOMOVE | w.SWP_NOZORDER | w.SWP_NOACTIVATE;
+
     pub fn create(app: *App, options: Options) !*Window {
         const self = try app.gpa.create(Window);
         errdefer app.gpa.destroy(self);
@@ -104,6 +108,7 @@ pub const Window = struct {
         const hwnd = w.CreateWindowExW(ex, class_name, w.wide(&title, options.title), style, w.CW_USEDEFAULT, w.CW_USEDEFAULT, 100, 100, null, null, inst, null) orelse return error.CreateWindow;
         self.hwnd = hwnd;
         _ = w.SetWindowLongPtrW(hwnd, w.GWLP_USERDATA, @bitCast(@intFromPtr(self)));
+        w.DragAcceptFiles(hwnd, 1);
         self.setSize(options.width, options.height);
         if (options.x != null and options.y != null) self.setPosition(options.x.?, options.y.?) else self.center();
         if (options.always_on_top) self.setAlwaysOnTop(true);
@@ -183,6 +188,11 @@ pub const Window = struct {
                 if (!sc.func(sc.ctx, self)) return 0;
             }
             self.destroyNow();
+            return 0;
+        }
+        if (msg == w.WM_DROPFILES) {
+            // Dropping does not activate the window: nothing here takes focus.
+            if (wp != 0) drop_files.handle(self.surface, hwnd, @ptrFromInt(wp));
             return 0;
         }
         if (msg == w.WM_GETMINMAXINFO) {
@@ -369,7 +379,7 @@ pub const Window = struct {
         // decorated style's border inflated every borderless window.
         const style: u32 = @bitCast(@as(i32, @truncate(w.GetWindowLongPtrW(h, w.GWL_STYLE))));
         _ = w.AdjustWindowRectEx(&r, style, 0, 0);
-        _ = w.SetWindowPos(h, null, 0, 0, r.right - r.left, r.bottom - r.top, 0x0002 | 0x0004); // no move, no z-order
+        _ = w.SetWindowPos(h, null, 0, 0, r.right - r.left, r.bottom - r.top, set_size_flags);
     }
 
     pub fn setPosition(self: *Window, x: f64, y: f64) void {

@@ -66,6 +66,30 @@ test "a window's client area is the size that was asked, borderless or not" {
     }
 }
 
+test "setSize keeps SWP_NOACTIVATE and preserves foreground activation" {
+    const gpa = testing.allocator;
+    const app = try makeApp(gpa);
+    defer app.destroy();
+    var p: Page = .{};
+    const win = try app.newWindow(.{
+        .title = "resize without activation",
+        .width = 160,
+        .height = 100,
+        .visible = false,
+        .content = .{ .view = .init(&p, Page.view) },
+    });
+    const h = win.hwnd orelse return error.SkipZigTest;
+    // Check the flags actually passed by setSize as well as the observable
+    // foreground window. The real HWND stays hidden throughout this test.
+    try testing.expect(Window.set_size_flags & w.SWP_NOACTIVATE != 0);
+    const foreground = w.GetForegroundWindow();
+    try testing.expect(foreground != h);
+    win.setSize(240, 140);
+    try testing.expectEqual(foreground, w.GetForegroundWindow());
+    try testing.expect(w.GetForegroundWindow() != h);
+    try testing.expect(!win.isVisible());
+}
+
 test "a window that asks to be above the others is WS_EX_TOPMOST" {
     const gpa = testing.allocator;
     const app = try makeApp(gpa);
