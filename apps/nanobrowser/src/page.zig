@@ -1,0 +1,305 @@
+//! One loaded document: fetching it and what it asks for, its style, layout and
+//! display list, and its script world. A page outlives `destroy` for as long
+//! as a request or a frame still holds it (`dead`); it frees itself then.
+const std = @import("std");
+const nanoui = @import("nanoui");
+const dom = @import("dom.zig");
+const html = @import("html/html.zig");
+const css = @import("css/css.zig");
+const box = @import("layout/box.zig");
+const display = @import("paint/display.zig");
+const gradient = @import("paint/gradient.zig");
+const loader = @import("loader.zig");
+const web = @import("web/web.zig");
+const view_mod = @import("page_view.zig");
+const find_mod = @import("find.zig");
+const http = nanoui.http;
+const Allocator = std.mem.Allocator;
+
+pub const user_agent = "Mozilla/5.0 (compatible) nanobrowser/0.1 (like Gecko)";
+
+pub const Page = struct {
+    gpa: Allocator,
+    host: Host,
+    /// The document and everything made for it die with this.
+    doc_arena: std.heap.ArenaAllocator,
+    doc: *dom.Document,
+    engine: css.Engine,
+    final_url: []u8 = &.{},
+    state: State = .fetching,
+    dead: bool = false,
+    /// Requests under way, and frames being drawn: what `dead` waits for.
+    pending: u32 = 0,
+    busy: u32 = 0,
+
+    /// Style sheets in document order, and what fetches them (`loader.zig`).
+    sheets: loader.Sheets = .{},
+    pictures: loader.Pictures = .{},
+    icon: ?[]const u8 = null,
+    icon_key: []const u8 = "",
+    icon_asked: bool = false,
+    title_text: []const u8 = "",
+    title_stale: bool = true,
+
+    layout_arena: std.heap.ArenaAllocator,
+    list: ?display.List = null,
+    tree: ?box.Tree = null,
+    viewport_w: f32 = 0,
+    viewport_h: f32 = 0,
+    dark: bool = false,
+    /// Scroll offsets by element, the page's under the document's node.
+    scrolls: std.AutoHashMapUnmanaged(*dom.Node, [2]f32) = .empty,
+    restore_scroll: f32 = 0,
+    /// Text widths already measured, by text and font.
+    widths: std.AutoHashMapUnmanaged(u64, f32) = .empty,
+    gradients: gradient.Cache,
+    /// Controls' editors (`paint/controls.zig`), freed with the page.
+    editors: std.ArrayList(*nanoui.ui.TextBuffer) = .empty,
+    /// The `<select>` whose list is open.
+    open_select: ?*dom.Node = null,
+    last_press: ?*dom.Node = null,
+    find: find_mod.Find = .{},
+    /// What the pointer was last over, to tell scripts it moved.
+    pointer: [2]f32 = .{ -1, -1 },
+
+    /// Scripts: null until the document has any (or none ever).
+    js: ?*web.World = null,
+
+    pub const State = enum { fetching, parsed, done, failed };
+
+    /// What a page asks of the window it is in.
+    pub const Host = struct {
+        ctx: *anyopaque,
+        navigate: *const fn (ctx: *anyopaque, page: *Page, to: Navigation) void,
+        /// Something changed outside a frame: draw one.
+        redraw: *const fn (ctx: *anyopaque) void,
+        /// It settled on a URL and a title.
+        loaded: *const fn (ctx: *anyopaque, page: *Page) void,
+    };
+
+    pub const Navigation = struct {
+        url: []const u8,
+        new_tab: bool = false,
+        post: bool = false,
+        body: []const u8 = "",
+    };
+
+    pub const Load = struct {
+        method: []const u8 = "GET",
+        body: []const u8 = "",
+    };
+
+    pub fn create(gpa: Allocator, host: Host) !*Page {
+        const p = try gpa.create(Page);
+        errdefer gpa.destroy(p);
+        p.* = .{
+            .gpa = gpa,
+            .host = host,
+            .doc_arena = .init(gpa),
+            .doc = undefined,
+            .engine = undefined,
+            .layout_arena = .init(gpa),
+            .gradients = .{ .gpa = gpa },
+        };
+        errdefer p.doc_arena.deinit();
+        p.doc = try dom.Document.create(p.doc_arena.allocator());
+        p.engine = css.Engine.init(gpa, p.doc);
+        return p;
+    }
+
+    /// Lets the page go; it is freed when the last thing holding it is done.
+    pub fn destroy(p: *Page) void {
+        p.dead = true;
+        p.maybeFree();
+    }
+
+    /// Called as requests and frames finish.
+    pub fn maybeFree(p: *Page) void {
+        if (!p.dead or p.pending > 0 or p.busy > 0) return;
+        const gpa = p.gpa;
+        if (p.js) |w| w.destroy();
+        p.engine.deinit();
+        p.layout_arena.deinit();
+        p.scrolls.deinit(gpa);
+        p.widths.deinit(gpa);
+        p.gradients.deinit();
+        for (p.editors.items) |e| gpa.destroy(e);
+        p.editors.deinit(gpa);
+        p.find.query.deinit(gpa);
+        p.sheets.deinit(gpa);
+        p.pictures.deinit(gpa);
+        gpa.free(p.final_url);
+        p.doc_arena.deinit();
+        gpa.destroy(p);
+    }
+
+    pub fn arena(p: *Page) Allocator {
+        return p.doc_arena.allocator();
+    }
+
+    pub fn url(p: *const Page) []const u8 {
+        return p.final_url;
+    }
+
+    pub fn isLoading(p: *const Page) bool {
+        return p.state == .fetching or p.pending > 0;
+    }
+
+    pub fn title(p: *Page) []const u8 {
+        if (p.title_stale) {
+            p.title_stale = false;
+            const raw = p.doc.title(p.arena()) catch "";
+            p.title_text = collapse(p.arena(), raw) catch "";
+        }
+        return p.title_text;
+    }
+
+    pub fn favicon(p: *const Page) ?[]const u8 {
+        return p.icon;
+    }
+
+    pub fn faviconKey(p: *const Page) []const u8 {
+        return p.icon_key;
+    }
+
+    pub fn scrollY(p: *const Page) f32 {
+        const s = p.scrolls.get(p.doc.node) orelse return 0;
+        return s[1];
+    }
+
+    pub fn view(p: *Page, c: *nanoui.ui.Context, rect: box.Rect) void {
+        view_mod.view(p, c, rect);
+    }
+
+    pub fn findText(p: *Page, query: []const u8) void {
+        find_mod.set(p, query);
+    }
+
+    pub fn findStep(p: *Page, by: i32) void {
+        find_mod.step(p, by);
+    }
+
+    pub fn findStop(p: *Page) void {
+        find_mod.stop(p);
+    }
+
+    pub fn findCount(p: *const Page) usize {
+        return p.find.count;
+    }
+
+    pub fn stop(p: *Page) void {
+        p.pictures.cancelQueued();
+        if (p.js) |w| w.stop();
+    }
+
+    pub fn redraw(p: *Page) void {
+        if (!p.dead) p.host.redraw(p.host.ctx);
+    }
+
+    pub fn navigate(p: *Page, to: Navigation) void {
+        if (!p.dead) p.host.navigate(p.host.ctx, p, to);
+    }
+
+    /// Starts fetching `dest`.
+    pub fn load(p: *Page, dest: []const u8, req: Load) void {
+        p.final_url = p.gpa.dupe(u8, dest) catch &.{};
+        p.doc.url = p.final_url;
+        if (std.mem.startsWith(u8, dest, "about:")) {
+            p.state = .done;
+            html.parseDocument(p.doc, "") catch {};
+            return;
+        }
+        if (std.mem.startsWith(u8, dest, "file://")) {
+            loader.readFile(p, dest);
+            return;
+        }
+        loader.fetchDocument(p, dest, req);
+    }
+
+    /// The document's bytes came: parse them, then ask for what they name.
+    pub fn documentArrived(p: *Page, status: u16, body: []const u8, final: []const u8, content_type: []const u8, err: []const u8) void {
+        if (final.len > 0 and !std.mem.eql(u8, final, p.final_url)) {
+            const copy = p.gpa.dupe(u8, final) catch p.final_url;
+            if (copy.ptr != p.final_url.ptr) {
+                p.gpa.free(p.final_url);
+                p.final_url = copy;
+                p.doc.url = copy;
+            }
+        }
+        p.state = .parsed;
+        if (status == 0) {
+            p.state = .failed;
+            const shown = std.fmt.allocPrint(p.arena(), error_page, .{ escaped(p.arena(), p.final_url), escaped(p.arena(), err) }) catch "";
+            html.parseDocument(p.doc, shown) catch {};
+        } else {
+            const source = documentSource(p, body, content_type) catch "";
+            html.parseDocument(p.doc, source) catch {};
+        }
+        p.title_stale = true;
+        loader.scan(p);
+        web.begin(p);
+        p.finishLoadCheck();
+        p.host.loaded(p.host.ctx, p);
+        p.redraw();
+    }
+
+    /// Everything it asked for has come.
+    pub fn finishLoadCheck(p: *Page) void {
+        if (p.state == .parsed and p.pending == 0) p.state = .done;
+    }
+};
+
+/// What a response's bytes are as HTML: pictures and plain text get a page.
+fn documentSource(p: *Page, body: []const u8, content_type: []const u8) ![]const u8 {
+    const a = p.arena();
+    if (std.ascii.startsWithIgnoreCase(content_type, "image/")) {
+        return std.fmt.allocPrint(a, "<!doctype html><title>{s}</title><body style=\"margin:0;display:flex;align-items:center;justify-content:center;min-height:100vh\"><img src=\"{s}\" style=\"max-width:100%;max-height:100vh\">", .{ escaped(a, p.final_url), escaped(a, p.final_url) });
+    }
+    if (std.ascii.startsWithIgnoreCase(content_type, "text/plain") or std.ascii.startsWithIgnoreCase(content_type, "application/json")) {
+        const text = try html.toUtf8(a, body, content_type);
+        return std.fmt.allocPrint(a, "<!doctype html><body><pre style=\"white-space:pre-wrap;margin:12px\">{s}</pre>", .{escaped(a, text)});
+    }
+    return html.toUtf8(a, body, content_type);
+}
+
+fn escaped(a: Allocator, s: []const u8) []const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    for (s) |ch| switch (ch) {
+        '&' => out.appendSlice(a, "&amp;") catch return "",
+        '<' => out.appendSlice(a, "&lt;") catch return "",
+        '>' => out.appendSlice(a, "&gt;") catch return "",
+        '"' => out.appendSlice(a, "&quot;") catch return "",
+        else => out.append(a, ch) catch return "",
+    };
+    return out.items;
+}
+
+/// Runs of whitespace as one space, none at the ends.
+fn collapse(a: Allocator, s: []const u8) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    var it = std.mem.tokenizeAny(u8, s, " \t\r\n\x0c");
+    while (it.next()) |w| {
+        if (out.items.len > 0) try out.append(a, ' ');
+        try out.appendSlice(a, w);
+    }
+    return out.items;
+}
+
+const error_page =
+    \\<!doctype html><meta charset=utf-8><title>Can't open this page</title>
+    \\<style>body{{font:15px/1.5 system-ui;color:#171717;margin:0;display:flex;align-items:center;justify-content:center;min-height:100vh}}
+    \\main{{max-width:520px;padding:24px}}h1{{font-size:20px;font-weight:600;margin:0 0 8px}}p{{color:#8c8c8c;margin:0;overflow-wrap:anywhere}}
+    \\@media (prefers-color-scheme:dark){{body{{color:#ededed;background:#1c1c1c}}p{{color:#949494}}}}</style>
+    \\<main><h1>Can't open this page</h1><p>{s}</p><p>{s}</p></main>
+;
+
+test "titles collapse, and escapes" {
+    var a = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer a.deinit();
+    try std.testing.expectEqualStrings("A bird", try collapse(a.allocator(), "  A \n  bird\t"));
+    try std.testing.expectEqualStrings("&lt;a&amp;&quot;&gt;", escaped(a.allocator(), "<a&\">"));
+}
+
+comptime {
+    _ = view_mod;
+}

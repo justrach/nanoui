@@ -1,0 +1,15 @@
+.{
+    .name = .nanobrowser,
+    .version = "0.1.0",
+    .fingerprint = 0x8d155bf90a2dbc1f,
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{
+        .nanoui = .{ .path = "../.." },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "README.md",
+    },
+}

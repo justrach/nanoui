@@ -1,0 +1,211 @@
+//! CSS-wide keywords: copying what a property governs from one `Style` to
+//! another. `inherit` copies from the parent, `initial` from the initial style,
+//! `revert` from the style the UA sheet alone gives.
+const std = @import("std");
+const style = @import("style.zig");
+const prop = @import("prop.zig");
+
+const Prop = prop.Prop;
+const Style = style.Style;
+
+fn sides(d: *Style, s: *const Style, comptime names: []const []const u8) void {
+    inline for (names) |n| @field(d, n) = @field(s, n);
+}
+
+/// Copies the fields `p` sets from `s` to `d`. Properties with no field do
+/// nothing.
+pub fn copy(p: Prop, d: *Style, s: *const Style) void {
+    switch (p) {
+        .custom, .all => {},
+        .color_scheme => d.dark_scheme = s.dark_scheme,
+        .direction => d.rtl = s.rtl,
+        .font => sides(d, s, &.{ "font_size", "font_weight", "italic", "mono", "serif", "mono_generic", "line_height", "line_height_factor" }),
+        .font_size => d.font_size = s.font_size,
+        .font_family => sides(d, s, &.{ "mono", "serif", "mono_generic" }),
+        .font_weight => d.font_weight = s.font_weight,
+        .font_style => d.italic = s.italic,
+        .line_height => sides(d, s, &.{ "line_height", "line_height_factor" }),
+        .color => d.color = s.color,
+        .display => sides(d, s, &.{ "display", "flow_root" }),
+        .position => d.position = s.position,
+        .float => d.float = s.float,
+        .clear => d.clear = s.clear,
+        .box_sizing => d.box_sizing = s.box_sizing,
+        .visibility => d.visibility = s.visibility,
+        .opacity => d.opacity = s.opacity,
+        .z_index => d.z_index = s.z_index,
+        .overflow => sides(d, s, &.{ "overflow_x", "overflow_y" }),
+        .overflow_x => d.overflow_x = s.overflow_x,
+        .overflow_y => d.overflow_y = s.overflow_y,
+        .cursor => d.cursor = s.cursor,
+        .pointer_events => d.pointer_events = s.pointer_events,
+        .width, .inline_size => d.width = s.width,
+        .height, .block_size => d.height = s.height,
+        .min_width, .min_inline_size => d.min_width = s.min_width,
+        .min_height, .min_block_size => d.min_height = s.min_height,
+        .max_width, .max_inline_size => d.max_width = s.max_width,
+        .max_height, .max_block_size => d.max_height = s.max_height,
+        .aspect_ratio => d.aspect_ratio = s.aspect_ratio,
+        .margin => sides(d, s, &.{ "margin_top", "margin_right", "margin_bottom", "margin_left" }),
+        .margin_top, .margin_block_start => d.margin_top = s.margin_top,
+        .margin_right => d.margin_right = s.margin_right,
+        .margin_bottom, .margin_block_end => d.margin_bottom = s.margin_bottom,
+        .margin_left => d.margin_left = s.margin_left,
+        .margin_inline => sides(d, s, &.{ "margin_left", "margin_right" }),
+        .margin_block => sides(d, s, &.{ "margin_top", "margin_bottom" }),
+        .margin_inline_start => if (d.rtl) {
+            d.margin_right = s.margin_right;
+        } else {
+            d.margin_left = s.margin_left;
+        },
+        .margin_inline_end => if (d.rtl) {
+            d.margin_left = s.margin_left;
+        } else {
+            d.margin_right = s.margin_right;
+        },
+        .padding => sides(d, s, &.{ "padding_top", "padding_right", "padding_bottom", "padding_left" }),
+        .padding_top, .padding_block_start => d.padding_top = s.padding_top,
+        .padding_right => d.padding_right = s.padding_right,
+        .padding_bottom, .padding_block_end => d.padding_bottom = s.padding_bottom,
+        .padding_left => d.padding_left = s.padding_left,
+        .padding_inline => sides(d, s, &.{ "padding_left", "padding_right" }),
+        .padding_block => sides(d, s, &.{ "padding_top", "padding_bottom" }),
+        .padding_inline_start => if (d.rtl) {
+            d.padding_right = s.padding_right;
+        } else {
+            d.padding_left = s.padding_left;
+        },
+        .padding_inline_end => if (d.rtl) {
+            d.padding_left = s.padding_left;
+        } else {
+            d.padding_right = s.padding_right;
+        },
+        .top, .inset_block_start => d.top = s.top,
+        .right => d.right = s.right,
+        .bottom, .inset_block_end => d.bottom = s.bottom,
+        .left => d.left = s.left,
+        .inset => sides(d, s, &.{ "top", "right", "bottom", "left" }),
+        .inset_inline, .inset_inline_start, .inset_inline_end => sides(d, s, &.{ "left", "right" }),
+        .inset_block => sides(d, s, &.{ "top", "bottom" }),
+        .border => sides(d, s, &.{ "border_top", "border_right", "border_bottom", "border_left" }),
+        .border_width, .border_style, .border_color => sides(d, s, &.{ "border_top", "border_right", "border_bottom", "border_left" }),
+        .border_top, .border_top_width, .border_top_style, .border_top_color, .border_block_start => d.border_top = s.border_top,
+        .border_right, .border_right_width, .border_right_style, .border_right_color => d.border_right = s.border_right,
+        .border_bottom, .border_bottom_width, .border_bottom_style, .border_bottom_color, .border_block_end => d.border_bottom = s.border_bottom,
+        .border_left, .border_left_width, .border_left_style, .border_left_color => d.border_left = s.border_left,
+        .border_inline, .border_inline_start, .border_inline_end, .border_inline_width, .border_inline_color, .border_inline_style => sides(d, s, &.{ "border_left", "border_right" }),
+        .border_block, .border_block_width, .border_block_color, .border_block_style => sides(d, s, &.{ "border_top", "border_bottom" }),
+        .border_radius => sides(d, s, &.{ "radius", "radius_pct" }),
+        .border_top_left_radius, .border_start_start_radius => corner(d, s, 0),
+        .border_top_right_radius, .border_start_end_radius => corner(d, s, 1),
+        .border_bottom_right_radius, .border_end_end_radius => corner(d, s, 2),
+        .border_bottom_left_radius, .border_end_start_radius => corner(d, s, 3),
+        .outline, .outline_width, .outline_style, .outline_color => d.outline = s.outline,
+        .background => sides(d, s, &.{ "background", "background_image", "background_gradient", "background_more", "background_clip", "background_size", "background_size_x", "background_size_y", "background_repeat", "background_x", "background_y", "background_x_px", "background_y_px" }),
+        .background_color => d.background = s.background,
+        .background_image => sides(d, s, &.{ "background_image", "background_gradient", "background_more" }),
+        .background_clip => d.background_clip = s.background_clip,
+        .background_size => sides(d, s, &.{ "background_size", "background_size_x", "background_size_y" }),
+        .background_repeat => d.background_repeat = s.background_repeat,
+        .background_position => sides(d, s, &.{ "background_x", "background_y", "background_x_px", "background_y_px" }),
+        .background_position_x => sides(d, s, &.{ "background_x", "background_x_px" }),
+        .background_position_y => sides(d, s, &.{ "background_y", "background_y_px" }),
+        .box_shadow => d.shadow = s.shadow,
+        .object_fit => d.object_fit = s.object_fit,
+        .transform, .translate, .scale => d.transform = s.transform,
+        .letter_spacing => d.letter_spacing = s.letter_spacing,
+        .word_spacing => d.word_spacing = s.word_spacing,
+        .text_align => sides(d, s, &.{ "text_align", "center_children" }),
+        .text_indent => d.text_indent = s.text_indent,
+        .white_space, .white_space_collapse, .text_wrap, .text_wrap_mode => d.white_space = s.white_space,
+        .text_transform => d.text_transform = s.text_transform,
+        .list_style => sides(d, s, &.{ "list_style", "list_inside" }),
+        .list_style_type => d.list_style = s.list_style,
+        .list_style_position => d.list_inside = s.list_inside,
+        .text_decoration => sides(d, s, &.{ "underline", "line_through", "overline", "text_decoration_color" }),
+        .text_decoration_line => sides(d, s, &.{ "underline", "line_through", "overline" }),
+        .text_decoration_color => d.text_decoration_color = s.text_decoration_color,
+        .vertical_align => d.vertical_align = s.vertical_align,
+        .text_overflow => d.text_overflow_ellipsis = s.text_overflow_ellipsis,
+        .flex => sides(d, s, &.{ "flex_grow", "flex_shrink", "flex_basis" }),
+        .flex_direction => d.flex_direction = s.flex_direction,
+        .flex_wrap => d.flex_wrap = s.flex_wrap,
+        .flex_flow => sides(d, s, &.{ "flex_direction", "flex_wrap" }),
+        .flex_grow => d.flex_grow = s.flex_grow,
+        .flex_shrink => d.flex_shrink = s.flex_shrink,
+        .flex_basis => d.flex_basis = s.flex_basis,
+        .order => d.order = s.order,
+        .justify_content => d.justify_content = s.justify_content,
+        .justify_items => d.justify_items = s.justify_items,
+        .justify_self => d.justify_self = s.justify_self,
+        .align_items => d.align_items = s.align_items,
+        .align_self => d.align_self = s.align_self,
+        .align_content => d.align_content = s.align_content,
+        .place_items => sides(d, s, &.{ "align_items", "justify_items" }),
+        .place_content => sides(d, s, &.{ "align_content", "justify_content" }),
+        .place_self => sides(d, s, &.{ "align_self", "justify_self" }),
+        .gap, .grid_gap => sides(d, s, &.{ "row_gap", "column_gap" }),
+        .row_gap, .grid_row_gap => d.row_gap = s.row_gap,
+        .column_gap, .grid_column_gap => d.column_gap = s.column_gap,
+        .grid_template, .grid => sides(d, s, &.{ "grid_template_columns", "grid_template_rows" }),
+        .grid_template_columns => d.grid_template_columns = s.grid_template_columns,
+        .grid_template_rows => d.grid_template_rows = s.grid_template_rows,
+        .grid_auto_rows => d.grid_auto_rows = s.grid_auto_rows,
+        .grid_auto_columns => d.grid_auto_columns = s.grid_auto_columns,
+        .grid_column, .grid_column_start, .grid_column_end => d.grid_column = s.grid_column,
+        .grid_row, .grid_row_start, .grid_row_end => d.grid_row = s.grid_row,
+        .grid_area => sides(d, s, &.{ "grid_row", "grid_column" }),
+        .grid_template_areas => d.grid_areas = s.grid_areas,
+        .grid_auto_flow => d.grid_auto_flow_column = s.grid_auto_flow_column,
+        .mask, .mask_image => d.mask_image = s.mask_image,
+        .content => d.content = s.content,
+        .border_collapse => d.border_collapse = s.border_collapse,
+        .border_spacing => sides(d, s, &.{ "border_spacing", "border_spacing_y" }),
+        .table_layout => d.table_fixed = s.table_fixed,
+        .caption_side => d.caption_bottom = s.caption_bottom,
+        .word_break => d.word_break_all = s.word_break_all,
+        .overflow_wrap, .word_wrap => d.overflow_wrap_anywhere = s.overflow_wrap_anywhere,
+        .tab_size => d.tab_size = s.tab_size,
+        else => {},
+    }
+}
+
+fn corner(d: *Style, s: *const Style, i: usize) void {
+    d.radius[i] = s.radius[i];
+    d.radius_pct[i] = s.radius_pct[i];
+}
+
+/// A new element's start: initial values, with the inherited ones from `p`.
+pub fn inherit(p: *const Style) Style {
+    var s: Style = .{};
+    sides(&s, p, &.{
+        "visibility",      "cursor",           "pointer_events",       "color",
+        "font_size",       "font_weight",      "italic",               "mono",
+        "serif",           "mono_generic",     "line_height",          "line_height_factor",
+        "letter_spacing",  "word_spacing",     "text_align",           "text_indent",
+        "center_children", "white_space",      "text_transform",       "list_style",
+        "list_inside",     "rtl",              "inherited_visibility", "border_collapse",
+        "border_spacing",  "border_spacing_y", "word_break_all",       "overflow_wrap_anywhere",
+        "caption_bottom",  "tab_size",         "dark_scheme",
+    });
+    return s;
+}
+
+/// `all`, as one pass of the cascade sees it: only the fields that pass
+/// governs, so that later declarations of earlier passes survive it.
+pub fn copyAll(d: *Style, s: *const Style, phase: u2) void {
+    const font_fields = [_][]const u8{ "font_size", "font_weight", "italic", "mono", "serif", "mono_generic" };
+    const text_fields = [_][]const u8{ "line_height", "line_height_factor", "color" };
+    switch (phase) {
+        0 => sides(d, s, &font_fields),
+        1 => sides(d, s, &text_fields),
+        else => {
+            const saved = d.*;
+            d.* = s.*;
+            sides(d, &saved, &font_fields);
+            sides(d, &saved, &text_fields);
+            d.rtl = saved.rtl;
+            d.dark_scheme = saved.dark_scheme;
+        },
+    }
+}

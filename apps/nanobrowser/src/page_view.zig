@@ -1,0 +1,236 @@
+//! A page's frame: style and layout if they are stale, the display list, the
+//! pointer and wheel, and the drawing. Called from the window's view, on the
+//! main thread. Nothing here polls: frames come from input and from `redraw`.
+const std = @import("std");
+const nanoui = @import("nanoui");
+const ui = nanoui.ui;
+const dom = @import("dom.zig");
+const css = @import("css/css.zig");
+const box = @import("layout/box.zig");
+const layout = @import("layout/layout.zig");
+const display = @import("paint/display.zig");
+const replay = @import("paint/replay.zig");
+const controls = @import("paint/controls.zig");
+const loader = @import("loader.zig");
+const input = @import("page_input.zig");
+const web = @import("web/web.zig");
+const Page = @import("page.zig").Page;
+
+/// What layout measures with during a frame.
+const Fonts = struct {
+    p: *Page,
+    c: *ui.Context,
+
+    fn width(ctx: *anyopaque, text: []const u8, font: box.Font) f32 {
+        const f: *Fonts = @ptrCast(@alignCast(ctx));
+        var h = std.hash.Wyhash.init(@intFromBool(font.italic) + 2 * @as(u64, @intFromBool(font.mono)) + 4 * @as(u64, @intFromBool(font.serif)) + 8 * @as(u64, font.weight));
+        h.update(std.mem.asBytes(&font.size));
+        h.update(text);
+        const k = h.final();
+        if (f.p.widths.get(k)) |w| return w;
+        const w = f.c.text.width(text, replay.textStyle(font));
+        f.p.widths.put(f.p.gpa, k, w) catch {};
+        return w;
+    }
+
+    fn metrics(ctx: *anyopaque, font: box.Font) box.Metrics {
+        const f: *Fonts = @ptrCast(@alignCast(ctx));
+        const m = f.c.text.font(replay.textStyle(font));
+        return .{ .ascent = m.ascent, .descent = m.descent, .gap = m.leading };
+    }
+
+    fn image(ctx: *anyopaque, node: *dom.Node) ?box.Size {
+        const f: *Fonts = @ptrCast(@alignCast(ctx));
+        if (node.image.len == 0) return null;
+        if (replay.isSvg(node.image)) {
+            const v = replay.svgSize(node.image) orelse return null;
+            return .{ .w = v[0], .h = v[1] };
+        }
+        const s = ui.imageSize(f.c, node.image_key, node.image) orelse return null;
+        return .{ .w = s.w, .h = s.h };
+    }
+
+    fn measurer(f: *Fonts) box.Measurer {
+        return .{ .ctx = f, .width = width, .metrics = metrics, .image = image };
+    }
+};
+
+/// Style and layout brought up to date for a viewport of `w` × `h`.
+pub fn prepare(p: *Page, c: *ui.Context, w: f32, h: f32) void {
+    if (w != p.viewport_w or h != p.viewport_h or c.theme.dark != p.dark) {
+        p.viewport_w = w;
+        p.viewport_h = h;
+        p.dark = c.theme.dark;
+        p.engine.setViewport(.{ .width = w, .height = h, .dark = p.dark });
+        p.doc.touchStyle();
+    }
+    if (p.doc.style_dirty) {
+        loader.scan(p);
+        p.engine.restyleAll() catch {};
+        p.doc.style_dirty = false;
+        p.doc.layout_dirty = true;
+        p.title_stale = true;
+    }
+    if (p.doc.layout_dirty or p.list == null) relayout(p, c);
+}
+
+pub fn relayout(p: *Page, c: *ui.Context) void {
+    _ = p.layout_arena.reset(.retain_capacity);
+    const a = p.layout_arena.allocator();
+    var fonts: Fonts = .{ .p = p, .c = c };
+    const m = fonts.measurer();
+    p.doc.layout_dirty = false;
+    const tree = layout.run(a, p.doc, .{ .width = p.viewport_w, .height = p.viewport_h }, m) catch {
+        p.tree = null;
+        p.list = null;
+        return;
+    };
+    p.tree = tree;
+    p.list = display.build(a, tree, p.doc.node, m, &p.scrolls) catch null;
+    if (p.restore_scroll > 0) if (p.list) |*l| {
+        l.clips[1].scroll_y = p.restore_scroll;
+    };
+}
+
+/// The picture of a background, for `replay`.
+const Replay = struct {
+    p: *Page,
+
+    pub fn picture(h: Replay, url: []const u8) ?[]const u8 {
+        return loader.background(h.p, url);
+    }
+
+    pub fn gradient(h: Replay, g: @import("css/style.zig").Gradient) ?[]const u8 {
+        return h.p.gradients.get(g);
+    }
+
+    pub fn control(h: Replay, c: *ui.Context, b: *const box.Box, x: f32, y: f32, opacity: f32) void {
+        controls.draw(h.p, c, b, x, y, opacity);
+    }
+};
+
+/// Draws the page in `rect` (window coordinates) and takes its input.
+pub fn view(p: *Page, c: *ui.Context, rect: box.Rect) void {
+    p.busy += 1;
+    defer {
+        p.busy -= 1;
+        p.maybeFree();
+    }
+    prepare(p, c, rect.w, rect.h);
+    if (p.list == null) {
+        _ = c.leaf(.{ .absolute = true, .fixed = true, .offset = .{ .x = rect.x, .y = rect.y }, .width = .{ .px = rect.w }, .height = .{ .px = rect.h }, .background = c.theme.background }, .none, null);
+        return;
+    }
+    const l = &p.list.?;
+    l.resolve(rect.x, rect.y, rect.w, rect.h);
+    clampScrolls(p, l);
+    l.resolve(rect.x, rect.y, rect.w, rect.h);
+
+    const canvas = if (l.canvas.a > 0) replay.color(l.canvas) else if (c.theme.dark and p.state == .failed) c.theme.background else ui.Color.white;
+    const root = c.open(.{
+        .absolute = true,
+        .fixed = true,
+        .offset = .{ .x = rect.x, .y = rect.y },
+        .width = .{ .px = rect.w },
+        .height = .{ .px = rect.h },
+        .clip = true,
+        .wheel = true,
+        .selectable = true,
+        .background = canvas,
+    }, null);
+    defer c.end();
+    const it = c.interact(root, .{});
+    c.wants_moves = true;
+    c.wants_wheel = true;
+    const mouse = c.input.mouse;
+    const inside = rect.contains(mouse.x, mouse.y);
+    var hovered: ?*dom.Node = null;
+    if (inside) hovered = l.hit(mouse.x, mouse.y);
+    input.pointer(p, c, it, hovered, mouse.x, mouse.y, inside);
+    if (p.dead) return;
+    if (p.doc.layout_dirty or p.doc.style_dirty) {
+        // What the pointer did restyled it, or a script changed it: this
+        // frame shows that.
+        prepare(p, c, rect.w, rect.h);
+        if (p.list == null) return;
+        p.list.?.resolve(rect.x, rect.y, rect.w, rect.h);
+    }
+    const shown = &p.list.?;
+    if (inside and (c.input.scroll.y != 0 or c.input.scroll.x != 0)) wheel(p, shown, mouse.x, mouse.y, c.input.scroll.x, c.input.scroll.y);
+    if (inside) keyScroll(p, c, shown, rect.h);
+    shown.resolve(rect.x, rect.y, rect.w, rect.h);
+    replay.replay(c, shown, Replay{ .p = p }, rect);
+    @import("find.zig").draw(p, c, shown, rect);
+    scrollbar(c, shown, rect);
+    controls.selectList(p, c, rect);
+}
+
+fn wheel(p: *Page, l: *display.List, x: f32, y: f32, dx: f32, dy: f32) void {
+    const i = l.scrollerAt(x, y);
+    scrollBy(p, l, i, -dx, -dy);
+}
+
+pub fn scrollBy(p: *Page, l: *display.List, i: u32, dx: f32, dy: f32) void {
+    const c = &l.clips[i];
+    const m = l.maxScroll(i);
+    c.scroll_x = std.math.clamp(c.scroll_x + dx, 0, m[0]);
+    c.scroll_y = std.math.clamp(c.scroll_y + dy, 0, m[1]);
+    p.restore_scroll = 0;
+    const key = if (i == 1) p.doc.node else c.node orelse return;
+    p.scrolls.put(p.gpa, key, .{ c.scroll_x, c.scroll_y }) catch {};
+    web.scrolled(p, key);
+}
+
+/// Goes to a place in the document: a fragment, a found word.
+pub fn scrollPageTo(p: *Page, y: f32) void {
+    const l = if (p.list) |*x| x else return;
+    const c = &l.clips[1];
+    scrollBy(p, l, 1, 0, y - c.scroll_y);
+}
+
+fn clampScrolls(p: *Page, l: *display.List) void {
+    _ = p;
+    for (l.clips, 0..) |*c, i| {
+        if (i == 0) continue;
+        const m = l.maxScroll(@intCast(i));
+        c.scroll_x = std.math.clamp(c.scroll_x, 0, m[0]);
+        c.scroll_y = std.math.clamp(c.scroll_y, 0, m[1]);
+    }
+}
+
+/// The keys that move a page when nothing is being typed in.
+fn keyScroll(p: *Page, c: *ui.Context, l: *display.List, h: f32) void {
+    if (c.focus != 0) return;
+    const step: f32 = 48;
+    if (c.input.key) |k| switch (k) {
+        .up => scrollBy(p, l, 1, 0, -step),
+        .down => scrollBy(p, l, 1, 0, step),
+        .left => scrollBy(p, l, 1, -step, 0),
+        .right => scrollBy(p, l, 1, step, 0),
+        .page_up => scrollBy(p, l, 1, 0, -(h - step)),
+        .page_down => scrollBy(p, l, 1, 0, h - step),
+        .home => scrollBy(p, l, 1, 0, -1e9),
+        .end => scrollBy(p, l, 1, 0, 1e9),
+        else => {},
+    };
+    if (c.shortcut(.{ .key = ' ' })) scrollBy(p, l, 1, 0, h - step);
+    if (c.shortcut(.{ .key = ' ', .shift = true })) scrollBy(p, l, 1, 0, -(h - step));
+}
+
+/// A slim bar along the right while there's more page than window.
+fn scrollbar(c: *ui.Context, l: *const display.List, rect: box.Rect) void {
+    const page = l.clips[1];
+    if (page.content_h <= rect.h + 1) return;
+    const k = rect.h / page.content_h;
+    const bar_h = @max(24, rect.h * k);
+    const y = (rect.h - bar_h) * page.scroll_y / @max(1, page.content_h - rect.h);
+    _ = c.leaf(.{
+        .absolute = true,
+        .offset = .{ .x = rect.w - 7, .y = y + 2 },
+        .width = .{ .px = 5 },
+        .height = .{ .px = bar_h - 4 },
+        .radius = 2.5,
+        .corner_circular = true,
+        .background = if (c.theme.dark) ui.Color.white.alpha(0.25) else ui.Color.black.alpha(0.22),
+    }, .none, null);
+}

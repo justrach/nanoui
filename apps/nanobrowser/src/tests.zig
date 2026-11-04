@@ -1,0 +1,21 @@
+//! Every part's tests, from one root.
+test {
+    _ = @import("dom.zig");
+    _ = @import("tests_engine.zig");
+    _ = @import("layout_tests.zig");
+    _ = @import("paint/display.zig");
+    _ = @import("paint/replay.zig");
+    _ = @import("paint/gradient.zig");
+    _ = @import("page.zig");
+    _ = @import("page_view.zig");
+    _ = @import("page_input.zig");
+    _ = @import("loader.zig");
+    _ = @import("find.zig");
+    _ = @import("shell/browser.zig");
+    _ = @import("shell/address.zig");
+    _ = @import("shell/omnibox.zig");
+    _ = @import("shell/strip.zig");
+    _ = @import("shell/switcher.zig");
+    _ = @import("text_search.zig");
+    _ = @import("tests_browser.zig");
+}
