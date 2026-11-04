@@ -572,7 +572,7 @@ restarting unseen (`nanoui.Updater`). Bound methods run on the main thread.
 
 nanoui is licensed under the [MIT License](LICENSE). Material from mygo (MIT),
 GPUI (Apache 2.0), gpui-motion (MIT) and GPUI Kit (Apache 2.0) keeps its own
-notices; see [third-party notices](THIRD_PARTY_NOTICES.md).
+notices; see [third-party notices](THIRD_PARTY_NOTICES.md). `apps/nanocua` keeps CodeGraff's license, not MIT.
 
 ## Credits
 
