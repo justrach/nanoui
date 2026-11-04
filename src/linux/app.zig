@@ -1,12 +1,15 @@
 //! The application on Linux: GTK's main loop, windows, menus' accelerators
 //! and timers. Headless runs (`--nanoui-snapshot`, `--nanoui-generate`)
-//! need no display and never start GTK.
+//! need no display and never start GTK. Otherwise GTK starts with the first
+//! window: which GTK depends on whether it shows a page (`webkit.zig`).
 const std = @import("std");
 const gtk = @import("gtk.zig");
 const dev = @import("../dev.zig");
 const window_mod = @import("window.zig");
 const menu_mod = @import("../menu_accel.zig");
 const ui = @import("../ui/ui.zig");
+const tsgen = @import("../tsgen.zig");
+const ipc = @import("../ipc.zig").ipc(window_mod.Window, App);
 const Window = window_mod.Window;
 
 pub const Options = struct {
@@ -33,6 +36,16 @@ pub const App = struct {
     windows: std.ArrayList(*Window) = .empty,
     main_menu: ?*menu_mod.Menu = null,
     flags: dev.Flags = .{},
+    /// The services pages call (`bind`) and the events they listen for.
+    services: std.StringHashMapUnmanaged(ipc.Service) = .empty,
+    events: std.ArrayList(tsgen.Service) = .empty,
+    /// `/nanoui.js`, made once and kept.
+    client_js: ?[]u8 = null,
+    /// The WebKitWebContext every page shares, and 6.0's network session.
+    web_context: ?*anyopaque = null,
+    web_session: ?*anyopaque = null,
+    /// A run that needs no display: GTK never starts.
+    headless: bool = false,
     /// GTK runs: windows show on a display.
     gui: bool = false,
     running: bool = false,
@@ -53,15 +66,9 @@ pub const App = struct {
             .flags = flags,
             .debug = init.environ_map.get("NANOUI_DEBUG") != null,
             .cpu_only = std.mem.eql(u8, init.environ_map.get("NANOUI_RENDERER") orelse "", "cpu"),
+            .headless = flags.snapshot != null or flags.generate_dir != null,
         };
-        const headless = flags.snapshot != null or flags.generate_dir != null;
-        if (!headless) {
-            if (!gtk.load()) return error.GtkMissing;
-            const ok = if (gtk.v4) gtk.v4api.gtk_init_check() else gtk.v3.gtk_init_check(null, null);
-            if (ok == 0) return error.NoDisplay;
-            if (self.debug) std.debug.print("nanoui: GTK {d}\n", .{@as(u8, if (gtk.v4) 4 else 3)});
-            self.gui = true;
-        }
+        const headless = self.headless;
         // `kv.standard()` kept between launches, in the app's data
         // directory; never for headless runs (tests, snapshots).
         if (!headless and !flags.hidden) if (@import("desktop.zig").path(gpa, .data, options.name)) |dir| {
@@ -71,22 +78,96 @@ pub const App = struct {
         return self;
     }
 
+    /// Brings GTK up, once, for a window that is about to be made. A page
+    /// needs the GTK its WebKitGTK is built for, so it has the first say.
+    pub fn startGtk(self: *App, for_page: bool) !void {
+        if (self.gui or self.headless) return;
+        if (for_page) @import("webkit.zig").prepare();
+        if (!gtk.load()) return error.GtkMissing;
+        if (!gtk.ready()) return error.NoDisplay;
+        if (self.debug) std.debug.print("nanoui: GTK {d}\n", .{@as(u8, if (gtk.v4) 4 else 3)});
+        self.gui = true;
+    }
+
     pub fn destroy(self: *App) void {
         while (self.windows.items.len > 0) self.windows.items[self.windows.items.len - 1].close();
         self.windows.deinit(self.gpa);
         if (self.main_menu) |m| m.destroy();
+        self.services.deinit(self.gpa);
+        self.events.deinit(self.gpa);
+        if (self.client_js) |js| self.gpa.free(js);
+        if (self.web_session) |s| gtk.api.g_object_unref(s);
+        if (self.web_context) |c| gtk.api.g_object_unref(c);
         self.gpa.destroy(self);
     }
 
-    /// Pages are not supported on Linux yet: services have no caller.
+    /// Makes a service's methods callable from pages.
     pub fn bind(self: *App, service: anytype) !void {
-        _ = self;
-        _ = service;
+        const T = @typeInfo(@TypeOf(service)).pointer.child;
+        const svc = ipc.service(T, service);
+        try self.services.put(self.gpa, svc.name, svc);
+        if (self.client_js) |js| self.gpa.free(js);
+        self.client_js = null;
     }
 
     pub fn registerEvent(self: *App, comptime E: type) !void {
-        _ = self;
-        _ = E;
+        try self.events.append(self.gpa, E.client);
+        if (self.client_js) |js| self.gpa.free(js);
+        self.client_js = null;
+    }
+
+    /// `/nanoui.js`: the client of every service and event, made once.
+    pub fn clientJs(self: *App) ![]const u8 {
+        if (self.client_js) |js| return js;
+        var aw: std.Io.Writer.Allocating = .init(self.gpa);
+        errdefer aw.deinit();
+        try aw.writer.writeAll(tsgen.runtime_js);
+        var it = self.services.valueIterator();
+        while (it.next()) |svc| try aw.writer.writeAll(svc.client.js);
+        for (self.events.items) |e| try aw.writer.writeAll(e.js);
+        self.client_js = try aw.toOwnedSlice();
+        return self.client_js.?;
+    }
+
+    /// The generated declarations of the client (`nanoui.d.ts`).
+    pub fn clientDts(self: *App, gpa: std.mem.Allocator) ![]u8 {
+        var aw: std.Io.Writer.Allocating = .init(gpa);
+        errdefer aw.deinit();
+        try aw.writer.writeAll(tsgen.runtime_dts);
+        var seen: std.StringHashMapUnmanaged(void) = .empty;
+        defer seen.deinit(gpa);
+        var parts: std.ArrayList(tsgen.Service) = .empty;
+        defer parts.deinit(gpa);
+        // Services sorted by name, so the output is stable.
+        var it = self.services.valueIterator();
+        while (it.next()) |svc| try parts.append(gpa, svc.client);
+        std.mem.sort(tsgen.Service, parts.items, {}, struct {
+            fn lt(_: void, x: tsgen.Service, y: tsgen.Service) bool {
+                return std.mem.lessThan(u8, x.dts, y.dts);
+            }
+        }.lt);
+        try parts.appendSlice(gpa, self.events.items);
+        for (parts.items) |p| {
+            for (p.decls) |d| {
+                if ((try seen.getOrPut(gpa, d.name)).found_existing) continue;
+                try aw.writer.print("\n{s}\n", .{d.source});
+            }
+        }
+        for (parts.items) |p| try aw.writer.print("\n{s}", .{p.dts});
+        return aw.toOwnedSlice();
+    }
+
+    /// `--nanoui-generate=DIR`: `nanoui.js` and `nanoui.d.ts` for a frontend.
+    fn writeClient(self: *App, dir_path: []const u8) !void {
+        const cwd = std.Io.Dir.cwd();
+        try cwd.createDirPath(self.io, dir_path);
+        var dir = try cwd.openDir(self.io, dir_path, .{});
+        defer dir.close(self.io);
+        const dts = try self.clientDts(self.gpa);
+        defer self.gpa.free(dts);
+        try dir.writeFile(self.io, .{ .sub_path = "nanoui.d.ts", .data = dts });
+        try dir.writeFile(self.io, .{ .sub_path = "nanoui.js", .data = try self.clientJs() });
+        std.log.info("nanoui: wrote {s}/nanoui.js and nanoui.d.ts", .{dir_path});
     }
 
     pub fn newWindow(self: *App, options: window_mod.Options) !*Window {
@@ -105,9 +186,16 @@ pub const App = struct {
     }
 
     pub fn run(self: *App) !void {
-        if (self.flags.generate_dir != null) return error.PagesUnsupported;
+        if (self.flags.generate_dir) |dir| return self.writeClient(dir);
         if (self.flags.snapshot) |path| return dev.snapshot(self, path);
+        try self.startGtk(false);
         if (self.stopping or !self.gui) return;
+        // `--nanoui-eval` drives the page rather than waiting on anyone: the
+        // loop runs while the web process answers, then the app quits.
+        if (self.flags.eval != null) {
+            const seconds = if (self.flags.wait > 0) self.flags.wait else 5;
+            after(@intFromFloat(seconds * 1000), self, quitNow);
+        }
         self.running = true;
         if (gtk.v4) {
             // GTK 4 has no gtk_main: GLib's loop, quit by `quit`.
@@ -127,6 +215,11 @@ pub const App = struct {
         if (gtk.v4) {
             if (main_loop) |loop| gtk.api.g_main_loop_quit(loop);
         } else gtk.v3.gtk_main_quit();
+    }
+
+    fn quitNow(ctx: ?*anyopaque) callconv(.c) void {
+        const self: *App = @ptrCast(@alignCast(ctx));
+        self.quit();
     }
 
     /// From any thread: calls `func(ctx)` on the main thread soon (GLib's

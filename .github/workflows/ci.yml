@@ -45,12 +45,14 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.17.0
-      - name: GTK, Mesa's OpenGL and OpenGL ES (llvmpipe), fonts and a virtual display
+      - name: GTK, WebKitGTK, Mesa's OpenGL and OpenGL ES (llvmpipe), fonts and a virtual display
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libgtk-3-0t64 libgtk-4-1 libegl1 libegl-mesa0 libgles2 libgl1-mesa-dri fonts-dejavu-core fonts-noto-core xvfb xauth zsh
+          sudo apt-get install -y --no-install-recommends libgtk-3-0t64 libgtk-4-1 libwebkit2gtk-4.1-0 libwebkitgtk-6.0-4 libegl1 libegl-mesa0 libgles2 libgl1-mesa-dri fonts-dejavu-core fonts-noto-core xvfb xauth zsh
       - run: zig build test-bin --prefix zig-out/linux
+      # GTK 4 with WebKitGTK 6.0; the page's test then runs under GTK 3 with 4.1.
       - run: xvfb-run -a zig-out/linux/bin/nanoui-tests
+      - run: NANOUI_GTK=3 xvfb-run -a zig-out/linux/bin/nanoui-tests
       # A live window under each GTK: GTK 4 where it's installed, GTK 3 when asked.
       - name: The counter under GTK 4 and GTK 3
         run: |
@@ -58,6 +60,16 @@ jobs:
           for v in 4 3; do
             NANOUI_GTK=$v NANOUI_DEBUG=1 timeout 4 xvfb-run -a zig-out/bin/counter > gtk$v.txt 2>&1 || true
             grep -q "nanoui: GTK $v" gtk$v.txt || { cat gtk$v.txt; exit 1; }
+          done
+      # A real page under each: its client served, a call to Zig and back.
+      - name: The hello page under WebKitGTK 6.0 and 4.1
+        env:
+          WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: "1"
+        run: |
+          js='import("/nanoui.js").then(async (m) => { nanoui.log(await m.Greeter.greet("Ada")); nanoui.window.close(); })'
+          for v in 4 3; do
+            NANOUI_GTK=$v NANOUI_DEBUG=1 timeout 90 xvfb-run -a zig-out/bin/hello --nanoui-wait=60 "--nanoui-eval=$js" > page$v.txt 2>&1
+            grep -q "nanoui: GTK $v" page$v.txt && grep -q "page: Hello, Ada!" page$v.txt || { cat page$v.txt; exit 1; }
           done
       - run: zig build test-nui
       - name: nui makes an app that builds, passes its test and renders
