@@ -199,6 +199,13 @@ pub const Cache = struct {
         var grid: u32 = 0;
         const hr = f.method(44, *const fn (*Com, f32, f32, f32, ?*const anyopaque, i32, u32, u32, ?*Com, *u32, *u32) callconv(.winapi) i32)(f, size, 96 * scale, 96 * scale, null, 0, 0, 0, self.params, &rendering, &grid);
         if (hr < 0 or rendering == 0 or rendering == 6) rendering = 5;
+        // At small physical ems, Natural's fractional advances and horizontal
+        // smoothing leave stems between pixels. GDI Classic keeps the same face
+        // and RGB coverage but grid-fits the stems and pen positions. Larger
+        // text keeps DirectWrite's recommended mode.
+        if (size * scale <= 16 and rendering >= 4) {
+            rendering = 2; // DWRITE_RENDERING_MODE_GDI_CLASSIC
+        }
         return .{ .rendering = rendering, .grid = grid };
     }
 

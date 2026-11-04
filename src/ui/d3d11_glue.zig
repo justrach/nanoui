@@ -9,8 +9,10 @@ pub const iid_texture2d: Guid = .{ .a = 0x6f15aaf2, .b = 0xd208, .c = 0x4e89, .d
 
 /// DXGI_FORMAT_B8G8R8A8_UNORM: what the frame and the pictures are in.
 pub const bgra8: u32 = 87;
-/// DXGI_FORMAT_R8_UNORM: the glyph atlas' coverage.
+/// DXGI_FORMAT_R8_UNORM: the glyph atlas' grayscale coverage.
 pub const r8_unorm: u32 = 61;
+/// DXGI_FORMAT_R8G8B8A8_UNORM: native RGB coverage plus its mode tag.
+pub const rgba8: u32 = 28;
 
 // D3D11_BIND_*, D3D11_USAGE_*, D3D11_CPU_ACCESS_*, D3D11_MAP_*.
 pub const bind_constant: u32 = 0x4;
@@ -33,6 +35,7 @@ pub const fill_solid: u32 = 3;
 pub const cull_none: u32 = 1;
 pub const blend_one: u32 = 2;
 pub const blend_inv_src_alpha: u32 = 6;
+pub const blend_inv_src1_color: u32 = 17;
 pub const blend_op_add: u32 = 1;
 pub const filter_linear: u32 = 0x15;
 pub const address_clamp: u32 = 3;
@@ -140,7 +143,7 @@ comptime {
     std.debug.assert(@sizeOf(BlendDesc) == 264);
     std.debug.assert(@sizeOf(RasterizerDesc) == 40);
     std.debug.assert(@sizeOf(SamplerDesc) == 52);
-    std.debug.assert(@sizeOf(Params) == 80);
+    std.debug.assert(@sizeOf(Params) == 112);
 }
 
 pub fn check(hr: HRESULT) !void {
@@ -202,7 +205,7 @@ pub const Box = extern struct { left: u32 = 0, top: u32 = 0, front: u32 = 0, rig
 pub const RenderTargetBlend = extern struct {
     enable: i32 = 1,
     src: u32 = blend_one,
-    dst: u32 = blend_inv_src_alpha,
+    dst: u32 = blend_inv_src1_color,
     op: u32 = blend_op_add,
     src_alpha: u32 = blend_one,
     dst_alpha: u32 = blend_inv_src_alpha,
@@ -262,7 +265,13 @@ pub const Params = extern struct {
     /// DrawInstanced's StartInstanceLocation only offsets vertex-buffer reads,
     /// so the offset is added here, in the shader.
     start_instance: i32 = 0,
-    pad1: i32 = 0,
+    /// Zero is the reverse-proof switch: glyph pixels use grayscale again.
+    rgb_text: f32 = 1,
+    /// DirectWrite's foreground-dependent coverage correction (text_blend.zig).
+    gamma: [4]f32 = .{ 0, 0, 0, 0 },
+    contrast: f32 = 0,
+    grayscale_contrast: f32 = 0,
+    pad2: [2]f32 = .{ 0, 0 },
 };
 
 /// The size a texture is made at to hold a `want`-tall or -wide frame that the
