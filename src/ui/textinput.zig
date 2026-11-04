@@ -22,6 +22,8 @@ pub const methods = [_]objc.Method{
     .{ .name = "markedRange", .imp = &markedRange, .types = "{_NSRange=QQ}@:" },
     .{ .name = "selectedRange", .imp = &selectedRange, .types = "{_NSRange=QQ}@:" },
     .{ .name = "validAttributesForMarkedText", .imp = &validAttributes, .types = "@@:" },
+    // NSTextInputTraits: macOS 14's inline predictions (`setInlinePredictions`).
+    .{ .name = "inlinePredictionType", .imp = &inlinePredictionType, .types = "q@:" },
     .{ .name = "attributedSubstringForProposedRange:actualRange:", .imp = &attributedSubstring, .types = "@@:{_NSRange=QQ}^{_NSRange=QQ}" },
     .{ .name = "firstRectForCharacterRange:actualRange:", .imp = &firstRect, .types = "{CGRect={CGPoint=dd}{CGSize=dd}}@:{_NSRange=QQ}^{_NSRange=QQ}" },
     .{ .name = "characterIndexForPoint:", .imp = &characterIndex, .types = "Q@:{CGPoint=dd}" },
@@ -81,6 +83,7 @@ pub const Queue = struct {
 fn ignoreCopy(_: ?*anyopaque, _: []const u8) void {}
 
 fn push(s: *Surface, op: ctx_mod.TextOp) void {
+    logOp(op);
     s.text_queue.ops.append(s.gpa, op) catch return;
     if (!s.text_queue.collecting) return flush(s);
     s.text_queue.preview(s.ctx.focused_text, s.ctx.focused_multiline, op);
@@ -190,6 +193,29 @@ fn selectedRange(obj: objc.Object, _: objc.SEL) callconv(.c) NSRange {
     const s = objc.getZig(Surface, obj) orelse return .{ .location = not_found, .length = 0 };
     const f = focusedOf(s) orelse return .{ .location = not_found, .length = 0 };
     return range16(f.text, @min(f.caret, f.anchor), @max(f.caret, f.anchor));
+}
+
+/// Whether the system may offer inline predictions in text fields: its
+/// completion arrives as marked text, so a letter just typed is held
+/// uncommitted until the next one (`ui.setInlinePredictions`).
+pub var inline_predictions: bool = true;
+
+fn inlinePredictionType(_: objc.Object, _: objc.SEL) callconv(.c) objc.NSInteger {
+    // NSTextInputTraitTypeDefault, NSTextInputTraitTypeNo.
+    return if (inline_predictions) 0 else 1;
+}
+
+/// `NANOUI_TEXT_LOG=1`: every text operation the input system sends, on stderr.
+var text_log: ?bool = null;
+
+fn logOp(op: ctx_mod.TextOp) void {
+    if (text_log == null) text_log = std.c.getenv("NANOUI_TEXT_LOG") != null;
+    if (!text_log.?) return;
+    switch (op) {
+        .insert => |t| std.debug.print("text: insert \"{s}\"\n", .{t}),
+        .set_marked => |m| std.debug.print("text: set_marked \"{s}\" sel {d}+{d}\n", .{ m.text, m.sel_start, m.sel_len }),
+        else => std.debug.print("text: {s}\n", .{@tagName(op)}),
+    }
 }
 
 fn validAttributes(_: objc.Object, _: objc.SEL) callconv(.c) objc.Object {

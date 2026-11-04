@@ -79,6 +79,12 @@ pub const Posture = device.Posture;
 pub const panes = @import("panes.zig").panes;
 pub const Panes = @import("panes.zig").Panes;
 pub const PanesOptions = @import("panes.zig").Options;
+/// Whether macOS offers inline predictions (14+) in text fields. They come
+/// as marked text: off, each typed letter is committed as it's typed, as
+/// a search field wants. On by default; no effect elsewhere.
+pub fn setInlinePredictions(on: bool) void {
+    if (comptime @import("builtin").os.tag == .macos) @import("textinput.zig").inline_predictions = on;
+}
 
 pub const key = widgets.key;
 pub const keyInt = widgets.keyInt;
