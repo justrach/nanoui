@@ -33,7 +33,72 @@ fn worldFor(p: *Page) ?*World {
 /// The document has parsed: a page with scripts gets its world, before it asks
 /// for anything that might answer at once.
 pub fn parsed(p: *Page) void {
+    if (p.no_scripts) return;
     if (scripts.hasScripts(p.doc)) _ = worldFor(p);
+}
+
+/// The world of a page another page's script has reached for, made if it had none.
+/// A frame sandboxed without scripts has one too: its own never run, but what's
+/// around it may still reach in, given `allow-same-origin`.
+pub fn ensureWorld(p: *Page) ?*World {
+    const had = p.js != null;
+    const w = worldFor(p) orelse return null;
+    if (!had) {
+        // Its document has long been there.
+        w.runner.phase = .complete;
+        w.runner.dom_ready = true;
+        w.runner.load_fired = true;
+    }
+    return w;
+}
+
+/// A press somewhere: `auto` popovers it's outside of close.
+pub fn lightDismiss(p: *Page, node: ?*dom.Node) void {
+    const w = p.js orelse return;
+    if (p.doc.top_layer.items.len == 0 or !w.h.lightDismiss.isCallable()) return;
+    const target = bind.wrap(w.vm, node) catch return;
+    w.task(w.h.lightDismiss, Value.undefined, &.{target});
+}
+
+/// Escape, while something shows in the top layer.
+pub fn escape(p: *Page) void {
+    const w = p.js orelse return;
+    if (p.doc.top_layer.items.len == 0 or !w.h.closeWatcher.isCallable()) return;
+    w.task(w.h.closeWatcher, Value.undefined, &.{});
+}
+
+/// A button with `popovertarget` or `commandfor`: true when it did what it says.
+pub fn invoke(p: *Page, button: *dom.Node) bool {
+    const w = p.js orelse return false;
+    if (!w.h.invoke.isCallable()) return false;
+    const target = bind.wrap(w.vm, button) catch return false;
+    w.enter();
+    defer w.leave();
+    const r = w.callReported(w.h.invoke, Value.undefined, &.{target}) orelse return false;
+    return w.vm.toBoolean(r);
+}
+
+/// A `<details>` was opened or closed by a person.
+pub fn detailsToggled(p: *Page, d: *dom.Node) void {
+    const w = p.js orelse return;
+    if (!w.h.detailsToggled.isCallable()) return;
+    const target = bind.wrap(w.vm, d) catch return;
+    w.task(w.h.detailsToggled, Value.undefined, &.{target});
+}
+
+/// Style and layout now, for one that changed and must be measured.
+pub fn layoutNow(p: *Page) void {
+    if (p.js) |w| {
+        _ = @import("api_geometry.zig").flushLayout(w);
+        return;
+    }
+    const c = p.host.uiContext(p.host.ctx) orelse return;
+    @import("../page_view.zig").prepare(p, c, p.viewport_w, p.viewport_h);
+}
+
+/// A page is going: scripts in others can't reach it any more.
+pub fn forgetPage(p: *Page) void {
+    @import("api_frames.zig").forget(p);
 }
 
 /// Runs its scripts, in order.
@@ -82,6 +147,8 @@ pub fn animationEvents(p: *Page) void {
             .none => "",
             .before => "::before",
             .after => "::after",
+            .marker => "::marker",
+            .backdrop => "::backdrop",
         }) catch continue;
         _ = w.callReported(w.h.fireAnimation, Value.undefined, &.{ target, kind, what, bind.num(e.elapsed), pseudo });
     }

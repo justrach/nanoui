@@ -46,7 +46,7 @@ pub fn self(b: *Builder, x: *const Box, at: At, list: *List) !void {
         try b.add(list, item(.{ .image = .{ .node = n, .fit = st.object_fit, .radius = c.largest(), .corners = c.mask(), .style = st } }, cr, at, node));
     };
     if (x.kind == .control) try b.add(list, item(.{ .control = x }, .{ .x = x.x + at.tx, .y = x.y + at.ty, .w = x.w, .h = x.h }, at, node));
-    if (x.marker) |m| try b.add(list, item(.{ .bullet = .{ .shape = st.list_style, .color = st.color } }, shifted(m, at), at, null));
+    if (x.marker) |m| try b.add(list, item(.{ .bullet = .{ .shape = st.list_style, .color = (x.lay.marker_style orelse st).color } }, shifted(m, at), at, null));
     if (st.outline.width > 0 and st.outline.style != .none and st.outline.color.a > 0) try outline(b, x, at, list);
 }
 

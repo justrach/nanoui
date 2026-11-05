@@ -19,6 +19,17 @@ pub const Entry = struct {
     key: u64,
     layer: u16,
     ua: bool,
+    /// The `@container` it sits under: checked when an element has matched it.
+    container: ?*const sheet.ContainerCond = null,
+
+    /// As a rule from inside a shadow tree about something outside it: any rule of
+    /// the outer tree wins over it.
+    fn outerWeak(e: Entry) Entry {
+        var out = e;
+        out.key &= ~(@as(u64, 0xFFF) << 51);
+        out.layer = 0;
+        return out;
+    }
 };
 
 /// An author selector with a state pseudo-class, for `invalidatedByState`. The UA
@@ -47,8 +58,15 @@ pub const Index = struct {
     tags: Map = .empty,
     universal: List = .empty,
     state_deps: std.ArrayList(StateDep) = .empty,
+    /// Rules for a shadow tree's host (`:host`), and what's slotted into it
+    /// (`::slotted`); `::part` rules for what's in the shadow trees of this tree.
+    host: List = .empty,
+    slotted: List = .empty,
+    parts: List = .empty,
     /// Some author rule uses `:has`: a change can reach its ancestors.
     uses_has: bool = false,
+    /// Some rule sits under `@container`.
+    uses_container: bool = false,
     quirks: bool = false,
 
     pub fn init(gpa: Allocator) Index {
@@ -68,13 +86,23 @@ pub const Index = struct {
             const layer = if (ua) 0 else layers.rank(r.layer);
             for (r.selectors) |*selector| {
                 if (selector.pseudo == .other) continue;
-                try ix.add(.{
+                const entry: Entry = .{
                     .sel = selector,
                     .decls = r.decls,
                     .key = makeKey(ua, layer, selector.specificity, order.*),
                     .layer = layer,
                     .ua = ua,
-                });
+                    .container = r.container,
+                };
+                if (r.container != null) ix.uses_container = true;
+                const a = ix.arena.allocator();
+                if (selector.pseudo == .slotted) {
+                    try ix.slotted.append(a, entry.outerWeak());
+                } else if (selector.pseudo == .part) {
+                    try ix.parts.append(a, entry);
+                } else if (isHostRule(selector)) {
+                    try ix.host.append(a, entry.outerWeak());
+                } else try ix.add(entry);
                 if (selector.uses_state and !ua) try ix.state_deps.append(ix.arena.allocator(), .{ .sel = selector });
                 if (!ua and !ix.uses_has) {
                     for (selector.compounds) |*c| for (c.simples) |x| switch (x) {
@@ -150,6 +178,21 @@ pub const Index = struct {
         return map.get(std.ascii.lowerString(&buf, key));
     }
 };
+
+/// Whether a selector's subject is `:host`.
+fn isHostRule(s: *const sel.Selector) bool {
+    if (s.compounds.len == 0) return false;
+    for (s.compounds[s.compounds.len - 1].simples) |x| switch (x) {
+        .host, .host_context => return true,
+        else => {},
+    };
+    return false;
+}
+
+/// The rules of `items` that match `el`, as `collect` gives them.
+pub fn collectFrom(gpa: Allocator, items: []const Entry, el: *dom.Node, ctx: *match.Ctx, out: *List) Allocator.Error!void {
+    try tryList(gpa, items, el, ctx, out);
+}
 
 fn tryList(gpa: Allocator, items: []const Entry, el: *dom.Node, ctx: *match.Ctx, out: *List) Allocator.Error!void {
     for (items) |e| {

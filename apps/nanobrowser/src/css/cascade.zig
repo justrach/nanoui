@@ -34,6 +34,18 @@ pub const querySelectorAll = query.querySelectorAll;
 pub const matchesSelector = query.matchesSelector;
 pub const closest = query.closest;
 
+/// The nearest ancestor that is a container, with this name if one is given.
+fn nearestContainer(n: *const dom.Node, name: []const u8) ?*const dom.Node {
+    var at = n.parent;
+    while (at) |a| : (at = a.parent) {
+        const st = a.computed orelse continue;
+        if (a.kind != .element or st.container_type == .normal) continue;
+        if (name.len == 0) return a;
+        for (st.container_names) |x| if (std.mem.eql(u8, x, name)) return a;
+    }
+    return null;
+}
+
 /// What a restyle changed, compared with the last computed style.
 pub const Change = enum {
     none,
@@ -53,12 +65,21 @@ pub const Engine = struct {
     gpa: Allocator,
     doc: *dom.Document,
     sheets: []const *const Sheet = &.{},
+    /// What each shadow tree's own `<style>`s and `<link>`s came to, by its root.
+    scoped: std.AutoHashMapUnmanaged(*dom.Node, []const *const Sheet) = .empty,
+    /// One index for each distinct list of sheets: a thousand shadow trees of one
+    /// custom element share theirs.
+    scope_index: std.AutoHashMapUnmanaged(u64, *rule_index.Index) = .empty,
+    /// Elements with a `container-type`: their boxes are read after each layout.
+    containers: std.AutoHashMapUnmanaged(*dom.Node, void) = .empty,
     viewport: Viewport = .{ .width = 1024, .height = 768 },
     /// Whether scripts run: `<noscript>` then stays hidden.
     scripting: bool = true,
 
     index: ?rule_index.Index = null,
     index_dirty: bool = true,
+    /// The UA's rules alone, which every tree has.
+    ua_index: ?rule_index.Index = null,
     /// Which media conditions held when the index was built.
     media_signature: u64 = 0,
     ua_arena: ?std.heap.ArenaAllocator = null,
@@ -81,6 +102,8 @@ pub const Engine = struct {
     pseudo_before: std.ArrayList(rule_index.Entry) = .empty,
     pseudo_after: std.ArrayList(rule_index.Entry) = .empty,
     pseudo_placeholder: std.ArrayList(rule_index.Entry) = .empty,
+    pseudo_marker: std.ArrayList(rule_index.Entry) = .empty,
+    pseudo_backdrop: std.ArrayList(rule_index.Entry) = .empty,
     custom_builder: vars.Builder = .{},
     match_ctx: match.Ctx,
     /// What runs: `@keyframes` and transitions (`animate.zig`), and the time
@@ -104,6 +127,13 @@ pub const Engine = struct {
 
     pub fn deinit(e: *Engine) void {
         if (e.index) |*ix| ix.deinit();
+        if (e.ua_index) |*ix| ix.deinit();
+        e.dropScopeIndexes();
+        e.scope_index.deinit(e.gpa);
+        var lists = e.scoped.valueIterator();
+        while (lists.next()) |l| e.gpa.free(l.*);
+        e.scoped.deinit(e.gpa);
+        e.containers.deinit(e.gpa);
         if (e.ua_arena) |*a| a.deinit();
         e.generation_arena.deinit();
         e.collected.deinit(e.gpa);
@@ -114,6 +144,8 @@ pub const Engine = struct {
         e.anim.deinit();
         e.keyframes.deinit(e.gpa);
         e.registered.deinit(e.gpa);
+        e.pseudo_marker.deinit(e.gpa);
+        e.pseudo_backdrop.deinit(e.gpa);
         e.custom_builder.deinit(e.gpa);
         e.fonts.deinit(e.gpa);
         e.gpa.free(e.sheets);
@@ -133,6 +165,93 @@ pub const Engine = struct {
         _ = e.fonts.declare(e.gpa, copy);
         e.index_dirty = true;
         e.doc.touchStyle();
+    }
+
+    /// Every shadow tree's sheets, replacing what was set; `list`'s slices are
+    /// copied. A root with none has no entry.
+    pub fn setScopedSheets(e: *Engine, roots: []const *dom.Node, lists: []const []const *const Sheet) void {
+        var old = e.scoped.valueIterator();
+        while (old.next()) |l| e.gpa.free(l.*);
+        e.scoped.clearRetainingCapacity();
+        for (roots, lists) |r, l| {
+            const copy = e.gpa.dupe(*const Sheet, l) catch continue;
+            e.scoped.put(e.gpa, r, copy) catch e.gpa.free(copy);
+        }
+        e.dropScopeIndexes();
+        e.doc.touchStyle();
+    }
+
+    fn dropScopeIndexes(e: *Engine) void {
+        var it = e.scope_index.valueIterator();
+        while (it.next()) |x| {
+            x.*.deinit();
+            e.gpa.destroy(x.*);
+        }
+        e.scope_index.clearRetainingCapacity();
+    }
+
+    /// The rules of a shadow tree, or none. Lists that are the same share an index.
+    fn indexOfScope(e: *Engine, root: *dom.Node) Allocator.Error!?*rule_index.Index {
+        const list = e.scoped.get(root) orelse return null;
+        const key = std.hash.Wyhash.hash(0, std.mem.sliceAsBytes(list));
+        if (e.scope_index.get(key)) |x| return x;
+        const ix = try e.gpa.create(rule_index.Index);
+        errdefer e.gpa.destroy(ix);
+        ix.* = rule_index.Index.init(e.gpa);
+        ix.quirks = e.doc.quirks;
+        const a = ix.arena.allocator();
+        const ranks = try rule_index.LayerRanks.build(a, list, e.viewport);
+        var order: u32 = 0;
+        for (list) |s| try ix.addSheet(s, e.viewport, false, &ranks, &order);
+        try e.scope_index.put(e.gpa, key, ix);
+        return ix;
+    }
+
+    /// The rules that can match `n`, from its tree, the tree inside it and the
+    /// tree around it, into `collected`.
+    pub fn collectFor(e: *Engine, n: *dom.Node) Allocator.Error!void {
+        const gpa = e.gpa;
+        const list = &e.collected;
+        if (n.tree_scope) |root| {
+            try e.ua_index.?.collect(gpa, n, &e.match_ctx, list);
+            if (try e.indexOfScope(root)) |ix| try ix.collect(gpa, n, &e.match_ctx, list);
+        } else try e.index.?.collect(gpa, n, &e.match_ctx, list);
+        if (e.scoped.count() == 0 and n.tree_scope == null) return;
+        if (n.shadow_root) |root| if (try e.indexOfScope(root)) |ix| {
+            try rule_index.collectFrom(gpa, ix.host.items, n, &e.match_ctx, list);
+        };
+        if (n.parent) |p| if (p.shadow_root) |root| if (try e.indexOfScope(root)) |ix| {
+            for (ix.slotted.items) |entry| if (match.matchesAny(entry.sel.slotted, n, &e.match_ctx)) try list.append(gpa, entry);
+        };
+        if (n.tree_scope) |root| if (n.attr("part")) |names| {
+            const host = root.parent orelse return;
+            const outer = if (host.tree_scope) |r2| try e.indexOfScope(r2) else &e.index.?;
+            const ix = outer orelse return;
+            for (ix.parts.items) |entry| {
+                var it = std.mem.tokenizeAny(u8, names, " \t\r\n\x0c");
+                while (it.next()) |w| if (std.mem.eql(u8, w, entry.sel.part)) {
+                    if (match.matches(entry.sel, host, &e.match_ctx)) try list.append(gpa, entry);
+                    break;
+                };
+            }
+        };
+    }
+
+    /// Whether the `@container` a rule sits under holds for `n`: each level asks
+    /// the nearest container with its name, and an unlaid one answers no.
+    pub fn containerHolds(e: *const Engine, cond: *const sheet_mod.ContainerCond, n: *const dom.Node) bool {
+        _ = e;
+        var at: ?*const sheet_mod.ContainerCond = cond;
+        while (at) |c| : (at = c.parent) {
+            const box = nearestContainer(n, c.name) orelse return false;
+            if (c.query) |q| {
+                if (box.container_w < 0) return false;
+                const st = box.computed.?;
+                const high = if (st.container_type == .size) box.container_h else -1;
+                if (!q.matches(.{ .width = box.container_w, .height = high })) return false;
+            }
+        }
+        return true;
     }
 
     pub fn setViewport(e: *Engine, v: Viewport) void {
@@ -155,6 +274,11 @@ pub const Engine = struct {
             mix(&h, s.active(e.viewport));
             for (s.conds) |c| mix(&h, c.matches(e.viewport));
         }
+        var lists = e.scoped.valueIterator();
+        while (lists.next()) |l| for (l.*) |s| {
+            mix(&h, s.active(e.viewport));
+            for (s.conds) |c| mix(&h, c.matches(e.viewport));
+        };
         return h;
     }
 
@@ -166,9 +290,23 @@ pub const Engine = struct {
         e.ua_quirks = try parser.parseSheet(a, ua.quirks, "");
     }
 
+    fn ensureUaIndex(e: *Engine) Allocator.Error!void {
+        if (e.ua_index != null and e.ua_index.?.quirks == e.doc.quirks) return;
+        try e.ensureUa();
+        if (e.ua_index) |*old| old.deinit();
+        e.ua_index = rule_index.Index.init(e.gpa);
+        const ix = &e.ua_index.?;
+        ix.quirks = e.doc.quirks;
+        const ranks: rule_index.LayerRanks = .{};
+        var order: u32 = 0;
+        try ix.addSheet(e.ua_sheet.?, e.viewport, true, &ranks, &order);
+        if (e.doc.quirks) try ix.addSheet(e.ua_quirks.?, e.viewport, true, &ranks, &order);
+    }
+
     fn ensureIndex(e: *Engine) Allocator.Error!void {
         if (!e.index_dirty and e.index != null) return;
-        try e.ensureUa();
+        try e.ensureUaIndex();
+        e.dropScopeIndexes();
         if (e.index) |*old| old.deinit();
         e.index = null;
         e.index = rule_index.Index.init(e.gpa);
@@ -323,7 +461,7 @@ pub const Engine = struct {
             const visible = parent_style != null and parent_style.?.display != .none;
             n.computed = if (n.kind == .text and visible) parent_style else null;
             n.style_generation = e.generation;
-            return n.nextInTree(root);
+            return n.nextDeep(root);
         }
         var parent_style: *const Style = &e.root_parent;
         var parent_scope: ?*const vars.Scope = e.registered_scope;
@@ -332,17 +470,24 @@ pub const Engine = struct {
             parent_style = e.current(p) orelse {
                 // Inside `display: none`, or not yet styled.
                 e.clearSubtree(n, change, old != null);
-                return n.nextSkippingChildren(root);
+                return n.nextDeepSkipping(root);
             };
             if (parent_style.display == .none) {
                 e.clearSubtree(n, change, old != null);
-                return n.nextSkippingChildren(root);
+                return n.nextDeepSkipping(root);
             }
             parent_scope = null;
             if (p.css_vars) |raw| parent_scope = @ptrCast(@alignCast(raw));
         }
+        // Which tree it is in: what rules can match.
+        if (n.is_shadow) {
+            n.tree_scope = n;
+        } else if (parent) |p| {
+            n.tree_scope = p.tree_scope;
+        }
         var fresh: Style = undefined;
-        const r = try compute.element(e, n, parent_style, parent_scope, &fresh);
+        const r = if (n.is_shadow) compute.shadowRoot(parent_style, parent_scope, &fresh) else try compute.element(e, n, parent_style, parent_scope, &fresh);
+        if (fresh.container_type != .normal) try e.containers.put(e.gpa, n, {});
         try e.anim.styled(e, n, .none, parent_style, r.scope, e.previous(n, .none), &fresh);
         var compared: Change = .layout;
         if (old) |o| {
@@ -374,11 +519,14 @@ pub const Engine = struct {
             };
             var k = n.first_child;
             while (k) |x| : (k = x.next) e.clearSubtree(x, change, false);
-            return n.nextSkippingChildren(root);
+            if (n.shadow_root) |x| e.clearSubtree(x, change, false);
+            return n.nextDeepSkipping(root);
         }
         n.before = try e.pseudoStyle(n, .before, e.pseudo_before.items, r.before, stored, r.scope, old_before, prev_before, change);
         n.after = try e.pseudoStyle(n, .after, e.pseudo_after.items, r.after, stored, r.scope, old_after, prev_after, change);
-        return n.nextInTree(root);
+        n.marker = try e.pseudoStyle(n, .marker, e.pseudo_marker.items, r.marker, stored, r.scope, null, null, null);
+        n.backdrop = try e.pseudoStyle(n, .backdrop, e.pseudo_backdrop.items, r.backdrop, stored, r.scope, null, null, null);
+        return n.nextDeep(root);
     }
 
     /// The style `n` (or its pseudo-element) had before this restyle, for what
@@ -390,6 +538,8 @@ pub const Engine = struct {
             .none => n.computed,
             .before => n.before,
             .after => n.after,
+            .marker => n.marker,
+            .backdrop => n.backdrop,
         };
     }
 
@@ -429,10 +579,11 @@ pub const Engine = struct {
             c.* = c.max(.layout);
         };
         var at: ?*dom.Node = top;
-        while (at) |n| : (at = n.nextInTree(top)) {
+        while (at) |n| : (at = n.nextDeep(top)) {
             n.computed = null;
             n.before = null;
             n.after = null;
+            n.marker = null;
             n.css_vars = null;
             n.style_generation = e.generation;
         }
@@ -442,7 +593,7 @@ pub const Engine = struct {
     /// hover on a page with none costs nothing.
     pub fn hoverSensitive(e: *Engine) bool {
         e.ensureIndex() catch return true;
-        return e.index.?.state_deps.items.len > 0;
+        return e.index.?.state_deps.items.len > 0 or e.scoped.count() > 0;
     }
 
     /// The highest ancestor whose style may change when `node`'s hover, active
@@ -450,6 +601,9 @@ pub const Engine = struct {
     /// that subtree needs restyling.
     pub fn invalidatedByState(e: *Engine, node: *dom.Node) ?*dom.Node {
         e.ensureIndex() catch return e.doc.documentElement();
+        // Inside a shadow tree the tree's rules say; a whole tree restyles cheaply.
+        if (node.tree_scope) |root| return root;
+        if (node.shadow_root != null) return node;
         return state.invalidatedBy(&e.index.?, e.doc, node);
     }
 

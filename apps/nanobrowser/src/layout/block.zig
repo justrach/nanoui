@@ -143,7 +143,8 @@ fn flowChild(f: *Flow, b: *Box, parent_left: f32, cx: f32, cw: f32, ch: ?f32) Er
     b.x = parent_left + b.margin.left;
     const in_w = @max(0, b.w - ctx.bpH(b));
     const bpv = ctx.bpV(b);
-    const def = ctx.specH(b, s.height, ch, bpv) orelse if (s.aspect_ratio > 0) ctx.clean(in_w / ctx.clean(s.aspect_ratio)) + bpv else null;
+    var def = ctx.specH(b, s.height, ch, bpv) orelse if (s.aspect_ratio > 0) ctx.aspectH(b, b.w) else null;
+    const aspect_floor = s.aspect_ratio > 0 and s.height.kind == .auto and ctx.aspectGrows(b);
     const inner_ch: ?f32 = if (def) |d| @max(0, ctx.clampH(b, d, ch, bpv) - bpv) else if (c.quirks) ch else null;
     const tb = ctx.bpTop(b);
     const bb = b.border.bottom + b.padding.bottom;
@@ -160,6 +161,10 @@ fn flowChild(f: *Flow, b: *Box, parent_left: f32, cx: f32, cw: f32, ch: ?f32) Er
     }
     if (top != null) f.y += tb;
     try insides(f, b, cx + b.margin.left + ctx.bpLeft(b), in_w, inner_ch, &top);
+    // A height from `aspect-ratio` gives way to what's inside.
+    if (aspect_floor) if (top) |t| {
+        def = @max(def.?, f.y - t + bb);
+    };
 
     var h: f32 = 0;
     var resolved = true;
@@ -314,7 +319,7 @@ pub fn blockWidth(c: *Ctx, b: *Box, cw: f32, ch: ?f32) Error!f32 {
     const bp = ctx.bpH(b);
     var spec = try ctx.specW(c, b, s.width, cw, bp);
     if (spec == null and s.aspect_ratio > 0) {
-        if (ctx.specH(b, s.height, ch, ctx.bpV(b))) |h| spec = (h - ctx.bpV(b)) * ctx.clean(s.aspect_ratio) + bp;
+        if (ctx.specH(b, s.height, ch, ctx.bpV(b))) |h| spec = ctx.aspectW(b, h);
     }
     const room = cw - b.margin.horizontal();
     const w0 = spec orelse if (b.lay.shrink) try sizing.shrinkToFit(c, b, room) else @max(bp, room);

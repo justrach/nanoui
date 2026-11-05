@@ -38,10 +38,18 @@ pub const Hooks = struct {
     hashChanged: Value = Value.undefined,
     historyStep: Value = Value.undefined,
     unhandled: Value = Value.undefined,
+    makeRemote: Value = Value.undefined,
+    remoteOp: Value = Value.undefined,
+    crossWindow: Value = Value.undefined,
+    deliverMessage: Value = Value.undefined,
+    closeWatcher: Value = Value.undefined,
+    invoke: Value = Value.undefined,
+    lightDismiss: Value = Value.undefined,
+    detailsToggled: Value = Value.undefined,
 };
 
 /// What `CacheKey.kind` holds on to, one of each per node.
-pub const Cached = enum(u8) { child_nodes, children, class_list, style, dataset, attributes, content, shadow, computed, rel_list };
+pub const Cached = enum(u8) { child_nodes, children, class_list, style, dataset, attributes, computed, rel_list };
 
 pub const CacheKey = struct { node: *dom.Node, kind: Cached };
 
@@ -154,6 +162,15 @@ pub const World = struct {
     deferred_events: std.ArrayList(Deferred) = .empty,
     /// Something listens for pointer movement.
     pointer_heard: bool = false,
+    /// What other worlds' proxies stand for, by the numbers they know them by; the
+    /// proxies here for other worlds' objects; the page calling in right now.
+    exports: std.ArrayList(Value) = .empty,
+    export_ids: std.AutoHashMapUnmanaged(*js.Object, u32) = .empty,
+    imports: std.AutoHashMapUnmanaged(*js.Object, @import("api_frames.zig").Remote) = .empty,
+    caller: ?*Page = null,
+    /// `document.open()` is in force: what's been written since.
+    doc_open: bool = false,
+    doc_written: std.ArrayList(u8) = .empty,
     /// A control should take the keyboard, or none, at the next frame.
     focus_request: ?*dom.Node = null,
     blur_request: bool = false,
@@ -193,6 +210,10 @@ pub const World = struct {
         for (w.console.items) |l| gpa.free(l.text);
         w.console.deinit(gpa);
         w.wrappers.deinit(gpa);
+        w.exports.deinit(gpa);
+        w.doc_written.deinit(gpa);
+        w.export_ids.deinit(gpa);
+        w.imports.deinit(gpa);
         if (w.pending_nav) |n| {
             gpa.free(n.url);
             gpa.free(n.body);
@@ -214,6 +235,9 @@ pub const World = struct {
         classes.mark(w, m);
         inline for (@typeInfo(Extra).@"struct".field_names) |name| m.markObj(@field(w.extra, name));
         for (w.wrappers.items) |o| m.markObj(o);
+        for (w.exports.items) |v| m.mark(v);
+        var imported = w.imports.keyIterator();
+        while (imported.next()) |o| m.markObj(o.*);
         var it = w.cached.valueIterator();
         while (it.next()) |o| m.markObj(o.*);
         for (w.animation.items) |a| m.mark(a.callback);

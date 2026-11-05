@@ -189,8 +189,10 @@ fn textWrap(s: *Style, t: []const Token) bool {
     if (w.kind != .ident) return false;
     if (w.isIdent("nowrap")) {
         s.white_space = if (s.white_space == .pre or s.white_space == .pre_wrap) .pre else .nowrap;
+        s.text_balance = false;
     } else if (w.isIdent("wrap") or w.isIdent("balance") or w.isIdent("pretty") or w.isIdent("stable")) {
         s.white_space = if (s.white_space == .pre) .pre_wrap else if (s.white_space == .nowrap) .normal else s.white_space;
+        s.text_balance = w.isIdent("balance");
     } else return false;
     return true;
 }
@@ -200,7 +202,7 @@ fn listWord(w: []const u8) ?style.ListStyle {
     const eq = std.ascii.eqlIgnoreCase;
     if (eq(w, "lower-latin")) return .lower_alpha;
     if (eq(w, "upper-latin")) return .upper_alpha;
-    if (eq(w, "decimal-leading-zero") or eq(w, "arabic-indic") or eq(w, "armenian") or eq(w, "georgian") or eq(w, "hebrew") or eq(w, "lower-greek") or eq(w, "cjk-decimal")) return .decimal;
+    if (eq(w, "arabic-indic") or eq(w, "armenian") or eq(w, "georgian") or eq(w, "hebrew") or eq(w, "cjk-decimal")) return .decimal;
     if (eq(w, "disclosure-open") or eq(w, "disclosure-closed")) return .disc;
     return null;
 }

@@ -205,3 +205,11 @@ pub fn descend(g: *gen.Gen, n: *dom.Node) void {
         }
     }
 }
+
+/// `hidden=until-found` and `content-visibility: hidden`: it has a box, and shows
+/// nothing that is in it.
+pub fn isContentHidden(n: *const dom.Node, s: *const Style) bool {
+    if (s.content_hidden) return true;
+    const v = n.attr("hidden") orelse return false;
+    return std.ascii.eqlIgnoreCase(v, "until-found");
+}

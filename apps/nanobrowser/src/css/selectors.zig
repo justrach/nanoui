@@ -9,7 +9,7 @@ pub const maxSpecificity = parser.maxSpecificity;
 
 pub const Combinator = enum(u8) { descendant, child, next, later };
 pub const AttrOp = enum(u8) { exists, equals, includes, dash, prefix, suffix, substring };
-pub const PseudoElement = enum(u8) { none, before, after, placeholder, other };
+pub const PseudoElement = enum(u8) { none, before, after, placeholder, marker, backdrop, slotted, part, other };
 
 pub const PseudoClass = enum(u8) {
     root,
@@ -42,6 +42,10 @@ pub const PseudoClass = enum(u8) {
     default,
     valid,
     indeterminate,
+    modal,
+    popover_open,
+    /// `:open`: an open `<details>`, `<dialog>`, `<select>`.
+    open,
     /// Known to exist, never true here (`:fullscreen`, `:-webkit-autofill`).
     never,
 };
@@ -76,6 +80,10 @@ pub const Simple = union(enum) {
     is: []const Selector,
     has: []const Selector,
     lang: []const u8,
+    /// `:host` and `:host(list)`, the list empty for the former.
+    host: []const Selector,
+    /// `:host-context(list)`.
+    host_context: []const Selector,
 };
 
 pub const Compound = struct {
@@ -92,4 +100,8 @@ pub const Selector = struct {
     uses_state: bool = false,
     /// In `:has()`: how the leftmost compound relates to the anchor.
     leading: Combinator = .descendant,
+    /// `::slotted(list)`: what it asks of the slotted element.
+    slotted: []const Selector = &.{},
+    /// `::part(name)`.
+    part: []const u8 = "",
 };

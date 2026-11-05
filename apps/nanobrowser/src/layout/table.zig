@@ -48,7 +48,7 @@ fn spanAttr(n: ?*const @import("../dom.zig").Node, name: []const u8) u32 {
     return v;
 }
 
-fn analyse(c: *Ctx, b: *Box) Error!*Grid {
+pub fn analyse(c: *Ctx, b: *Box) Error!*Grid {
     if (b.lay.table) |p| return @ptrCast(@alignCast(p));
     const a = c.arena;
     var rows: std.ArrayList(Row) = .empty;
@@ -121,6 +121,7 @@ fn analyse(c: *Ctx, b: *Box) Error!*Grid {
         .col_pct = try a.alloc(f32, ncols),
     };
     b.lay.table = g;
+    if (b.style.border_collapse) try @import("table_collapse.zig").resolve(c, b, g);
     return g;
 }
 
@@ -159,17 +160,6 @@ fn addCols(c: *Ctx, out: *std.ArrayList(css.Len), n: *const @import("../dom.zig"
     while (span > 0) : (span -= 1) try out.append(c.arena, w);
 }
 
-/// The table's border that its columns' edges overlap, when collapsed.
-fn collapseInsetX(b: *const Box) f32 {
-    if (!b.style.border_collapse) return 0;
-    return (ctx.borderWidth(b.style.border_left) + ctx.borderWidth(b.style.border_right)) / 2;
-}
-
-fn collapseInsetY(b: *const Box) f32 {
-    if (!b.style.border_collapse) return 0;
-    return (ctx.borderWidth(b.style.border_top) + ctx.borderWidth(b.style.border_bottom)) / 2;
-}
-
 /// The table's widths (border box), from its columns and captions.
 fn measured(c: *Ctx, b: *Box) Error!*Grid {
     const g = try analyse(c, b);
@@ -178,7 +168,7 @@ fn measured(c: *Ctx, b: *Box) Error!*Grid {
     const n: f32 = @floatFromInt(g.ncols);
     const spacing = if (g.ncols > 0) spacingX(b.style) * (n + 1) else 0;
     const e = ctx.edgesOf(b.style, 0);
-    const bp = e.border.horizontal() + e.padding.horizontal() - collapseInsetX(b);
+    const bp = e.border.horizontal() + e.padding.horizontal();
     var lo: f32 = 0;
     var hi: f32 = 0;
     for (g.col_min, g.col_max) |a, z| {
@@ -228,18 +218,16 @@ pub fn layout(c: *Ctx, b: *Box, cw_in: f32, ch: ?f32) Error!f32 {
     b.runs = &.{};
     b.marker = null;
     const a = c.arena;
-    const inset_x = collapseInsetX(b);
-    const inset_y = collapseInsetY(b);
     const sx = spacingX(s);
     const sy = spacingY(s);
     const n: f32 = @floatFromInt(g.ncols);
-    const room = @max(0, cw_in + inset_x - (if (g.ncols > 0) sx * (n + 1) else 0));
+    const room = @max(0, cw_in - (if (g.ncols > 0) sx * (n + 1) else 0));
     const widths = try cols_mod.distribute(c, b, g, room);
     var used: f32 = 0;
     for (widths) |w| used += w;
     if (g.ncols > 0) used += sx * (n + 1);
-    const table_w = @max(used, cw_in + inset_x);
-    if (used > cw_in + inset_x) b.w = used - inset_x + ctx.bpH(b);
+    const table_w = @max(used, cw_in);
+    if (used > cw_in) b.w = used + ctx.bpH(b);
 
     const col_x = try a.alloc(f32, g.ncols + 1);
     var at: f32 = sx;
@@ -277,10 +265,10 @@ pub fn layout(c: *Ctx, b: *Box, cw_in: f32, ch: ?f32) Error!f32 {
                 down[cell.row] = @max(down[cell.row], h - base);
                 row_h[cell.row] = @max(row_h[cell.row], up[cell.row] + down[cell.row]);
             }
-            row_h[cell.row] = @max(row_h[cell.row], h - collapseCellY(s, x));
+            row_h[cell.row] = @max(row_h[cell.row], h);
         }
     }
-    try rowSpans(c, g, row_h, sy, s);
+    try rowSpans(c, g, row_h, sy);
 
     // A definite table height spreads over the rows.
     var cap_top: f32 = 0;
@@ -291,7 +279,7 @@ pub fn layout(c: *Ctx, b: *Box, cw_in: f32, ch: ?f32) Error!f32 {
     }
     var rows_total: f32 = if (nrows > 0) sy * @as(f32, @floatFromInt(nrows + 1)) else 0;
     for (row_h) |h| rows_total += h;
-    if (ch) |d| spread(row_h, d + inset_y - cap_top - cap_bottom - rows_total);
+    if (ch) |d| spread(row_h, d - cap_top - cap_bottom - rows_total);
 
     // Positions.
     const row_y = try a.alloc(f32, nrows + 1);
@@ -302,11 +290,11 @@ pub fn layout(c: *Ctx, b: *Box, cw_in: f32, ch: ?f32) Error!f32 {
     }
     row_y[nrows] = y;
     const rows_end = if (nrows > 0) y else 0;
-    const origin_x = ctx.bpLeft(b) - inset_x / 2;
-    const origin_y = ctx.bpTop(b) + cap_top - inset_y / 2;
+    const origin_x = ctx.bpLeft(b);
+    const origin_y = ctx.bpTop(b) + cap_top;
 
     var cap_y = ctx.bpTop(b);
-    var cap_after = origin_y + rows_end + inset_y / 2;
+    var cap_after = origin_y + rows_end;
     for (g.captions) |cap| {
         cap.x = ctx.bpLeft(b) + cap.margin.left;
         if (cap.style.caption_bottom) {
@@ -357,12 +345,10 @@ pub fn layout(c: *Ctx, b: *Box, cw_in: f32, ch: ?f32) Error!f32 {
         const w = cellWidth(x, col_x, cell, sx);
         const last_row = cell.row + cell.rows;
         const area_h = row_y[last_row] - row_y[cell.row] - sy;
-        const half_l = if (s.border_collapse) x.border.left / 2 else 0;
-        const half_t = if (s.border_collapse) x.border.top / 2 else 0;
-        const h = area_h + collapseCellY(s, x);
+        const h = area_h;
         var pct_child = false;
         var q = x.first_child;
-        while (q) |y2| : (q = y2.next) pct_child = pct_child or y2.style.height.pct != 0;
+        while (q) |y2| : (q = y2.next) pct_child = pct_child or y2.style.height.hasPct();
         _ = try sizing.layoutBfc(c, x, w, if (pct_child) h else null);
         x.w = w;
         x.h = h;
@@ -374,8 +360,8 @@ pub fn layout(c: *Ctx, b: *Box, cw_in: f32, ch: ?f32) Error!f32 {
             .baseline => if (x.lay.first_baseline) |v| up[cell.row] - (v - x.lay.shift_y) else 0,
         };
         ctx.shiftContents(x, want - x.lay.shift_y);
-        x.x = col_x[cell.col] - half_l;
-        x.y = -half_t;
+        x.x = col_x[cell.col];
+        x.y = 0;
     }
     b.lay.first_baseline = null;
     b.lay.last_baseline = null;
@@ -384,21 +370,16 @@ pub fn layout(c: *Ctx, b: *Box, cw_in: f32, ch: ?f32) Error!f32 {
         b.lay.first_baseline = base;
         b.lay.last_baseline = base;
     }
-    return @max(0, rows_end - inset_y + cap_top + cap_bottom);
-}
-
-fn collapseCellY(s: *const css.Style, x: *const Box) f32 {
-    return if (s.border_collapse) (x.border.top + x.border.bottom) / 2 else 0;
+    return @max(0, rows_end + cap_top + cap_bottom);
 }
 
 fn cellWidth(x: *const Box, col_x: []const f32, cell: *const Cell, sx: f32) f32 {
-    const area = col_x[cell.col + cell.cols] - col_x[cell.col] - sx;
-    const collapsed = x.style.border_collapse;
-    return if (collapsed) area + (x.border.left + x.border.right) / 2 else area;
+    _ = x;
+    return col_x[cell.col + cell.cols] - col_x[cell.col] - sx;
 }
 
 /// Rows too short for the cells spanning them share what is missing equally.
-fn rowSpans(c: *Ctx, g: *Grid, row_h: []f32, sy: f32, s: *const css.Style) Error!void {
+fn rowSpans(c: *Ctx, g: *Grid, row_h: []f32, sy: f32) Error!void {
     var spanning: std.ArrayList(*Cell) = .empty;
     for (g.cells) |*cell| if (cell.rows > 1) try spanning.append(c.arena, cell);
     std.mem.sort(*Cell, spanning.items, {}, struct {
@@ -410,7 +391,6 @@ fn rowSpans(c: *Ctx, g: *Grid, row_h: []f32, sy: f32, s: *const css.Style) Error
         const x = cell.b;
         var h = x.lay.measure_h;
         if (ctx.specH(x, x.style.height, null, ctx.bpV(x))) |v| h = @max(h, v);
-        h -= collapseCellY(s, x);
         const part = row_h[cell.row .. cell.row + cell.rows];
         var have = sy * @as(f32, @floatFromInt(cell.rows - 1));
         for (part) |v| have += v;

@@ -3,6 +3,7 @@
 //! callbacks, scripts running when connected, a frame asked for. No layout:
 //! the document's dirty flags say what the next frame or geometry read redoes.
 const std = @import("std");
+const frames = @import("../frames.zig");
 const js = @import("../js/js.zig");
 const dom = @import("../dom.zig");
 const bind = @import("bind.zig");
@@ -121,7 +122,7 @@ fn forgetState(w: *World, n: *Node) void {
     };
 }
 
-/// Empties `n`, the shadow stand-in staying.
+/// Empties `n`.
 pub fn removeAllChildren(w: *World, n: *Node) Error!void {
     if (bind.firstChild(n) == null) return;
     var list: std.ArrayList(*Node) = .empty;
@@ -167,17 +168,26 @@ pub fn replaceAllWith(w: *World, n: *Node, fragment: ?*Node) Error!void {
     return afterChildren(w, n);
 }
 
+/// What `document.write` put in the tree: as if it had just arrived.
+pub fn arrived(w: *World, n: *Node) Error!void {
+    return inserted(w, n);
+}
+
 /// A node arrived in the tree: its scripts run, its custom elements begin.
 fn inserted(w: *World, n: *Node) Error!void {
     if (n.kind != .element or !inPage(w, n)) return;
     var pending: std.ArrayList(*Node) = .empty;
     defer pending.deinit(w.gpa);
     var at: ?*Node = n;
-    while (at) |x| : (at = if (x.isTag("template")) x.nextSkippingChildren(n) else x.nextInTree(n)) {
+    while (at) |x| : (at = x.nextDeep(n)) {
         if (x.kind != .element) continue;
+        if (x.isTag("script") and w.page.no_scripts) continue;
         if (x.isTag("script") or custom.isCustomName(x.tag)) {
             try pending.append(w.gpa, x);
-        } else if (x.isTag("iframe") or (x.isTag("link") and !isSheet(x))) {
+        } else if (x.isTag("iframe")) {
+            // There at once: a script may reach into it on the next line.
+            frames.note(w.page, x);
+        } else if (x.isTag("link") and !isSheet(x)) {
             // What won't load here is taken as loaded: nobody waits for ever.
             web.imageDone(w.page, x, true);
         }
@@ -198,11 +208,12 @@ fn isSheet(n: *const Node) bool {
 }
 
 fn removed(w: *World, n: *Node) Error!void {
+    if (n.kind == .element and w.page.frames.list.items.len > 0) frames.sweep(w.page);
     if (n.kind != .element or w.custom.upgraded.count() == 0) return;
     var pending: std.ArrayList(*Node) = .empty;
     defer pending.deinit(w.gpa);
     var at: ?*Node = n;
-    while (at) |x| : (at = x.nextInTree(n)) {
+    while (at) |x| : (at = x.nextDeep(n)) {
         if (x.kind == .element and w.custom.upgraded.contains(x)) try pending.append(w.gpa, x);
     }
     for (pending.items) |x| try custom.disconnected(w, x);
@@ -221,6 +232,7 @@ pub fn setAttr(w: *World, n: *Node, name: []const u8, value: []const u8) Error!v
     try n.setAttr(name, value);
     w.changed();
     try attrChanged(w, n, name, old, value);
+    if (old == null and n.isTag("details") and std.mem.eql(u8, name, "open")) web.detailsToggled(w.page, n);
 }
 
 pub fn removeAttr(w: *World, n: *Node, name: []const u8) Error!void {

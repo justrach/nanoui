@@ -174,6 +174,8 @@ pub const List = struct {
     doc_w: f32,
     doc_h: f32,
     canvas: css.Color,
+    /// The `<iframe>`s' content boxes among `items`.
+    frames: []const *const Item = &.{},
 
     /// Works out this frame's offsets and visible parts, for a viewport of
     /// `w` × `h` at (`x`, `y`) in the window.
@@ -580,7 +582,9 @@ pub fn build(arena: Allocator, tree: box.Tree, doc: *dom.Node, m: box.Measurer, 
     try b.xforms.append(arena, .{});
     try b.clips.append(arena, .{});
     const doc_scroll = scrolls.get(doc) orelse .{ 0, 0 };
-    try b.clips.append(arena, .{ .parent = 0, .scrolls = true, .content_w = tree.doc_w, .content_h = tree.doc_h, .scroll_x = doc_scroll[0], .scroll_y = doc_scroll[1] });
+    try b.clips.append(arena, .{ .parent = 0, .scrolls = !tree.locked, .content_w = tree.doc_w, .content_h = tree.doc_h, .scroll_x = doc_scroll[0], .scroll_y = doc_scroll[1] });
     const items = try b.atomic(tree.root, .{ .clip = 1, .abs_clip = 1 });
-    return .{ .items = items, .clips = b.clips.items, .xforms = b.xforms.items, .any_paths = b.any_paths, .doc_w = tree.doc_w, .doc_h = tree.doc_h, .canvas = tree.canvas };
+    var frames: std.ArrayList(*const Item) = .empty;
+    for (items) |*it| if (it.kind == .image and it.kind.image.node.isTag("iframe")) try frames.append(arena, it);
+    return .{ .items = items, .clips = b.clips.items, .xforms = b.xforms.items, .any_paths = b.any_paths, .doc_w = tree.doc_w, .doc_h = tree.doc_h, .canvas = tree.canvas, .frames = frames.items };
 }

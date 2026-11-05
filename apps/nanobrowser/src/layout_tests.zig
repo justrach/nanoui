@@ -11,4 +11,5 @@ test {
     _ = @import("layout/tests_gen.zig");
     _ = @import("layout/tests_robust.zig");
     _ = @import("layout/tests_html.zig");
+    _ = @import("layout/tests_flow.zig");
 }

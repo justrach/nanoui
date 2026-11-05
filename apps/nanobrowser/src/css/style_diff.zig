@@ -55,6 +55,7 @@ pub fn same(comptime T: type, a: T, b: T) bool {
             return same(o.child, a.?, b.?);
         },
         .pointer => |p| {
+            if (p.size == .one) return a == b or same(p.child, a.*, b.*);
             if (p.size != .slice) return a == b;
             if (a.len != b.len) return false;
             if (a.ptr == b.ptr) return true;

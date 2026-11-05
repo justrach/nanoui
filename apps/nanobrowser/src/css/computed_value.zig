@@ -107,7 +107,7 @@ pub fn get(e: *cascade.Engine, n: *dom.Node, name: []const u8) ?[]const u8 {
 
 fn text(a: Allocator, s: *const Style, p: prop.Prop) Allocator.Error!?[]const u8 {
     return switch (p) {
-        .display => try kw(a, s.display),
+        .display => if (s.flow_root) "flow-root" else try kw(a, s.display),
         .position => try kw(a, s.position),
         .float => try kw(a, s.float),
         .clear => try kw(a, s.clear),
@@ -190,7 +190,7 @@ fn text(a: Allocator, s: *const Style, p: prop.Prop) Allocator.Error!?[]const u8
         .align_self => try kw(a, s.align_self),
         .align_content => try kw(a, s.align_content),
         .row_gap => try lenText(a, s.row_gap),
-        .column_gap => try lenText(a, s.column_gap),
+        .column_gap => if (s.column_gap.kind == .auto) "normal" else try lenText(a, s.column_gap),
         .border_collapse => boolWord(s.border_collapse, "collapse", "separate"),
         .object_fit => try kw(a, s.object_fit),
         .transform => if (s.transform != null) blk: {

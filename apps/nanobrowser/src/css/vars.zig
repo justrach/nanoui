@@ -172,6 +172,13 @@ fn substituteWith(arena: Allocator, value: []const Token, look: *const Lookup) A
     return out.items;
 }
 
+/// What the environment says of what `env()` names: a window has no insets here.
+fn envDefault(name: []const u8) ?Token {
+    const zero = [_][]const u8{ "safe-area-inset-top", "safe-area-inset-right", "safe-area-inset-bottom", "safe-area-inset-left", "safe-area-max-inset-top", "safe-area-max-inset-right", "safe-area-max-inset-bottom", "safe-area-max-inset-left", "keyboard-inset-top", "keyboard-inset-right", "keyboard-inset-bottom", "keyboard-inset-left", "keyboard-inset-width", "keyboard-inset-height", "titlebar-area-x", "titlebar-area-y", "titlebar-area-width", "titlebar-area-height" };
+    for (zero) |z| if (std.ascii.eqlIgnoreCase(name, z)) return .{ .kind = .dimension, .num = 0, .text = "px" };
+    return null;
+}
+
 fn walk(arena: Allocator, value: []const Token, look: *const Lookup, out: *std.ArrayList(Token), depth: u32) Allocator.Error!bool {
     if (depth > 32) return false;
     var i: usize = 0;
@@ -222,6 +229,10 @@ fn walk(arena: Allocator, value: []const Token, look: *const Lookup, out: *std.A
             }
             if (look.builder) |b| if (b.cycle_root != null) return false;
         }
+        if (is_env and fallback == null) if (envDefault(name_tok.text)) |v| {
+            try out.append(arena, v);
+            continue;
+        };
         const f = fallback orelse return false;
         if (!try walk(arena, f, look, out, depth + 1)) return false;
     }

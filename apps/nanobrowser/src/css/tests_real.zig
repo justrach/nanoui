@@ -301,7 +301,8 @@ test "CSS variable themes, GitHub style" {
     try near(h.padding_top.px, 16);
     try near(h.background.r, (13.0 / 255.0) * 0.9 + 0.1);
     try expect(h.z_index.? == 32);
-    try near(h.margin_top.px, 1);
+    // Nothing here is a container, so `@container` has nobody to ask.
+    try near(h.margin_top.px, 0);
     const l = p.s("l");
     try near(l.color.r, 230.0 / 255.0);
     try expect(l.font_weight == 600 and l.white_space == .nowrap);

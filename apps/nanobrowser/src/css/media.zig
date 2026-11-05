@@ -6,6 +6,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const values = @import("values.zig");
 const tk = @import("tokenizer.zig");
+const sheet = @import("sheet.zig");
 
 const Token = tk.Token;
 const Cur = values.Cur;
@@ -25,7 +26,7 @@ pub const Cond = union(enum) {
     /// Grammar the parser could not read: false.
     unknown,
 
-    fn matches(c: *const Cond, v: Viewport) bool {
+    pub fn matches(c: *const Cond, v: Viewport) bool {
         return switch (c.*) {
             .all => |l| blk: {
                 for (l) |*x| if (!x.matches(v)) break :blk false;
@@ -341,6 +342,7 @@ fn featureId(name: []const u8) ?Feature {
         .{ "overflow-inline", .always_true },               .{ "monochrome", .always_false },           .{ "grid", .always_false },
         .{ "forced-colors", .always_false },                .{ "prefers-contrast", .always_false },     .{ "inverted-colors", .always_false },
         .{ "prefers-reduced-transparency", .always_false }, .{ "prefers-reduced-data", .always_false },
+        .{ "inline-size", .width },                         .{ "block-size", .height },
     });
     var buf: [40]u8 = undefined;
     if (name.len > buf.len) return null;
@@ -351,6 +353,21 @@ fn featureId(name: []const u8) ?Feature {
 pub fn parseList(arena: Allocator, toks: []const Token) Allocator.Error!*const List {
     var p: Parser = .{ .arena = arena };
     return p.list(toks);
+}
+
+/// `@container`'s prelude: an optional name, then a condition.
+pub fn parseContainer(arena: Allocator, toks: []const Token) Allocator.Error!sheet.ContainerCond {
+    var c = Cur.of(toks);
+    var out: sheet.ContainerCond = .{};
+    if (c.peek()) |t| if (t.kind == .ident and !t.isIdent("not")) {
+        out.name = t.text;
+        c.i += 1;
+    };
+    if (!c.atEnd()) {
+        var p: Parser = .{ .arena = arena };
+        out.query = try p.condition(c.t[c.i..]);
+    }
+    return out;
 }
 
 /// Parses a media query list from text, for `<link media>` and `<style media>`.

@@ -1,5 +1,5 @@
 //! CSS Grid: expanding the templates, placing items on lines (explicit, then
-//! auto-placement without dense packing), and setting them out once
+//! auto-placement, `dense` going back for holes), and setting them out once
 //! `grid_tracks.zig` has sized the tracks.
 const std = @import("std");
 const box = @import("box.zig");
@@ -32,33 +32,42 @@ pub const Layout = struct {
 };
 
 /// A template with its auto-repeat expanded to fit `avail`.
-fn expand(a: Allocator, list: css.TrackList, avail: ?f32, gap: f32) Error!struct { tracks: []css.Track, from: i32, to: i32 } {
+fn expand(a: Allocator, list: css.TrackList, avail: ?f32, gap: f32, sub: ?[]const f32) Error!struct { tracks: []css.Track, from: i32, to: i32 } {
     var out: std.ArrayList(css.Track) = .empty;
+    // A subgrid's tracks are its parent's, sized or about to be.
+    if (sub) |sizes| {
+        for (sizes) |v| try out.append(a, if (v < 0) .{} else .{ .kind = .fixed, .px = v });
+        return .{ .tracks = out.items, .from = -1, .to = -1 };
+    }
     if (list.auto_repeat < 0 or list.auto_repeat >= list.tracks.len) {
         try out.appendSlice(a, list.tracks);
-        return .{ .tracks = out.items, .from = 0, .to = 0 };
+        return .{ .tracks = out.items, .from = -1, .to = -1 };
     }
     const at: usize = @intCast(list.auto_repeat);
+    const end: usize = @min(list.tracks.len, at + @max(list.repeat_len, 1));
+    const group = list.tracks[at..end];
     var fixed: f32 = 0;
-    for (list.tracks, 0..) |t, i| if (i != at) {
+    for (list.tracks, 0..) |t, i| if (i < at or i >= end) {
         fixed += fixedSize(t, avail) + gap;
     };
-    const one = fixedSize(list.tracks[at], avail);
+    var one: f32 = 0;
+    for (group) |t| one += fixedSize(t, avail) + gap;
     var count: i32 = 1;
-    if (avail) |room| if (one > 0) {
-        const v = (room - fixed + gap) / (one + gap);
+    if (avail) |room| if (one > gap * @as(f32, @floatFromInt(group.len))) {
+        const v = (room - fixed + gap) / one;
         count = @intFromFloat(std.math.clamp(@floor(v), 1, @as(f32, @floatFromInt(line_cap))));
     };
     try out.appendSlice(a, list.tracks[0..at]);
     var n: i32 = 0;
-    while (n < count) : (n += 1) try out.append(a, list.tracks[at]);
-    try out.appendSlice(a, list.tracks[at + 1 ..]);
-    return .{ .tracks = out.items, .from = @intCast(at), .to = @as(i32, @intCast(at)) + count };
+    while (n < count) : (n += 1) try out.appendSlice(a, group);
+    try out.appendSlice(a, list.tracks[end..]);
+    const added = count * @as(i32, @intCast(group.len));
+    return .{ .tracks = out.items, .from = @intCast(at), .to = @as(i32, @intCast(at)) + added };
 }
 
 fn fixedSize(t: css.Track, avail: ?f32) f32 {
     return switch (t.kind) {
-        .fixed, .minmax => @max(0, ctx.clean(t.px) + ctx.clean(t.pct) * (avail orelse 0) / 100),
+        .fixed, .minmax => @max(0, tracks.least(t, avail orelse 0)),
         else => 0,
     };
 }
@@ -167,14 +176,78 @@ fn spanOf(p: css.GridPlace, explicit: i32) Span {
     return .{ .start = null, .n = l.span };
 }
 
+fn colGap(b: *const Box, avail: f32) f32 {
+    if (b.lay.sub_cols != null and b.style.column_gap.kind != .length) return b.lay.sub_col_gap;
+    return @max(0, ctx.len(b.style.column_gap, avail));
+}
+
+fn rowGap(b: *const Box, avail: f32) f32 {
+    if (b.lay.sub_rows != null and isZeroLen(b.style.row_gap)) return b.lay.sub_row_gap;
+    return @max(0, ctx.len(b.style.row_gap, avail));
+}
+
+fn isZeroLen(l: css.Len) bool {
+    return l.kind == .length and l.px == 0 and !l.hasPct();
+}
+
+fn placeholder(a: Allocator, n: i32) Error![]const f32 {
+    const out = try a.alloc(f32, @intCast(@max(n, 0)));
+    @memset(out, -1);
+    return out;
+}
+
+/// Tells the subgrids among `items` how many tracks they span, before they're sized.
+fn markSubgrids(c: *Ctx, items: []const Placed, col_gap: f32, row_gap: f32) Error!void {
+    for (items) |*it| {
+        const n = &it.b.lay;
+        if (it.b.kind != .grid) continue;
+        if (it.b.style.grid_template_columns.subgrid and n.sub_cols == null) {
+            n.sub_cols = try placeholder(c.arena, it.c1 - it.c0);
+            n.sub_col_gap = col_gap;
+        }
+        if (it.b.style.grid_template_rows.subgrid and n.sub_rows == null) {
+            n.sub_rows = try placeholder(c.arena, it.r1 - it.r0);
+            n.sub_row_gap = row_gap;
+        }
+    }
+}
+
+/// What the tracks `from`..`to` come to for what's inside an item that spans them:
+/// the end tracks give up what the item's own edges take.
+fn subSizes(c: *Ctx, list: []const tracks.Track, from: i32, to: i32, start_edge: f32, end_edge: f32) Error![]const f32 {
+    const out = try c.arena.alloc(f32, @intCast(@max(to - from, 0)));
+    for (out, 0..) |*v, i| {
+        const at: usize = @intCast(from + @as(i32, @intCast(i)));
+        v.* = if (at < list.len) list[at].base else 0;
+    }
+    if (out.len > 0) {
+        out[0] = @max(0, out[0] - start_edge);
+        out[out.len - 1] = @max(0, out[out.len - 1] - end_edge);
+    }
+    return out;
+}
+
+/// A subgrid now knows its tracks; what it had made of them no longer holds.
+fn settleSub(b: *Box) void {
+    b.lay.state_valid = false;
+    b.lay.measure_valid = false;
+    b.lay.intrinsic_known = false;
+}
+
+/// Where every item of a subgrid goes in tracks of the grid around it, for that
+/// grid to size them by: `b`'s placement with its own tracks not sized yet.
+pub fn subPlacement(c: *Ctx, b: *Box) Error![]Placed {
+    return (try placeItems(c, b, null, null)).items;
+}
+
 /// Works out where every item goes and sizes the track lists to match.
 fn placeItems(c: *Ctx, b: *Box, avail_w: ?f32, avail_h: ?f32) Error!Layout {
     const a = c.arena;
     const st = b.style;
-    const col_gap = @max(0, ctx.len(st.column_gap, avail_w orelse 0));
-    const row_gap = @max(0, ctx.len(st.row_gap, avail_h orelse 0));
-    const col_t = try expand(a, st.grid_template_columns, avail_w, col_gap);
-    const row_t = try expand(a, st.grid_template_rows, avail_h, row_gap);
+    const col_gap = colGap(b, avail_w orelse 0);
+    const row_gap = rowGap(b, avail_h orelse 0);
+    const col_t = try expand(a, st.grid_template_columns, avail_w, col_gap, if (st.grid_template_columns.subgrid) b.lay.sub_cols else null);
+    const row_t = try expand(a, st.grid_template_rows, avail_h, row_gap, if (st.grid_template_rows.subgrid) b.lay.sub_rows else null);
     const ncols: i32 = @intCast(col_t.tracks.len);
     const nrows: i32 = @intCast(row_t.tracks.len);
     const column_flow = st.grid_auto_flow_column;
@@ -186,8 +259,8 @@ fn placeItems(c: *Ctx, b: *Box, avail_w: ?f32, avail_h: ?f32) Error!Layout {
     var k = b.first_child;
     while (k) |x| : (k = x.next) {
         if (x.style.isOutOfFlow()) continue;
-        const col_shift = col_t.to - col_t.from - 1;
-        const row_shift = row_t.to - row_t.from - 1;
+        const col_shift = col_t.to - col_t.from - @as(i32, @max(st.grid_template_columns.repeat_len, 1));
+        const row_shift = row_t.to - row_t.from - @as(i32, @max(st.grid_template_rows.repeat_len, 1));
         const sc = spanOf(withLines(st, st.grid_template_columns, x.style.grid_column, true, col_shift, col_t.from), ncols);
         const sr = spanOf(withLines(st, st.grid_template_rows, x.style.grid_row, false, row_shift, row_t.from), nrows);
         if (sc.start) |v| min_c = @min(min_c, v);
@@ -233,7 +306,12 @@ fn placeItems(c: *Ctx, b: *Box, avail_w: ?f32, avail_h: ?f32) Error!Layout {
         const j = &s[major_i];
         if (j.start != null) continue;
         const m = &s[minor_i];
+        if (st.grid_auto_flow_dense) {
+            cur_maj = 0;
+            cur_min = 0;
+        }
         if (m.start) |at| {
+            if (st.grid_auto_flow_dense) cur_min = at;
             if (at < cur_min) cur_maj += 1;
             cur_min = at;
             while (!(try occ.free(cur_maj, cur_min, j.n, m.n))) cur_maj += 1;
@@ -264,8 +342,9 @@ fn placeItems(c: *Ctx, b: *Box, avail_w: ?f32, avail_h: ?f32) Error!Layout {
     const total_r = if (column_flow) minor_n else major_n;
     const cols = try tracks.make(a, col_t.tracks, st.grid_auto_columns, -min_c, total_c);
     const rows = try tracks.make(a, row_t.tracks, st.grid_auto_rows, -min_r, total_r);
-    if (st.grid_template_columns.auto_fit) collapseEmpty(cols, items.items, col_t.from - min_c, col_t.to - min_c, true);
-    if (st.grid_template_rows.auto_fit) collapseEmpty(rows, items.items, row_t.from - min_r, row_t.to - min_r, false);
+    if (st.grid_template_columns.auto_fit and col_t.from >= 0) collapseEmpty(cols, items.items, col_t.from - min_c, col_t.to - min_c, true);
+    if (st.grid_template_rows.auto_fit and row_t.from >= 0) collapseEmpty(rows, items.items, row_t.from - min_r, row_t.to - min_r, false);
+    try markSubgrids(c, items.items, col_gap, row_gap);
     return .{ .items = items.items, .cols = cols, .rows = rows };
 }
 
@@ -317,12 +396,18 @@ pub fn layout(c: *Ctx, b: *Box, cw: f32, ch: ?f32) Error!f32 {
         x.y = top;
     };
     const g = try placeItems(c, b, cw, ch);
-    const col_gap = @max(0, ctx.len(st.column_gap, cw));
-    const row_gap = @max(0, ctx.len(st.row_gap, ch orelse 0));
+    const col_gap = colGap(b, cw);
+    const row_gap = rowGap(b, ch orelse 0);
     for (g.items) |*it| ctx.setEdges(it.b, cw);
 
     try tracks.sizeColumns(c, g.cols, g.items, cw, col_gap, st.justify_content == .normal or st.justify_content == .stretch);
     const col_pos = try tracks.positions(c.arena, g.cols, cw, col_gap, justifyAsAlign(st.justify_content));
+    for (g.items) |*it| {
+        const x = it.b;
+        if (x.kind != .grid or !x.style.grid_template_columns.subgrid) continue;
+        x.lay.sub_cols = try subSizes(c, g.cols, it.c0, it.c1, x.margin.left + ctx.bpLeft(x), x.margin.right + x.border.right + x.padding.right);
+        settleSub(x);
+    }
 
     // Rows see each item at its column's width.
     const heights = try c.arena.alloc(f32, g.items.len);
@@ -331,9 +416,17 @@ pub fn layout(c: *Ctx, b: *Box, cw: f32, ch: ?f32) Error!f32 {
         const self_j = selfOf(it.b.style.justify_self, st.justify_items, it.b.kind == .replaced);
         const area = tracks.areaSize(g.cols, it.c0, it.c1, col_gap);
         widths[i] = try itemWidth(c, it.b, area, self_j);
-        heights[i] = try sizing.measureH(c, it.b, widths[i], null) + it.b.margin.vertical();
+        // A subgrid asks through what's in it, track by track.
+        heights[i] = if (it.b.kind == .grid and it.b.style.grid_template_rows.subgrid) 0 else try sizing.measureH(c, it.b, widths[i], null) + it.b.margin.vertical();
     }
-    try tracks.sizeRows(c.arena, g.rows, g.items, heights, ch, row_gap, st.align_content == .normal or st.align_content == .stretch);
+    const extra = try subRowAsks(c, g.items, widths);
+    try tracks.sizeRows(c.arena, g.rows, g.items, heights, extra, ch, row_gap, st.align_content == .normal or st.align_content == .stretch);
+    for (g.items) |*it| {
+        const x = it.b;
+        if (x.kind != .grid or !x.style.grid_template_rows.subgrid) continue;
+        x.lay.sub_rows = try subSizes(c, g.rows, it.r0, it.r1, x.margin.top + ctx.bpTop(x), x.margin.bottom + x.border.bottom + x.padding.bottom);
+        settleSub(x);
+    }
     const row_pos = try tracks.positions(c.arena, g.rows, ch orelse tracks.total(g.rows, row_gap), row_gap, st.align_content);
 
     for (g.items, 0..) |*it, i| {
@@ -358,6 +451,28 @@ pub fn layout(c: *Ctx, b: *Box, cw: f32, ch: ?f32) Error!f32 {
         b.lay.last_baseline = base;
     }
     return tracks.total(g.rows, row_gap);
+}
+
+/// What the items of row subgrids ask of the rows they fall in.
+fn subRowAsks(c: *Ctx, items: []const Placed, widths: []const f32) Error![]const tracks.Contribution {
+    var out: std.ArrayList(tracks.Contribution) = .empty;
+    for (items, widths) |*it, w| {
+        const x = it.b;
+        if (x.kind != .grid or !x.style.grid_template_rows.subgrid) continue;
+        const inner_w = @max(0, w - ctx.bpH(x));
+        const g = try placeItems(c, x, inner_w, null);
+        for (g.items) |*sub| ctx.setEdges(sub.b, inner_w);
+        const gap = colGap(x, inner_w);
+        try tracks.sizeColumns(c, g.cols, g.items, inner_w, gap, true);
+        for (g.items) |*sub| {
+            const area = tracks.areaSize(g.cols, sub.c0, sub.c1, gap);
+            const self_j = selfOf(sub.b.style.justify_self, x.style.justify_items, sub.b.kind == .replaced);
+            const sw = try itemWidth(c, sub.b, area, self_j);
+            const sh = try sizing.measureH(c, sub.b, sw, null) + sub.b.margin.vertical();
+            try out.append(c.arena, .{ .lo = sh, .hi = sh, .from = it.r0 + sub.r0, .to = it.r0 + sub.r1 });
+        }
+    }
+    return out.items;
 }
 
 fn offset(a: css.Align, free: f32, start_auto: bool, end_auto: bool) f32 {
@@ -389,7 +504,7 @@ fn justifyAsAlign(j: css.Justify) css.Align {
 /// Content-box widths: the column tracks sized with no width to fill.
 pub fn intrinsic(c: *Ctx, b: *Box) Error!intrinsic_mod.Sizes {
     const g = try placeItems(c, b, null, null);
-    const gap = @max(0, ctx.len(b.style.column_gap, 0));
+    const gap = colGap(b, 0);
     const lo = try tracks.intrinsicColumns(c, g.cols, g.items, gap, false);
     const hi = try tracks.intrinsicColumns(c, g.cols, g.items, gap, true);
     return .{ .min = lo, .max = @max(lo, hi) };

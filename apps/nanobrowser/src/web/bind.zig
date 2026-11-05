@@ -140,18 +140,14 @@ pub fn isShadow(n: *const Node) bool {
     return n.is_shadow;
 }
 
-/// Children as scripts see them: the shadow stand-in is not one.
 pub fn firstChild(n: *const Node) ?*Node {
-    const c = n.first_child orelse return null;
-    return if (isShadow(c)) c.next else c;
+    return n.first_child;
 }
 
 pub fn lastChild(n: *const Node) ?*Node {
-    const c = n.last_child orelse return null;
-    return if (isShadow(c)) c.prev else c;
+    return n.last_child;
 }
 
 pub fn prevSibling(n: *const Node) ?*Node {
-    const c = n.prev orelse return null;
-    return if (isShadow(c)) null else c;
+    return n.prev;
 }

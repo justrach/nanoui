@@ -132,6 +132,13 @@ fn dataset(vm: *Vm, this: Value, _: []const Value) Error!Value {
     return collections.dataset(bind.world(vm), try elementOf(vm, this));
 }
 
+/// `element.classList = "..."` sets the class, as `className` does.
+fn setClassList(vm: *Vm, this: Value, args: []const Value) Error!Value {
+    const n = try elementOf(vm, this);
+    try mutate.setAttr(bind.world(vm), n, "class", try bind.strNullEmpty(vm, args, 0));
+    return Value.undefined;
+}
+
 fn styleOf(vm: *Vm, this: Value, _: []const Value) Error!Value {
     return style.inlineStyle(bind.world(vm), try elementOf(vm, this));
 }
@@ -243,7 +250,6 @@ fn firstElementChild(vm: *Vm, this: Value, _: []const Value) Error!Value {
 fn lastElementChild(vm: *Vm, this: Value, _: []const Value) Error!Value {
     var k = bind.lastChild(try nodeOf(vm, this));
     while (k) |x| : (k = x.prev) {
-        if (bind.isShadow(x)) return Value.null;
         if (x.kind == .element) return bind.wrap(vm, x);
     }
     return Value.null;
@@ -255,7 +261,7 @@ fn nextElementSibling(vm: *Vm, this: Value, _: []const Value) Error!Value {
 
 fn previousElementSibling(vm: *Vm, this: Value, _: []const Value) Error!Value {
     const e = (try nodeOf(vm, this)).prevElement() orelse return Value.null;
-    return if (bind.isShadow(e)) Value.null else bind.wrap(vm, e);
+    return bind.wrap(vm, e);
 }
 
 fn selectorError(vm: *Vm, e: css.QueryError, selector: []const u8) Error {
@@ -326,34 +332,33 @@ fn getElementsByClassName(vm: *Vm, this: Value, args: []const Value) Error!Value
 }
 
 /// `attachShadow`: the root is a `display: contents` element (a `<slot>` to the
-/// style sheet) that is the host's first child, hidden from what scripts see of
-/// the host. Layout renders it in place of the host's children, which go where
-/// its `<slot>`s say (`layout/gen.zig`). There is no style encapsulation.
+/// style sheet) that hangs off its host, in none of its host's child lists. Layout
+/// renders it in place of the host's children, which go where its `<slot>`s say
+/// (`layout/gen.zig`); the rules that match inside it are its own (`css/cascade.zig`).
 fn attachShadow(vm: *Vm, this: Value, args: []const Value) Error!Value {
     const n = try elementOf(vm, this);
     const w = bind.world(vm);
-    const key = world_mod.CacheKey{ .node = n, .kind = .shadow };
-    if (w.cached.contains(key)) return bind.throwDom(vm, "NotSupportedError", "Shadow root cannot be created on a host which already hosts a shadow tree.");
-    const root = try n.doc.createElement("slot");
-    root.is_shadow = true;
-    n.insertBefore(root, n.first_child);
-    const o = try bind.wrap(vm, root);
-    try w.cached.put(w.gpa, key, o.asObject());
-    var open = true;
+    var closed = false;
     if (bind.arg(args, 0).isObject()) {
         const mode = try args[0].asObject().get(vm, "mode");
-        if (mode.isString()) open = !std.mem.eql(u8, try vm.toStringSlice(mode), "closed");
+        if (mode.isString()) closed = std.mem.eql(u8, try vm.toStringSlice(mode), "closed");
     }
-    if (!open) try o.asObject().defineData(vm, "__closed", Value.true, js.PropFlags.hidden);
-    return o;
+    if (n.shadow_root) |root| {
+        // One the parser made is the script's to take over, emptied.
+        if (!root.shadow_declarative) return bind.throwDom(vm, "NotSupportedError", "Shadow root cannot be created on a host which already hosts a shadow tree.");
+        root.shadow_declarative = false;
+        root.shadow_closed = closed;
+        try mutate.removeAllChildren(w, root);
+        return bind.wrap(vm, root);
+    }
+    return bind.wrap(vm, try n.attachShadow(closed, false));
 }
 
 fn shadowRoot(vm: *Vm, this: Value, _: []const Value) Error!Value {
     const n = try elementOf(vm, this);
-    const w = bind.world(vm);
-    const o = w.cached.get(.{ .node = n, .kind = .shadow }) orelse return Value.null;
-    if (vm.toBoolean(try o.get(vm, "__closed"))) return Value.null;
-    return o.value();
+    const root = n.shadow_root orelse return Value.null;
+    if (root.shadow_closed) return Value.null;
+    return bind.wrap(vm, root);
 }
 
 fn shadowHost(vm: *Vm, this: Value, _: []const Value) Error!Value {
@@ -374,7 +379,7 @@ pub fn install(w: *World) Error!void {
         .{ .name = "namespaceURI", .get = namespaceURI },
         .{ .name = "id", .get = id, .set = setId },
         .{ .name = "className", .get = className, .set = setClassName },
-        .{ .name = "classList", .get = classList },
+        .{ .name = "classList", .get = classList, .set = setClassList },
         .{ .name = "attributes", .get = attributes },
         .{ .name = "innerHTML", .get = innerHTML, .set = setInnerHTML },
         .{ .name = "outerHTML", .get = outerHTML, .set = setOuterHTML },

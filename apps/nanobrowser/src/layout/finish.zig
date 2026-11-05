@@ -33,12 +33,12 @@ fn relativeOffset(b: *const Box) [2]f32 {
     } else if (s.right.kind == .length) {
         dx = -ctx.len(s.right, rw);
     }
-    const definite = p.style.height.kind == .length and p.style.height.pct == 0;
+    const definite = p.style.height.kind == .length and !p.style.height.hasPct();
     const rh = p.contentRect().h;
     var dy: f32 = 0;
-    if (s.top.kind == .length and (s.top.pct == 0 or definite)) {
+    if (s.top.kind == .length and (!s.top.hasPct() or definite)) {
         dy = ctx.len(s.top, rh);
-    } else if (s.bottom.kind == .length and (s.bottom.pct == 0 or definite)) {
+    } else if (s.bottom.kind == .length and (!s.bottom.hasPct() or definite)) {
         dy = -ctx.len(s.bottom, rh);
     }
     return .{ dx, dy };

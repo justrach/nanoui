@@ -47,7 +47,7 @@ pub fn copy(p: Prop, d: *Style, s: *const Style) void {
         .min_height, .min_block_size => d.min_height = s.min_height,
         .max_width, .max_inline_size => d.max_width = s.max_width,
         .max_height, .max_block_size => d.max_height = s.max_height,
-        .aspect_ratio => d.aspect_ratio = s.aspect_ratio,
+        .aspect_ratio => sides(d, s, &.{ "aspect_ratio", "aspect_auto" }),
         .margin => sides(d, s, &.{ "margin_top", "margin_right", "margin_bottom", "margin_left" }),
         .margin_top, .margin_block_start => d.margin_top = s.margin_top,
         .margin_right => d.margin_right = s.margin_right,
@@ -137,7 +137,7 @@ pub fn copy(p: Prop, d: *Style, s: *const Style) void {
         .text_fill_color => d.text_fill = s.text_fill,
         .accent_color => d.accent = s.accent,
         .appearance => d.appearance_none = s.appearance_none,
-        .isolation, .mix_blend_mode, .will_change, .contain => d.makes_context = s.makes_context,
+        .isolation, .mix_blend_mode, .will_change => d.makes_context = s.makes_context,
         .clip => d.clip_rect = s.clip_rect,
         .clip_path => {
             d.clip_path = s.clip_path;
@@ -157,7 +157,10 @@ pub fn copy(p: Prop, d: *Style, s: *const Style) void {
         .word_spacing => d.word_spacing = s.word_spacing,
         .text_align => sides(d, s, &.{ "text_align", "center_children" }),
         .text_indent => d.text_indent = s.text_indent,
-        .white_space, .white_space_collapse, .text_wrap, .text_wrap_mode => d.white_space = s.white_space,
+        .white_space, .white_space_collapse, .text_wrap, .text_wrap_mode => {
+            d.white_space = s.white_space;
+            d.text_balance = s.text_balance;
+        },
         .text_transform => d.text_transform = s.text_transform,
         .list_style => sides(d, s, &.{ "list_style", "list_inside" }),
         .list_style_type => d.list_style = s.list_style,
@@ -196,9 +199,12 @@ pub fn copy(p: Prop, d: *Style, s: *const Style) void {
         .grid_row, .grid_row_start, .grid_row_end => d.grid_row = s.grid_row,
         .grid_area => sides(d, s, &.{ "grid_row", "grid_column" }),
         .grid_template_areas => d.grid_areas = s.grid_areas,
-        .grid_auto_flow => d.grid_auto_flow_column = s.grid_auto_flow_column,
+        .grid_auto_flow => {
+            d.grid_auto_flow_column = s.grid_auto_flow_column;
+            d.grid_auto_flow_dense = s.grid_auto_flow_dense;
+        },
         .mask, .mask_image => d.mask_image = s.mask_image,
-        .content => d.content = s.content,
+        .content => sides(d, s, &.{ "content", "content_parts", "marker_hidden" }),
         .border_collapse => d.border_collapse = s.border_collapse,
         .border_spacing => sides(d, s, &.{ "border_spacing", "border_spacing_y" }),
         .table_layout => d.table_fixed = s.table_fixed,
@@ -206,6 +212,19 @@ pub fn copy(p: Prop, d: *Style, s: *const Style) void {
         .word_break => d.word_break_all = s.word_break_all,
         .overflow_wrap, .word_wrap => d.overflow_wrap_anywhere = s.overflow_wrap_anywhere,
         .tab_size => d.tab_size = s.tab_size,
+        .container => sides(d, s, &.{ "container_type", "container_names" }),
+        .container_type => d.container_type = s.container_type,
+        .container_name => d.container_names = s.container_names,
+        .contain => sides(d, s, &.{ "contain_size", "contain_inline_size", "contain_flow", "makes_context" }),
+        .columns => sides(d, s, &.{ "column_count", "column_width" }),
+        .column_count => d.column_count = s.column_count,
+        .column_width => d.column_width = s.column_width,
+        .column_span => d.column_span_all = s.column_span_all,
+        .counter_reset => d.counter_reset = s.counter_reset,
+        .counter_increment => d.counter_increment = s.counter_increment,
+        .counter_set => d.counter_set = s.counter_set,
+        .scroll_margin_top, .scroll_margin_block_start, .scroll_margin, .scroll_margin_block => d.scroll_margin_top = s.scroll_margin_top,
+        .scroll_padding_top, .scroll_padding_block_start, .scroll_padding, .scroll_padding_block => d.scroll_padding_top = s.scroll_padding_top,
         else => {},
     }
 }
@@ -231,6 +250,7 @@ pub fn inherit(p: *const Style) Style {
         "border_spacing",  "border_spacing_y", "word_break_all",       "overflow_wrap_anywhere",
         "caption_bottom",  "tab_size",         "dark_scheme",          "text_fill",
         "text_shadows",    "accent",
+        "text_balance",    "list_style_text",
     });
     s.svg = p.svg.inherited();
     return s;

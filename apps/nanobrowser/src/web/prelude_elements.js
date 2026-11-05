@@ -48,9 +48,6 @@ accessor(HP, "enterKeyHint", function () { return this.getAttribute("enterkeyhin
 accessor(HP, "inputMode", function () { return this.getAttribute("inputmode") || ""; }, function (v) { this.setAttribute("inputmode", v); });
 accessor(HP, "popover", function () { return this.getAttribute("popover"); }, function (v) { if (v === null) this.removeAttribute("popover"); else this.setAttribute("popover", v); });
 def(HP, "attachInternals", function () { return { setFormValue() {}, setValidity() {}, checkValidity() { return true; }, reportValidity() { return true; }, states: new Set(), shadowRoot: this.shadowRoot, form: null, labels: [] }; });
-def(HP, "showPopover", function () { this.style.display = "block"; });
-def(HP, "hidePopover", function () { this.style.display = "none"; });
-def(HP, "togglePopover", function () { this.style.display = this.style.display === "block" ? "none" : "block"; });
 accessor(SVGElement.prototype, "ownerSVGElement", function () { let n = this.parentElement; while (n && n.tagName !== "svg") n = n.parentElement; return n; });
 str(SVGElement.prototype, "nonce");
 accessor(SVGElement.prototype, "className", function () { return this.getAttribute("class") || ""; }, function (v) { this.setAttribute("class", v); });
@@ -309,8 +306,91 @@ bool(HTMLDetailsElement.prototype, "open");
 bool(HTMLDialogElement.prototype, "open");
 accessor(HTMLDialogElement.prototype, "returnValue", function () { return this.__return || ""; }, function (v) { this.__return = v; });
 def(HTMLDialogElement.prototype, "show", function () { this.setAttribute("open", ""); });
-def(HTMLDialogElement.prototype, "showModal", function () { this.setAttribute("open", ""); });
-def(HTMLDialogElement.prototype, "close", function (v) { this.removeAttribute("open"); if (v !== undefined) this.returnValue = v; $.dispatch(this, new Event("close")); });
+// Above everything, with what's outside it taking no input.
+def(HTMLDialogElement.prototype, "showModal", function () {
+  if (this.hasAttribute("open")) {
+    if (this.matches(":modal")) return;
+    throw new DOMException("The element already has an 'open' attribute, and therefore cannot be opened modally.", "InvalidStateError");
+  }
+  if (!this.isConnected) throw new DOMException("The element is not in a Document.", "InvalidStateError");
+  this.setAttribute("open", "");
+  $.topLayer(this, true, true);
+});
+def(HTMLDialogElement.prototype, "close", function (v) {
+  if (!this.hasAttribute("open")) return;
+  this.removeAttribute("open");
+  $.topLayer(this, false, false);
+  if (v !== undefined) this.returnValue = v;
+  g.setTimeout(() => $.dispatch(this, new Event("close")), 0);
+});
+def(HTMLDialogElement.prototype, "requestClose", function (v) {
+  if (!this.hasAttribute("open")) return;
+  if ($.dispatch(this, new Event("cancel", { cancelable: true }))) this.close(v);
+});
+// Popovers: in the top layer while showing.
+const popoverEvent = (el, type, oldState, newState) => {
+  const e = new Event(type, { cancelable: type === "beforetoggle" });
+  e.oldState = oldState;
+  e.newState = newState;
+  return $.dispatch(el, e);
+};
+const showPopover = (el) => {
+  if (!el.hasAttribute("popover")) throw new DOMException("Not supported on elements that do not have a valid value for the 'popover' attribute.", "NotSupportedError");
+  if ($.popoverOpen(el)) return;
+  if (!popoverEvent(el, "beforetoggle", "closed", "open")) return;
+  if (el.getAttribute("popover") !== "manual") for (const other of [...document.querySelectorAll("[popover]:popover-open")]) if (other !== el && !other.contains(el) && other.getAttribute("popover") !== "manual") hidePopover(other);
+  $.popoverOpen(el, true);
+  g.setTimeout(() => popoverEvent(el, "toggle", "closed", "open"), 0);
+};
+const hidePopover = (el) => {
+  if (!$.popoverOpen(el)) return;
+  popoverEvent(el, "beforetoggle", "open", "closed");
+  $.popoverOpen(el, false);
+  g.setTimeout(() => popoverEvent(el, "toggle", "open", "closed"), 0);
+};
+def(HP, "showPopover", function () { showPopover(this); });
+def(HP, "hidePopover", function () { hidePopover(this); });
+def(HP, "togglePopover", function (force) {
+  const open = $.popoverOpen(this);
+  const want = force === undefined || typeof force === "object" ? !open : !!force;
+  if (want) showPopover(this); else hidePopover(this);
+  return want;
+});
+accessor(HP, "popover", function () {
+  const v = this.getAttribute("popover");
+  if (v === null) return null;
+  return v.toLowerCase() === "manual" || v.toLowerCase() === "hint" ? v.toLowerCase() : "auto";
+}, function (v) { if (v === null) this.removeAttribute("popover"); else this.setAttribute("popover", v); });
+// A press outside closes `auto` popovers; Escape the top of what's showing.
+$.hook("lightDismiss", (target) => {
+  for (const el of [...document.querySelectorAll("[popover]:popover-open")]) if (el.getAttribute("popover") !== "manual" && !(target && el.contains(target))) hidePopover(el);
+});
+$.hook("closeWatcher", () => {
+  const open = [...document.querySelectorAll("dialog:modal, [popover]:popover-open")];
+  const top = open[open.length - 1];
+  if (!top) return;
+  if (top.localName === "dialog") top.requestClose(); else hidePopover(top);
+});
+// `popovertarget` and `commandfor` on a button.
+$.hook("invoke", (button) => {
+  const id = button.getAttribute("popovertarget") || button.getAttribute("commandfor");
+  const target = id && document.getElementById(id);
+  if (!target) return false;
+  const action = (button.getAttribute("popovertargetaction") || button.getAttribute("command") || "toggle").toLowerCase();
+  if (action === "show-modal") target.showModal();
+  else if (action === "close") target.close();
+  else if (action === "request-close") target.requestClose();
+  else if (action === "show" || action === "show-popover") showPopover(target);
+  else if (action === "hide" || action === "hide-popover") hidePopover(target);
+  else target.togglePopover();
+  return true;
+});
+// A `<details>` that opened: others of its name close, and it tells.
+$.hook("detailsToggled", (el) => {
+  const name = el.getAttribute("name");
+  if (name && el.hasAttribute("open")) for (const other of el.getRootNode().querySelectorAll(`details[name="${CSS.escape(name)}"][open]`)) if (other !== el) other.removeAttribute("open");
+  g.setTimeout(() => $.dispatch(el, new Event("toggle")), 0);
+});
 str(HTMLSlotElement.prototype, "name");
 def(HTMLSlotElement.prototype, "assignedNodes", function () {
   const root = this.getRootNode();
@@ -365,13 +445,18 @@ def(CV, "toDataURL", function () { return "data:,"; });
 def(CV, "toBlob", function (f) { g.setTimeout(() => f(null), 0); });
 def(CV, "captureStream", function () { return null; });
 
-// An iframe holds nothing: it renders its box, loads no document.
+// An iframe's window is another world's (`api_frames.zig`).
 const IF = HTMLIFrameElement.prototype;
 url(IF, "src");
 str(IF, "srcdoc", "name", "sandbox", "allow", "width", "height", "referrerPolicy", "loading");
 bool(IF, "allowFullscreen");
-accessor(IF, "contentWindow", function () { return null; });
-accessor(IF, "contentDocument", function () { return null; });
+accessor(IF, "contentWindow", function () { return this.isConnected ? $.frameWindow(this) : null; });
+accessor(IF, "contentDocument", function () {
+  if (!this.isConnected) return null;
+  const win = $.frameWindow(this);
+  return win && $.frameShared(this) ? win.document : null;
+});
+def(IF, "getSVGDocument", function () { return null; });
 
 // Media elements don't play.
 // Bundles name these constants though no media ever plays here.

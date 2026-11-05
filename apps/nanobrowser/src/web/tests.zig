@@ -13,4 +13,5 @@ test {
     _ = @import("tests_typing.zig");
     _ = @import("tests_net.zig");
     _ = @import("tests_misc.zig");
+    _ = @import("tests_frames.zig");
 }

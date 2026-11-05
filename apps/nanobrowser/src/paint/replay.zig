@@ -7,6 +7,7 @@
 //!   host.gradient(g, w, h, nx, ny, scale) ?[]const u8   tiles of a gradient as a picture
 //!   host.control(c, box, x, y, opacity)   draws a form control at (x, y) in the open box
 //!   host.nearLazy(node)                   a `loading=lazy` picture has come near the window
+//!   host.frame(c, node, x, y, r)          draws an `<iframe>`'s page at (x, y) in the open box, `r` in the window
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
@@ -249,7 +250,7 @@ fn draw(c: *ui.Context, it: *const display.Item, x: f32, y: f32, r: Rect, view: 
             const top = y + (t.baseline - it.rect.y) - (f.ascent + f.leading / 2);
             _ = c.leaf(.{ .absolute = true, .offset = .{ .x = x, .y = top }, .opacity = it.opacity }, .{ .text = .{ .str = t.str, .style = s, .color = color(t.color), .spans = gradientSpans(c, t, it.rect.x, s) } }, null);
         },
-        .image => |im| drawPicture(c, im, placed, r),
+        .image => |im| if (im.node.isTag("iframe")) host.frame(c, im.node, x, y, r) else drawPicture(c, im, placed, r),
         .background => |bg| if (host.picture(bg.url)) |bytes| backgrounds.picture(c, bg, bytes, placed, r, view),
         .gradient => |g| backgrounds.gradient(c, g, host, placed, r, view),
         .mask => |ms| if (host.picture(ms.url)) |bytes| drawMask(c, ms, bytes, placed, r),

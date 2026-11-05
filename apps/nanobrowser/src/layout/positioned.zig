@@ -39,7 +39,7 @@ pub fn place(c: *Ctx, b: *Box, sx: f32, sy: f32, cb: ?*Box) Error!void {
     const natural = if (b.kind == .replaced) try replaced.size(c, b, pad.w, pad.h) else box.Size{};
     var spec = if (b.kind == .replaced) natural.w else try ctx.specW(c, b, s.width, pad.w, bph);
     if (spec == null and s.aspect_ratio > 0) {
-        if (ctx.specH(b, s.height, pad.h, bpv)) |h| spec = (h - bpv) * ctx.clean(s.aspect_ratio) + bph;
+        if (ctx.specH(b, s.height, pad.h, bpv)) |h| spec = ctx.aspectW(b, h);
     }
     if (spec) |v| {
         w = v;
@@ -76,13 +76,13 @@ pub fn place(c: *Ctx, b: *Box, sx: f32, sy: f32, cb: ?*Box) Error!void {
     } else if (right) |v| {
         x = pad.x + pad.w - v - b.margin.right - w;
     } else {
-        x = sx + b.margin.left;
+        x = sx + b.margin.left + (b.lay.static_w - w - b.margin.horizontal()) * b.lay.static_fx;
     }
 
     // Height: from the insets when they stretch it, else content.
     var def: ?f32 = if (b.kind == .replaced) natural.h else ctx.specH(b, s.height, pad.h, bpv);
-    if (def == null and top != null and bottom != null) def = @max(bpv, pad.h - top.? - bottom.? - b.margin.vertical());
-    if (def == null and s.aspect_ratio > 0 and b.kind != .replaced) def = (w - bph) / ctx.clean(s.aspect_ratio) + bpv;
+    if (def == null and top != null and bottom != null and (s.height.kind == .auto or s.height.kind == .stretch)) def = @max(bpv, pad.h - top.? - bottom.? - b.margin.vertical());
+    if (def == null and s.aspect_ratio > 0 and b.kind != .replaced) def = ctx.aspectH(b, w);
     var h: f32 = 0;
     if (def) |d| {
         h = try sizing.layoutBfc(c, b, w, ctx.clampH(b, d, pad.h, bpv));
@@ -109,7 +109,7 @@ pub fn place(c: *Ctx, b: *Box, sx: f32, sy: f32, cb: ?*Box) Error!void {
     } else if (bottom) |v| {
         y = pad.y + pad.h - v - b.margin.bottom - h;
     } else {
-        y = sy + b.margin.top;
+        y = sy + b.margin.top + (b.lay.static_h - h - b.margin.vertical()) * b.lay.static_fy;
     }
     b.x = x;
     b.y = y;

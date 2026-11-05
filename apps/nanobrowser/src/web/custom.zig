@@ -102,7 +102,7 @@ pub fn define(vm: *Vm, _: Value, args: []const Value) Error!Value {
     defer pending.deinit(w.gpa);
     const doc = w.page.doc.node;
     var at = doc.first_child;
-    while (at) |n| : (at = n.nextInTree(doc)) {
+    while (at) |n| : (at = n.nextDeep(doc)) {
         if (n.kind == .element and std.mem.eql(u8, n.tag, d.name)) try pending.append(w.gpa, n);
     }
     for (pending.items) |n| {
@@ -118,7 +118,7 @@ pub fn upgradeTree(vm: *Vm, _: Value, args: []const Value) Error!Value {
     var pending: std.ArrayList(*Node) = .empty;
     defer pending.deinit(w.gpa);
     var at: ?*Node = root;
-    while (at) |n| : (at = n.nextInTree(root)) {
+    while (at) |n| : (at = n.nextDeep(root)) {
         if (n.kind == .element and isCustomName(n.tag)) try pending.append(w.gpa, n);
     }
     for (pending.items) |n| {

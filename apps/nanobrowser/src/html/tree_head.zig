@@ -190,7 +190,10 @@ pub fn inHead(b: *Builder, t: *Token) Error!Act {
                 return .done;
             },
             .template => {
-                _ = try b.insert(s);
+                if (!try declarativeShadow(b, s)) {
+                    const made = try b.insert(s);
+                    made.template_content = try b.doc.createFragment();
+                }
                 try b.formatting.append(b.arena, .{ .node = null });
                 b.frameset_ok = false;
                 b.mode = .in_template;
@@ -413,4 +416,25 @@ pub fn afterAfterFrameset(b: *Builder, t: *Token) Error!Act {
         else => {},
     }
     return .done;
+}
+
+/// `<template shadowrootmode>`: the element that holds it gets a shadow root, which
+/// the template's content goes in, and the template itself goes nowhere. True when
+/// it did. A second one on a host, or one in `innerHTML`, is an ordinary template.
+fn declarativeShadow(b: *Builder, s: *const tz.Tag) Error!bool {
+    var mode: ?[]const u8 = null;
+    for (s.attrs) |a| if (std.mem.eql(u8, a.name, "shadowrootmode")) {
+        mode = a.value;
+    };
+    const m = mode orelse return false;
+    const open = std.ascii.eqlIgnoreCase(m, "open");
+    if (!open and !std.ascii.eqlIgnoreCase(m, "closed")) return false;
+    if (b.context != null) return false;
+    const host = (b.current() orelse return false).node;
+    if (host.kind != .element or host.shadow_root != null or host.isTag("template")) return false;
+    const root = try host.attachShadow(!open, true);
+    const tpl = try b.newElement(s.name, .html, s.attrs);
+    tpl.template_content = root;
+    try b.open.append(b.arena, .{ .node = tpl, .id = s.id });
+    return true;
 }

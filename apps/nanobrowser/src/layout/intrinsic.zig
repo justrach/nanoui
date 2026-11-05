@@ -8,6 +8,7 @@ const flex = @import("flex.zig");
 const grid = @import("grid.zig");
 const table = @import("table.zig");
 const replaced = @import("replaced.zig");
+const multicol = @import("multicol.zig");
 const Box = box.Box;
 const Ctx = ctx.Ctx;
 const Error = ctx.Error;
@@ -30,12 +31,21 @@ pub fn of(c: *Ctx, b: *Box) Error!Sizes {
         .grid => try grid.intrinsic(c, b),
         else => if (n.inline_root) try inlineSizes(c, b) else try blockSizes(c, b),
     };
+    if (b.kind == .block and (s.column_count > 0 or s.column_width > 0)) out = multicol.intrinsic(s, out);
+    // `contain: size` or `inline-size`: what's inside asks for nothing.
+    if ((s.contain_size or s.contain_inline_size) and b.kind != .replaced) out = .{};
     if (b.kind != .replaced and b.kind != .control and b.kind != .table) {
         out.min += bp;
         out.max += bp;
     }
     n.content_min = out.min;
     n.content_max = out.max;
+    // A height and a shape say the width, whatever's inside.
+    if (b.kind != .replaced and s.aspect_ratio > 0 and s.width.kind == .auto) if (fixed(s.height, s.box_sizing == .border_box, ctx_bpv(e))) |h| {
+        const ratio = ctx.clean(s.aspect_ratio);
+        const v = if (s.box_sizing == .border_box) h * ratio else (h - ctx_bpv(e)) * ratio + bp;
+        out = .{ .min = @max(v, out.min), .max = @max(v, out.min) };
+    };
     if (b.kind != .replaced) {
         if (fixed(s.width, s.box_sizing == .border_box, bp)) |v| {
             // A table never gets narrower than its content.
@@ -59,9 +69,13 @@ pub fn of(c: *Ctx, b: *Box) Error!Sizes {
     return out;
 }
 
+fn ctx_bpv(e: ctx.EdgeSet) f32 {
+    return e.border.vertical() + e.padding.vertical();
+}
+
 /// A length with no percentage, as a border-box size.
 fn fixed(l: ctx.Len, border_box: bool, bp: f32) ?f32 {
-    if (l.kind != .length or l.pct != 0) return null;
+    if (l.kind != .length or l.hasPct()) return null;
     const v = @max(0, ctx.clean(l.px));
     return if (border_box) @max(v, bp) else v + bp;
 }

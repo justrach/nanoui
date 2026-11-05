@@ -20,13 +20,27 @@ Object.setPrototypeOf(Window.prototype, new Proxy(names, {
   },
   has(t, k) { return k in t || (typeof k === "string" && $.document.getElementById(k) !== null); },
 }));
-for (const name of ["window", "self", "frames", "top", "parent"]) Object.defineProperty(g, name, { value: g, writable: true, configurable: true, enumerable: true });
+for (const name of ["window", "self"]) Object.defineProperty(g, name, { value: g, writable: true, configurable: true, enumerable: true });
+// Above a frame are other windows (`api_frames.zig`); the top is its own parent.
+const nearWindow = (name) => Object.defineProperty(g, name, { get() { return $.isFramed() ? $.relative(name) : g; }, set(v) { Object.defineProperty(g, name, { value: v, writable: true, configurable: true, enumerable: true }); }, configurable: true, enumerable: true });
+nearWindow("top");
+nearWindow("parent");
+const framesList = () => {
+  const list = $.framesOf();
+  const out = { length: list.length / 2, window: g };
+  for (let i = 0; i < list.length; i += 2) {
+    out[i / 2] = list[i];
+    if (list[i + 1]) out[list[i + 1]] = list[i];
+  }
+  return out;
+};
+Object.defineProperty(g, "frames", { get() { return $.framesCount() ? framesList() : g; }, set(v) { Object.defineProperty(g, "frames", { value: v, writable: true, configurable: true, enumerable: true }); }, configurable: true, enumerable: true });
 Object.defineProperty(g, "document", { value: document, enumerable: true, configurable: true });
 def(g, "event", undefined);
-g.name = "";
-g.length = 0;
+g.name = $.frameName();
+Object.defineProperty(g, "length", { get() { return $.framesCount(); }, set(v) { Object.defineProperty(g, "length", { value: v, writable: true, configurable: true, enumerable: true }); }, configurable: true, enumerable: true });
 g.opener = null;
-g.frameElement = null;
+Object.defineProperty(g, "frameElement", { get() { return $.frameElement(); }, configurable: true, enumerable: true });
 g.closed = false;
 g.isSecureContext = true;
 g.origin = $.originOf($.splitUrl($.pageUrl()));
@@ -85,6 +99,20 @@ class Location {
   toString() { return $.pageUrl(); }
 }
 def(g, "Location", Location);
+// What our user agent string claims, said the way Chromium says it.
+const userAgentData = {
+  brands: [{ brand: "Chromium", version: "142" }, { brand: "Not_A Brand", version: "99" }],
+  mobile: false,
+  platform: ({ MacIntel: "macOS", Win32: "Windows", iPhone: "iOS" })[$.platform] || "Linux",
+  getHighEntropyValues(hints) {
+    const known = { architecture: "arm", bitness: "64", model: "", platformVersion: "10.15.7", uaFullVersion: "142.0.0.0", fullVersionList: this.brands.map((b) => ({ brand: b.brand, version: b.version + ".0.0.0" })), wow64: false, formFactors: ["Desktop"] };
+    const out = { brands: this.brands, mobile: this.mobile, platform: this.platform };
+    for (const h of hints || []) if (h in known) out[h] = known[h];
+    return Promise.resolve(out);
+  },
+  toJSON() { return { brands: this.brands, mobile: this.mobile, platform: this.platform }; },
+};
+if (!("chrome" in g)) g.chrome = { app: { isInstalled: false, InstallState: { DISABLED: "disabled", INSTALLED: "installed", NOT_INSTALLED: "not_installed" }, RunningState: { CANNOT_RUN: "cannot_run", READY_TO_RUN: "ready_to_run", RUNNING: "running" } }, runtime: {}, csi() { return {}; }, loadTimes() { return {}; } };
 const location = new Location();
 Object.defineProperty(g, "location", { get() { return location; }, set(v) { goTo(v, false); }, enumerable: true, configurable: true });
 accessor(Document.prototype, "location", function () { return this === document ? location : null; }, function (v) { goTo(v, false); });
@@ -162,8 +190,8 @@ class Navigator {
   get productSub() { return "20030107"; }
   get vendor() { return ""; }
   get vendorSub() { return ""; }
-  get language() { return "en"; }
-  get languages() { return ["en"]; }
+  get language() { return "en-US"; }
+  get languages() { return ["en-US", "en"]; }
   get platform() { return $.platform; }
   get onLine() { return true; }
   get cookieEnabled() { return true; }
@@ -178,6 +206,8 @@ class Navigator {
   get connection() { return { effectiveType: "4g", downlink: 10, rtt: 50, saveData: false, addEventListener() {}, removeEventListener() {} }; }
   get clipboard() { return clipboard; }
   get userActivation() { return { hasBeenActive: true, isActive: false }; }
+  get userAgentData() { return userAgentData; }
+  get vendor() { return "Google Inc."; }
   get mediaDevices() { return undefined; }
   sendBeacon(url, body) {
     try { g.fetch(url, { method: "POST", body, keepalive: true }).catch(() => {}); return true; } catch (e) { return false; }
@@ -311,6 +341,13 @@ def(g, "PerformanceNavigation", PerformanceNavigation);
 if (!performance.navigation) performance.navigation = new PerformanceNavigation();
 class PerformanceObserver { constructor(cb) { this.cb = cb; } observe() {} disconnect() {} takeRecords() { return []; } static get supportedEntryTypes() { return []; } }
 def(g, "PerformanceObserver", PerformanceObserver);
+class PerformanceNavigation {
+  static get TYPE_NAVIGATE() { return 0; }
+  static get TYPE_RELOAD() { return 1; }
+  static get TYPE_BACK_FORWARD() { return 2; }
+  static get TYPE_RESERVED() { return 255; }
+}
+for (const c of [PerformanceEntry, PerformanceNavigation, class PerformanceTiming {}, class PerformanceResourceTiming extends PerformanceEntry {}, class PerformanceNavigationTiming extends PerformanceEntry {}, class PerformanceMark extends PerformanceEntry {}, class PerformanceMeasure extends PerformanceEntry {}, class PerformancePaintTiming extends PerformanceEntry {}]) def(g, c.name, c);
 
 // matchMedia, its `change` events from a viewport or theme change.
 const mediaLists = new Set();
@@ -409,14 +446,102 @@ g.open = function open(url) {
   if (url !== undefined && url !== "") $.navigate(String(url), true);
   return null;
 };
-g.postMessage = function postMessage(data) {
-  const copy = g.structuredClone(data);
+g.postMessage = function postMessage(data, target) {
+  const from = $.callerPage();
+  const want = typeof target === "object" && target ? target.targetOrigin : target;
+  if (want !== undefined && want !== "*" && want !== "/" && String(want) !== ($.pageOrigin() === "null" ? "null" : new g.URL(String(want), location.href).origin)) { /* its own origin only */ }
+  if (want !== undefined && want !== "*" && want !== "/" && $.pageOrigin() !== new g.URL(String(want), location.href).origin) return;
+  // From a window of this origin in another world, whose objects come as proxies.
+  const copy = from ? JSON.parse(JSON.stringify({ v: data })).v : g.structuredClone(data);
+  const origin = from ? $.pageOrigin(from) : $.pageOrigin();
+  const source = from ? $.windowOfPage(from) : g;
   g.setTimeout(() => {
-    const e = new MessageEvent("message", { data: copy, origin: location.origin, source: g });
+    const e = new MessageEvent("message", { data: copy, origin, source });
     e.isTrusted = true;
     $.dispatch(g, e);
   }, 0);
 };
+$.hook("deliverMessage", (text, origin, from) => {
+  const e = new MessageEvent("message", { data: JSON.parse(text).v, origin, source: $.windowOfPage(from) });
+  e.isTrusted = true;
+  $.dispatch(g, e);
+});
+// Another world's object, as a proxy: every operation crosses to the VM that owns it.
+const remotes = new Map();
+$.hook("makeRemote", (peer, id, callable) => {
+  const key = peer + ":" + id;
+  let p = remotes.get(key);
+  if (p) return p;
+  const call = (op, a, b) => $.remote(op, peer, id, a, b);
+  const field = (k) => (typeof k === "symbol" ? undefined : k);
+  p = new Proxy(callable ? function () {} : {}, {
+    get(_, k) { return typeof k === "symbol" ? (k === Symbol.toStringTag ? call(0, "constructor")?.name : undefined) : call(0, k); },
+    set(_, k, v) { if (typeof k !== "symbol") call(1, k, v); return true; },
+    has(_, k) { return typeof k !== "symbol" && call(2, k); },
+    deleteProperty(_, k) { return typeof k === "symbol" || call(3, k); },
+    ownKeys() { return Array.from(call(4)); },
+    getOwnPropertyDescriptor(_, k) {
+      if (typeof k === "symbol" || !call(5, k)) return undefined;
+      return { value: call(0, k), writable: true, enumerable: true, configurable: true };
+    },
+    getPrototypeOf() { const v = call(8); return v === null ? null : v; },
+    apply(_, self, args) { return call(6, self, args); },
+    construct(_, args) { return call(7, args); },
+  });
+  void field;
+  remotes.set(key, p);
+  return p;
+});
+$.hook("remoteOp", (op, o, a, b) => {
+  switch (op) {
+    case 0: return o[a];
+    case 1: o[a] = b; return true;
+    case 2: return a in o;
+    case 3: return delete o[a];
+    case 4: return Reflect.ownKeys(o).filter((k) => typeof k === "string");
+    case 5: return Object.getOwnPropertyDescriptor(o, a) !== undefined;
+    case 6: return Reflect.apply(o, a, Array.from(b));
+    case 7: return Reflect.construct(o, Array.from(a));
+    case 8: return Object.getPrototypeOf(o);
+  }
+});
+// A window of another origin: it can be sent messages and sent elsewhere, and little else.
+const crossWindows = new Map();
+const blocked = (what) => { throw new DOMException(`Failed to read a named property '${String(what)}' from 'Window': Blocked a frame with origin "${$.pageOrigin()}" from accessing a cross-origin frame.`, "SecurityError"); };
+$.hook("crossWindow", (id) => {
+  let w = crossWindows.get(id);
+  if (w) return w;
+  const place = new Proxy({}, {
+    get(_, k) { if (k === "replace" || k === "assign") return (u) => $.navigateFrame(id, String(u)); blocked(k); },
+    set(_, k, v) { if (k === "href") { $.navigateFrame(id, String(v)); return true; } blocked(k); },
+  });
+  const known = {
+    postMessage(data, target) { $.postTo(id, JSON.stringify({ v: data }), String((typeof target === "object" && target ? target.targetOrigin : target) ?? "/")); },
+    focus() {}, blur() {}, close() {},
+    closed: false,
+  };
+  w = new Proxy({}, {
+    get(_, k) {
+      if (k in known) return known[k];
+      if (k === "self" || k === "window" || k === "frames") return w;
+      if (k === "location") return place;
+      if (k === "parent" || k === "top") return $.neighbor(id, k);
+      if (k === "length") return $.framesCount(id);
+      if (k === "opener") return null;
+      if (k === Symbol.toStringTag) return "Window";
+      if (typeof k === "symbol" || k === "then") return undefined;
+      if (/^[0-9]+$/.test(k)) return $.framesOf(id)[Number(k) * 2];
+      blocked(k);
+    },
+    set(_, k, v) { if (k === "location") { $.navigateFrame(id, String(v)); return true; } blocked(k); },
+    has(_, k) { return k in known || k === "location" || k === "parent" || k === "top"; },
+    ownKeys() { return []; },
+    getOwnPropertyDescriptor(_, k) { blocked(k); },
+    getPrototypeOf() { return null; },
+  });
+  crossWindows.set(id, w);
+  return w;
+});
 g.reportError = function reportError(e) { $.reportError(e); };
 class BarProp {}
 class Screen {}

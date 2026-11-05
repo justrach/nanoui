@@ -44,7 +44,11 @@ pub fn apply(ctx: *Ctx, p: Prop, t: []const Token) ?bool {
         .place_self => placePair(&s.align_self, &s.justify_self, t),
         .place_content => placeContent(s, t),
         .gap, .grid_gap => gap(ctx, t),
-        .row_gap, .grid_row_gap => gap1(ctx, &s.row_gap, t),
+        .row_gap, .grid_row_gap => {
+            if (!gap1(ctx, &s.row_gap, t)) return false;
+            if (s.row_gap.kind == .auto) s.row_gap = Len.zero;
+            return true;
+        },
         .column_gap, .grid_column_gap => gap1(ctx, &s.column_gap, t),
         .grid_template_columns => template(ctx, &s.grid_template_columns, t),
         .grid_template_rows => template(ctx, &s.grid_template_rows, t),
@@ -233,7 +237,7 @@ fn placeContent(s: *style.Style, t: []const Token) bool {
 }
 
 fn gapValue(ctx: *Ctx, c: *Cur) ?Len {
-    if (c.takeIdent("normal")) return Len.zero;
+    if (c.takeIdent("normal")) return Len.auto;
     return values.lengthAt(ctx, c);
 }
 
@@ -243,7 +247,7 @@ fn gap(ctx: *Ctx, t: []const Token) bool {
     var b = a;
     if (!c.atEnd()) b = gapValue(ctx, &c) orelse return false;
     if (!c.atEnd()) return false;
-    ctx.style.row_gap = a;
+    ctx.style.row_gap = if (a.kind == .auto) Len.zero else a;
     ctx.style.column_gap = b;
     return true;
 }
@@ -284,16 +288,17 @@ fn trackAt(ctx: *Ctx, c: *Cur) ?Track {
                 return minmax(ctx, c.body());
             }
             if (t.isFunction("fit-content")) {
-                // Sized as `auto`, which ignores the limit.
+                // As `auto`, with its most capped at the limit.
                 c.i += 1;
-                _ = c.body();
-                return .{ .kind = .auto };
+                var a = Cur.of(c.body());
+                const limit = values.lengthAt(ctx, &a) orelse return null;
+                return .{ .kind = .auto, .fit = true, .max_px = limit.px, .max_pct = limit.pct, .max_math = limit.math };
             }
         },
         else => {},
     }
     const l = values.lengthAt(ctx, c) orelse return null;
-    return .{ .kind = .fixed, .px = l.px, .pct = l.pct };
+    return .{ .kind = .fixed, .px = l.px, .pct = l.pct, .math = l.math };
 }
 
 fn minmax(ctx: *Ctx, args: []const Token) ?Track {
@@ -306,6 +311,7 @@ fn minmax(ctx: *Ctx, args: []const Token) ?Track {
     if (low.kind == .fixed) {
         out.px = low.px;
         out.pct = low.pct;
+        out.math = low.math;
     } else out.min_auto = true;
     switch (high.kind) {
         .fr => out.fr = high.fr,
@@ -314,6 +320,7 @@ fn minmax(ctx: *Ctx, args: []const Token) ?Track {
         .fixed => {
             out.max_px = high.px;
             out.max_pct = high.pct;
+            out.max_math = high.math;
         },
         .minmax => {},
     }
@@ -342,11 +349,12 @@ fn trackListDeep(ctx: *Ctx, t: []const Token, depth: u32) ?TrackList {
     if (depth > 4) return null;
     var out: std.ArrayList(Track) = .empty;
     var auto_repeat: i16 = -1;
+    var repeat_len: u16 = 1;
     var auto_fit = false;
     var names: std.ArrayList(style.LineName) = .empty;
     var c = Cur.of(t);
     while (true) {
-        lineNames(ctx, &c, out.items.len, if (depth == 0) &names else null);
+        lineNames(ctx, &c, out.items.len, &names);
         const k = c.peek() orelse break;
         if (k.kind == .string) {
             c.i += 1;
@@ -365,24 +373,33 @@ fn trackListDeep(ctx: *Ctx, t: []const Token, depth: u32) ?TrackList {
             if (is_auto) {
                 auto_repeat = @intCast(@min(out.items.len, 32000));
                 auto_fit = count.isIdent("auto-fit");
-                // A repetition of several tracks fits only its first.
-                out.append(ctx.arena, list.tracks[0]) catch return null;
+                repeat_len = @intCast(@min(list.tracks.len, 1000));
+                for (list.names) |nm| names.append(ctx.arena, .{ .name = nm.name, .line = @intCast(@min(@as(i32, nm.line) + @as(i32, auto_repeat), 32000)) }) catch return null;
+                out.appendSlice(ctx.arena, list.tracks) catch return null;
             } else {
                 const times: usize = @intFromFloat(@min(count.num, 1000));
-                for (0..times) |_| out.appendSlice(ctx.arena, list.tracks) catch return null;
+                for (0..times) |_| {
+                    const base: i32 = @intCast(@min(out.items.len, 32000));
+                    if (out.items.len < 32000) for (list.names) |nm| names.append(ctx.arena, .{ .name = nm.name, .line = @intCast(@min(@as(i32, nm.line) + base, 32000)) }) catch return null;
+                    out.appendSlice(ctx.arena, list.tracks) catch return null;
+                }
             }
             continue;
         }
         const tr = trackAt(ctx, &c) orelse return null;
         out.append(ctx.arena, tr) catch return null;
     }
-    return .{ .tracks = out.items, .auto_repeat = auto_repeat, .auto_fit = auto_fit, .names = names.items };
+    return .{ .tracks = out.items, .auto_repeat = auto_repeat, .repeat_len = repeat_len, .auto_fit = auto_fit, .names = names.items };
 }
 
 fn template(ctx: *Ctx, field: *TrackList, t: []const Token) bool {
     if (values.ident(t)) |w| {
-        if (std.ascii.eqlIgnoreCase(w, "none") or std.ascii.eqlIgnoreCase(w, "subgrid") or std.ascii.eqlIgnoreCase(w, "masonry")) {
+        if (std.ascii.eqlIgnoreCase(w, "none") or std.ascii.eqlIgnoreCase(w, "masonry")) {
             field.* = .{};
+            return true;
+        }
+        if (std.ascii.eqlIgnoreCase(w, "subgrid")) {
+            field.* = .{ .subgrid = true };
             return true;
         }
     }
@@ -428,12 +445,14 @@ fn gridTemplate(ctx: *Ctx, t: []const Token) bool {
     return true;
 }
 
-/// `grid-auto-flow`: only the axis matters here, `dense` isn't done.
+/// `grid-auto-flow`: the axis, and whether it goes back to fill holes.
 fn autoFlow(s: *style.Style, t: []const Token) bool {
     s.grid_auto_flow_column = false;
-    for (t) |k| if (k.isIdent("column")) {
-        s.grid_auto_flow_column = true;
-    };
+    s.grid_auto_flow_dense = false;
+    for (t) |k| {
+        if (k.isIdent("column")) s.grid_auto_flow_column = true;
+        if (k.isIdent("dense")) s.grid_auto_flow_dense = true;
+    }
     return true;
 }
 

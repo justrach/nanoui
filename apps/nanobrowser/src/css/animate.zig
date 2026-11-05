@@ -23,7 +23,7 @@ const Smooth = v.Smooth;
 const Value = v.Value;
 const Allocator = std.mem.Allocator;
 
-pub const Pseudo = enum(u8) { none, before, after };
+pub const Pseudo = enum(u8) { none, before, after, marker, backdrop };
 
 const Key = struct { node: *dom.Node, pseudo: Pseudo };
 
@@ -471,6 +471,8 @@ fn slotOf(key: Key, e: *const Engine) ?*const Style {
         .none => n.computed,
         .before => n.before,
         .after => n.after,
+        .marker => n.marker,
+        .backdrop => n.backdrop,
     };
 }
 

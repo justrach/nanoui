@@ -14,6 +14,7 @@ const loader = @import("loader.zig");
 const web = @import("web/web.zig");
 const view_mod = @import("page_view.zig");
 const find_mod = @import("find.zig");
+const frames_mod = @import("frames.zig");
 const http = nanoui.http;
 const Allocator = std.mem.Allocator;
 
@@ -89,6 +90,16 @@ pub const Page = struct {
 
     /// Scripts: null until the document has any (or none ever).
     js: ?*web.World = null,
+    /// `sandbox` without `allow-scripts`.
+    no_scripts: bool = false,
+
+    /// Its `<iframe>`s, and when it is in one, that one.
+    frames: frames_mod.Frames = .{},
+    frame: ?*frames_mod.Frame = null,
+    /// The number other pages' scripts know it by; 0 until one asks.
+    id: u32 = 0,
+    /// A wheel over this frame was taken by what's outside it.
+    wheel_taken: bool = false,
 
     pub const State = enum { fetching, parsed, done, failed };
 
@@ -147,8 +158,10 @@ pub const Page = struct {
 
     /// Lets the page go; it is freed when the last thing holding it is done.
     pub fn destroy(p: *Page) void {
+        web.forgetPage(p);
         p.dead = true;
         p.busy += 1;
+        frames_mod.destroyAll(p);
         p.host.retire(p.host.ctx, p);
     }
 
@@ -267,6 +280,7 @@ pub const Page = struct {
         if (std.mem.startsWith(u8, dest, "about:")) {
             p.state = .done;
             html.parseDocument(p.doc, "") catch {};
+            web.parsed(p);
             return;
         }
         if (std.mem.startsWith(u8, dest, "file://")) {
@@ -299,7 +313,8 @@ pub const Page = struct {
             html.parseDocument(p.doc, shown) catch {};
         } else {
             const source = documentSource(p, body, content_type) catch "";
-            html.parseDocument(p.doc, source) catch {};
+            // Without scripts, `<noscript>` is markup to show.
+            html.parseDocumentWith(p.doc, source, .{ .scripting = !p.no_scripts }) catch {};
         }
         p.title_stale = true;
         web.parsed(p);
@@ -371,4 +386,5 @@ test "titles collapse, and escapes" {
 
 comptime {
     _ = view_mod;
+    _ = frames_mod;
 }

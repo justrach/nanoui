@@ -53,7 +53,7 @@ fn fill(w: *World, c: *Coll) Error!void {
             var at = c.root.first_child;
             const all = std.mem.eql(u8, c.name, "*");
             while (at) |x| : (at = x.nextInTree(c.root)) {
-                if (x.kind != .element or bind.isShadow(x)) continue;
+                if (x.kind != .element) continue;
                 if (all or std.ascii.eqlIgnoreCase(x.tag, c.name)) try c.items.append(a, x);
             }
         },
@@ -152,18 +152,12 @@ pub fn staticList(w: *World, root: *Node, nodes: []const *Node) Error!Value {
     return o.value();
 }
 
-/// A template's content fragment, made on first asking from its children.
-pub fn templateContent(w: *World, n: *Node) ?*Node {
-    const key = world_mod.CacheKey{ .node = n, .kind = .content };
-    if (w.cached.get(key)) |o| return bind.asNode(o.value());
-    return makeContent(w, n) catch null;
-}
-
-fn makeContent(w: *World, n: *Node) Error!*Node {
-    const f = try n.doc.createFragment();
+/// A template's content fragment; one a script made and filled gets its children.
+pub fn templateContent(_: *World, n: *Node) ?*Node {
+    if (n.template_content) |f| return f;
+    const f = n.doc.createFragment() catch return null;
     while (n.first_child) |k| f.appendChild(k);
-    const o = try bind.wrap(w.vm, f);
-    try w.cached.put(w.gpa, .{ .node = n, .kind = .content }, o.asObject());
+    n.template_content = f;
     return f;
 }
 

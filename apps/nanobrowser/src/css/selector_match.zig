@@ -43,11 +43,13 @@ fn from(s: *const Selector, i: usize, el: *Node, ctx: *Ctx, anchor: ?*Node) bool
     switch (c.combinator) {
         .child => {
             const p = el.parentElement() orelse return false;
+            if (p.is_shadow) return crossToHost(s, i - 1, p, ctx, anchor);
             return from(s, i - 1, p, ctx, anchor);
         },
         .descendant => {
             var p = el.parentElement();
             while (p) |at| : (p = at.parentElement()) {
+                if (at.is_shadow) return crossToHost(s, i - 1, at, ctx, anchor);
                 if (from(s, i - 1, at, ctx, anchor)) return true;
             }
             return false;
@@ -64,6 +66,16 @@ fn from(s: *const Selector, i: usize, el: *Node, ctx: *Ctx, anchor: ?*Node) bool
             return false;
         },
     }
+}
+
+/// A selector doesn't see past its tree, but for the host when it says `:host`.
+fn crossToHost(s: *const Selector, i: usize, root: *Node, ctx: *Ctx, anchor: ?*Node) bool {
+    const host = root.parent orelse return false;
+    for (s.compounds[i].simples) |x| switch (x) {
+        .host, .host_context => return from(s, i, host, ctx, anchor),
+        else => {},
+    };
+    return false;
 }
 
 fn related(how: sel.Combinator, el: *const Node, anchor: *const Node) bool {
@@ -116,6 +128,14 @@ fn simple(s: *const Simple, el: *Node, ctx: *Ctx) bool {
             break :blk has(l, el, ctx);
         },
         .lang => |want| lang(want, el),
+        .host => |l| el.shadow_root != null and (l.len == 0 or matchesAny(l, el, ctx)),
+        .host_context => |l| blk: {
+            var at: ?*Node = el;
+            while (at) |a| : (at = a.parent) {
+                if (a.kind == .element and !a.is_shadow and matchesAny(l, a, ctx)) break :blk true;
+            }
+            break :blk false;
+        },
     };
 }
 
@@ -290,6 +310,9 @@ fn pseudo(p: sel.PseudoClass, el: *Node, ctx: *Ctx) bool {
             break :blk std.mem.eql(u8, doc.url[hash + 1 ..], id);
         },
         .defined => true,
+        .modal => el.modal,
+        .popover_open => el.popover_open,
+        .open => el.popover_open or el.modal or ((el.isTag("details") or el.isTag("dialog")) and el.hasAttr("open")),
         .default => isChecked(el) or (el.isTag("button") and !el.hasAttr("type")),
         .valid => isControl(el.tag) or el.isTag("form"),
         .indeterminate => el.isTag("progress") and !el.hasAttr("value"),

@@ -4,6 +4,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const tk = @import("tokenizer.zig");
 const types = @import("selectors.zig");
+const names = @import("selector_names.zig");
 
 const Token = tk.Token;
 const Combinator = types.Combinator;
@@ -17,6 +18,11 @@ const Compound = types.Compound;
 const Selector = types.Selector;
 
 const max_depth = 24;
+const legacyElement = names.legacyElement;
+const isOtherElement = names.isOtherElement;
+const isElementFunction = names.isElementFunction;
+const pseudo_classes = names.pseudo_classes;
+pub const parseAnB = names.parseAnB;
 
 pub const Parser = struct {
     arena: Allocator,
@@ -87,6 +93,8 @@ pub const Parser = struct {
             if (st.pseudo != .none) {
                 if (sel.pseudo != .none) return null;
                 sel.pseudo = st.pseudo;
+                sel.slotted = st.slotted;
+                sel.part = st.part;
             }
             sel.specificity += st.specificity;
             sel.uses_state = sel.uses_state or st.uses_state;
@@ -131,6 +139,8 @@ pub const Parser = struct {
         pseudo: PseudoElement = .none,
         uses_state: bool = false,
         saw_nesting: bool = false,
+        slotted: []const Selector = &.{},
+        part: []const u8 = "",
     };
 
     fn compound(p: *Parser, c: *Cur, depth: u32, st: *CompoundState) Allocator.Error!?[]const Simple {
@@ -293,8 +303,22 @@ pub const Parser = struct {
             const n = c.peek() orelse return null;
             if (n.kind == .function) {
                 if (!std.ascii.startsWithIgnoreCase(n.text, "-webkit-") and !isElementFunction(n.text)) return null;
-                c.skipFunction();
+                c.i += 1;
+                const inner = c.functionBody();
                 st.pseudo = .other;
+                if (std.ascii.eqlIgnoreCase(n.text, "slotted")) {
+                    st.slotted = try p.list(inner, depth + 1, false, false) orelse return null;
+                    st.specificity += maxSpecificity(st.slotted) + 1;
+                    st.pseudo = .slotted;
+                } else if (std.ascii.eqlIgnoreCase(n.text, "part")) {
+                    var a: Cur = .{ .t = inner };
+                    a.skipWs();
+                    const name = a.peek() orelse return null;
+                    if (name.kind != .ident) return null;
+                    st.part = name.text;
+                    st.pseudo = .part;
+                    st.specificity += 1;
+                }
                 return @as(?Simple, null);
             }
             if (n.kind != .ident) return null;
@@ -305,6 +329,10 @@ pub const Parser = struct {
             c.i += 1;
             // The old single-colon forms of pseudo-elements.
             if (legacyElement(t.text)) return pseudoElement(t.text, st);
+            if (std.ascii.eqlIgnoreCase(t.text, "host")) {
+                st.specificity += 1 << 8;
+                return @as(?Simple, .{ .host = &.{} });
+            }
             const pc = pseudo_classes.get(try lower(p.arena, t.text)) orelse return null;
             st.specificity += 1 << 8;
             switch (pc) {
@@ -366,6 +394,12 @@ pub const Parser = struct {
             st.specificity += 1 << 8;
             return @as(?Simple, .{ .lang = v.text });
         }
+        if (eql(u8, name, "host") or eql(u8, name, "host-context")) {
+            const l = try p.list(inner, depth + 1, false, false) orelse return null;
+            st.specificity += maxSpecificity(l) + (1 << 8);
+            state_of.apply(st, l);
+            return @as(?Simple, if (name.len == 4) .{ .host = l } else .{ .host_context = l });
+        }
         if (eql(u8, name, "dir")) {
             st.specificity += 1 << 8;
             return @as(?Simple, .{ .pseudo = .defined });
@@ -412,6 +446,10 @@ fn pseudoElement(name: []const u8, st: *CompoundState_) ??Simple {
         st.pseudo = .after;
     } else if (std.ascii.eqlIgnoreCase(name, "placeholder") or std.ascii.eqlIgnoreCase(name, "-webkit-input-placeholder")) {
         st.pseudo = .placeholder;
+    } else if (std.ascii.eqlIgnoreCase(name, "marker")) {
+        st.pseudo = .marker;
+    } else if (std.ascii.eqlIgnoreCase(name, "backdrop")) {
+        st.pseudo = .backdrop;
     } else if (isOtherElement(name) or std.ascii.startsWithIgnoreCase(name, "-webkit-")) {
         st.pseudo = .other;
     } else return null;
@@ -420,44 +458,6 @@ fn pseudoElement(name: []const u8, st: *CompoundState_) ??Simple {
 }
 
 const CompoundState_ = Parser.CompoundState;
-
-fn legacyElement(name: []const u8) bool {
-    const l = [_][]const u8{ "before", "after", "first-line", "first-letter" };
-    for (l) |x| if (std.ascii.eqlIgnoreCase(name, x)) return true;
-    return false;
-}
-
-fn isOtherElement(name: []const u8) bool {
-    const l = [_][]const u8{ "marker", "selection", "first-line", "first-letter", "backdrop", "file-selector-button", "details-content", "target-text", "cue", "scroll-marker" };
-    for (l) |x| if (std.ascii.eqlIgnoreCase(name, x)) return true;
-    return false;
-}
-
-fn isElementFunction(name: []const u8) bool {
-    const l = [_][]const u8{ "part", "slotted", "cue", "highlight", "view-transition-group", "view-transition-image-pair", "view-transition-old", "view-transition-new" };
-    for (l) |x| if (std.ascii.eqlIgnoreCase(name, x)) return true;
-    return false;
-}
-
-const pseudo_classes = std.StaticStringMap(PseudoClass).initComptime(.{
-    .{ "root", .root },                   .{ "empty", .empty },                         .{ "first-child", .first_child },
-    .{ "last-child", .last_child },       .{ "only-child", .only_child },               .{ "first-of-type", .first_of_type },
-    .{ "last-of-type", .last_of_type },   .{ "only-of-type", .only_of_type },           .{ "link", .link },
-    .{ "any-link", .any_link },           .{ "-webkit-any-link", .any_link },           .{ "visited", .visited },
-    .{ "hover", .hover },                 .{ "active", .active },                       .{ "focus", .focus },
-    .{ "focus-visible", .focus_visible }, .{ "focus-within", .focus_within },           .{ "checked", .checked },
-    .{ "disabled", .disabled },           .{ "enabled", .enabled },                     .{ "required", .required },
-    .{ "optional", .optional },           .{ "placeholder-shown", .placeholder_shown }, .{ "read-only", .read_only },
-    .{ "read-write", .read_write },       .{ "scope", .scope },                         .{ "target", .target },
-    .{ "defined", .defined },             .{ "default", .default },                     .{ "valid", .valid },
-    .{ "indeterminate", .indeterminate }, .{ "invalid", .never },                       .{ "user-valid", .never },
-    .{ "user-invalid", .never },          .{ "in-range", .valid },                      .{ "out-of-range", .never },
-    .{ "fullscreen", .never },            .{ "modal", .never },                         .{ "popover-open", .never },
-    .{ "autofill", .never },              .{ "-webkit-autofill", .never },              .{ "host", .never },
-    .{ "open", .never },                  .{ "closed", .never },                        .{ "paused", .never },
-    .{ "playing", .never },               .{ "past", .never },                          .{ "future", .never },
-    .{ "current", .never },               .{ "picture-in-picture", .never },            .{ "blank", .never },
-});
 
 pub fn maxSpecificity(l: []const Selector) u32 {
     var m: u32 = 0;
@@ -490,37 +490,6 @@ fn combinatorAt(c: *Cur) ?Combinator {
     };
     c.i += 1;
     return out;
-}
-
-/// `An+B`: `odd`, `even`, `3`, `2n`, `-n+3`, `2n - 1`. The tokenizer splits
-/// these oddly, so they are read from the tokens written back as text.
-pub fn parseAnB(arena: Allocator, toks: []const Token) Allocator.Error!?[2]i32 {
-    const text = try tk.serialize(arena, toks);
-    var buf: std.ArrayList(u8) = .empty;
-    for (text) |c| if (c != ' ' and c != '\t' and c != '\n') try buf.append(arena, std.ascii.toLower(c));
-    return anb(buf.items);
-}
-
-fn anb(s: []const u8) ?[2]i32 {
-    if (std.mem.eql(u8, s, "odd")) return .{ 2, 1 };
-    if (std.mem.eql(u8, s, "even")) return .{ 2, 0 };
-    if (s.len == 0) return null;
-    const n = std.mem.indexOfScalar(u8, s, 'n') orelse {
-        const b = std.fmt.parseInt(i32, s, 10) catch return null;
-        return .{ 0, b };
-    };
-    const a_text = s[0..n];
-    const a: i32 = if (a_text.len == 0 or std.mem.eql(u8, a_text, "+"))
-        1
-    else if (std.mem.eql(u8, a_text, "-"))
-        -1
-    else
-        std.fmt.parseInt(i32, a_text, 10) catch return null;
-    const rest = s[n + 1 ..];
-    if (rest.len == 0) return .{ a, 0 };
-    if (rest[0] != '+' and rest[0] != '-') return null;
-    const b = std.fmt.parseInt(i32, rest, 10) catch return null;
-    return .{ a, b };
 }
 
 /// A cursor over tokens.
