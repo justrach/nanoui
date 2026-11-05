@@ -15,11 +15,6 @@ pub fn readFile(io: std.Io, gpa: std.mem.Allocator, path: []const u8) !Bytes {
     };
 }
 
-/// The explicit heap form used by the byte-for-byte rendering regression test.
-pub fn readHeap(io: std.Io, gpa: std.mem.Allocator, path: []const u8) !Bytes {
-    return readFile(io, gpa, path);
-}
-
 pub fn freeBytes(io: std.Io, gpa: std.mem.Allocator, bytes: *Bytes) void {
     _ = io;
     gpa.free(@constCast(bytes.data));
@@ -43,7 +38,7 @@ test "font reads are exact and release twenty times" {
         defer freeBytes(std.testing.io, gpa, &bytes);
         try std.testing.expectEqualStrings(text, bytes.data);
     }
-    var heap = try readHeap(std.testing.io, gpa, path);
+    var heap = try readFile(std.testing.io, gpa, path);
     defer freeBytes(std.testing.io, gpa, &heap);
     try std.testing.expectEqualStrings(text, heap.data);
     try std.testing.expectError(error.FileNotFound, readFile(std.testing.io, gpa, "no such font anywhere.ttf"));

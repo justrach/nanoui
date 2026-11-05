@@ -102,7 +102,7 @@ test "font reads and heap fonts render byte-identical coverage" {
     const path = fontPath() orelse return error.SkipZigTest;
     var loaded = try fontmap.readFile(std.testing.io, gpa, path);
     defer fontmap.freeBytes(std.testing.io, gpa, &loaded);
-    var heap = try fontmap.readHeap(std.testing.io, gpa, path);
+    var heap = try fontmap.readFile(std.testing.io, gpa, path);
     defer fontmap.freeBytes(std.testing.io, gpa, &heap);
     try std.testing.expectEqualSlices(u8, heap.data, loaded.data);
     const a = try glyphCoverage(gpa, heap.data);

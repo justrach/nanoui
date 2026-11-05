@@ -202,6 +202,12 @@ pub fn build(b: *std.Build) void {
     if (os == .windows) {
         font_bench.root_module.linkSystemLibrary("dwrite", .{});
         font_bench.root_module.linkSystemLibrary("psapi", .{});
+    } else if (os == .macos) {
+        for (frameworks) |f| font_bench.root_module.linkFramework(f, .{});
+        font_bench.root_module.linkSystemLibrary("objc", .{});
+    } else if (os == .ios) {
+        for (ios_frameworks) |f| font_bench.root_module.linkFramework(f, .{});
+        font_bench.root_module.linkSystemLibrary("objc", .{});
     }
     const run_font_bench = b.addRunArtifact(font_bench);
     run_font_bench.addPassthruArgs();
