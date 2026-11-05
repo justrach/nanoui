@@ -62,6 +62,61 @@ fn expectAt(r: *Run, x: f32, y: f32, comptime is: fn ([4]u8) bool, what: []const
     }
 }
 
+test "stacking: what's positioned in a box with no z-index stacks with its context" {
+    var r: Run = undefined;
+    try r.start();
+    defer r.stop();
+    // Apple's hero: the copy is z-index 2 in a positioned box with none; a picture after that box must not cover it.
+    try page(&r,
+        \\<div style='position:relative'><div id=copy style='position:relative;z-index:2;width:50px;height:50px;background:#f00'></div></div>
+        \\<div id=pic style='position:absolute;left:0;top:0;width:100px;height:100px;background:#00f'></div>
+    );
+    try expectAt(&r, 25, 25, isRed, "the copy, over the later picture");
+    try expectAt(&r, 75, 75, isBlue, "the picture");
+    try r.expectJs("document.elementFromPoint(25, 25).id", "copy");
+    // With a z-index of its own, or `isolation`, it is a context and holds it in.
+    try page(&r,
+        \\<div style='position:relative;z-index:0'><div style='position:relative;z-index:2;width:50px;height:50px;background:#f00'></div></div>
+        \\<div style='position:absolute;left:0;top:0;width:100px;height:100px;background:#00f'></div>
+    );
+    try expectAt(&r, 25, 25, isBlue, "held in by its context");
+    try page(&r,
+        \\<div style='isolation:isolate'><div style='position:relative;z-index:2;width:50px;height:50px;background:#f00'></div></div>
+        \\<div style='position:absolute;left:0;top:0;width:100px;height:100px;background:#00f'></div>
+    );
+    try expectAt(&r, 25, 25, isBlue, "isolated");
+    // A negative z-index goes under a box with none, but not under its context's own background.
+    try page(&r,
+        \\<div style='position:relative;z-index:0;background:#00f;width:100px;height:100px'><div style='position:relative;width:60px;height:60px'><div style='position:absolute;z-index:-1;width:50px;height:50px;background:#f00'></div></div></div>
+    );
+    try expectAt(&r, 25, 25, isRed, "over the context's background");
+}
+
+test "@property: Tailwind's rings and borders, which read registered starting values" {
+    var r: Run = undefined;
+    try r.start();
+    defer r.stop();
+    try page(&r,
+        \\<style>@property --tw-ring { syntax: "*"; inherits: false; initial-value: 0 0 #0000 }
+        \\@property --tw-shadow { syntax: "*"; inherits: false; initial-value: 0 0 #0000 }
+        \\@property --tw-border-style { syntax: "*"; inherits: false; initial-value: solid }
+        \\@property --kept { syntax: "<color>"; inherits: true; initial-value: #00f }
+        \\.ring { --tw-ring: 0 0 0 4px #f00; box-shadow: var(--tw-ring), var(--tw-shadow) }
+        \\.line { border-bottom: 4px; border-bottom-style: var(--tw-border-style); border-bottom-color: #f00; height: 10px }
+        \\.kept { background: var(--kept) }</style>
+        \\<div class=ring style='position:absolute;left:20px;top:20px;width:40px;height:40px'><div class=ring style='--tw-ring:0 0 #0000;width:20px;height:20px'></div></div>
+        \\<div class=ring style='position:absolute;left:100px;top:20px;width:40px;height:40px'><div id=child style='width:20px;height:20px;box-shadow:var(--tw-ring)'></div></div>
+        \\<div class=line style='position:absolute;left:200px;top:0;width:40px'></div>
+        \\<div class=kept style='position:absolute;left:300px;top:0;width:40px;height:40px'></div>
+    );
+    try expectAt(&r, 18, 40, isRed, "the ring");
+    try expectAt(&r, 40, 50, isWhite, "the box");
+    // Not inherited: what the parent set doesn't reach its child.
+    try expectAt(&r, 122, 40, isWhite, "no ring on the child");
+    try expectAt(&r, 220, 12, isRed, "a border whose style is registered");
+    try expectAt(&r, 320, 20, isBlue, "a registered color with no declaration");
+}
+
 test "corners of their own: a box round on one side only" {
     var r: Run = undefined;
     try r.start();
@@ -334,6 +389,34 @@ test "a blurred fill is soft-edged and backdrop-filter blurs what's behind" {
     try page(&r, "<div style='position:absolute;left:0;top:0;width:100px;height:200px;background:#000'></div><div style='position:absolute;left:50px;top:50px;width:100px;height:100px;backdrop-filter:blur(10px)'></div>");
     const across = try pixel(&r, 100, 100);
     try testing.expect(across[1] > 60 and across[1] < 200);
+}
+
+test "gradient text: layers composite, and sizes and positions count" {
+    var r: Run = undefined;
+    try r.start();
+    defer r.stop();
+    // Apple's: a see-through sheen above a color, the sheen's tile moved off the text.
+    try page(&r, "<div style='position:absolute;left:0;top:0;width:300px;font-size:40px;background-image:linear-gradient(90deg,#f000,#f000),linear-gradient(90deg,#00f,#00f);-webkit-background-clip:text;background-clip:text;color:transparent'>MMMMMMMMMMMM</div>");
+    var blue: u32 = 0;
+    var y: f32 = 0;
+    while (y < 50) : (y += 2) {
+        var x: f32 = 0;
+        while (x < 200) : (x += 2) {
+            if (isBlue(try pixel(&r, x, y))) blue += 1;
+        }
+    }
+    try testing.expect(blue > 20);
+    // What's inside a span takes it from the block around it.
+    try page(&r, "<div style='position:absolute;left:0;top:0;width:300px;font-size:40px;background:linear-gradient(#f00,#f00);-webkit-background-clip:text;color:transparent'><span>MMMM</span></div>");
+    var red: u32 = 0;
+    y = 0;
+    while (y < 50) : (y += 2) {
+        var x: f32 = 0;
+        while (x < 200) : (x += 2) {
+            if (isRed(try pixel(&r, x, y))) red += 1;
+        }
+    }
+    try testing.expect(red > 20);
 }
 
 test "gradient text: each glyph takes the gradient's color where it is" {

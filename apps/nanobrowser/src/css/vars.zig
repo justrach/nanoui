@@ -21,6 +21,9 @@ pub const Entry = struct {
 pub const Scope = struct {
     parent: ?*const Scope = null,
     entries: []const Entry = &.{},
+    /// Those of `entries` declared here for properties that don't inherit
+    /// (`@property`): what this scope's children have to put back.
+    local: []const Entry = &.{},
 
     /// Found-and-null means invalid; not found is null too, for the caller
     /// these are the same.
@@ -35,6 +38,9 @@ pub const Scope = struct {
     }
 };
 
+/// `@property`'s rules, by name.
+pub const Registered = std.StringHashMapUnmanaged(sheet.PropertyRule);
+
 const State = enum(u8) { unvisited, visiting, done };
 
 const Pending = struct {
@@ -42,6 +48,8 @@ const Pending = struct {
     name: []const u8,
     raw: ?[]const Token,
     has_var: bool,
+    /// Declared here, rather than put back to what it starts as.
+    declared: bool = true,
     state: State = .unvisited,
     value: ?[]const Token = null,
 };
@@ -82,22 +90,31 @@ pub const Builder = struct {
             if (p.hash == d.hash and std.mem.eql(u8, p.name, d.name)) {
                 p.raw = raw;
                 p.has_var = has_var;
+                p.declared = true;
                 return;
             }
         }
         try b.pending.append(gpa, .{ .hash = d.hash, .name = d.name, .raw = raw, .has_var = has_var });
     }
 
+    /// A property that doesn't inherit, the parent's not coming down here.
+    pub fn putBack(b: *Builder, gpa: Allocator, e: Entry, initial: ?[]const Token) Allocator.Error!void {
+        try b.pending.append(gpa, .{ .hash = e.hash, .name = e.name, .raw = initial, .has_var = false, .declared = false });
+    }
+
     /// The finished scope, in `arena`; `parent` itself when nothing was declared.
-    pub fn finish(b: *Builder, arena: Allocator, parent: ?*const Scope) Allocator.Error!?*const Scope {
+    /// `registered`: what `@property` said.
+    pub fn finish(b: *Builder, arena: Allocator, parent: ?*const Scope, registered: *const Registered) Allocator.Error!?*const Scope {
         if (b.pending.items.len == 0) return parent;
         for (b.pending.items) |*p| _ = try b.resolve(arena, p, parent);
         const entries = try arena.alloc(Entry, b.pending.items.len);
+        var local: std.ArrayList(Entry) = .empty;
         for (b.pending.items, entries) |*p, *e| {
             e.* = .{ .hash = p.hash, .name = p.name, .value = p.value };
+            if (p.declared) if (registered.get(p.name)) |r| if (!r.inherits) try local.append(arena, e.*);
         }
         const s = try arena.create(Scope);
-        s.* = .{ .parent = parent, .entries = entries };
+        s.* = .{ .parent = parent, .entries = entries, .local = local.items };
         return s;
     }
 

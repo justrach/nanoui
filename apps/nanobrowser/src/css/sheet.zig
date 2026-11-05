@@ -96,6 +96,14 @@ pub const Keyframes = struct {
     cond: ?*const Cond = null,
 };
 
+/// `@property`: what a custom property starts as, and whether it inherits.
+pub const PropertyRule = struct {
+    name: []const u8,
+    /// Null: it starts invalid (`syntax: "*"` with no `initial-value`).
+    initial: ?[]const Token = null,
+    inherits: bool = true,
+};
+
 pub const Sheet = struct {
     rules: []const Rule = &.{},
     /// The `@import`s, in order: the host fetches them and passes the results
@@ -104,6 +112,7 @@ pub const Sheet = struct {
     font_faces: []const FontFace = &.{},
     /// `@keyframes`, by name; the last of a name wins (`Engine.keyframes`).
     keyframes: []const Keyframes = &.{},
+    properties: []const PropertyRule = &.{},
     /// Layer names in the order first mentioned.
     layers: []const []const u8 = &.{},
     /// Every condition, for telling when a viewport change matters.

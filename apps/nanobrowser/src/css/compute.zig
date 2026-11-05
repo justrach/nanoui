@@ -150,10 +150,13 @@ fn customProperties(e: *Engine, list: []const Entry, inline_d: ?*const Declarati
     if (inline_d) |d| if (d.has_custom) {
         any = true;
     };
-    if (!any) return parent;
+    // What the parent declared and doesn't inherit stops here.
+    const back = if (parent) |p| p.local else &.{};
+    if (!any and back.len == 0) return parent;
     const gpa = e.gpa;
     const b = &e.custom_builder;
     b.reset();
+    for (back) |x| try b.putBack(gpa, x, if (e.registered.get(x.name)) |r| r.initial else null);
     // Normal declarations, then `!important` ones over them.
     for (list) |m| if (m.decls.has_custom) {
         for (m.decls.items) |*d| if (d.prop == .custom and !d.important) try b.add(gpa, d, parent);
@@ -167,7 +170,7 @@ fn customProperties(e: *Engine, list: []const Entry, inline_d: ?*const Declarati
     if (inline_d) |id| for (id.items) |*d| {
         if (d.prop == .custom and d.important) try b.add(gpa, d, parent);
     };
-    return b.finish(e.genArena(), parent);
+    return b.finish(e.genArena(), parent, &e.registered);
 }
 
 /// One computation over one list of rules. The UA-only form, for `revert`, is
@@ -367,19 +370,6 @@ const Run = struct {
         if (is_root or (r.node.isTag("body") and r.parent.overflow_x == .visible and r.parent.overflow_y == .visible)) {
             s.overflow_x = .visible;
             s.overflow_y = .visible;
-        }
-        // Glyphs filled with a background: their fill, when it shows through,
-        // follows the gradient (`display.zig`); a picture's is one color.
-        if (s.background_clip == .text) {
-            if (s.background_gradient) |g| {
-                s.text_gradient = g;
-            } else if (s.background_image.len > 0 and (s.text_fill orelse s.color).a == 0) {
-                s.text_fill = if (s.background.a > 0) s.background else style.Color{ .r = 0.45, .g = 0.45, .b = 0.45 };
-            }
-            s.background = .transparent;
-            s.background_image = "";
-            s.background_gradient = null;
-            s.background_more = &.{};
         }
         // The canvas of a dark page.
         if (is_root and s.dark_scheme and s.background.a == 0 and s.background_image.len == 0) {

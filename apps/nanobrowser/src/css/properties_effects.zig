@@ -34,6 +34,10 @@ pub fn apply(ctx: *Ctx, p: Prop, t: []const Token) ?bool {
             s.outline_offset = values.pxAt(ctx, &c) orelse return false;
             return c.atEnd();
         },
+        .isolation, .mix_blend_mode, .will_change, .contain => {
+            s.makes_context = makesContext(p, t);
+            return true;
+        },
         .appearance => {
             const w = values.ident(t) orelse return false;
             s.appearance_none = std.ascii.eqlIgnoreCase(w, "none");
@@ -53,6 +57,22 @@ pub fn apply(ctx: *Ctx, p: Prop, t: []const Token) ?bool {
         },
         else => null,
     };
+}
+
+/// Blending itself is not done (what's under shows as if `normal`); the
+/// stacking context it makes is, since what paints over what depends on it.
+fn makesContext(p: Prop, t: []const Token) bool {
+    var c = Cur.of(t);
+    while (c.next()) |k| {
+        if (k.kind != .ident) continue;
+        switch (p) {
+            .isolation => if (k.isIdent("isolate")) return true,
+            .mix_blend_mode => if (!k.isIdent("normal")) return true,
+            .will_change => if (k.isIdent("opacity") or k.isIdent("transform") or k.isIdent("filter") or k.isIdent("clip-path") or k.isIdent("translate") or k.isIdent("rotate") or k.isIdent("scale")) return true,
+            else => if (k.isIdent("paint") or k.isIdent("layout") or k.isIdent("strict") or k.isIdent("content")) return true,
+        }
+    }
+    return false;
 }
 
 /// One shadow of `box-shadow` or `text-shadow`.

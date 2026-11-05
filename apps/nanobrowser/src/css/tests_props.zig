@@ -521,8 +521,8 @@ test "background layers, clips and gradient shapes" {
     try near(k.s("x").background_gradient.?.angle, 90);
     const text = try with("background: linear-gradient(red, blue); -webkit-background-clip: text; color: transparent");
     defer text.done();
-    try expect(text.s("x").background_gradient == null);
-    try expect(text.s("x").text_gradient != null);
+    try expect(text.s("x").background_gradient != null);
+    try expect(text.s("x").background_clip == .text);
     const many = try with("background-image: url(a.png), url(b.png), url(c.png)");
     defer many.done();
     try eqc(@as(usize, 2), many.s("x").background_more.len);

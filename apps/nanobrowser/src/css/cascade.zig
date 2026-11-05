@@ -82,6 +82,9 @@ pub const Engine = struct {
     anim: animate.Animator,
     now: f64 = 0,
     keyframes: std.StringHashMapUnmanaged(*const sheet_mod.Keyframes) = .empty,
+    /// `@property`'s, and the scope above the root holding what each starts as.
+    registered: vars.Registered = .empty,
+    registered_scope: ?*const vars.Scope = null,
 
     pub fn init(gpa: Allocator, doc: *dom.Document) Engine {
         return .{
@@ -104,6 +107,7 @@ pub const Engine = struct {
         e.pseudo_placeholder.deinit(e.gpa);
         e.anim.deinit();
         e.keyframes.deinit(e.gpa);
+        e.registered.deinit(e.gpa);
         e.custom_builder.deinit(e.gpa);
         e.gpa.free(e.sheets);
     }
@@ -169,6 +173,19 @@ pub const Engine = struct {
         if (e.doc.quirks) try ix.addSheet(e.ua_quirks.?, e.viewport, true, &ranks, &order);
         for (e.sheets) |s| try ix.addSheet(s, e.viewport, false, &ranks, &order);
         e.keyframes.clearRetainingCapacity();
+        e.registered.clearRetainingCapacity();
+        var starts: std.ArrayList(vars.Entry) = .empty;
+        for (e.sheets) |s| for (s.properties) |r| {
+            if (e.registered.contains(r.name)) continue;
+            try e.registered.put(e.gpa, r.name, r);
+            try starts.append(a, .{ .hash = std.hash.Fnv1a_32.hash(r.name), .name = r.name, .value = r.initial });
+        };
+        e.registered_scope = null;
+        if (starts.items.len > 0) {
+            const root_scope = try a.create(vars.Scope);
+            root_scope.* = .{ .entries = starts.items };
+            e.registered_scope = root_scope;
+        }
         for (e.sheets) |s| {
             if (!s.active(e.viewport)) continue;
             for (s.keyframes) |*k| {
@@ -299,7 +316,7 @@ pub const Engine = struct {
             return n.nextInTree(root);
         }
         var parent_style: *const Style = &e.root_parent;
-        var parent_scope: ?*const vars.Scope = null;
+        var parent_scope: ?*const vars.Scope = e.registered_scope;
         if (parent_is_element) {
             const p = parent.?;
             parent_style = e.current(p) orelse {
@@ -311,6 +328,7 @@ pub const Engine = struct {
                 e.clearSubtree(n, change, old != null);
                 return n.nextSkippingChildren(root);
             }
+            parent_scope = null;
             if (p.css_vars) |raw| parent_scope = @ptrCast(@alignCast(raw));
         }
         var fresh: Style = undefined;

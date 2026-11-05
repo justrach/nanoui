@@ -22,8 +22,8 @@ const paint_only = std.StaticStringMap(void).initComptime(.{
     .{"translate_x"},     .{"translate_y"},          .{"rotate"},            .{"scale_x"},
     .{"scale_y"},         .{"transform_origin_x"},   .{"transform_origin_y"},.{"clip_rect"},
     .{"clip_path"},       .{"filters"},              .{"backdrop_blur"},     .{"appearance_none"},
-    .{"animations"},      .{"transitions"},          .{"text_fill"},         .{"text_gradient"},
-    .{"text_shadows"},    .{"accent"},               .{"placeholder"},
+    .{"animations"},      .{"transitions"},          .{"text_fill"},         
+    .{"text_shadows"},    .{"accent"},               .{"placeholder"},       .{"makes_context"},
 });
 
 fn borderDiff(a: style.Border, b: style.Border) Change {

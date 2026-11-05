@@ -49,7 +49,8 @@ pub fn parse(ctx: *Ctx, name: []const u8, args: []const Token) ?style.Gradient {
     g.repeating = std.ascii.findIgnoreCase(name, "repeating") != null;
     if (is_linear) {
         if (values.angleAt(&c)) |a| {
-            g.angle = a;
+            // The prefixed syntax counts from the right, against the clock.
+            g.angle = if (legacy) 90 - a else a;
             _ = c.takeComma();
         } else if (c.takeIdent("to")) {
             g.angle = sideAngle(&c, false, &g) orelse return null;

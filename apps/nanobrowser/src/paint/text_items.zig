@@ -43,12 +43,9 @@ fn text(b: *Builder, x: *const Box, run: *const box.TextRun, s: []const u8, tx: 
     const top = baseline - metrics.ascent - metrics.gap / 2;
     const rect: Rect = .{ .x = tx, .y = top, .w = run.w, .h = metrics.ascent + metrics.descent + metrics.gap };
     const fill = st.text_fill orelse st.color;
-    var gradient: ?*const Kind.TextGradient = null;
-    if (st.text_gradient) |g| if (fill.a < 0.01) {
-        const made = try b.arena.create(Kind.TextGradient);
-        made.* = .{ .g = g, .box_x = x.x + at.tx, .box_w = x.w, .box_h = x.h };
-        gradient = made;
-    };
+    // What shows through see-through glyphs.
+    const gradient = if (fill.a < 0.01) at.text_bg else null;
+    _ = x;
     // The shadows under it, the first on top; a blurred one as faint copies around.
     var i = st.text_shadows.len;
     while (i > 0) {

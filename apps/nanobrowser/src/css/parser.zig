@@ -38,6 +38,7 @@ const P = struct {
     imports: std.ArrayList(sheet.Import) = .empty,
     font_faces: std.ArrayList(sheet.FontFace) = .empty,
     keyframes: std.ArrayList(sheet.Keyframes) = .empty,
+    properties: std.ArrayList(sheet.PropertyRule) = .empty,
     layers: std.ArrayList([]const u8) = .empty,
     conds: std.ArrayList(*const Cond) = .empty,
     anon_layers: u32 = 0,
@@ -271,7 +272,18 @@ const P = struct {
             if (pre.len == 0) return p.skipBlock();
             return keyframes_rule.parse(p, pre[0].text, scope.cond);
         }
-        // @page, @property, @counter-style, @font-feature-values, the unknown.
+        if (is(name, "property")) {
+            if (pre.len == 0) return p.skipBlock();
+            const decls = try p.declarationBlock();
+            var rule: sheet.PropertyRule = .{ .name = pre[0].text };
+            for (decls.items) |d| {
+                if (is(d.name, "initial-value")) rule.initial = d.value;
+                if (is(d.name, "inherits") and d.value.len > 0) rule.inherits = !d.value[0].isIdent("false");
+            }
+            try p.properties.append(p.arena, rule);
+            return;
+        }
+        // @page, @counter-style, @font-feature-values, the unknown.
         return p.skipBlock();
     }
 
@@ -529,6 +541,7 @@ pub fn parseSheet(arena: Allocator, css_text: []const u8, base_url: []const u8) 
         .imports = p.imports.items,
         .font_faces = p.font_faces.items,
         .keyframes = p.keyframes.items,
+        .properties = p.properties.items,
         .layers = p.layers.items,
         .conds = p.conds.items,
         .base_url = p.base,

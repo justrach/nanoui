@@ -291,6 +291,9 @@ pub const Style = struct {
     filters: []const fx.Filter = &.{},
     /// `backdrop-filter: blur()`'s radius, pixels; 0 for none.
     backdrop_blur: f32 = 0,
+    /// `isolation: isolate`, a blend mode, `will-change` or `contain` that
+    /// makes it a stacking context, whatever else it is.
+    makes_context: bool = false,
     /// `appearance: none`: the author's CSS draws the control.
     appearance_none: bool = false,
     /// What `animation-*` and `transition-*` wrote, and what they come to
@@ -304,8 +307,6 @@ pub const Style = struct {
     color: Color = .{},
     /// `-webkit-text-fill-color`: what glyphs fill with, over `color`.
     text_fill: ?Color = null,
-    /// `background-clip: text`'s gradient, for glyphs with a see-through fill.
-    text_gradient: ?Gradient = null,
     /// `text-shadow`, the topmost first.
     text_shadows: []const Shadow = &.{},
     /// `accent-color`: a control's checked part.

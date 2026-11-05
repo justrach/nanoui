@@ -396,7 +396,11 @@ pub const Animator = struct {
     /// them. Says what the page has to do about it.
     pub fn tick(a: *Animator, e: *Engine, now: f64) Schedule {
         var out_plan: Schedule = .{};
-        if (a.states.count() == 0) return out_plan;
+        if (a.states.count() == 0) {
+            // Nothing runs: nor is anything told of it can still be read.
+            if (a.events.items.len == 0) _ = a.kept.reset(.retain_capacity);
+            return out_plan;
+        }
         a.tick_at +%= 1;
         _ = a.ticks[a.tick_at].reset(.retain_capacity);
         var gone: std.ArrayList(Key) = .empty;
@@ -412,9 +416,10 @@ pub const Animator = struct {
             var out = s.base;
             a.overlay(s, key, &out, now, &out_plan);
             const change = diff.compare(slot, &out);
+            const inherited = change != .none and inheritedDiffers(slot, &out);
+            // Always: what it holds was blended in an arena that is going away.
+            @constCast(slot).* = out;
             if (change != .none) {
-                const inherited = inheritedDiffers(slot, &out);
-                @constCast(slot).* = out;
                 if (change == .layout) out_plan.layout = true else out_plan.paint = true;
                 if (inherited and key.pseudo == .none and hasElementChild(key.node)) e.doc.markStyle(key.node);
             }

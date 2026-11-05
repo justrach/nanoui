@@ -7,6 +7,7 @@ const box = @import("../layout/box.zig");
 const display = @import("display.zig");
 const corners = @import("corners.zig");
 const paint_gradient = @import("gradient.zig");
+const backgrounds = @import("backgrounds.zig");
 const Box = box.Box;
 const Rect = box.Rect;
 const Builder = display.Builder;
@@ -87,7 +88,7 @@ fn paintRect(b: *Builder, x: *const Box, r: Rect, at: At, node: ?*dom.Node, list
         return;
     }
     const layers = st.background_more.len + 1;
-    if (st.background.a > 0) {
+    if (st.background.a > 0 and layerClip(st, layers - 1) != .text) {
         // The color reaches as far as the last layer's clip says.
         const area = clipArea(x, r, c, layerClip(st, layers - 1));
         if (polygonOf(b, st, r) catch null) |pts| {
@@ -182,6 +183,8 @@ fn clipArea(x: *const Box, r: Rect, c: Corners, clip: css.BackgroundClip) Area {
 fn bgLayer(b: *Builder, x: *const Box, r: Rect, c: Corners, url: []const u8, gradient_in: ?css.Gradient, index: usize, at: At, node: ?*dom.Node, list: *List) !void {
     if (url.len == 0 and gradient_in == null) return;
     const st = x.style;
+    // Cut to the text: its glyphs show it (`textBackground`).
+    if (layerClip(st, index) == .text) return;
     const area = clipArea(x, r, c, layerClip(st, index));
     const round = area.c.uniform() orelse area.c.largest();
     const mask = area.c.mask();
@@ -204,6 +207,36 @@ fn bgLayer(b: *Builder, x: *const Box, r: Rect, c: Corners, url: []const u8, gra
         const layer = try layerSpec(b, x, area.r, r, index);
         try b.add(list, item(.{ .background = .{ .url = url, .layer = layer, .radius = round, .corners = mask } }, area.r, at, node));
     }
+}
+
+/// A box's background layers cut to its text, as its text can show them: its
+/// gradients across one line. A picture has no color to give: what shows is the
+/// box's own color, or a gray so that the text is there at all.
+pub fn textBackground(b: *Builder, x: *const Box, at: At) !?*const Kind.TextBackground {
+    const st = x.style;
+    if (st.background_more.len == 0 and st.background_clip != .text) return null;
+    var layers: std.ArrayList(Kind.TextLayer) = .empty;
+    var any_picture = false;
+    const count = st.background_more.len + 1;
+    for (0..count) |i| {
+        if (layerClip(st, i) != .text) continue;
+        const g = if (i == 0) st.background_gradient else st.background_more[i - 1].gradient;
+        const url = if (i == 0) st.background_image else st.background_more[i - 1].url;
+        if (url.len > 0) any_picture = true;
+        const grad = g orelse continue;
+        const spec = try layerSpec(b, x, x.borderRect(), x.borderRect(), i);
+        const tile = backgrounds.tileSize(spec.size, null, spec.w, spec.h);
+        if (tile.w <= 0 or tile.h <= 0) continue;
+        const x0 = spec.dx + (spec.w - tile.w) * spec.pos.x_pct / 100 + spec.pos.x_px;
+        const repeats = spec.repeat == .repeat or spec.repeat == .repeat_x;
+        try layers.append(b.arena, .{ .g = grad, .x0 = x0, .w = tile.w, .h = tile.h, .repeats = repeats });
+    }
+    if (layers.items.len == 0 and !any_picture) return null;
+    const out = try b.arena.create(Kind.TextBackground);
+    var color = st.background;
+    if (color.a <= 0 and layers.items.len == 0) color = .{ .r = 0.45, .g = 0.45, .b = 0.45 };
+    out.* = .{ .layers = layers.items, .color = color, .box_x = x.x + at.tx };
+    return out;
 }
 
 /// Whether layer `i` has a size that may not cover its box.

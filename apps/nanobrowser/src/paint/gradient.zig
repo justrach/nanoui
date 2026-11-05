@@ -250,6 +250,28 @@ pub const Line = struct {
     }
 };
 
+/// A gradient to read colors from, one point at a time.
+pub const Sampler = struct {
+    line: Line,
+    stops: []const css.GradientStop,
+
+    pub fn init(a: std.mem.Allocator, g: css.Gradient, w: f32, h: f32) !Sampler {
+        const line = Line.of(g, w, h);
+        return .{ .line = line, .stops = try placed(a, g, line.length) };
+    }
+
+    /// Premultiplied, at a point of its box.
+    pub fn at(s: *const Sampler, x: f32, y: f32) [4]f32 {
+        var t = s.line.at(x, y);
+        if (s.line.g.repeating) {
+            const first = s.stops[0].at;
+            const period = s.stops[s.stops.len - 1].at - first;
+            if (period > 0) t = first + @mod(t - first, period);
+        }
+        return colorAt(s.stops, t);
+    }
+};
+
 fn render(gpa: std.mem.Allocator, g: css.Gradient, w: f32, h: f32, nx: u32, ny: u32, pw: u32, ph: u32) ![]u8 {
     const px = try gpa.alloc(u8, @as(usize, pw) * ph * 4);
     defer gpa.free(px);

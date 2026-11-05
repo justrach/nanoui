@@ -118,6 +118,7 @@ pub fn copy(p: Prop, d: *Style, s: *const Style) void {
         .text_fill_color => d.text_fill = s.text_fill,
         .accent_color => d.accent = s.accent,
         .appearance => d.appearance_none = s.appearance_none,
+        .isolation, .mix_blend_mode, .will_change, .contain => d.makes_context = s.makes_context,
         .clip => d.clip_rect = s.clip_rect,
         .clip_path => d.clip_path = s.clip_path,
         .filter => d.filters = s.filters,
@@ -206,7 +207,7 @@ pub fn inherit(p: *const Style) Style {
         "list_inside",     "rtl",              "inherited_visibility", "border_collapse",
         "border_spacing",  "border_spacing_y", "word_break_all",       "overflow_wrap_anywhere",
         "caption_bottom",  "tab_size",         "dark_scheme",          "text_fill",
-        "text_gradient",   "text_shadows",     "accent",
+        "text_shadows",    "accent",
     });
     return s;
 }

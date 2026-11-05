@@ -132,10 +132,13 @@ pub const Kind = union(enum) {
         color: css.Color,
         spacing: f32 = 0,
         baseline: f32,
-        /// Its glyphs fill with this across its box: `background-clip: text`.
-        gradient: ?*const TextGradient = null,
+        /// Its glyphs fill with these: `background-clip: text`.
+        gradient: ?*const TextBackground = null,
     };
-    pub const TextGradient = struct { g: css.Gradient, box_x: f32, box_w: f32, box_h: f32 };
+    /// One layer's tile, and where tiles start from the box's left.
+    pub const TextLayer = struct { g: css.Gradient, x0: f32, w: f32, h: f32, repeats: bool };
+    /// The box whose background shows through its text: its layers, topmost first.
+    pub const TextBackground = struct { layers: []const TextLayer, color: css.Color, box_x: f32 };
     pub const Image = struct {
         node: *dom.Node,
         fit: css.ObjectFit,
@@ -325,18 +328,24 @@ pub const At = struct {
     xform: u32 = 0,
     /// A transform around it: `position: fixed` is held by that, not the window.
     in_transform: bool = false,
+    /// A box around it whose background is cut to its text.
+    text_bg: ?*const Kind.TextBackground = null,
 };
 
-const Entry = struct { z: i32, items: []const Item };
+const Entry = struct { z: i32, items: []const Item = &.{} };
+const Entries = std.ArrayList(Entry);
 
-/// One stacking context's lists, each in tree order.
+/// What paints as one unit, in tree order within each list. `stacked` is its
+/// stacking context's: a box that only paints as if it had one (positioned with
+/// no z-index, a float, an inline-block) leaves what is positioned in it to the
+/// real one around it, as CSS's Appendix E says.
 const Layer = struct {
     /// How many of `blocks` are the context's own background.
     own: usize = 0,
     blocks: std.ArrayList(Item) = .empty,
     floats: std.ArrayList(Item) = .empty,
     inlines: std.ArrayList(Item) = .empty,
-    stacked: std.ArrayList(Entry) = .empty,
+    stacked: *Entries,
 };
 
 /// At most this many opacity groups a list: each costs a pass of the renderer.
@@ -357,24 +366,36 @@ pub const Builder = struct {
         try list.append(b.arena, it);
     }
 
-    /// Everything of a box that paints as one unit, as one list.
+    /// A stacking context: a box and all that's in it, as one list.
     fn atomic(b: *Builder, x: *const Box, at: At) Allocator.Error![]const Item {
-        var layer: Layer = .{};
+        var entries: Entries = .empty;
+        var layer: Layer = .{ .stacked = &entries };
         try boxes.self(b, x, at, &layer.blocks);
         layer.own = layer.blocks.items.len;
         const inner = try b.inside(x, at);
         try b.children(x, inner, &layer);
-        return b.flatten(&layer);
+        return b.flatten(&layer, entries.items);
     }
 
-    fn flatten(b: *Builder, layer: *Layer) Allocator.Error![]const Item {
-        std.mem.sort(Entry, layer.stacked.items, {}, struct {
+    /// A box that paints as one unit in its context, what's stacked in it going
+    /// to that context instead.
+    fn unit(b: *Builder, x: *const Box, at: At, entries: *Entries) Allocator.Error![]const Item {
+        var layer: Layer = .{ .stacked = entries };
+        try boxes.self(b, x, at, &layer.blocks);
+        layer.own = layer.blocks.items.len;
+        const inner = try b.inside(x, at);
+        try b.children(x, inner, &layer);
+        return b.flatten(&layer, &.{});
+    }
+
+    fn flatten(b: *Builder, layer: *Layer, entries: []Entry) Allocator.Error![]const Item {
+        std.mem.sort(Entry, entries, {}, struct {
             fn less(_: void, p: Entry, q: Entry) bool {
                 return p.z < q.z;
             }
         }.less);
         var n = layer.blocks.items.len + layer.floats.items.len + layer.inlines.items.len;
-        for (layer.stacked.items) |e| n += e.items.len;
+        for (entries) |e| n += e.items.len;
         const out = try b.arena.alloc(Item, n);
         var at: usize = 0;
         const put = struct {
@@ -387,11 +408,11 @@ pub const Builder = struct {
         // first of `blocks`, which is that background when it has one.
         const own = @min(layer.blocks.items.len, layer.own);
         put(out, &at, layer.blocks.items[0..own]);
-        for (layer.stacked.items) |e| if (e.z < 0) put(out, &at, e.items);
+        for (entries) |e| if (e.z < 0) put(out, &at, e.items);
         put(out, &at, layer.blocks.items[own..]);
         put(out, &at, layer.floats.items);
         put(out, &at, layer.inlines.items);
-        for (layer.stacked.items) |e| if (e.z >= 0) put(out, &at, e.items);
+        for (entries) |e| if (e.z >= 0) put(out, &at, e.items);
         return out;
     }
 
@@ -399,6 +420,7 @@ pub const Builder = struct {
     fn inside(b: *Builder, x: *const Box, at_in: At) !At {
         var at = at_in;
         const st = x.style;
+        if (try boxes.textBackground(b, x, at)) |bg| at.text_bg = bg;
         const clips_it = st.clips() and x.kind != .inline_box;
         if (clips_it) {
             const pad = x.paddingRect();
@@ -458,20 +480,29 @@ pub const Builder = struct {
         if (try boxes.shapeClip(b, x, &at)) at.abs_clip = at.clip;
 
         const in_flex = if (x.parent) |p| p.style.isFlex() or p.style.isGrid() else false;
-        const stacks = st.position != .static or st.opacity < 1 or st.hasTransform() or st.filters.len > 0 or st.clip_path != null or st.backdrop_blur > 0 or (in_flex and st.z_index != null);
-        if (stacks) {
-            const z = st.z_index orelse 0;
+        const zed = st.z_index != null and (st.position != .static or in_flex);
+        const context = zed or st.position == .fixed or st.position == .sticky or st.opacity < 1 or st.hasTransform() or st.filters.len > 0 or st.clip_path != null or st.backdrop_blur > 0 or st.makes_context;
+        if (context) {
+            const z = if (zed) st.z_index.? else 0;
             try layer.stacked.append(b.arena, .{ .z = z, .items = try b.stacked(x, at) });
             return;
         }
+        if (st.position != .static) {
+            // In its place among them; what's stacked inside comes after it.
+            const place = layer.stacked.items.len;
+            try layer.stacked.append(b.arena, .{ .z = 0 });
+            const items = try b.unit(x, at, layer.stacked);
+            layer.stacked.items[place].items = items;
+            return;
+        }
         if (st.float != .none) {
-            try layer.floats.appendSlice(b.arena, try b.atomic(x, at));
+            try layer.floats.appendSlice(b.arena, try b.unit(x, at, layer.stacked));
             return;
         }
         // Inline-level things that hold their own flow paint as one, with
         // the inline content around them.
         if (st.isInlineLevel() and st.display != .inline_ or x.kind == .replaced or x.kind == .control) {
-            try layer.inlines.appendSlice(b.arena, try b.atomic(x, at));
+            try layer.inlines.appendSlice(b.arena, try b.unit(x, at, layer.stacked));
             return;
         }
         try boxes.self(b, x, at, if (x.kind == .inline_box) &layer.inlines else &layer.blocks);

@@ -157,25 +157,40 @@ fn shadowReach(s: css.Shadow) f32 {
     return s.blur * 1.5 + @max(s.spread, 0) + @max(@abs(s.x), @abs(s.y));
 }
 
-/// `background-clip: text`: each character the gradient's color where it is.
-/// Nanoui can't fill glyphs with a picture, but it can color them one by one.
+/// `background-clip: text`: each character the color the layers make where it
+/// is. Nanoui can't fill glyphs with a picture, but it can color them one by one:
+/// within a glyph the color is flat. A long text gets one color a stretch.
 fn gradientSpans(c: *ui.Context, t: display.Kind.Text, doc_x: f32, s: ui.TextStyle) []const ui.Span {
-    const tg = t.gradient orelse return &.{};
-    if (tg.g.stops.len == 0) return &.{};
-    const line = paint_gradient.Line.of(tg.g, tg.box_w, tg.box_h);
+    const bg = t.gradient orelse return &.{};
+    const a = c.alloc();
+    const samplers = a.alloc(paint_gradient.Sampler, bg.layers.len) catch return &.{};
+    for (bg.layers, samplers) |l, *o| o.* = paint_gradient.Sampler.init(a, l.g, l.w, l.h) catch return &.{};
+    const stretch: usize = if (t.str.len > 256) 16 else 1;
     var spans: std.ArrayList(ui.Span) = .empty;
     var it = std.unicode.Utf8View.initUnchecked(t.str).iterator();
     var start: usize = 0;
-    while (it.nextCodepointSlice()) |ch| {
-        const end = start + ch.len;
-        const before = c.text.width(t.str[0..start], s);
+    var before: f32 = 0;
+    while (start < t.str.len) {
+        var end = start;
+        for (0..stretch) |_| end += (it.nextCodepointSlice() orelse break).len;
+        if (end == start) break;
         const after = c.text.width(t.str[0..end], s);
-        const px = doc_x - tg.box_x + (before + after) / 2;
-        const k = paint_gradient.colorAt(tg.g.stops, line.at(px, tg.box_h / 2));
-        const a = k[3];
-        const ink: ui.Color = if (a > 0) .{ .r = k[0] / a, .g = k[1] / a, .b = k[2] / a, .a = a } else .{ .a = 0 };
-        spans.append(c.alloc(), .{ .start = @intCast(start), .end = @intCast(end), .color = ink }) catch return &.{};
+        const px = doc_x - bg.box_x + (before + after) / 2;
+        var mix: [4]f32 = .{ bg.color.r * bg.color.a, bg.color.g * bg.color.a, bg.color.b * bg.color.a, bg.color.a };
+        var i = bg.layers.len;
+        while (i > 0) {
+            i -= 1;
+            const l = bg.layers[i];
+            var u = px - l.x0;
+            if (l.repeats) u = @mod(u, l.w);
+            if (u < 0 or u > l.w) continue;
+            const k = samplers[i].at(u, l.h / 2);
+            for (&mix, k) |*m, v| m.* = v + m.* * (1 - k[3]);
+        }
+        const ink: ui.Color = if (mix[3] > 0) .{ .r = mix[0] / mix[3], .g = mix[1] / mix[3], .b = mix[2] / mix[3], .a = mix[3] } else .{ .a = 0 };
+        spans.append(a, .{ .start = @intCast(start), .end = @intCast(end), .color = ink }) catch return &.{};
         start = end;
+        before = after;
     }
     return spans.items;
 }
