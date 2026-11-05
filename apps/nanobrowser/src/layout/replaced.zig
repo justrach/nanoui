@@ -21,7 +21,28 @@ pub fn dimAttr(n: *const dom.Node, name: []const u8) ?Dim {
     return .{ .px = ctx.clean(v), .pct = end < raw.len and raw[end] == '%' };
 }
 
-const Natural = struct { w: ?f32 = null, h: ?f32 = null, ratio: ?f32 = null };
+/// A dimension attribute on an SVG element: a CSS length (`1em`, `2.5pt`, `50%`),
+/// where HTML's would read only the number.
+fn svgDim(n: *const dom.Node, name: []const u8, font_size: f32) ?Dim {
+    const raw = std.mem.trim(u8, n.attr(name) orelse return null, " \t\r\n");
+    var end: usize = 0;
+    while (end < raw.len and (std.ascii.isDigit(raw[end]) or raw[end] == '.')) end += 1;
+    if (end == 0) return null;
+    const v = std.fmt.parseFloat(f32, raw[0..end]) catch return null;
+    const u = raw[end..];
+    const eq = std.ascii.eqlIgnoreCase;
+    if (eq(u, "%")) return .{ .px = v, .pct = true };
+    const k: f32 = if (u.len == 0 or eq(u, "px")) 1 else if (eq(u, "em")) font_size else if (eq(u, "rem")) 16 else if (eq(u, "ex")) font_size / 2 else if (eq(u, "pt")) 4.0 / 3.0 else if (eq(u, "pc")) 16 else if (eq(u, "in")) 96 else if (eq(u, "cm")) 96.0 / 2.54 else if (eq(u, "mm")) 96.0 / 25.4 else return null;
+    return .{ .px = ctx.clean(v * k) };
+}
+
+fn attrDim(b: *const Box, n: *const dom.Node, name: []const u8) ?Dim {
+    return if (n.ns == .svg) svgDim(n, name, b.style.font_size) else dimAttr(n, name);
+}
+
+/// `fills`: it has a shape but no size of its own, so where its width is free it
+/// takes what room there is, and adds none to a box sized by its content.
+const Natural = struct { w: ?f32 = null, h: ?f32 = null, ratio: ?f32 = null, fills: bool = false };
 
 fn viewBoxRatio(n: *const dom.Node) ?f32 {
     const v = n.attr("viewBox") orelse n.attr("viewbox") orelse return null;
@@ -38,11 +59,18 @@ fn viewBoxRatio(n: *const dom.Node) ?f32 {
 fn natural(c: *Ctx, b: *Box) Natural {
     const n = b.node orelse return .{ .w = 300, .h = 150, .ratio = 2 };
     var out: Natural = .{};
-    if (c.m.image(c.m.ctx, n)) |s| if (s.w > 0 and s.h > 0) {
-        out = .{ .w = ctx.clean(s.w), .h = ctx.clean(s.h), .ratio = s.w / s.h };
+    // An inline `<svg>` has only what it says: its markup is drawn at any size.
+    if (n.ns != .svg) if (c.m.image(c.m.ctx, n)) |s| {
+        if (s.w < 0) {
+            out = .{ .ratio = s.h, .fills = true };
+        } else if (s.w > 0 and s.h > 0) {
+            // Its density's pixels to the CSS pixel: `a.png 2x` is half its size.
+            const d = @max(n.image_density, 0.001);
+            out = .{ .w = ctx.clean(s.w / d), .h = ctx.clean(s.h / d), .ratio = s.w / s.h };
+        }
     };
-    const aw = dimAttr(n, "width");
-    const ah = dimAttr(n, "height");
+    const aw = attrDim(b, n, "width");
+    const ah = attrDim(b, n, "height");
     if (aw) |d| if (!d.pct) {
         out.w = d.px;
     };
@@ -58,10 +86,10 @@ fn natural(c: *Ctx, b: *Box) Natural {
         if (out.h != null and out.w == null) out.w = out.h.? * r;
     }
     if (out.w == null and out.h == null and !n.isTag("img")) {
-        out.w = 300;
-        if (out.ratio) |r| {
-            out.h = 300 / r;
+        if (out.ratio != null) {
+            out.fills = true;
         } else {
+            out.w = 300;
             out.h = 150;
             out.ratio = 2;
         }
@@ -71,7 +99,7 @@ fn natural(c: *Ctx, b: *Box) Natural {
 
 fn styleW(c: *Ctx, b: *Box, cw: ?f32) Error!?f32 {
     if (try ctx.specW(c, b, b.style.width, cw, ctx.bpH(b))) |w| return w - ctx.bpH(b);
-    if (b.node) |n| if (dimAttr(n, "width")) |d| if (d.pct) {
+    if (b.node) |n| if (attrDim(b, n, "width")) |d| if (d.pct) {
         if (cw) |r| return r * d.px / 100;
     };
     return null;
@@ -79,7 +107,7 @@ fn styleW(c: *Ctx, b: *Box, cw: ?f32) Error!?f32 {
 
 fn styleH(b: *Box, ch: ?f32) ?f32 {
     if (ctx.specH(b, b.style.height, ch, ctx.bpV(b))) |h| return h - ctx.bpV(b);
-    if (b.node) |n| if (dimAttr(n, "height")) |d| if (d.pct) {
+    if (b.node) |n| if (attrDim(b, n, "height")) |d| if (d.pct) {
         if (ch) |r| return r * d.px / 100;
     };
     return null;
@@ -103,6 +131,11 @@ pub fn size(c: *Ctx, b: *Box, cw: ?f32, ch: ?f32) Error!box.Size {
     } else if (sh) |v| {
         h = v;
         w = if (nat.ratio) |r| v * r else nat.w orelse 0;
+    } else if (nat.fills) {
+        // As a block's width would be, if the room doesn't depend on it.
+        const room = if (cw) |r| @max(0, r - bph - b.margin.horizontal()) else 0;
+        w = room;
+        h = if (nat.ratio) |r| room / r else 0;
     } else {
         w = nat.w orelse 0;
         h = nat.h orelse 0;

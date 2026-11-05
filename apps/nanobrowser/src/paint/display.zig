@@ -71,7 +71,7 @@ pub const Kind = union(enum) {
     pub const Bullet = struct { shape: css.ListStyle, color: css.Color };
     pub const Fill = struct { color: css.Color, radius: f32 = 0, shadow: ?css.Shadow = null };
     pub const Text = struct { str: []const u8, font: box.Font, color: css.Color, spacing: f32 = 0, baseline: f32 };
-    pub const Image = struct { node: *dom.Node, fit: css.ObjectFit, radius: f32 };
+    pub const Image = struct { node: *dom.Node, fit: css.ObjectFit, radius: f32, style: *const css.Style };
     pub const Background = struct { url: []const u8, style: *const css.Style, radius: f32 };
 };
 
@@ -395,7 +395,7 @@ const Builder = struct {
         const content = x.contentRect();
         const cr: Rect = .{ .x = content.x + at.tx, .y = content.y + at.ty, .w = content.w, .h = content.h };
         if (x.kind == .replaced) if (x.node) |n| {
-            try b.add(list, .{ .kind = .{ .image = .{ .node = n, .fit = st.object_fit, .radius = cornerRadius(st, x.w) } }, .rect = cr, .clip = at.clip, .opacity = at.opacity, .node = node });
+            try b.add(list, .{ .kind = .{ .image = .{ .node = n, .fit = st.object_fit, .radius = cornerRadius(st, x.w), .style = st } }, .rect = cr, .clip = at.clip, .opacity = at.opacity, .node = node });
         };
         if (x.kind == .control) try b.add(list, .{ .kind = .{ .control = x }, .rect = .{ .x = x.x + at.tx, .y = x.y + at.ty, .w = x.w, .h = x.h }, .clip = at.clip, .opacity = at.opacity, .node = node });
         if (x.marker) |m| try b.add(list, .{ .kind = .{ .bullet = .{ .shape = st.list_style, .color = st.color } }, .rect = .{ .x = m.x + at.tx, .y = m.y + at.ty, .w = m.w, .h = m.h }, .clip = at.clip, .opacity = at.opacity });

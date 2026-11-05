@@ -53,6 +53,8 @@ pub const Measurer = struct {
     metrics: *const fn (ctx: *anyopaque, font: Font) Metrics,
     /// An element's picture's own size in CSS pixels (`<img>`, `<svg>`,
     /// `<canvas>`, `<video>`); null while unknown (not arrived, or broken).
+    /// A picture's own size; a negative `w`: it has none, and `h` is its shape
+    /// (width over height), as an SVG with only a viewBox.
     image: *const fn (ctx: *anyopaque, node: *dom.Node) ?Size,
 };
 

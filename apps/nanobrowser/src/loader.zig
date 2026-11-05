@@ -16,10 +16,11 @@ const max_pictures = 6;
 /// The most one response may hold; more is treated as failed by what it was for.
 const net = @import("web/net.zig");
 const web = @import("web/web.zig");
+const source_pick = @import("web/source_pick.zig");
 
 const headers = [_]http.Header{
     .{ .name = "User-Agent", .value = page_mod.user_agent },
-    .{ .name = "Accept", .value = "text/html,application/xhtml+xml,image/png,image/jpeg,image/gif,image/svg+xml,text/css,*/*;q=0.8" },
+    .{ .name = "Accept", .value = "text/html,application/xhtml+xml,image/avif,image/webp,image/png,image/jpeg,image/gif,image/svg+xml,text/css,*/*;q=0.8" },
     .{ .name = "Accept-Language", .value = "en" },
 };
 
@@ -189,6 +190,7 @@ pub fn linkFrom(p: *Page, ref: []const u8) ?[]const u8 {
 /// Walks the document for sheets, pictures and the icon not yet asked for.
 pub fn scan(p: *Page) void {
     var changed = false;
+    const repick = pickChanged(p);
     var at = p.doc.node.first_child;
     while (at) |n| : (at = n.nextInTree(p.doc.node)) {
         if (n.kind != .element) continue;
@@ -196,10 +198,9 @@ pub fn scan(p: *Page) void {
             changed = styleElement(p, n) or changed;
         } else if (n.isTag("link")) {
             linkElement(p, n, &changed);
-        } else if (n.isTag("img") or n.isTag("source")) {
-            imageElement(p, n);
-        } else if (n.isTag("svg") and n.ns == .svg and n.image.len == 0) {
-            inlineSvg(p, n);
+        } else if (n.isTag("img")) {
+            if (repick) repickImage(p, n);
+            if (!isLazy(n)) imageElement(p, n);
         }
     }
     if (dropGone(p)) changed = true;
@@ -209,14 +210,6 @@ pub fn scan(p: *Page) void {
         if (resolve(p, "/favicon.ico")) |u| send(p, u, "GET", "", .{ .icon = u });
     }
     pump(p);
-}
-
-/// An inline `<svg>`, as markup that nanoui draws.
-fn inlineSvg(p: *Page, n: *dom.Node) void {
-    const html = @import("html/html.zig");
-    const text = html.serialize(p.arena(), n, true) catch return;
-    n.image = text;
-    n.image_key = std.fmt.allocPrint(p.arena(), "svg:{x}", .{std.hash.Wyhash.hash(0, text)}) catch "svg";
 }
 
 fn styleElement(p: *Page, n: *dom.Node) bool {
@@ -334,35 +327,55 @@ fn askImports(p: *Page, parent: u32, sheet: *css.Sheet) void {
     }
 }
 
-/// The address a picture element wants: `src`, or the best of `srcset`.
-pub fn sourceOf(n: *const dom.Node) ?[]const u8 {
-    if (n.attr("srcset")) |set| if (bestOf(set)) |u| return u;
-    if (n.attr("src")) |s| if (s.len > 0) return s;
-    if (n.attr("data-src")) |s| if (s.len > 0) return s;
-    return null;
+/// The address a picture element wants, and what it says of density.
+pub fn sourceOf(p: *Page, n: *const dom.Node) ?source_pick.Choice {
+    return source_pick.choose(n, envOf(p), p.arena());
 }
 
-/// The candidate nearest twice the page's scale, widths being unknown here: the
-/// `2x`, else the first.
-fn bestOf(set: []const u8) ?[]const u8 {
-    var first: ?[]const u8 = null;
-    var it = std.mem.splitScalar(u8, set, ',');
-    while (it.next()) |raw| {
-        const entry = std.mem.trim(u8, raw, " \t\r\n");
-        if (entry.len == 0) continue;
-        var parts = std.mem.tokenizeAny(u8, entry, " \t");
-        const u = parts.next() orelse continue;
-        if (first == null) first = u;
-        if (parts.next()) |d| if (std.mem.eql(u8, d, "2x")) return u;
+fn envOf(p: *Page) source_pick.Env {
+    var w = p.viewport_w;
+    var h = p.viewport_h;
+    if (w <= 0) {
+        const v = p.host.viewport(p.host.ctx);
+        w = v[0];
+        h = v[1];
     }
-    return first;
+    const scale: f32 = if (p.host.uiContext(p.host.ctx)) |c| c.scale else 1;
+    return .{ .scale = scale, .viewport = .{ .width = w, .height = h, .dark = p.dark } };
+}
+
+/// Whether the screen or the window have changed what `srcset` and `media` say.
+fn pickChanged(p: *Page) bool {
+    const e = envOf(p);
+    const sig = std.hash.Wyhash.hash(0, std.mem.asBytes(&[3]f32{ e.scale, e.viewport.width, e.viewport.height }));
+    if (sig == p.pick_signature) return false;
+    p.pick_signature = sig;
+    return true;
+}
+
+/// A picture already asked for, that the new screen or window would choose
+/// differently: the old one goes, and the new one is asked for.
+fn repickImage(p: *Page, n: *dom.Node) void {
+    if (n.image_key.len == 0 or !source_pick.mayChange(n)) return;
+    const choice = sourceOf(p, n) orelse return;
+    const u = resolve(p, choice.url) orelse return;
+    if (std.mem.eql(u8, u, n.image_key)) return;
+    n.image_key = "";
+    n.image = "";
+    n.image_density = 1;
+}
+
+fn isLazy(n: *const dom.Node) bool {
+    const v = n.attr("loading") orelse return false;
+    return std.ascii.eqlIgnoreCase(v, "lazy");
 }
 
 fn imageElement(p: *Page, n: *dom.Node) void {
     if (n.image_key.len > 0) return;
-    const src = sourceOf(n) orelse return;
-    const u = resolve(p, src) orelse return;
+    const choice = sourceOf(p, n) orelse return;
+    const u = resolve(p, choice.url) orelse return;
     n.image_key = u;
+    n.image_density = choice.density;
     const pic = want(p, u) orelse return;
     if (pic.state == .here) {
         n.image = pic.bytes;
@@ -382,8 +395,8 @@ pub fn askImage(p: *Page, n: *dom.Node) void {
 
 /// `img.complete`: nothing to wait for, or it has come or failed.
 pub fn imageComplete(p: *Page, n: *const dom.Node) bool {
-    if (sourceOf(n) == null) return true;
     if (n.image.len > 0) return true;
+    if (sourceOf(p, n) == null) return true;
     if (n.image_key.len == 0) return false;
     const pic = p.pictures.map.get(n.image_key) orelse return false;
     return pic.state == .here or pic.state == .failed;
@@ -468,10 +481,7 @@ fn iconArrived(p: *Page, key: []const u8, res: http.Response) void {
     p.icon_key = key;
 }
 
-test "srcset" {
-    try std.testing.expectEqualStrings("b.png", bestOf("a.png 1x, b.png 2x, c.png 3x").?);
-    try std.testing.expectEqualStrings("a.png", bestOf("a.png 480w, b.png 800w").?);
-    try std.testing.expect(bestOf("  ") == null);
+test "words in a list" {
     try std.testing.expect(hasWord("shortcut ICON", "icon"));
     try std.testing.expect(!hasWord("stylesheets", "stylesheet"));
 }

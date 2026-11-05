@@ -65,6 +65,8 @@ pub const Node = struct {
     /// A decoded picture's bytes, from `<img>`: empty until it arrives.
     image: []const u8 = "",
     image_key: []const u8 = "",
+    /// Its `srcset` candidate's density: file pixels to a CSS pixel.
+    image_density: f32 = 1,
 
     pub fn isElement(n: *const Node) bool {
         return n.kind == .element;
@@ -266,6 +268,10 @@ pub const Document = struct {
     quirks: bool = false,
     /// Goes up as style is touched: what live collections know themselves by.
     generation: u32 = 0,
+    /// Goes up when anything in an inline `<svg>` changes: what's drawn from
+    /// their markup is made again (`paint/svg_markup.zig`).
+    svg_version: u32 = 0,
+    svg_dirty: bool = false,
     /// What a restyle has to look at: everything, or under just these.
     dirty_all: bool = true,
     dirty_nodes: std.ArrayList(*Node) = .empty,

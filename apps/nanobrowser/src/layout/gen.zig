@@ -186,10 +186,17 @@ fn buttonDefault(n: *const dom.Node) []const u8 {
 fn brokenAlt(c: *Ctx, n: *dom.Node) ?[]const u8 {
     if (!n.isTag("img")) return null;
     if (c.m.image(c.m.ctx, n) != null) return null;
+    // Not asked for yet: it needs a box to come near the window with.
+    if (n.image_key.len == 0 and isLazy(n)) return null;
     if (replaced.dimAttr(n, "width") != null and replaced.dimAttr(n, "height") != null) return null;
     const alt = n.attr("alt") orelse return null;
     if (alt.len == 0) return null;
     return alt;
+}
+
+fn isLazy(n: *const dom.Node) bool {
+    const v = n.attr("loading") orelse return false;
+    return std.ascii.eqlIgnoreCase(v, "lazy");
 }
 
 fn altBox(g: *Gen, n: *dom.Node, s: *const Style, alt: []const u8) Error!void {

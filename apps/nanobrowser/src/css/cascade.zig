@@ -44,6 +44,10 @@ pub const Change = enum {
     }
 };
 
+/// Styles worked out under `display: none`, for as long as a caller wants them.
+pub const DetachedMemo = std.AutoHashMapUnmanaged(*dom.Node, Detached);
+pub const Detached = struct { style: *const Style, scope: ?*const vars.Scope };
+
 pub const Engine = struct {
     gpa: Allocator,
     doc: *dom.Document,
@@ -369,6 +373,35 @@ pub const Engine = struct {
     pub fn invalidatedByState(e: *Engine, node: *dom.Node) ?*dom.Node {
         e.ensureIndex() catch return e.doc.documentElement();
         return state.invalidatedBy(&e.index.?, e.doc, node);
+    }
+
+    /// `n`'s style, computed if it has none: an icon sprite's symbols, under
+    /// `display: none`, have their rules applied as anything else's. Not kept on
+    /// the node, whose `computed` is what layout goes by.
+    pub fn styleAnyway(e: *Engine, n: *dom.Node, memo: *DetachedMemo, a: Allocator) Allocator.Error!?*const Style {
+        const d = try e.detached(n, memo, a) orelse return null;
+        return d.style;
+    }
+
+    fn detached(e: *Engine, n: *dom.Node, memo: *DetachedMemo, a: Allocator) Allocator.Error!?Detached {
+        if (n.kind != .element) return null;
+        if (e.current(n)) |s| {
+            const scope: ?*const vars.Scope = if (n.css_vars) |raw| @ptrCast(@alignCast(raw)) else null;
+            return .{ .style = s, .scope = scope };
+        }
+        if (memo.get(n)) |d| return d;
+        try e.ensureIndex();
+        var up: Detached = .{ .style = &e.root_parent, .scope = null };
+        if (n.parent) |p| if (p.kind == .element) {
+            up = try e.detached(p, memo, a) orelse return null;
+        };
+        var fresh: Style = undefined;
+        const r = try compute.element(e, n, up.style, up.scope, &fresh);
+        const s = try e.genArena().create(Style);
+        s.* = fresh;
+        const out: Detached = .{ .style = s, .scope = r.scope };
+        try memo.put(a, n, out);
+        return out;
     }
 
     /// A serialized value for `getComputedStyle`, in the engine's arena; null for

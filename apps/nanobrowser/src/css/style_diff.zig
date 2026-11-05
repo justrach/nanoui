@@ -16,6 +16,8 @@ const paint_only = std.StaticStringMap(void).initComptime(.{
     .{"shadow"},          .{"object_fit"},           .{"transform"},         .{"color"},
     .{"underline"},       .{"line_through"},         .{"overline"},          .{"text_decoration_color"},
     .{"dark_scheme"},     .{"background_more"},      .{"background_clip"},   .{"mask_image"},
+    .{"svg"},             .{"object_x"},             .{"object_y"},          .{"object_x_px"},
+    .{"object_y_px"},
 });
 
 fn borderDiff(a: style.Border, b: style.Border) Change {

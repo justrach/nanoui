@@ -6,6 +6,7 @@
 //!   host.picture(url) ?[]const u8         a background's bytes; asks for them the first time
 //!   host.gradient(g) ?[]const u8          a gradient as an encoded picture
 //!   host.control(c, box, x, y, opacity)   draws a form control at (x, y) in the open box
+//!   host.nearLazy(node)                   a `loading=lazy` picture has come near the window
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
@@ -13,6 +14,9 @@ const css = @import("../css/style.zig");
 const box = @import("../layout/box.zig");
 const display = @import("display.zig");
 const Rect = box.Rect;
+
+/// How far from the window a lazy picture is asked for, as Chromium does.
+const lazy_reach = 1250;
 
 pub fn color(k: css.Color) ui.Color {
     return .{ .r = k.r, .g = k.g, .b = k.b, .a = k.a };
@@ -41,6 +45,10 @@ pub fn replay(c: *ui.Context, l: *const display.List, host: anytype, rect: Rect)
         const clip = &l.clips[it.clip];
         if (clip.visible.w <= 0 or clip.visible.h <= 0) continue;
         const r = l.placed(it);
+        if (it.kind == .image) {
+            const n = it.kind.image.node;
+            if (n.image_key.len == 0 and n.ns == .html and overlaps(.{ .x = r.x - lazy_reach, .y = r.y - lazy_reach, .w = r.w + 2 * lazy_reach, .h = r.h + 2 * lazy_reach }, clip.visible)) host.nearLazy(n);
+        }
         const reach: f32 = if (it.kind == .fill and it.kind.fill.shadow != null) shadowReach(it.kind.fill.shadow.?) else 0;
         if (!overlaps(.{ .x = r.x - reach, .y = r.y - reach, .w = r.w + 2 * reach, .h = r.h + 2 * reach }, clip.visible)) continue;
         const wanted: u32 = if (it.clip <= 1) 0 else it.clip;
@@ -167,44 +175,140 @@ fn sameColor(a: css.Color, b: css.Color) bool {
 
 fn drawImage(c: *ui.Context, im: display.Kind.Image, placed: ui.Style, r: Rect) void {
     const n = im.node;
-    if (n.image.len == 0) return;
+    if (n.image.len == 0 or r.w <= 0 or r.h <= 0) return;
     var s = placed;
     s.width = .{ .px = r.w };
     s.height = .{ .px = r.h };
+    s.clip = im.radius > 0 or im.fit == .none or im.fit == .cover;
+    s.radius = im.radius;
     _ = c.open(s, null);
     defer c.end();
-    if (isSvg(n.image)) {
+    // An inline `<svg>` is laid out to its box and says for itself how it fits.
+    if (n.ns == .svg) {
         _ = ui.svg(c, .{ .key = n.image_key, .bytes = n.image, .width = r.w, .height = r.h });
         return;
     }
-    const size = ui.imageSize(c, n.image_key, n.image) orelse return;
-    var part: [4]f32 = .{ 0, 0, 1, 1 };
-    var w = r.w;
-    var h = r.h;
-    switch (im.fit) {
-        .cover => part = cover(size.w, size.h, r.w, r.h),
-        .contain, .scale_down => {
-            const k = @min(r.w / @max(size.w, 1), r.h / @max(size.h, 1));
-            w = size.w * k;
-            h = size.h * k;
-        },
-        else => {},
-    }
-    if (w != r.w or h != r.h) {
-        _ = c.open(.{ .absolute = true, .offset = .{ .x = (r.w - w) / 2, .y = (r.h - h) / 2 } }, null);
+    const svg = isSvg(n.image);
+    const d = @max(n.image_density, 0.001);
+    const own: ui.Size = if (svg) svgFitSize(n.image, r.w, r.h) else blk: {
+        const px = ui.imageSize(c, n.image_key, n.image) orelse return;
+        break :blk .{ .w = px.w / d, .h = px.h / d };
+    };
+    const p = fitted(im.fit, own, r.w, r.h, im.style);
+    if (svg) {
+        // Documents start from black, whatever this window's theme.
+        _ = c.open(.{ .absolute = true, .offset = .{ .x = p.x, .y = p.y } }, null);
         defer c.end();
-        _ = ui.image(c, .{ .key = n.image_key, .bytes = n.image, .box = .{ .w = w, .h = h }, .radius = im.radius, .part = part });
+        _ = ui.svg(c, .{ .key = n.image_key, .bytes = n.image, .width = p.w, .height = p.h, .current = ui.Color.black });
         return;
     }
-    _ = ui.image(c, .{ .key = n.image_key, .bytes = n.image, .box = .{ .w = w, .h = h }, .radius = im.radius, .part = part });
+    const v = visiblePart(p, r.w, r.h);
+    if (v.w <= 0 or v.h <= 0) return;
+    if (v.w != r.w or v.h != r.h or v.x != 0 or v.y != 0) {
+        _ = c.open(.{ .absolute = true, .offset = .{ .x = v.x, .y = v.y } }, null);
+        defer c.end();
+        _ = ui.image(c, .{ .key = n.image_key, .bytes = n.image, .box = .{ .w = v.w, .h = v.h }, .radius = 0, .part = v.part });
+        return;
+    }
+    _ = ui.image(c, .{ .key = n.image_key, .bytes = n.image, .box = .{ .w = v.w, .h = v.h }, .radius = im.radius, .part = v.part });
 }
 
-/// An SVG's own size: its attributes, else its viewBox.
-pub fn svgSize(bytes: []const u8) ?[2]f32 {
-    const head = bytes[0..@min(bytes.len, 2048)];
+const Placed = struct { x: f32, y: f32, w: f32, h: f32 };
+
+/// Where a picture of `own` size goes in a box of `bw` × `bh`, as `object-fit`
+/// and `object-position` say; it may reach outside the box.
+fn fitted(fit: css.ObjectFit, own: ui.Size, bw: f32, bh: f32, st: *const css.Style) Placed {
+    var w = bw;
+    var h = bh;
+    const contain = @min(bw / @max(own.w, 0.001), bh / @max(own.h, 0.001));
+    const cover_k = @max(bw / @max(own.w, 0.001), bh / @max(own.h, 0.001));
+    switch (fit) {
+        .fill => return .{ .x = 0, .y = 0, .w = bw, .h = bh },
+        .contain => {
+            w = own.w * contain;
+            h = own.h * contain;
+        },
+        .cover => {
+            w = own.w * cover_k;
+            h = own.h * cover_k;
+        },
+        .none => {
+            w = own.w;
+            h = own.h;
+        },
+        .scale_down => {
+            const k = @min(contain, 1);
+            w = own.w * k;
+            h = own.h * k;
+        },
+    }
+    return .{
+        .x = (bw - w) * st.object_x / 100 + st.object_x_px,
+        .y = (bh - h) * st.object_y / 100 + st.object_y_px,
+        .w = w,
+        .h = h,
+    };
+}
+
+const Visible = struct { x: f32, y: f32, w: f32, h: f32, part: [4]f32 };
+
+/// What of a placed picture shows in the box, and which part of the picture it is.
+fn visiblePart(p: Placed, bw: f32, bh: f32) Visible {
+    const x0 = @max(p.x, 0);
+    const y0 = @max(p.y, 0);
+    const x1 = @min(p.x + p.w, bw);
+    const y1 = @min(p.y + p.h, bh);
+    return .{
+        .x = x0,
+        .y = y0,
+        .w = x1 - x0,
+        .h = y1 - y0,
+        .part = .{ (x0 - p.x) / @max(p.w, 0.001), (y0 - p.y) / @max(p.h, 0.001), (x1 - p.x) / @max(p.w, 0.001), (y1 - p.y) / @max(p.h, 0.001) },
+    };
+}
+
+/// What an SVG document says of its size.
+pub const SvgOwn = struct { size: ?[2]f32 = null, ratio: ?f32 = null };
+
+pub fn svgOwn(bytes: []const u8) SvgOwn {
+    const head = rootTag(bytes);
+    var out: SvgOwn = .{};
+    if (attrIn(head, "viewBox")) |vb| {
+        var it = std.mem.tokenizeAny(u8, vb, " ,");
+        _ = it.next();
+        _ = it.next();
+        const vw = number(it.next());
+        const vh = number(it.next());
+        if (vw != null and vh != null and vw.? > 0 and vh.? > 0) out.ratio = vw.? / vh.?;
+    }
     const w = number(attrIn(head, "width"));
     const h = number(attrIn(head, "height"));
-    if (w != null and h != null) return .{ w.?, h.? };
+    if (w != null and h != null) {
+        out.size = .{ w.?, h.? };
+    } else if (w != null and out.ratio != null) {
+        out.size = .{ w.?, w.? / out.ratio.? };
+    } else if (h != null and out.ratio != null) {
+        out.size = .{ h.? * out.ratio.?, h.? };
+    }
+    return out;
+}
+
+/// An SVG's size to fit by: its own, or the box when it hasn't one, in its shape.
+fn svgFitSize(bytes: []const u8, bw: f32, bh: f32) ui.Size {
+    const own = svgOwn(bytes);
+    if (own.size) |v| return .{ .w = v[0], .h = v[1] };
+    if (own.ratio) |ratio| {
+        if (bw / @max(bh, 0.001) > ratio) return .{ .w = bh * ratio, .h = bh };
+        return .{ .w = bw, .h = bw / ratio };
+    }
+    return .{ .w = bw, .h = bh };
+}
+
+/// The picture's size for a background: an SVG's own, else its viewBox's.
+pub fn svgSize(bytes: []const u8) ?[2]f32 {
+    const own = svgOwn(bytes);
+    if (own.size) |v| return v;
+    const head = rootTag(bytes);
     if (attrIn(head, "viewBox")) |vb| {
         var it = std.mem.tokenizeAny(u8, vb, " ,");
         _ = it.next();
@@ -216,11 +320,26 @@ pub fn svgSize(bytes: []const u8) ?[2]f32 {
     return null;
 }
 
+/// The `<svg ...>` tag's text, past any prolog; what its attributes are read from.
+fn rootTag(bytes: []const u8) []const u8 {
+    const head = bytes[0..@min(bytes.len, 8192)];
+    const at = std.mem.indexOf(u8, head, "<svg") orelse return "";
+    var i = at;
+    var quote: u8 = 0;
+    while (i < head.len) : (i += 1) {
+        const ch = head[i];
+        if (quote != 0) {
+            if (ch == quote) quote = 0;
+        } else if (ch == '"' or ch == '\'') quote = ch else if (ch == '>') break;
+    }
+    return head[at..i];
+}
+
 fn attrIn(head: []const u8, name: []const u8) ?[]const u8 {
     var from: usize = 0;
     while (std.mem.indexOfPos(u8, head, from, name)) |at| {
         from = at + name.len;
-        if (at == 0 or head[at - 1] != ' ' and head[at - 1] != '\n' and head[at - 1] != '\t') continue;
+        if (at == 0 or head[at - 1] != ' ' and head[at - 1] != '\n' and head[at - 1] != '\t' and head[at - 1] != '\r') continue;
         const rest = std.mem.trimStart(u8, head[from..], " ");
         if (rest.len < 2 or rest[0] != '=') continue;
         const q = rest[1];
@@ -231,29 +350,32 @@ fn attrIn(head: []const u8, name: []const u8) ?[]const u8 {
     return null;
 }
 
+/// A length in CSS pixels; a percentage says nothing of a size.
 fn number(s: ?[]const u8) ?f32 {
-    const t = s orelse return null;
+    const t = std.mem.trim(u8, s orelse return null, " \t\r\n");
     var end: usize = 0;
     while (end < t.len and (std.ascii.isDigit(t[end]) or t[end] == '.')) end += 1;
-    if (end == 0 or (end < t.len and t[end] == '%')) return null;
-    return std.fmt.parseFloat(f32, t[0..end]) catch null;
+    if (end == 0) return null;
+    const v = std.fmt.parseFloat(f32, t[0..end]) catch return null;
+    const u = t[end..];
+    const eq = std.ascii.eqlIgnoreCase;
+    if (u.len == 0 or eq(u, "px")) return v;
+    if (eq(u, "%")) return null;
+    if (eq(u, "em") or eq(u, "rem")) return v * 16;
+    if (eq(u, "ex")) return v * 8;
+    if (eq(u, "pt")) return v * 4 / 3;
+    if (eq(u, "pc")) return v * 16;
+    if (eq(u, "in")) return v * 96;
+    if (eq(u, "cm")) return v * 96 / 2.54;
+    if (eq(u, "mm")) return v * 96 / 25.4;
+    return v;
 }
 
 pub fn isSvg(bytes: []const u8) bool {
-    const head = std.mem.trimStart(u8, bytes[0..@min(bytes.len, 256)], " \t\r\n");
-    return std.mem.startsWith(u8, head, "<svg") or std.mem.startsWith(u8, head, "<?xml");
-}
-
-/// The middle part of a picture that fills a box without bars, cut to fit.
-fn cover(iw: f32, ih: f32, bw: f32, bh: f32) [4]f32 {
-    const ir = iw / @max(ih, 1);
-    const br = bw / @max(bh, 1);
-    if (ir > br) {
-        const keep = br / ir;
-        return .{ (1 - keep) / 2, 0, (1 + keep) / 2, 1 };
-    }
-    const keep = ir / @max(br, 0.001);
-    return .{ 0, (1 - keep) / 2, 1, (1 + keep) / 2 };
+    const head = std.mem.trimStart(u8, bytes[0..@min(bytes.len, 1024)], " \t\r\n\xef\xbb\xbf");
+    if (std.mem.startsWith(u8, head, "<svg")) return true;
+    if (!std.mem.startsWith(u8, head, "<?xml") and !std.mem.startsWith(u8, head, "<!")) return false;
+    return std.mem.indexOf(u8, head, "<svg") != null;
 }
 
 /// At most this many tiles of a repeating background: a one-pixel picture
@@ -298,18 +420,17 @@ fn drawBackground(c: *ui.Context, bg: display.Kind.Background, bytes: []const u8
         const v = svgSize(bytes) orelse [2]f32{ r.w, r.h };
         break :blk .{ .w = v[0], .h = v[1] };
     } else ui.imageSize(c, bg.url, bytes) orelse return;
-    const size = tileSize(st, own, r);
+    var size = tileSize(st, own, r);
+    // With a shape but no size of its own, `auto` is whatever fits whole.
+    if (svg and own_in == null and st.background_size == .auto and !st.background_size_x.isLength() and !st.background_size_y.isLength() and svgOwn(bytes).size == null) {
+        const k = @min(r.w / @max(own.w, 1), r.h / @max(own.h, 1));
+        size = .{ .w = own.w * k, .h = own.h * k };
+    }
     const w = size.w;
     const h = size.h;
     if (w <= 0 or h <= 0) return;
     const x0 = (r.w - w) * st.background_x / 100 + st.background_x_px;
     const y0 = (r.h - h) * st.background_y / 100 + st.background_y_px;
-    if (svg) {
-        _ = c.open(.{ .absolute = true, .offset = .{ .x = x0, .y = y0 } }, null);
-        defer c.end();
-        _ = ui.svg(c, .{ .key = bg.url, .bytes = bytes, .width = w, .height = h });
-        return;
-    }
     // Filling the box from its corner is one tile, however it repeats.
     const rx = (st.background_repeat == .repeat or st.background_repeat == .repeat_x) and !(x0 == 0 and w >= r.w);
     const ry = (st.background_repeat == .repeat or st.background_repeat == .repeat_y) and !(y0 == 0 and h >= r.h);
@@ -318,7 +439,7 @@ fn drawBackground(c: *ui.Context, bg: display.Kind.Background, bytes: []const u8
     const nx: f32 = if (rx) @ceil(r.w / w) + 1 else 1;
     const ny: f32 = if (ry) @ceil(r.h / h) + 1 else 1;
     if (nx * ny > max_tiles) {
-        tile(c, bg.url, bytes, if (rx) 0 else x0, if (ry) 0 else y0, if (rx) r.w else w, if (ry) r.h else h);
+        tile(c, bg.url, bytes, if (rx) 0 else x0, if (ry) 0 else y0, if (rx) r.w else w, if (ry) r.h else h, svg);
         return;
     }
     const sx: f32 = if (rx) @mod(x0, w) - w else x0;
@@ -326,22 +447,45 @@ fn drawBackground(c: *ui.Context, bg: display.Kind.Background, bytes: []const u8
     var j: f32 = 0;
     while (j < ny) : (j += 1) {
         var i: f32 = 0;
-        while (i < nx) : (i += 1) tile(c, bg.url, bytes, sx + i * w, sy + j * h, w, h);
+        while (i < nx) : (i += 1) tile(c, bg.url, bytes, sx + i * w, sy + j * h, w, h, svg);
     }
 }
 
-fn tile(c: *ui.Context, key: []const u8, bytes: []const u8, x: f32, y: f32, w: f32, h: f32) void {
+fn tile(c: *ui.Context, key: []const u8, bytes: []const u8, x: f32, y: f32, w: f32, h: f32, svg: bool) void {
     _ = c.open(.{ .absolute = true, .offset = .{ .x = x, .y = y } }, null);
     defer c.end();
+    if (svg) {
+        _ = ui.svg(c, .{ .key = key, .bytes = bytes, .width = w, .height = h, .current = ui.Color.black });
+        return;
+    }
     _ = ui.image(c, .{ .key = key, .bytes = bytes, .box = .{ .w = w, .h = h }, .radius = 0 });
 }
 
-test "cover cuts the longer side" {
-    const wide = cover(200, 100, 100, 100);
-    try std.testing.expectApproxEqAbs(@as(f32, 0.25), wide[0], 0.001);
-    try std.testing.expectApproxEqAbs(@as(f32, 0.75), wide[2], 0.001);
-    const tall = cover(100, 200, 100, 100);
-    try std.testing.expectApproxEqAbs(@as(f32, 0.25), tall[1], 0.001);
+test "object-fit and object-position place a picture, cut to its box" {
+    const st: css.Style = .{};
+    // Covering: the middle of the longer side.
+    const wide = visiblePart(fitted(.cover, .{ .w = 200, .h = 100 }, 100, 100, &st), 100, 100);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.25), wide.part[0], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.75), wide.part[2], 0.001);
+    try std.testing.expectEqual(@as(f32, 100), wide.w);
+    // At its own size, and at the left: its left part only.
+    var left: css.Style = .{};
+    left.object_x = 0;
+    const none = visiblePart(fitted(.none, .{ .w = 200, .h = 100 }, 100, 100, &left), 100, 100);
+    try std.testing.expectEqual(@as(f32, 0), none.part[0]);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), none.part[2], 0.001);
+    try std.testing.expectEqual(@as(f32, 0), none.x);
+    try std.testing.expectEqual(@as(f32, 0), none.y);
+    // Containing: bars either side, in the middle unless positioned.
+    const whole = fitted(.contain, .{ .w = 100, .h = 200 }, 100, 100, &st);
+    try std.testing.expectEqual(@as(f32, 25), whole.x);
+    try std.testing.expectEqual(@as(f32, 50), whole.w);
+    // Scaling down leaves a small picture as it is.
+    const small = fitted(.scale_down, .{ .w = 10, .h = 10 }, 100, 100, &st);
+    try std.testing.expectEqual(@as(f32, 10), small.w);
+    try std.testing.expectEqual(@as(f32, 45), small.x);
+    try std.testing.expect(svgOwn("<svg width=\"1em\" viewBox=\"0 0 2 1\">").size.?[1] == 8);
+    try std.testing.expect(isSvg("<!-- c --><!DOCTYPE svg><svg/>"));
     try std.testing.expect(isSvg("  <svg width=1>"));
     try std.testing.expect(!isSvg("\x89PNG"));
     try std.testing.expectEqual(@as(f32, 24), svgSize("<svg xmlns=\"x\" width=\"24\" height=\"12px\"></svg>").?[0]);

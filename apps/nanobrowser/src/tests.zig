@@ -19,4 +19,6 @@ test {
     _ = @import("text_search.zig");
     _ = @import("tests_browser.zig");
     _ = @import("web/tests.zig");
+    _ = @import("web/source_pick.zig");
+    _ = @import("paint/tests_pictures.zig");
 }

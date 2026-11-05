@@ -10,6 +10,7 @@ const box = @import("properties_box.zig");
 const text = @import("properties_text.zig");
 const paint = @import("properties_paint.zig");
 const layout = @import("properties_layout.zig");
+const svg = @import("properties_svg.zig");
 
 const Prop = prop.Prop;
 const Ctx = values.Ctx;
@@ -26,6 +27,7 @@ fn setKw(comptime T: type, field: *T, t: []const Token) bool {
 pub fn apply(ctx: *Ctx, p: Prop, t: []const Token) bool {
     if (t.len == 0) return false;
     const s = ctx.style;
+    if (svg.apply(ctx, p, t)) |r| return r;
     if (box.apply(ctx, p, t)) |r| return r;
     if (text.apply(ctx, p, t)) |r| return r;
     if (paint.apply(ctx, p, t)) |r| return r;
@@ -51,6 +53,7 @@ pub fn apply(ctx: *Ctx, p: Prop, t: []const Token) bool {
         },
         .aspect_ratio => aspectRatio(ctx, t),
         .object_fit => setKw(style.ObjectFit, &s.object_fit, t),
+        .object_position => objectPosition(ctx, t),
         .color_scheme => colorScheme(ctx, t),
         // Known, with no effect on a `Style`.
         else => @backingInt(p) >= @backingInt(Prop.accent_color) or p == .text_decoration_style or p == .text_decoration_thickness,
@@ -218,6 +221,24 @@ fn aspectRatio(ctx: *Ctx, t: []const Token) bool {
     if (c.takeIdent("auto")) auto_seen = true;
     if (!c.atEnd()) return false;
     ctx.style.aspect_ratio = ratio;
+    return true;
+}
+
+/// Written as `background-position` is, and read the same way.
+fn objectPosition(ctx: *Ctx, t: []const Token) bool {
+    const s = ctx.style;
+    const saved = [4]f32{ s.background_x, s.background_y, s.background_x_px, s.background_y_px };
+    defer {
+        s.background_x = saved[0];
+        s.background_y = saved[1];
+        s.background_x_px = saved[2];
+        s.background_y_px = saved[3];
+    }
+    if (!paint.position(ctx, t)) return false;
+    s.object_x = s.background_x;
+    s.object_y = s.background_y;
+    s.object_x_px = s.background_x_px;
+    s.object_y_px = s.background_y_px;
     return true;
 }
 

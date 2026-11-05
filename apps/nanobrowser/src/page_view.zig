@@ -11,6 +11,7 @@ const layout = @import("layout/layout.zig");
 const display = @import("paint/display.zig");
 const replay = @import("paint/replay.zig");
 const controls = @import("paint/controls.zig");
+const svg_markup = @import("paint/svg_markup.zig");
 const loader = @import("loader.zig");
 const input = @import("page_input.zig");
 const web = @import("web/web.zig");
@@ -45,12 +46,18 @@ const Fonts = struct {
     fn image(ctx: *anyopaque, node: *dom.Node) ?box.Size {
         const f: *Fonts = @ptrCast(@alignCast(ctx));
         if (node.image.len == 0) return null;
-        if (replay.isSvg(node.image)) {
-            const v = replay.svgSize(node.image) orelse return null;
-            return .{ .w = v[0], .h = v[1] };
-        }
+        if (replay.isSvg(node.image)) return svgNatural(node.image);
         const s = ui.imageSize(f.c, node.image_key, node.image) orelse return null;
         return .{ .w = s.w, .h = s.h };
+    }
+
+    /// An SVG picture's own size; with only a viewBox, its shape alone
+    /// (`Measurer.image`); with neither, what any picture without one is.
+    fn svgNatural(bytes: []const u8) box.Size {
+        const own = replay.svgOwn(bytes);
+        if (own.size) |v| return .{ .w = v[0], .h = v[1] };
+        if (own.ratio) |r| return .{ .w = -1, .h = r };
+        return .{ .w = 300, .h = 150 };
     }
 
     fn measurer(f: *Fonts) box.Measurer {
@@ -60,6 +67,9 @@ const Fonts = struct {
 
 /// Style and layout brought up to date for a viewport of `w` × `h`.
 pub fn prepare(p: *Page, c: *ui.Context, w: f32, h: f32) void {
+    // Pictures on the web are as large as the screen is dense; the budget is
+    // what scrolling back past them shouldn't decode again.
+    ui.imageLimits(c, .{ .picture_side = 8192, .atlas_side = 8192, .decoded_bytes = 256 * 1024 * 1024 });
     if (w != p.viewport_w or h != p.viewport_h or c.theme.dark != p.dark) {
         p.viewport_w = w;
         p.viewport_h = h;
@@ -68,7 +78,9 @@ pub fn prepare(p: *Page, c: *ui.Context, w: f32, h: f32) void {
         p.doc.touchStyle();
     }
     flushStyle(p);
-    if (p.doc.layout_dirty or p.list == null) relayout(p, c);
+    if (p.doc.layout_dirty or p.list == null) {
+        relayout(p, c);
+    } else if (p.doc.svg_dirty) svg_markup.refresh(p);
 }
 
 /// Style brought up to date, as far as what changed reaches. Layout follows
@@ -120,6 +132,7 @@ pub fn relayout(p: *Page, c: *ui.Context) void {
         return;
     };
     p.tree = tree;
+    svg_markup.refresh(p);
     p.list = display.build(a, tree, p.doc.node, m, &p.scrolls) catch null;
     if (p.restore_scroll > 0) if (p.list) |*l| {
         l.clips[1].scroll_y = p.restore_scroll;
@@ -132,6 +145,11 @@ const Replay = struct {
 
     pub fn picture(h: Replay, url: []const u8) ?[]const u8 {
         return loader.background(h.p, url);
+    }
+
+    /// A `loading=lazy` picture has come near the window.
+    pub fn nearLazy(h: Replay, n: *dom.Node) void {
+        loader.askImage(h.p, n);
     }
 
     pub fn gradient(h: Replay, g: @import("css/style.zig").Gradient) ?[]const u8 {

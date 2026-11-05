@@ -202,8 +202,11 @@ pub fn clone(w: *bind.World, n: *Node, deep: bool, doc: *dom.Document) Error!*No
     copy.value = n.value;
     copy.checked = n.checked;
     copy.selected = n.selected;
-    copy.image = n.image;
-    copy.image_key = n.image_key;
+    // An inline `<svg>`'s markup is its original's alone.
+    if (n.ns != .svg) {
+        copy.image = n.image;
+        copy.image_key = n.image_key;
+    }
     if (deep) {
         // Depth may be great: a stack of where to go on.
         var from: *Node = n;
@@ -230,8 +233,10 @@ pub fn clone(w: *bind.World, n: *Node, deep: bool, doc: *dom.Document) Error!*No
                 c2.value = child.value;
                 c2.checked = child.checked;
                 c2.selected = child.selected;
-                c2.image = child.image;
-                c2.image_key = child.image_key;
+                if (child.ns != .svg) {
+                    c2.image = child.image;
+                    c2.image_key = child.image_key;
+                }
                 to.appendChild(c2);
                 if (child.isTag("template")) {
                     if (collections.templateContent(w, child)) |t| {
