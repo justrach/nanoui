@@ -51,7 +51,9 @@ pub fn material(g: types.Glass, w: f32, h: f32, dark: bool, scale: f32) Material
         .curve = 1.2,
         .saturation = 1,
     };
-    if (g.style == .clear) {
+    if (g.style == .frost) {
+        mat = .{ .bezel = 0, .refraction = 0, .rim_width = 0, .blur = @max(g.blur, 0.5), .low = 0, .high = 1, .curve = 1, .saturation = 1 };
+    } else if (g.style == .clear) {
         mat.blur = 1;
         mat.low = 0.125;
         mat.high = 1.082;

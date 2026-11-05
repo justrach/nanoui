@@ -51,7 +51,7 @@ struct Instance {
     float  border_width; // blur radius for shadows
     float  kind;
     float  clip_round;   // corners * 4096 + radius (gpu.zig's clipRound)
-    // These are declared to keep the stride at 160 bytes, which is what
+    // These are declared to keep the stride at 192 bytes, which is what
     // gpu.zig's `Instance` is. Without them the structured buffer steps 96 bytes
     // per element and every instance after the first reads another's fields --
     // which showed up as the D3D11/CPU parity tests failing, not as an obvious
@@ -62,6 +62,8 @@ struct Instance {
     float4 pulse;        // period s, scale_amp, alpha_low, unused
     float4 vel;          // blur vector x, y in points, face, mirror x
     float4 turn;         // angle about the vertical axis, eye distance, pivot x, pivot y
+    float4 m;            // a plane transform: x' = m.x x + m.z y + mt.x, y' = m.y x + m.w y + mt.y
+    float4 mt;
 };
 
 StructuredBuffer<Instance> instances : register(t0);
@@ -78,6 +80,7 @@ struct Varyings {
     float2 v_local : TEXCOORD0;
     float2 v_world : TEXCOORD1;
     float2 v_uv : TEXCOORD2;
+    float2 v_screen : TEXCOORD9;
     nointerpolation float4 i_rect : TEXCOORD3;
     nointerpolation float4 i_color : TEXCOORD4;
     nointerpolation float4 i_border_color : TEXCOORD5;
@@ -107,7 +110,7 @@ Varyings quad_vs(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     Instance a = instances[iid + (uint)start_instance];
     float2 corner = float2(float(vid & 1), float(vid >> 1));
     // Shadows reach three standard deviations past their box.
-    float grow = a.kind == 2.0 ? a.border_width * 3.0 : 0.0;
+    float grow = (a.kind == 2.0 || a.kind == 5.0) ? a.border_width * 3.0 : 0.0;
     float2 p = a.rect.xy - grow + corner * (a.rect.zw + 2.0 * grow);
     if (a.kind == 6.0) {
         // A box along the line, a point past its round ends.
@@ -125,14 +128,15 @@ Varyings quad_vs(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     // The reverse of a card is seen through it: mirrored across its middle.
     if (a.vel.z == 2.0 && a.kind != 6.0 && a.kind != 7.0) p.x = 2.0 * a.vel.w - p.x;
     // A turn about the vertical axis through the pivot, in perspective.
-    float2 seen = p;
+    float2 landed = float2(a.m.x * p.x + a.m.z * p.y + a.mt.x, a.m.y * p.x + a.m.w * p.y + a.mt.y);
+    float2 seen = landed;
     float w = 1.0;
     float ct = cos(a.turn.x);
     bool hidden = (a.vel.z == 1.0 && ct < 0.0) || (a.vel.z == 2.0 && ct >= 0.0);
     if (a.turn.x != 0.0) {
-        float dx = p.x - a.turn.z;
+        float dx = landed.x - a.turn.z;
         float z = -dx * sin(a.turn.x);
-        seen = float2(a.turn.z + dx * ct, p.y);
+        seen = float2(a.turn.z + dx * ct, landed.y);
         if (a.turn.y > 0.0) {
             w = max(1.0 - z / a.turn.y, 0.1);
             seen = a.turn.zw + (seen - a.turn.zw) / w;
@@ -142,6 +146,7 @@ Varyings quad_vs(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     o.pos = hidden ? float4(0.0, 0.0, 0.0, 1.0) : float4((seen / viewport * float2(2.0, -2.0) + float2(-1.0, 1.0)) * w, 0.0, w);
     o.v_local = local;
     o.v_world = p;
+    o.v_screen = landed;
     o.v_uv = lerp(a.uv.xy, a.uv.zw, corner);
     o.i_rect = a.rect;
     o.i_color = a.color;
@@ -207,14 +212,14 @@ float2 rounded_box_aa(float2 p, float2 half_size, float r) {
 // How much of the fragment the instance's clip lets through: discarded
 // outside it, cut in its rounded corners.
 float clip_coverage(Varyings v) {
-    if (v.v_world.x < v.i_clip.x || v.v_world.y < v.i_clip.y || v.v_world.x > v.i_clip.z || v.v_world.y > v.i_clip.w) discard;
+    if (v.v_screen.x < v.i_clip.x || v.v_screen.y < v.i_clip.y || v.v_screen.x > v.i_clip.z || v.v_screen.y > v.i_clip.w) discard;
     float clip_cover = 1.0;
     float clip_round = v.i_misc.w;
     if (clip_round > 0.0) {
         float corners = floor(clip_round / 4096.0);
         float rad = clip_round - corners * 4096.0;
         float2 ch = (v.i_clip.zw - v.i_clip.xy) * 0.5;
-        float2 q = v.v_world - v.i_clip.xy - ch;
+        float2 q = v.v_screen - v.i_clip.xy - ch;
         float2 cd = rounded_box_aa(q, ch, min(rad, min(ch.x, ch.y)));
         uint bit = q.y < 0.0 ? (q.x < 0.0 ? 1u : 2u) : (q.x < 0.0 ? 8u : 4u);
         if ((uint(corners) & bit) != 0u) clip_cover = 1.0 - smoothstep(-cd.y, cd.y, cd.x);
@@ -380,9 +385,11 @@ float4 shade(Varyings v) {
         }
         return px * (coverage * v.i_color.a);
     }
-    if (kind == 2.0) {
+    if (kind == 2.0 || kind == 5.0) {
         float sigma = max(v.i_misc.y, 0.25);
         float a = shadow_alpha(p, half_size, r, sigma) * v.i_color.a;
+        // Knocked out inside the box itself (see shader.metal).
+        if (kind == 5.0) a *= clamp(rounded_box_aa(p - v.i_uv.xy, max(half_size - v.i_uv.z, float2(0.0, 0.0)), max(abs(r) - v.i_uv.z, 0.0)).x + 0.5, 0.0, 1.0);
         return float4(v.i_color.rgb * a, a);
     }
     // Premultiplied: the border is laid over the fill (see shader.metal).

@@ -16,10 +16,13 @@ layout(location = 6) in vec4 a_xf;     // angle, spin, pivot x, pivot y
 layout(location = 7) in vec4 a_pulse;  // period, scale amplitude, alpha low
 layout(location = 8) in vec4 a_vel;    // motion blur vector in points, face, mirror x
 layout(location = 9) in vec4 a_turn;   // angle about the vertical axis, eye distance, pivot x, pivot y
+layout(location = 10) in vec4 a_m;     // a plane transform: x' = m.x x + m.z y + mt.x, y' = m.y x + m.w y + mt.y
+layout(location = 11) in vec4 a_mt;
 uniform vec2 viewport;
 uniform float time;
 out vec2 v_local;
 out vec2 v_world;
+out vec2 v_screen;
 out vec2 v_uv;
 flat out vec4 i_rect;
 flat out vec4 i_color;
@@ -74,14 +77,15 @@ void main() {
         p = a_xf.zw + d;
     }
     // A turn about the vertical axis through the pivot, in perspective.
-    vec2 seen = p;
+    vec2 landed = vec2(a_m.x * p.x + a_m.z * p.y + a_mt.x, a_m.y * p.x + a_m.w * p.y + a_mt.y);
+    vec2 seen = landed;
     float w = 1.0;
     float ct = cos(a_turn.x);
     bool hidden = (a_vel.z == 1.0 && ct < 0.0) || (a_vel.z == 2.0 && ct >= 0.0);
     if (a_turn.x != 0.0) {
-        float dx = p.x - a_turn.z;
+        float dx = landed.x - a_turn.z;
         float z = -dx * sin(a_turn.x);
-        seen = vec2(a_turn.z + dx * ct, p.y);
+        seen = vec2(a_turn.z + dx * ct, landed.y);
         if (a_turn.y > 0.0) {
             w = max(1.0 - z / a_turn.y, 0.1);
             seen = a_turn.zw + (seen - a_turn.zw) / w;
@@ -90,6 +94,7 @@ void main() {
     gl_Position = hidden ? vec4(0.0, 0.0, 0.0, 1.0) : vec4((seen / viewport * vec2(2.0, -2.0) + vec2(-1.0, 1.0)) * w, 0.0, w);
     v_local = p_unrot - a_rect.xy;
     v_world = p;
+    v_screen = landed;
     v_uv = has_blur ? a_uv.xy + (p_unrot - a_rect.xy) / max(a_rect.zw, vec2(1e-4)) * (a_uv.zw - a_uv.xy) : mix(a_uv.xy, a_uv.zw, corner);
     v_vel = has_blur ? velocity : vec2(0.0);
     v_pulse_alpha = pulse_alpha;
@@ -105,6 +110,7 @@ void main() {
 #if defined(QUAD_FS) || defined(GLASS_FS)
 in vec2 v_local;
 in vec2 v_world;
+in vec2 v_screen;
 in vec2 v_uv;
 flat in vec4 i_rect;
 flat in vec4 i_color;
@@ -223,14 +229,14 @@ vec2 corner_sdf_aa(vec2 p, vec2 half_size, float r_in) {
 // How much of the fragment the instance's clip lets through: discarded
 // outside it, cut in its rounded corners.
 float clip_coverage() {
-    if (v_world.x < i_clip.x || v_world.y < i_clip.y || v_world.x > i_clip.z || v_world.y > i_clip.w) discard;
+    if (v_screen.x < i_clip.x || v_screen.y < i_clip.y || v_screen.x > i_clip.z || v_screen.y > i_clip.w) discard;
     float clip_cover = 1.0;
     float clip_round = i_misc.w;
     if (clip_round > 0.0) {
         float corners = floor(clip_round / 4096.0);
         float rad = clip_round - corners * 4096.0;
         vec2 ch = (i_clip.zw - i_clip.xy) * 0.5;
-        vec2 q = v_world - i_clip.xy - ch;
+        vec2 q = v_screen - i_clip.xy - ch;
         vec2 cd = corner_sdf_aa(q, ch, min(rad, min(ch.x, ch.y)));
         uint bit = q.y < 0.0 ? (q.x < 0.0 ? 1u : 2u) : (q.x < 0.0 ? 8u : 4u);
         if ((uint(corners) & bit) != 0u) clip_cover = 1.0 - smoothstep(-cd.y, cd.y, cd.x);
@@ -381,7 +387,10 @@ vec4 shade() {
     if (kind == 2.0 || kind == 5.0) {
         float sigma = max(i_misc.y, 0.25);
         float a = shadow_alpha(p, half_size, r, sigma) * i_color.a;
-        if (kind == 5.0) a *= clamp(corner_sdf_aa(p - i_uv.xy, half_size, r).x + 0.5, 0.0, 1.0);
+        if (kind == 5.0) {
+            float rb = r < 0.0 ? -max(-r - i_uv.z, 0.0) : max(r - i_uv.z, 0.0);
+            a *= clamp(corner_sdf_aa(p - i_uv.xy, max(half_size - i_uv.z, vec2(0.0)), rb).x + 0.5, 0.0, 1.0);
+        }
         if (a > 0.0) a = clamp(a + shadow_dither(v_world * scale), 0.0, 1.0);
         return vec4(i_color.rgb * a, a);
     }
