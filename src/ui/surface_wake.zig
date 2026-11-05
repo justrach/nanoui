@@ -13,6 +13,11 @@
 //! panel. Keys were handled, and nothing showed. `watch` looks after it for as
 //! long as a frame is wanted, and invalidating the window's shadow, which leaves
 //! nothing changed, has had it running again within 40 ms each time.
+//!
+//! A link that does run can still leave a presented frame off the screen: a
+//! word typed showed only 1.25 s later, once another key's nudge came. So every
+//! present is followed by the same nudge (`presented`), and with it neither
+//! has been seen on macOS 14, 15 or 26.
 const std = @import("std");
 const objc = @import("../objc.zig");
 const cf = @import("cf.zig");
@@ -67,6 +72,11 @@ fn fire(ptr: ?*anyopaque) callconv(.c) void {
     }
     s.setRate(null);
     s.setPaced(true);
+}
+
+/// A frame has just gone to the screen: has the window server look.
+pub fn presented(s: *Surface) void {
+    objc.msg(void, s.window.nswindow, "invalidateShadow", .{});
 }
 
 /// A frame is wanted from the link: sees that it comes. Not a poll: it stops
