@@ -181,3 +181,121 @@ test "a GIF and a JPEG draw on every platform" {
     const px = try drawsAt(jpeg, @floatFromInt(@import("jpeg_decode.zig").size(jpeg).?.width), @floatFromInt(@import("jpeg_decode.zig").size(jpeg).?.height));
     try testing.expectEqual(@as(u8, 255), px[3]);
 }
+
+const Big = struct {
+    bytes: []const u8,
+    w: f32,
+    limits: ?images.Limits = null,
+    fn view(s: *Big, c: *ui.Context) void {
+        if (s.limits) |l| ui.imageLimits(c, l);
+        _ = ui.image(c, .{ .key = "big", .bytes = s.bytes, .box = .{ .w = s.w, .h = 20 }, .radius = 0 });
+    }
+};
+
+/// Columns one pixel wide, black and white in turn: blurred, they would be gray.
+fn stripes(gpa: std.mem.Allocator, w: usize, h: usize) ![]u8 {
+    const raw = try gpa.alloc(u8, w * h * 4);
+    defer gpa.free(raw);
+    for (0..h) |y| for (0..w) |x| {
+        const v: u8 = if (x % 2 == 0) 255 else 0;
+        raw[(y * w + x) * 4 ..][0..4].* = .{ v, v, v, 255 };
+    };
+    return ui.png.encode(gpa, .{ .bytes = raw, .width = @intCast(w), .height = @intCast(h) });
+}
+
+test "with larger limits a picture a window wide on a dense screen keeps every pixel" {
+    const gpa = testing.allocator;
+    const png = try stripes(gpa, 2560, 40);
+    defer gpa.free(png);
+    var s: Big = .{ .bytes = png, .w = 1280, .limits = .{ .picture_side = 8192, .atlas_side = 8192, .decoded_bytes = 64 * 1024 * 1024 } };
+    var t: ui.Tester = undefined;
+    try t.init(gpa, ui.View.init(&s, Big.view), .{ .width = 1280, .height = 40, .scale = 2 });
+    defer t.deinit();
+    t.frame();
+    try testing.expectEqual(@as(u32, 4096), t.text.images.side);
+    const px = try t.render(gpa);
+    defer px.deinit(gpa);
+    // Neighbouring pixels are the picture's own columns, not an average.
+    const a = px.bytes[(10 * px.width + 1000) * 4];
+    const b = px.bytes[(10 * px.width + 1001) * 4];
+    try testing.expect((a > 230 and b < 25) or (a < 25 and b > 230));
+}
+
+test "without asking, a picture stays within the defaults and the atlas doesn't grow" {
+    const gpa = testing.allocator;
+    const png = try stripes(gpa, 2560, 40);
+    defer gpa.free(png);
+    var s: Big = .{ .bytes = png, .w = 1280 };
+    var t: ui.Tester = undefined;
+    try t.init(gpa, ui.View.init(&s, Big.view), .{ .width = 1280, .height = 40, .scale = 2 });
+    defer t.deinit();
+    t.frame();
+    try testing.expectEqual(images.size, t.text.images.side);
+    var it = t.text.images.entries.iterator();
+    while (it.next()) |kv| try testing.expect(kv.key_ptr.side <= images.max_side);
+}
+
+test "a frame's pictures that don't fit double the atlas, and a smaller frame's leave" {
+    const gpa = testing.allocator;
+    var im: images.Images = .{ .gpa = gpa, .limits = .{ .picture_side = 2000, .atlas_side = 8192 } };
+    defer im.deinit();
+    const raw = try gpa.alloc(u8, 2000 * 1800 * 4);
+    defer gpa.free(raw);
+    @memset(raw, 90);
+    const png = try ui.png.encode(gpa, .{ .bytes = raw, .width = 2000, .height = 1800 });
+    defer gpa.free(png);
+    im.beginPaint();
+    im.decodes_left = 8;
+    const first = im.get(images.Images.key("a"), png, 2000).?;
+    try testing.expectEqual(images.size, im.side);
+    try testing.expect(first.uv[2] > 0);
+    const second = im.get(images.Images.key("b"), png, 2000).?;
+    try testing.expectEqual(@as(u32, 4096), im.side);
+    try testing.expect(im.reset_during_frame);
+    // Both in the larger atlas, apart.
+    const again = im.get(images.Images.key("a"), png, 2000).?;
+    try testing.expect(again.uv[1] != second.uv[1] or again.uv[0] != second.uv[0]);
+    try testing.expectEqual(@as(usize, 4096 * 4096 * 4), im.pixels.len);
+}
+
+test "a decoded picture over budget leaves the cache, not the atlas" {
+    const gpa = testing.allocator;
+    var im: images.Images = .{ .gpa = gpa, .limits = .{ .decoded_bytes = 100 } };
+    defer im.deinit();
+    const raw = try gpa.alloc(u8, 32 * 32 * 4);
+    defer gpa.free(raw);
+    @memset(raw, 90);
+    const png = try ui.png.encode(gpa, .{ .bytes = raw, .width = 32, .height = 32 });
+    defer gpa.free(png);
+    im.beginPaint();
+    const a = im.get(images.Images.key("a"), png, 32).?;
+    _ = im.get(images.Images.key("b"), png, 32).?;
+    try testing.expectEqual(@as(usize, 1), im.decoded.count());
+    // Still drawn from the atlas, nothing decoded again.
+    const gen = im.generation;
+    const left = im.decodes_left;
+    const a2 = im.get(images.Images.key("a"), png, 32).?;
+    try testing.expectEqual(a.uv, a2.uv);
+    try testing.expectEqual(gen, im.generation);
+    try testing.expectEqual(left, im.decodes_left);
+}
+
+test "an SVG larger than a picture may be is drawn at the limit, not past the atlas" {
+    const gpa = testing.allocator;
+    var im: images.Images = .{ .gpa = gpa };
+    defer im.deinit();
+    const doc = "<svg viewBox='0 0 10 10'><rect width='10' height='10' fill='#f00'/></svg>";
+    im.beginPaint();
+    const d = im.infoSvg(77, doc, .{ .width = 6000, .height = 3000, .current = .{ 0, 0, 0, 1 } }).?;
+    try testing.expectEqual(@as(u32, images.max_side), d.w);
+    try testing.expectEqual(@as(u32, images.max_side / 2), d.h);
+    try testing.expect(im.get(77, doc, 6000) != null);
+}
+
+test "types that decode here" {
+    try testing.expect(ui.imageTypeDecodes("image/png"));
+    try testing.expect(ui.imageTypeDecodes("IMAGE/JPEG; q=1"));
+    try testing.expect(ui.imageTypeDecodes("image/svg+xml"));
+    try testing.expect(!ui.imageTypeDecodes("image/jxl"));
+    try testing.expect(!ui.imageTypeDecodes("text/html"));
+}

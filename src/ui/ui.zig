@@ -87,6 +87,9 @@ pub const spacer = widgets.spacer;
 pub const divider = widgets.divider;
 pub const image = widgets.image;
 pub const imageSize = widgets.imageSize;
+pub const imageLimits = widgets.imageLimits;
+pub const imageTypeDecodes = widgets.imageTypeDecodes;
+pub const ImageLimits = @import("images.zig").Limits;
 pub const texture = widgets.texture;
 pub const hole = widgets.hole;
 /// A box to draw lines, triangles, polygons and circles in (draw.zig).

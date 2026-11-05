@@ -97,6 +97,13 @@ pub const Renderer = struct {
         return r;
     }
 
+    /// The longest side a texture may have here.
+    pub fn maxTextureSide() u32 {
+        var v: i32 = 0;
+        gl.api.glGetIntegerv(0x0D33, &v); // GL_MAX_TEXTURE_SIZE
+        return if (v > 0) @intCast(v) else 2048;
+    }
+
     /// The format BGRA pixels go up as: OpenGL ES takes them for RGBA.
     fn bgra(r: *const Renderer) u32 {
         return if (r.es) gl.RGBA else gl.BGRA;
