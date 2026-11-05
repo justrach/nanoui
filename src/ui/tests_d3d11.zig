@@ -34,7 +34,7 @@ const Limits = struct { mean: f64, worst: u8, off_in: usize };
 /// compile, a buffer that will not be made — is a bug in this repository and
 /// must fail the test. Sharing one error name between the two is what let a
 /// broken shader look like a machine without a GPU.
-fn renderer() !?d3d11.Renderer {
+pub fn renderer() !?d3d11.Renderer {
     return d3d11.Renderer.init() catch |e| {
         if (e == error.NoDevice) {
             std.debug.print("no Direct3D 11 here: {t} ", .{e});
@@ -79,7 +79,7 @@ fn drawnPixels(px: gpu.Pixels, clear: ui.Color) usize {
 /// against a CPU frame that is also mostly background can pass while the GPU
 /// drew nothing at all, which is exactly what a wrong `Instance` stride does.
 /// So the frame has to have content before it is compared.
-fn drawThenRead(r: *d3d11.Renderer, t: *ui.Tester, clear: ui.Color) !gpu.Pixels {
+pub fn drawThenRead(r: *d3d11.Renderer, t: *ui.Tester, clear: ui.Color) !gpu.Pixels {
     const gpa = testing.allocator;
     r.sync(t.text.atlas.mask(), t.text.atlas.generation, t.text.images.pictures(), t.text.images.generation);
     r.draw(t.instances.items, t.size, t.scale, clear, null);

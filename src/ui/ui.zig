@@ -243,6 +243,8 @@ test {
     _ = @import("tests_gradient.zig");
     _ = @import("layout.zig");
     _ = textfield;
+    _ = @import("textfield_tests.zig");
+    _ = @import("tests_frame_part.zig");
     _ = @import("tests.zig");
     _ = @import("tests_keymap.zig");
     _ = @import("tests_multiline.zig");
@@ -296,6 +298,8 @@ test {
     _ = @import("tests_truncate.zig");
     if (@import("dwrite.zig").enabled) _ = @import("tests_dwrite.zig");
     if (@import("builtin").os.tag == .windows) _ = @import("tests_d3d11.zig");
+    if (@import("builtin").os.tag == .windows) _ = @import("tests_d3d11_texture.zig");
+    if (@import("builtin").os.tag == .windows) _ = @import("d3d11_texture.zig");
     _ = @import("icons.zig");
     _ = keys;
     _ = @import("tests_textedit.zig");

@@ -76,14 +76,14 @@ pub const TextBuffer = struct {
     }
 };
 
-fn prevBoundary(s: []const u8, i: usize) usize {
+pub fn prevBoundary(s: []const u8, i: usize) usize {
     if (i == 0) return 0;
     var j = i - 1;
     while (j > 0 and (s[j] & 0xc0) == 0x80) j -= 1;
     return j;
 }
 
-fn nextBoundary(s: []const u8, i: usize) usize {
+pub fn nextBoundary(s: []const u8, i: usize) usize {
     if (i >= s.len) return s.len;
     return @min(s.len, i + utf8.seqLen(s[i]));
 }
@@ -535,64 +535,3 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
 pub const rehome = textedit.rehome;
 pub const editState = textedit.editState;
 pub const focusSelect = textedit.focusSelect;
-
-test "buffer edits" {
-    var b: TextBuffer = .{};
-    defer b.deinit();
-    b.set("hllo");
-    _ = b.insert(1, "e");
-    try std.testing.expectEqualStrings("hello", b.text());
-    b.remove(0, 1);
-    try std.testing.expectEqualStrings("ello", b.text());
-    _ = b.replace(1, 3, "XYZ");
-    try std.testing.expectEqualStrings("eXYZo", b.text());
-    b.set("añb");
-    try std.testing.expectEqual(@as(usize, 1), prevBoundary(b.text(), 3));
-    try std.testing.expectEqual(@as(usize, 3), nextBoundary(b.text(), 1));
-    try std.testing.expectEqual(@as(usize, 0), prevWord("foo bar", 3));
-    try std.testing.expectEqual(@as(usize, 7), nextWord("foo bar", 3));
-}
-
-fn noClip(_: ?*anyopaque, _: []const u8) void {}
-
-test "composition, selection, commands" {
-    var b: TextBuffer = .{};
-    defer b.deinit();
-    var e: EditState = .{};
-    var r: Result = .{};
-    apply(&b, &e, .{ .insert = "hello world" }, .{}, .{ .write = noClip }, &r);
-    apply(&b, &e, .{ .command = .select_word_left }, .{}, .{ .write = noClip }, &r);
-    try std.testing.expectEqual(@as(usize, 6), @min(e.caret, e.anchor));
-    apply(&b, &e, .{ .insert = "Zig" }, .{}, .{ .write = noClip }, &r);
-    try std.testing.expectEqualStrings("hello Zig", b.text());
-    // An input method composes "日本", then commits it.
-    apply(&b, &e, .{ .set_marked = .{ .text = "に", .sel_start = 3, .sel_len = 0 } }, .{}, .{ .write = noClip }, &r);
-    try std.testing.expect(e.marked != null);
-    apply(&b, &e, .{ .set_marked = .{ .text = "日本", .sel_start = 6, .sel_len = 0 } }, .{}, .{ .write = noClip }, &r);
-    apply(&b, &e, .{ .insert = "日本" }, .{}, .{ .write = noClip }, &r);
-    try std.testing.expectEqualStrings("hello Zig日本", b.text());
-    try std.testing.expect(e.marked == null);
-    apply(&b, &e, .{ .command = .delete_word_backward }, .{}, .{ .write = noClip }, &r);
-    try std.testing.expectEqualStrings("hello ", b.text());
-    apply(&b, &e, .{ .command = .select_all }, .{}, .{ .write = noClip }, &r);
-    apply(&b, &e, .{ .command = .delete_backward }, .{}, .{ .write = noClip }, &r);
-    try std.testing.expectEqualStrings("", b.text());
-}
-
-test "a suggestion is taken with → at the end" {
-    var b: TextBuffer = .{};
-    defer b.deinit();
-    var e: EditState = .{};
-    var r: Result = .{};
-    const opts: Options = .{ .suggestion = "status" };
-    apply(&b, &e, .{ .insert = "git " }, opts, .{ .write = noClip }, &r);
-    apply(&b, &e, .{ .command = .move_left }, opts, .{ .write = noClip }, &r);
-    // Not at the end: → only moves.
-    apply(&b, &e, .{ .command = .move_right }, opts, .{ .write = noClip }, &r);
-    try std.testing.expect(!r.accepted);
-    try std.testing.expectEqualStrings("git ", b.text());
-    apply(&b, &e, .{ .command = .move_right }, opts, .{ .write = noClip }, &r);
-    try std.testing.expect(r.accepted);
-    try std.testing.expectEqualStrings("git status", b.text());
-    try std.testing.expectEqual(@as(usize, 10), e.caret);
-}

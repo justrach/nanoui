@@ -353,6 +353,11 @@ pub const Style = struct {
     /// A single press on it moves the window, as a title bar's does (a
     /// tab strip's empty space); a double click still comes to the box.
     window_drag: bool = false,
+    /// The window's maximize button, drawn by the app in its own title bar
+    /// (`TitleBar.hidden`): Windows hit-tests it as the system's
+    /// (HTMAXBUTTON), so hovering it offers Windows 11's snap layouts,
+    /// while its hover and clicks still come to the box. Elsewhere a plain box.
+    window_maximize: bool = false,
     /// A control (a button, a toggle): its texts do not select, even in a
     /// selectable box, so the pointer is a hand all over it.
     control: bool = false,

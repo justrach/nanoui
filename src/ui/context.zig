@@ -509,6 +509,7 @@ pub const Context = struct {
     pub const acceptsDropAt = hooks.acceptsDropAt;
     pub const dropAt = hooks.dropAt;
     pub const startsWindowDrag = hooks.startsWindowDrag;
+    pub const framePartAt = hooks.framePartAt;
     pub const addA11y = hooks.addA11y;
     pub const adjustable = hooks.adjustable;
     pub const a11yStep = hooks.a11yStep;
