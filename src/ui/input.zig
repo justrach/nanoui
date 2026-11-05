@@ -126,6 +126,8 @@ pub const FocusedText = struct {
     marked: ?[2]usize,
     /// Where the caret is drawn, in view points.
     caret_rect: types.Rect,
+    /// The selection's two ends in order, line-tall, when it has one.
+    ends: ?[2]types.Rect = null,
 };
 
 /// Where copied text goes: the system's clipboard, or the Tester's own.

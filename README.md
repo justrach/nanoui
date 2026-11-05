@@ -388,7 +388,8 @@ another needs its own way to close (no swipe down). A finger is the
 pointer: it presses and drags, and scrolls what it moves up or down over,
 flinging as iOS's scroll views do. Two fingers pinch: their spread and
 movement come to the view as `input.zoom` and `input.pan` (a trackpad's
-pinch does on the Mac). A hardware keyboard's keys and shortcuts work as on
+pinch does on the Mac). Holding on text selects its word, with handles, the
+loupe and the edit menu. A hardware keyboard's keys and shortcuts work as on
 the Mac, held keys repeat, and a focused text field brings up the software
 keyboard. Views are laid out inside the safe area, clear of the status bar,
 the home indicator and the keyboard; a window made with `.full_bleed = true`
@@ -417,8 +418,7 @@ first after `zig build`.
 Devices, signing, app icons, extensions and iOS versions are in
 [docs/ios.md](docs/ios.md).
 
-Not on iOS yet: pages, the selection's handles and loupe, or iPad
-multiwindow.
+Not on iOS yet: pages, or iPad multiwindow.
 
 ### Android
 

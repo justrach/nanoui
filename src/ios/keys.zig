@@ -142,6 +142,10 @@ fn reveal(s: *Surface) void {
     if (@import("../ui/scroll.zig").revealCaret(&s.ctx, s.size.h - s.safeArea().bottom)) s.requestFrame();
 }
 
+pub fn pushOp(s: *Surface, op: ctx_mod.TextOp) void {
+    push(s, op);
+}
+
 fn push(s: *Surface, op: ctx_mod.TextOp) void {
     const st = &s.keys;
     st.ops.append(s.gpa, op) catch return;

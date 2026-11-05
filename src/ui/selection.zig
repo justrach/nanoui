@@ -42,6 +42,12 @@ pub const Selection = struct {
     /// button, a pill over the text), if any: texts before it in the tree
     /// are under it, and the pointer is not on them.
     cover: ?u32 = null,
+    /// A finger, not a pointer: a press doesn't select (it may be a scroll),
+    /// holding or tapping twice does, and the ends have handles.
+    touch: bool = false,
+    /// Where the selection's ends were painted, if they were.
+    start_rect: ?types.Rect = null,
+    end_rect: ?types.Rect = null,
 
     pub fn deinit(s: *Selection, gpa: std.mem.Allocator) void {
         s.order.deinit(gpa);
@@ -60,6 +66,13 @@ pub const Selection = struct {
         const oa = s.order.get(a.id) orelse return false;
         const ob = s.order.get(b.id) orelse return false;
         return oa < ob or (oa == ob and a.at < b.at);
+    }
+
+    /// The ends in reading order.
+    pub fn ordered(s: *const Selection) ?[2]Point {
+        const a = s.anchor orelse return null;
+        const b = s.focus orelse return null;
+        return if (s.before(b, a)) .{ b, a } else .{ a, b };
     }
 
     /// The selected bytes of text `id` (`len` long), or null.
@@ -106,6 +119,16 @@ pub fn line(c: anytype, out: *std.ArrayList(gpu.Instance), id: u64, index: u32, 
         c.cursor_text = true;
     } else if (y + lh <= m.y) s.below = .{ .id = id, .at = end };
     const r = s.range(id, str.len) orelse return;
+    if (s.ordered()) |o| {
+        const rect = struct {
+            fn f(l: text_mod.Layout, ox: f32, oy: f32, h: f32, at: usize) types.Rect {
+                return .{ .x = ox + xAt(l, at), .y = oy, .w = 0, .h = h };
+            }
+        }.f;
+        // At a wrap, the start goes on the next line and the end stays on this.
+        if (o[0].id == id and o[0].at >= start and o[0].at <= end) s.start_rect = rect(lay, x, y, lh, o[0].at - start);
+        if (o[1].id == id and o[1].at >= start and o[1].at <= end and s.end_rect == null) s.end_rect = rect(lay, x, y, lh, o[1].at - start);
+    }
     const a = @max(r[0], start);
     const b = @min(r[1], end);
     if (b <= a and !(r[0] <= start and r[1] > end)) return;
@@ -156,6 +179,8 @@ pub fn beginPaint(c: anytype) void {
     s.hit_str = "";
     s.below = null;
     s.cover = null;
+    s.start_rect = null;
+    s.end_rect = null;
     if (c.hot != 0) {
         if (c.hot_index < c.nodes.items.len and c.nodes.items[c.hot_index].id == c.hot) {
             s.cover = c.hot_index;
@@ -174,7 +199,9 @@ pub fn afterPaint(c: anytype) void {
     if (s.pressed) {
         s.pressed = false;
         s.moved = false;
-        if (s.hit != null and !s.blocked) {
+        if (s.touch and c.input.click_count < 2) {
+            // Nothing yet: `ios/selecting.zig` lets go of it on a tap.
+        } else if (s.hit != null and !s.blocked) {
             const h = s.hit.?;
             if (c.input.click_count >= 3 and s.hit_line != null) {
                 const hl = s.hit_line.?;
@@ -194,7 +221,9 @@ pub fn afterPaint(c: anytype) void {
                 s.anchor = h;
                 s.focus = h;
             }
-            s.dragging = true;
+            // A finger still down isn't dragging: it would pull the word's end
+            // back under it. Its handles move the ends.
+            s.dragging = !s.touch;
         } else if (!s.blocked) s.clear();
     } else if (s.dragging and c.input.down) {
         if (s.hit orelse s.below) |p| if (s.focus == null or !std.meta.eql(p, s.focus.?)) {
