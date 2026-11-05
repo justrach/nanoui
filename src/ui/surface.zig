@@ -59,6 +59,9 @@ pub const Surface = struct {
     /// A frame was wanted while the window was hidden: run it once visible.
     pending: bool = false,
     dead: bool = false,
+    /// `destroy` ran after the app's run loop stopped: queued ticks and
+    /// wakes will never fire, so the surface must not wait for them.
+    force_destroy: bool = false,
     torn_down: bool = false,
     /// The window is being resized: only its size changes draw (each when
     /// the layer is displayed); the link waits, and what else asks for a
@@ -167,6 +170,7 @@ pub const Surface = struct {
     }
     pub fn destroy(self: *Surface) void {
         self.dead = true;
+        self.force_destroy = !self.window.app.running;
         if (!self.in_frame) self.finishDestroy();
     }
     pub fn finishDestroy(self: *Surface) void {
@@ -195,7 +199,7 @@ pub const Surface = struct {
             self.pacing_log.close();
             if (self.frame_log) |*fl| fl.deinit();
         }
-        if (!self.tick_scheduled and self.wake.pending == 0) self.gpa.destroy(self);
+        if (self.force_destroy or (!self.tick_scheduled and self.wake.pending == 0)) self.gpa.destroy(self);
     }
 
     fn finishFrame(self: *Surface) void {
