@@ -446,6 +446,7 @@ pub const Surface = struct {
             presented = self.renderer.drawLogged(self.instances.items, self.atlasTexture(), self.size, clear, null, 0).presented;
         }
         if (presented) self.last_present_target = present_at;
+        if (presented) @import("surface_wake.zig").presented(self);
         return presented;
     }
 
@@ -500,11 +501,10 @@ pub const Surface = struct {
     }
 
     pub fn setPaced(self: *Surface, on: bool) void {
+        if (on) @import("surface_wake.zig").watch(self);
         if (self.paced == on) return;
         self.paced = on;
-        if (!on) if (self.frame_log) |*fl| {
-            fl.last_t = 0;
-        };
+        if (!on and self.frame_log != null) self.frame_log.?.last_t = 0;
         if (self.display_link) |link| objc.msg(void, link, "setPaused:", .{!on});
     }
 
