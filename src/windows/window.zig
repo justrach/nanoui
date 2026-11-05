@@ -7,6 +7,8 @@ const Surface = @import("surface.zig").Surface;
 const window_types = @import("../window_types.zig");
 const Page = @import("../page_webview2.zig").Page;
 const drop_files = @import("drop_files.zig");
+const chrome = @import("chrome.zig");
+const place = @import("window_place.zig");
 
 /// The window message a page's queued messages go out on (`Page.flush`):
 /// after the app's own (`WM_APP` onwards, as `fdwatch.zig` allocates them).
@@ -36,7 +38,7 @@ pub const ShouldClose = window_types.ShouldClose(Window);
 pub const Options = window_types.Options(Window);
 pub const NativeView = window_types.NativeView;
 
-pub const Frame = struct { x: f64, y: f64, width: f64, height: f64 };
+pub const Frame = place.Frame;
 
 const class_name = std.unicode.utf8ToUtf16LeStringLiteral("NanoUIWindow");
 var registered = false;
@@ -108,6 +110,15 @@ pub const Window = struct {
     /// `Options.transparent`: the frame is the window, alpha and all
     /// (`layered.zig`).
     transparent: bool = false,
+    /// `Options.decorations`: false is a `WS_POPUP`.
+    decorations: bool = true,
+    /// `Options.frame_autosave`, the app's copy (`window_place.zig`).
+    autosave: ?[]const u8 = null,
+    /// The kept placement was maximized: the first `show` maximizes.
+    restore_maximized: bool = false,
+    /// The pointer is over the app's maximize button (`chrome.zig`), with
+    /// the non-client leave asked for.
+    max_hover: bool = false,
 
     /// Resizing changes geometry only, never the foreground window.
     pub const set_size_flags: u32 = w.SWP_NOMOVE | w.SWP_NOZORDER | w.SWP_NOACTIVATE;
@@ -115,7 +126,7 @@ pub const Window = struct {
     pub fn create(app: *App, options: Options) !*Window {
         const self = try app.gpa.create(Window);
         errdefer app.gpa.destroy(self);
-        self.* = .{ .app = app, .title_bar = options.title_bar, .on_close = options.on_close, .should_close = options.should_close, .on_resize = options.on_resize, .on_key = options.on_key, .on_fullscreen = options.on_fullscreen, .width = options.width, .height = options.height, .theme = options.theme, .min_width = options.min_width, .min_height = options.min_height, .opacity = options.opacity, .transparent = options.transparent and !options.decorations };
+        self.* = .{ .app = app, .title_bar = options.title_bar, .on_close = options.on_close, .should_close = options.should_close, .on_resize = options.on_resize, .on_key = options.on_key, .on_fullscreen = options.on_fullscreen, .width = options.width, .height = options.height, .theme = options.theme, .min_width = options.min_width, .min_height = options.min_height, .opacity = options.opacity, .transparent = options.transparent and !options.decorations, .decorations = options.decorations };
         // A page is made once the window it fills exists, below.
         var page_options: ?PageOptions = null;
         switch (options.content) {
@@ -123,6 +134,8 @@ pub const Window = struct {
             .view => |v| self.view = v,
         }
         if (!app.gui) return self;
+        if (options.frame_autosave) |n| self.autosave = try app.gpa.dupe(u8, n);
+        errdefer if (self.autosave) |n| app.gpa.free(n);
         const inst = w.GetModuleHandleW(null);
         if (!registered) {
             const wc: w.WNDCLASSEXW = .{ .style = w.CS_DBLCLKS, .lpfnWndProc = wndProc, .hInstance = inst, .hCursor = w.LoadCursorW(null, 32512), .lpszClassName = class_name };
@@ -132,6 +145,8 @@ pub const Window = struct {
         if (self.view) |view| {
             self.surface = try Surface.create(self, view, options.theme);
             errdefer if (self.surface) |s| s.destroy();
+            // The system caption's height, until the view sets its own band.
+            if (chrome.chromeless(self)) self.surface.?.ctx.title_bar_height = chrome.title_bar_height;
         }
         var title: [512]u16 = undefined;
         // A borderless window is `WS_POPUP`: no title bar, no frame, and the
@@ -150,8 +165,12 @@ pub const Window = struct {
         _ = w.SetWindowLongPtrW(hwnd, w.GWLP_USERDATA, @bitCast(@intFromPtr(self)));
         self.setIcon(options.icon);
         w.DragAcceptFiles(hwnd, 1);
+        // A title bar the app draws: the band reclaimed before the first size.
+        if (chrome.chromeless(self)) chrome.apply(hwnd);
         self.setSize(options.width, options.height);
         if (options.x != null and options.y != null) self.setPosition(options.x.?, options.y.?) else self.center();
+        // A frame kept under the name wins over the one asked for.
+        if (self.autosave != null) _ = place.restore(self);
         if (options.always_on_top) self.setAlwaysOnTop(true);
         // After the window exists: `SetLayeredWindowAttributes` needs one, and it
         // needs `WS_EX_LAYERED` to have been set when it was made — or set just
@@ -166,7 +185,7 @@ pub const Window = struct {
                 // what is missing where the page would have been.
                 error.WebView2Missing => {
                     std.log.warn("nanoui: no WebView2 for this window: showing a notice instead", .{});
-                    self.view = fallbackView(p.url);
+                    self.view = @import("window_notice.zig").fallbackView(p.url);
                     self.surface = Surface.create(self, self.view.?, options.theme) catch null;
                 },
                 else => return err,
@@ -231,6 +250,10 @@ pub const Window = struct {
             self.destroyNow();
             return 0;
         }
+        // A title bar the app draws: the frame's messages (`chrome.zig`).
+        if (chrome.chromeless(self)) if (chrome.handle(self, hwnd, msg, wp, lp)) |r| return r;
+        // A move or resize ended: the frame is kept (`frame_autosave`).
+        if (msg == w.WM_EXITSIZEMOVE) place.save(self);
         if (msg == w.WM_DROPFILES) {
             // Dropping does not activate the window: nothing here takes focus.
             if (wp != 0) drop_files.handle(self.surface, hwnd, @ptrFromInt(wp));
@@ -310,29 +333,15 @@ pub const Window = struct {
         if (self.on_fullscreen) |cb| cb.func(cb.ctx, self);
     }
 
-    /// The monitor the window is mostly on: its whole rect and its work area
-    /// (the monitor minus the taskbar and the docked bars). Null when the
-    /// system will not say.
-    fn monitor(self: *Window) ?struct { whole: w.RECT, work: w.RECT } {
-        const h = self.hwnd orelse return null;
-        const m = w.MonitorFromWindow(h, 2) orelse return null;
-        var info: w.MONITORINFO = .{};
-        if (w.GetMonitorInfoW(m, &info) == 0) return null;
-        return .{ .whole = info.rc_monitor, .work = info.rc_work };
-    }
-
-    /// The work area of the monitor the window is mostly on. Null when the
-    /// system will not say.
-    fn workArea(self: *Window) ?w.RECT {
-        const m = self.monitor() orelse return null;
-        return m.work;
-    }
-
-    fn dpiScale(self: *Window) f64 {
-        const h = self.hwnd orelse return 1;
-        const dpi = w.GetDpiForWindow(h);
-        return if (dpi > 0) @as(f64, @floatFromInt(dpi)) / 96 else 1;
-    }
+    pub const dpiScale = place.dpiScale;
+    const monitor = place.monitor;
+    const workArea = place.workArea;
+    pub const frame = place.frame;
+    pub const monitorSize = place.monitorSize;
+    /// Sizes the window so its client area is `width` × `height` points.
+    pub const setSize = place.setSize;
+    pub const setPosition = place.setPosition;
+    pub const center = place.center;
 
     /// The title-bar and taskbar icons, from an ICO's bytes: the frame
     /// nearest the size the system asks for.
@@ -348,6 +357,10 @@ pub const Window = struct {
     fn finish(self: *Window) void {
         if (self.closed) return;
         self.closed = true;
+        // Where it was, for the next window made with its name.
+        place.save(self);
+        if (self.autosave) |n| self.app.gpa.free(n);
+        self.autosave = null;
         if (self.on_close) |cb| cb.func(cb.ctx, self);
         // The page first: WebView2's view is a child window, gone with its
         // controller before the window that holds it.
@@ -395,64 +408,9 @@ pub const Window = struct {
         self.onFullscreen();
     }
 
-    pub fn frame(self: *Window) Frame {
-        const h = self.hwnd orelse return .{ .x = 0, .y = 0, .width = self.width, .height = self.height };
-        var r: w.RECT = .{};
-        _ = w.GetWindowRect(h, &r);
-        const s = self.dpiScale();
-        return .{ .x = @as(f64, @floatFromInt(r.left)) / s, .y = @as(f64, @floatFromInt(r.top)) / s, .width = @as(f64, @floatFromInt(r.right - r.left)) / s, .height = @as(f64, @floatFromInt(r.bottom - r.top)) / s };
-    }
-
-    /// The work area of the monitor the window is on, in points, so a caller
-    /// can work out whether there is room to put another window beside this
-    /// one. (The taskbar is left out: room means room for a window.)
-    pub fn monitorSize(self: *Window) [2]f64 {
-        const s = self.dpiScale();
-        if (self.workArea()) |a| {
-            return .{
-                @as(f64, @floatFromInt(a.right - a.left)) / s,
-                @as(f64, @floatFromInt(a.bottom - a.top)) / s,
-            };
-        }
-        return .{
-            @as(f64, @floatFromInt(w.GetSystemMetrics(0))) / s,
-            @as(f64, @floatFromInt(w.GetSystemMetrics(1))) / s,
-        };
-    }
-
     pub fn contentSize(self: *Window) [2]f64 {
         const s = self.surface orelse return .{ self.width, self.height };
         return .{ s.size.w, s.size.h };
-    }
-
-    /// Sizes the window so its client area is `width` × `height` points.
-    pub fn setSize(self: *Window, width: f64, height: f64) void {
-        const h = self.hwnd orelse return;
-        const s = self.dpiScale();
-        var r: w.RECT = .{ .right = @intFromFloat(width * s), .bottom = @intFromFloat(height * s) };
-        // The window's own style decides the non-client border a client area
-        // of this size needs: a `WS_POPUP` has none, and assuming the
-        // decorated style's border inflated every borderless window.
-        const style: u32 = @bitCast(@as(i32, @truncate(w.GetWindowLongPtrW(h, w.GWL_STYLE))));
-        _ = w.AdjustWindowRectEx(&r, style, 0, 0);
-        _ = w.SetWindowPos(h, null, 0, 0, r.right - r.left, r.bottom - r.top, set_size_flags);
-    }
-
-    pub fn setPosition(self: *Window, x: f64, y: f64) void {
-        const h = self.hwnd orelse return;
-        const s = self.dpiScale();
-        _ = w.SetWindowPos(h, null, @intFromFloat(x * s), @intFromFloat(y * s), 0, 0, 0x0001 | 0x0004); // no size, no z-order
-    }
-
-    pub fn center(self: *Window) void {
-        const h = self.hwnd orelse return;
-        var r: w.RECT = .{};
-        _ = w.GetWindowRect(h, &r);
-        const area = self.workArea() orelse w.RECT{
-            .right = w.GetSystemMetrics(0),
-            .bottom = w.GetSystemMetrics(1),
-        };
-        _ = w.SetWindowPos(h, null, area.left + @divTrunc(area.right - area.left - (r.right - r.left), 2), area.top + @divTrunc(area.bottom - area.top - (r.bottom - r.top), 2), 0, 0, 0x0001 | 0x0004);
     }
 
     pub fn setMinSize(self: *Window, width: f64, height: f64) void {
@@ -490,7 +448,9 @@ pub const Window = struct {
 
     pub fn show(self: *Window) void {
         const h = self.hwnd orelse return;
-        _ = w.ShowWindow(h, 5);
+        // Maximized, if the kept placement was (`window_place.restore`).
+        _ = w.ShowWindow(h, if (self.restore_maximized) 3 else 5);
+        self.restore_maximized = false;
         _ = w.SetForegroundWindow(h);
         _ = w.SetFocus(h);
     }
@@ -568,26 +528,3 @@ pub const Window = struct {
         std.debug.print("nanoui: window {x} frame {d} {d} {d} {d}\n", .{ @intFromPtr(self), f.x, f.y, f.width, f.height });
     }
 };
-
-/// The window's content when its page cannot be shown: no WebView2 on this
-/// machine, which the user can fix. A native view, so the window opens and
-/// says what is missing — with the download page one click away, and the
-/// address itself for anyone who'd rather read it first.
-const download_url = "https://developer.microsoft.com/microsoft-edge/webview2/";
-
-fn fallbackView(_: []const u8) ui.View {
-    const Notice = struct {
-        fn build(_: *@This(), c: *ui.Context) void {
-            const box = ui.div(c).column().center().sizeFull().gap(10).p(28);
-            defer box.end();
-            _ = ui.text(c, "This app needs Microsoft Edge WebView2", .{ .size = 18, .weight = .semibold });
-            _ = ui.text(c, "It is not installed on this PC. Install the Evergreen Runtime, then open the app again.", .{ .size = 13, .color = c.theme.muted });
-            const dl = ui.button(c, "Download WebView2", .{ .variant = .primary, .size = 14 });
-            if (dl.clicked) _ = @import("desktop.zig").shell.openUrl(download_url);
-            _ = ui.text(c, download_url, .{ .size = 11, .color = c.theme.muted });
-            const close = ui.button(c, "Close", .{ .size = 13 });
-            if (close.clicked) c.close_request = true;
-        }
-    };
-    return ui.View.init(@as(*Notice, @ptrFromInt(@alignOf(Notice))), Notice.build);
-}
