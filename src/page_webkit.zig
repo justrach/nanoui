@@ -201,8 +201,18 @@ fn didReceiveScriptMessage(self_obj: objc.Object, _: objc.SEL, _: objc.Object, m
     const pool = objc.Pool.push();
     defer pool.pop();
     const body = objc.msg(objc.Object, message, "body", .{});
-    // The page that sent it, which need not be the window's `page`.
-    ipc.handlePageMessage(self.queue.window, self, objc.fromNSString(body));
+    // The page that sent it, which need not be the window's `page`, and the
+    // document in it that did: where the frame is now, not where it was sent.
+    ipc.handlePageMessage(self.queue.window, self, objc.fromNSString(body), messageSource(message));
+}
+
+/// The absolute URL of the frame a script message came from
+/// (`message.frameInfo.request.URL`), or "" when WebKit gives none.
+fn messageSource(message: objc.Object) []const u8 {
+    const frame = objc.msg(?objc.Object, message, "frameInfo", .{}) orelse return "";
+    const req = objc.msg(?objc.Object, frame, "request", .{}) orelse return "";
+    const url = objc.msg(?objc.Object, req, "URL", .{}) orelse return "";
+    return objc.fromNSString(objc.msg(?objc.Object, url, "absoluteString", .{}));
 }
 
 fn startURLSchemeTask(self_obj: objc.Object, _: objc.SEL, _: objc.Object, task: objc.Object) callconv(.c) void {

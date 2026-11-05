@@ -495,9 +495,16 @@ const MessageReceived = struct {
         const units = std.mem.span(wide);
         buf.ensureTotalCapacity(gpa, units.len * 3) catch return wv.S_OK;
         const n = std.unicode.utf16LeToUtf8(buf.allocatedSlice(), units) catch return wv.S_OK;
-        ipc.handleMessage(box.page.queue.window, buf.allocatedSlice()[0..n]);
+        // The document that posted it: where the page is now, which may not
+        // be where it was last sent.
+        var src_buf: std.ArrayList(u8) = .empty;
+        defer src_buf.deinit(gpa);
+        const source = wv.MessageArgs.sourceUtf8(a, gpa, &src_buf);
+        // Said before the call: a method may close the window and its page.
         if (box.page.queue.window.app.debug)
             std.debug.print("nanoui: page said: {s}\n", .{buf.allocatedSlice()[0..n]});
+        // The page that sent it, which need not be the window's `page`.
+        ipc.handlePageMessage(box.page.queue.window, box.page, buf.allocatedSlice()[0..n], source);
         return wv.S_OK;
     }
 };
