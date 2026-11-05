@@ -203,7 +203,6 @@ pub const Surface = struct {
             gpu_side.invalidate(self);
             if (!self.frame_again) break;
         }
-        if (self.after_frame) |af| _ = af(self.after_frame_ctx, self);
         self.frames += 1;
         self.trace("frame built: {d:.0}x{d:.0} {d} draws, {d} passes, again={}", .{ self.size.w, self.size.h, self.instances.items.len, passes + 1, self.frame_again });
         self.frame_again = false;
@@ -242,7 +241,11 @@ pub const Surface = struct {
             self.window.close();
         }
         self.updateCursor();
-        pace_side.logFrame(self, now, raw_dt, 0);
+        // Native views over the view's boxes (a docked page) follow this
+        // frame's layout, whichever path built it (an input, a resize's paint).
+        const t_af = clock.now();
+        if (self.after_frame) |af| _ = af(self.after_frame_ctx, self);
+        pace_side.logFrame(self, now, raw_dt, (clock.now() - t_af) * 1000);
         const more = c.animating or r.hot_changed;
         self.hot_moving = r.hot_changed;
         if (more and !self.ticking) pace_side.startTicking(self);

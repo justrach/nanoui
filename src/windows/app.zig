@@ -258,6 +258,7 @@ pub const App = struct {
     /// arrive, and nothing is drawn to the screen.
     pub fn runSeconds(self: *App, seconds: f64) !void {
         self.running = true;
+        self.deliverLaunchUrls();
         for (self.windows.items) |win| if (win.page) |p| p.start();
         const clock = @import("../ui/clock.zig");
         const start = clock.now();
