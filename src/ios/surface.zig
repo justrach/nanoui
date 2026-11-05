@@ -282,6 +282,7 @@ pub const Surface = struct {
         if (!c.animating) self.last_frame_time = 0;
         // After the pace: the keyboard coming or going asks for a frame.
         keys.syncFocus(self);
+        selecting.afterFrame(self);
     }
 
     /// The app's view inside the safe area; the view sees none left.

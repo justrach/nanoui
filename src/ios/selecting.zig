@@ -31,6 +31,8 @@ pub const State = struct {
     loupe: ?objc.Object = null,
     menu: ?objc.Object = null,
     menu_view: ?objc.Object = null,
+    /// Where the selection was when its menu came up, while it's up.
+    menu_at: ?types.Rect = null,
 
     pub fn deinit(st: *State) void {
         if (st.loupe) |l| {
@@ -248,8 +250,20 @@ fn showMenu(s: *Surface) void {
     const from = objc.msg(objc.CGPoint, s.uiview, "convertPoint:toView:", .{ objc.CGPoint{ .x = r.x, .y = r.y }, view });
     const config = objc.msg(objc.Object, config_cls, "configurationWithIdentifier:sourcePoint:", .{ @as(?objc.Object, null), from });
     objc.msg(void, st.menu.?, "presentEditMenuWithConfiguration:", .{config});
+    st.menu_at = r;
+}
+
+/// After a frame: the menu points at the selection, so it goes when the selection
+/// moves without a finger (new content pushing it, the keyboard, a resize).
+pub fn afterFrame(s: *Surface) void {
+    const st = &s.selecting;
+    const at = st.menu_at orelse return;
+    const e = handles.ends(&s.ctx) orelse return dismissMenu(st);
+    const r = e.start orelse e.end orelse return dismissMenu(st);
+    if (r.x != at.x or r.y != at.y) dismissMenu(st);
 }
 
 fn dismissMenu(st: *State) void {
+    st.menu_at = null;
     if (st.menu) |m| objc.msg(void, m, "dismissMenu", .{});
 }
