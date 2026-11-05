@@ -39,4 +39,7 @@ pub fn main(init: std.process.Init) !void {
         break;
     }
     try app.run();
+    if (init.environ_map.get("NANOBROWSER_DUMP")) |file| {
+        if (browser.tabs.items[browser.current].page) |page| try @import("dump.zig").write(app.gpa, page, file);
+    }
 }
