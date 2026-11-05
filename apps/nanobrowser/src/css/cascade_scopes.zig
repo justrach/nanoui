@@ -74,9 +74,18 @@ pub fn collectFor(e: *Engine, n: *dom.Node) Allocator.Error!void {
     if (n.shadow_root) |root| if (try indexOfScope(e, root)) |ix| {
         try rule_index.collectFrom(gpa, ix.host.items, n, &e.match_ctx, list);
     };
-    if (n.parent) |p| if (p.shadow_root) |root| if (try indexOfScope(e, root)) |ix| {
-        for (ix.slotted.items) |entry| if (match.matchesAny(entry.sel.slotted, n, &e.match_ctx)) try list.append(gpa, entry);
-    };
+    // Each shadow tree `n` is slotted through: a `<slot>` that is itself a host's
+    // child forwards what it takes to that host's slots.
+    var through: *dom.Node = n;
+    var hops: u32 = 0;
+    while (through.parent) |p| : (hops += 1) {
+        const root = p.shadow_root orelse break;
+        if (try indexOfScope(e, root)) |ix| {
+            for (ix.slotted.items) |entry| if (match.matchesAny(entry.sel.slotted, n, &e.match_ctx)) try list.append(gpa, entry);
+        }
+        if (hops >= 16) break;
+        through = slotFor(root, through) orelse break;
+    }
     if (n.tree_scope) |root| if (n.attr("part")) |names| {
         const host = root.parent orelse return;
         const outer = if (host.tree_scope) |r2| try indexOfScope(e, r2) else &e.index.?;
@@ -89,6 +98,16 @@ pub fn collectFor(e: *Engine, n: *dom.Node) Allocator.Error!void {
             };
         }
     };
+}
+
+/// The `<slot>` in a shadow tree that a child of its host goes to.
+fn slotFor(root: *dom.Node, child: *const dom.Node) ?*dom.Node {
+    const wants = if (child.kind == .element) child.attr("slot") orelse "" else "";
+    var at = root.first_child;
+    while (at) |x| : (at = x.nextInTree(root)) {
+        if (x.kind == .element and x.isTag("slot") and std.mem.eql(u8, x.attr("name") orelse "", wants)) return x;
+    }
+    return null;
 }
 
 /// Whether the `@container` a rule sits under holds for `n`: each level asks

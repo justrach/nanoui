@@ -218,3 +218,19 @@ test "matchMedia and resize follow the viewport" {
     try r.expectJs("mq.matches + ',' + seen.join() + ',' + resizes + ',' + innerWidth", "false,false,1,600");
     try r.expectNoErrors();
 }
+
+test "::slotted reaches what a slot forwards from another shadow tree" {
+    var r: Run = undefined;
+    try r.start();
+    defer r.stop();
+    try r.html(
+        \\<!doctype html><body><x-outer><ul id=u><li>one</li></ul></x-outer><script>
+        \\customElements.define('x-inner', class extends HTMLElement { constructor() { super();
+        \\  this.attachShadow({mode: 'open'}).innerHTML = '<style>::slotted(:not([slot])) { display: grid; margin: 7px }</style><div><slot></slot></div>'; } });
+        \\customElements.define('x-outer', class extends HTMLElement { constructor() { super();
+        \\  this.attachShadow({mode: 'open'}).innerHTML = '<x-inner><slot></slot></x-inner>'; } });
+        \\</script>
+    );
+    try r.expectJs("getComputedStyle(u).display + getComputedStyle(u).marginTop", "grid7px");
+    try r.expectNoErrors();
+}
