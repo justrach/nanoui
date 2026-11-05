@@ -15,7 +15,11 @@ pub fn run(a: std.mem.Allocator, io: std.Io, out: *cli.Out) !void {
     if (builtin.os.tag == .linux) {
         if (gtk_ok) out.step("✓ GTK 3", .{}) else out.step("✗ GTK 3 not found (libgtk-3-0)", .{});
         // Only apps with pages need it: reported, not required.
-        if (found("libwebkit2gtk-4.1.so.0") or found("libwebkit2gtk-4.0.so.37") or found("libwebkitgtk-6.0.so.4"))
+        const four = found("libwebkit2gtk-4.1.so.0") or found("libwebkit2gtk-4.0.so.37");
+        const six = found("libwebkitgtk-6.0.so.4");
+        if (six and !four and bwrapRefuses(a, io))
+            out.step("- WebKitGTK 6.0 can't start its sandbox here: web pages need libwebkit2gtk-4.1-0", .{})
+        else if (four or six)
             out.step("✓ WebKitGTK", .{})
         else
             out.step("- WebKitGTK not found: web pages need it (libwebkit2gtk-4.1-0)", .{});
@@ -24,6 +28,16 @@ pub fn run(a: std.mem.Allocator, io: std.Io, out: *cli.Out) !void {
     if (!zig_ok) return out.fail("zig 0.17 is needed", .{}, "install it from ziglang.org/download, or with zigup 0.17.0");
     if (!gtk_ok) return out.fail("GTK 3 is needed on Linux", .{}, "sudo apt install libgtk-3-0 (or your distribution's GTK 3)");
     out.done(.{ .zig = zig_version, .os = os, .arch = @tagName(builtin.cpu.arch) }, &.{});
+}
+
+/// Whether bubblewrap, which WebKitGTK 6.0 always runs in, refuses to run here.
+/// The same check as `webkit.refuses` in an app.
+fn bwrapRefuses(a: std.mem.Allocator, io: std.Io) bool {
+    const r = std.process.run(a, io, .{ .argv = &.{ "bwrap", "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev", "--unshare-all", "true" } }) catch return false;
+    return switch (r.term) {
+        .exited => |code| code != 0,
+        else => true,
+    };
 }
 
 /// Whether a library is where the dynamic loader finds it (nui itself is
