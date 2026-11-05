@@ -316,7 +316,7 @@ test "a span isn't transformed, and `fixed` is held by what's transformed" {
     var r: Run = undefined;
     try r.start();
     defer r.stop();
-    try page(&r, "<span id=s style='transform:translateX(100px);background:#f00'>hello</span>");
+    try page(&r, "<span id=s style='transform:translateX(100px);background:#f00;color:#f00'>hello</span>");
     try r.expectJs("Math.round(s.getBoundingClientRect().left)", "0");
     try expectAt(&r, 3, 5, isRed, "still at its place");
 }

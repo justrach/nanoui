@@ -261,7 +261,9 @@ test "a declared family is the page's own, and pages don't see the mark" {
     try n.declared.put(gpa, try gpa.dupe(u8, "inter"), {});
     const list = (try resolve(a, &n, gpa, try tokens(a, "Inter, Arial")));
     try std.testing.expect(std.mem.startsWith(u8, list.?, "@7/Inter,"));
-    try std.testing.expectEqualStrings("Inter, Arial, " ++ standard, try shown(a, list.?));
+    const whole = try std.fmt.allocPrint(a, "Inter,{s},{s}", .{ metricAlias("Arial") orelse "Arial", standard });
+    const want = try std.mem.replaceOwned(u8, a, whole, ",", ", ");
+    try std.testing.expectEqualStrings(want, try shown(a, list.?));
     // The same words, the same string.
     try std.testing.expectEqual(list.?.ptr, (try resolve(a, &n, gpa, try tokens(a, "Inter, Arial"))).?.ptr);
 }
