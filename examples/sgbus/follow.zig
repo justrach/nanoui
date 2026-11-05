@@ -529,14 +529,17 @@ fn followBar(s: *App, c: *ui.Context, box: ui.Rect, sa: ui.Edges, mode: Mode, y:
         ui.text(c, if (following) "Following" else "Follow this journey", .{ .size = 16, .weight = .bold, .color = if (following) ink else ground, .truncate = .ellipsis });
         if (pill.clicked() and !following) {
             if (s.journey.trip()) |t| {
-                s.journey.going = true;
-                s.nav.start(t, s.journey.dest.?.at, s.journey.dest.?.name());
-                f.passed = @splat(0);
-                f.last_cur = null;
+                // Where it starts, kept before nav starts: once it's on,
+                // originName gives back origin_buf itself (a follow
+                // before this one), and copying that onto itself panics.
                 const o = originName(s);
                 const n = @min(o.len, f.origin_buf.len);
                 @memcpy(f.origin_buf[0..n], o[0..n]);
                 f.origin_len = n;
+                s.journey.going = true;
+                s.nav.start(t, s.journey.dest.?.at, s.journey.dest.?.name());
+                f.passed = @splat(0);
+                f.last_cur = null;
                 nanoui.haptics.notify(.success);
             }
         }
