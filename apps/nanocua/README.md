@@ -48,7 +48,8 @@ named. `click` with a ref presses the element through accessibility when it can;
 otherwise, and for keys, text and scrolling, events are posted to that app alone,
 so your pointer stays where it is and your keyboard stays yours. Screenshots
 capture that app's window, even behind others, with the mapping from image pixels
-back to screen points. This isn't a sandbox: it's your real Mac, your apps and
+back to screen points. A window on another Space or minimized is out of reach:
+macOS shows neither its picture nor its elements, and the reply says so. This isn't a sandbox: it's your real Mac, your apps and
 your logins. And some apps ignore events they get in the background (Chromium's
 web content is the likely one); refs still work there.
 

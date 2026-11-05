@@ -1,7 +1,7 @@
 # Vendored from codegraff
 
 This folder is generated from `apps/nanocua` in
-[codegraff](https://github.com/justrach/codegraff) at `5b0d13d473c82c7df88c01d7ed2ad24676fccdda`, by that
+[codegraff](https://github.com/justrach/codegraff) at `e709ba1d93b570e6b1d4b86c7e8feb2ad5e6f10b`, by that
 repository's `scripts/vendor-nanocua.sh`. Change it there, not here: the next
 copy overwrites this one.
 

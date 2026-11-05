@@ -24,6 +24,8 @@ extern "c" fn dispatch_async_f(queue: objc.dispatch_queue_t, ctx: ?*anyopaque, w
 extern "c" fn getpid() c_int;
 extern "c" fn usleep(us: c_uint) c_int;
 
+const off_this_space = "That app's window isn't on the user's current Space, or is minimized, so macOS shows nanocua neither its picture nor its elements. Tell the user once; don't retry.";
+
 /// What one agent is working on. Agents connect one socket each: refs from
 /// one's tree mean nothing to another, and neither moves the other's target.
 pub const Session = struct {
@@ -274,6 +276,7 @@ const Job = struct {
                 if (pid == m.self_pid) return j.fail("That is nanocua itself, which agents don't see. Pass pid or app (see list_apps).", .{});
                 const max: usize = @intCast(std.math.clamp(j.max_nodes orelse 400, 1, 2000));
                 try ax.writeTree(&j.session.refs, w, pid, .{ .max_nodes = max });
+                if (windows.main(pid)) |win| if (!win.onscreen) try w.print("\n{s}\n", .{off_this_space});
                 j.session.last = pid;
             },
             .screenshot => try j.screenshot(),
@@ -547,6 +550,8 @@ const Job = struct {
                 const w = windows.main(pid) orelse return j.fail("App {d} has no window to capture.", .{pid});
                 rect = w.frame;
                 j.session.last = pid;
+                // macOS refuses these (SCStream error -3811), with no better reason to pass on.
+                if (!w.onscreen) return j.fail("{s}", .{off_this_space});
                 break :blk capture.window(m.gpa, w.id, w.frame, max);
             },
         };

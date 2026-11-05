@@ -34,17 +34,25 @@ pub const Tool = enum {
         return std.meta.stringToEnum(Tool, name);
     }
 
+    /// When to use nanocua and when to stop. Here as well as in the handshake's
+    /// `instructions`, which clients may ignore: graff does.
+    pub const guidance =
+        \\ Use nanocua for another app's real UI; to show or test your own work, prefer the project's own commands.
+        \\If a call says nanocua is stopped, or input or the whole screen is off, tell the user once and carry on
+        \\without it. Don't retry in a loop or set up permissions yourself: they are the user's to give.
+    ;
+
     pub fn description(t: Tool) []const u8 {
         return switch (t) {
             .list_apps =>
             \\Lists the running apps with windows: name, bundle id, pid, and which one is frontmost.
-            ,
+            ++ guidance,
             .get_ui_tree =>
             \\The accessibility tree of an app, in the background (pid or app; else the app you last read, else the
             \\frontmost): one line per element with a ref like [12], its role, title, value and frame in screen points
             \\(top-left origin). The app becomes the one you act in. Use refs with click, type_text, scroll and
             \\set_value; they stay valid until the next get_ui_tree. Prefer this over screenshots: it is exact and cheap.
-            ,
+            ++ guidance,
             .screenshot =>
             \\A JPEG of an app's main window, even behind other windows (pid or app; else the app you last read).
             \\With whole_screen, if the user allows it: the main display, or a region of it (x, y, width, height).
@@ -198,4 +206,9 @@ test "arguments read leniently" {
     try std.testing.expectEqualStrings("hi", a.string("text").?);
     try std.testing.expectEqual(@as(?bool, null), a.boolean("text"));
     try std.testing.expectEqual(@as(?[]const u8, null), Args.of(null).string("text"));
+}
+
+test "the guidance reaches clients that ignore a server's instructions" {
+    for ([_]Tool{ .list_apps, .get_ui_tree }) |t|
+        try std.testing.expect(std.mem.indexOf(u8, t.description(), "permissions yourself") != null);
 }

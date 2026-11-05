@@ -29,6 +29,13 @@ pub fn better(a: Window, b: Window) bool {
     return a.frame.size.width * a.frame.size.height > b.frame.size.width * b.frame.size.height;
 }
 
+/// Whether it's big enough to be a window someone works in. An app can have
+/// layer 0 strips and icons and nothing else: Finder with its windows closed has a
+/// menu-bar-sized strip, whose picture is blank.
+pub fn sizedLikeAWindow(w: Window) bool {
+    return w.frame.size.width >= 100 and w.frame.size.height >= 40;
+}
+
 fn int(v: ?*anyopaque) ?i64 {
     const x = v orelse return null;
     if (cf.CFGetTypeID(x) != cf.CFNumberGetTypeID()) return null;
@@ -56,6 +63,7 @@ pub fn main(pid: i32) ?Window {
     for (0..n) |i| {
         const d: cf.CFDictionaryRef = @ptrCast(cf.CFArrayGetValueAtIndex(list, @intCast(i)) orelse continue);
         const w = read(d, pid) orelse continue;
+        if (!sizedLikeAWindow(w)) continue;
         if (best == null or better(w, best.?)) best = w;
     }
     return best;
@@ -97,6 +105,18 @@ test "the main window: on screen first, then the largest" {
     try std.testing.expect(better(of(1352, 802, true), of(1352, 47, true)));
     try std.testing.expect(!better(of(1352, 47, true), of(1352, 802, true)));
     try std.testing.expect(better(of(10, 10, true), of(1352, 849, false)));
+}
+
+test "strips and icons aren't an app's main window" {
+    const of = struct {
+        fn f(w: f64, h: f64) Window {
+            return .{ .id = 1, .frame = .{ .size = .{ .width = w, .height = h } }, .onscreen = false };
+        }
+    }.f;
+    try std.testing.expect(!sizedLikeAWindow(of(1352, 29)));
+    try std.testing.expect(!sizedLikeAWindow(of(64, 64)));
+    try std.testing.expect(sizedLikeAWindow(of(1352, 47)));
+    try std.testing.expect(sizedLikeAWindow(of(260, 400)));
 }
 
 test "a window contains the points in its frame" {
