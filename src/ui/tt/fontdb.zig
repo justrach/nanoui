@@ -6,6 +6,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const font = @import("font.zig");
+const registry = @import("../font_registry.zig");
 
 pub const Face = struct {
     path: []const u8,
@@ -13,6 +14,8 @@ pub const Face = struct {
     style: font.Style,
     /// A font the app brought (`ui.registerFont`): its bytes, not a file.
     memory: ?[]const u8 = null,
+    /// Brought with `ui.registerFontFace`: found only through its registration.
+    private: bool = false,
 
     fn read(f: Face, db: *Db) ![]u8 {
         if (f.memory) |m| return db.gpa.dupe(u8, m);
@@ -55,6 +58,8 @@ pub const Db = struct {
     found: std.AutoHashMapUnmanaged(u21, ?u32) = .empty,
     /// How many of the app's fonts (`font_registry`) are added.
     bundled: usize = 0,
+    /// Faces of `ui.registerFontFace`, added as first used.
+    brought: std.AutoHashMapUnmanaged(*const registry.Face, u32) = .empty,
 
     pub fn init(gpa: std.mem.Allocator, io: std.Io) Db {
         return .{ .gpa = gpa, .io = io };
@@ -70,6 +75,37 @@ pub const Db = struct {
         }
         db.loaded.deinit(db.gpa);
         db.found.deinit(db.gpa);
+        db.brought.deinit(db.gpa);
+    }
+
+    /// The face of a font the app brought, added the first time.
+    pub fn addBrought(db: *Db, face: *const registry.Face) ?u32 {
+        if (db.brought.get(face)) |i| return i;
+        if (face.bytes.len == 0) return null;
+        const t = font.Tables.read(face.bytes, 0) catch return null;
+        const owned = db.gpa.dupe(u8, "") catch return null;
+        db.faces.append(db.gpa, .{ .path = owned, .index = 0, .style = font.Style.read(face.bytes, t), .memory = face.bytes, .private = true }) catch {
+            db.gpa.free(owned);
+            return null;
+        };
+        const i: u32 = @intCast(db.faces.items.len - 1);
+        db.brought.put(db.gpa, face, i) catch {};
+        return i;
+    }
+
+    /// Faces the app brought may be gone: forgets them all, loaded copies
+    /// too. Their numbers stay taken, so none now means another. Nothing may
+    /// hold a run font of them (the text system dropped its own first).
+    pub fn dropBrought(db: *Db) void {
+        var it = db.brought.valueIterator();
+        while (it.next()) |i| {
+            db.faces.items[i.*].memory = "";
+            if (db.loaded.fetchRemove(i.*)) |kv| {
+                db.gpa.free(kv.value.data);
+                db.gpa.destroy(kv.value);
+            }
+        }
+        db.brought.clearRetainingCapacity();
     }
 
     /// Adds the faces of fonts the app registered since last asked.
@@ -165,9 +201,29 @@ pub const Db = struct {
         var best: ?u32 = null;
         var best_score: u32 = std.math.maxInt(u32);
         for (db.faces.items, 0..) |f, i| {
-            if (!std.ascii.eqlIgnoreCase(f.style.name(), name)) continue;
+            if (f.private or !std.ascii.eqlIgnoreCase(f.style.name(), name)) continue;
             const dw: u32 = @abs(@as(i32, f.style.weight) - @as(i32, weight));
             const score = dw + @as(u32, if (f.style.italic != italic) 1000 else 0);
+            if (score < best_score) {
+                best_score = score;
+                best = @intCast(i);
+            }
+        }
+        return best;
+    }
+
+    /// As `family`, a width in `font-stretch` percent counted first. OS/2's
+    /// classes 1 to 9 stand for 50% to 200%.
+    pub fn familyStretch(db: *Db, name: []const u8, weight: u16, italic: bool, stretch: u16) ?u32 {
+        if (stretch == 100) return db.family(name, weight, italic);
+        db.scan();
+        const percent = [_]u16{ 100, 50, 62, 75, 87, 100, 112, 125, 150, 200 };
+        var best: ?u32 = null;
+        var best_score: u32 = std.math.maxInt(u32);
+        for (db.faces.items, 0..) |f, i| {
+            if (f.private or !std.ascii.eqlIgnoreCase(f.style.name(), name)) continue;
+            const have = percent[@min(f.style.width, 9)];
+            const score = @as(u32, @abs(@as(i32, have) - @as(i32, stretch))) * 100_000 + @as(u32, @intFromBool(f.style.italic != italic)) * 2000 + @abs(@as(i32, f.style.weight) - @as(i32, weight));
             if (score < best_score) {
                 best_score = score;
                 best = @intCast(i);
@@ -182,8 +238,9 @@ pub const Db = struct {
         if (name) |n| if (db.family(n, weight, italic)) |f| return f;
         for (if (mono) &monos else &sans) |n| if (db.family(n, weight, italic)) |f| return f;
         db.scan();
-        for (db.faces.items, 0..) |f, i| if (f.style.mono == mono) return @intCast(i);
-        return if (db.faces.items.len > 0) 0 else null;
+        for (db.faces.items, 0..) |f, i| if (!f.private and f.style.mono == mono) return @intCast(i);
+        for (db.faces.items, 0..) |f, i| if (!f.private) return @intCast(i);
+        return null;
     }
 
     /// A face's font, loaded on first use (null if it cannot be read).
@@ -219,12 +276,12 @@ pub const Db = struct {
         };
         // Any face at all: the loaded first, then the rest.
         var it = db.loaded.iterator();
-        while (it.next()) |e| if (e.value_ptr.*.font.glyphIndex(cp) != 0) return e.key_ptr.*;
+        while (it.next()) |e| if (!db.faces.items[e.key_ptr.*].private and e.value_ptr.*.font.glyphIndex(cp) != 0) return e.key_ptr.*;
         // Read, checked and let go unless it has it; a few dozen at most.
         var tries: usize = 0;
         for (0..db.faces.items.len) |i| {
             if (tries >= 48) break;
-            if (db.loaded.contains(@intCast(i))) continue;
+            if (db.loaded.contains(@intCast(i)) or db.faces.items[i].private) continue;
             if (i > 0 and std.mem.eql(u8, db.faces.items[i - 1].style.name(), db.faces.items[i].style.name())) continue;
             tries += 1;
             const face = db.faces.items[i];

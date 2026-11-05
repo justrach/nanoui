@@ -27,7 +27,7 @@ fn tag(s: *const [4]u8) u32 {
 
 /// The number of faces in a font file: one, or a collection's count.
 pub fn faces(data: []const u8) usize {
-    if (data.len >= 12 and be32(data, 0) == tag("ttcf")) return be32(data, 8);
+    if (data.len >= 12 and be32(data, 0) == tag("ttcf")) return @min(be32(data, 8), 256);
     return 1;
 }
 
@@ -99,6 +99,8 @@ pub const Style = struct {
     italic: bool = false,
     /// Every glyph as wide as every other.
     mono: bool = false,
+    /// OS/2's width class: 1 ultra-condensed … 5 normal … 9 ultra-expanded.
+    width: u16 = 5,
 
     pub fn name(s: *const Style) []const u8 {
         return s.family[0..s.family_len];
@@ -109,6 +111,7 @@ pub const Style = struct {
         var s: Style = .{};
         if (t.os2 != 0) {
             s.weight = be16(data, t.os2 + 4);
+            s.width = be16(data, t.os2 + 6);
             const sel = be16(data, t.os2 + 62);
             s.italic = sel & 1 != 0;
             // PANOSE proportion 9 is monospaced.
@@ -266,6 +269,20 @@ pub const Font = struct {
         return if (g == 0) 0 else g +% delta;
     }
 
+    /// The height of lowercase letters, in font units: OS/2's, else `x`'s own.
+    pub fn xHeight(f: *const Font) f32 {
+        if (f.t.os2 != 0 and be16(f.data, f.t.os2) >= 2 and bei16(f.data, f.t.os2 + 86) > 0) return @floatFromInt(bei16(f.data, f.t.os2 + 86));
+        if (f.bounds(f.glyphIndex('x'))) |b| return b[3];
+        return f.units_per_em * 0.5;
+    }
+
+    /// The height of capitals, in font units: OS/2's, else `H`'s own.
+    pub fn capHeight(f: *const Font) f32 {
+        if (f.t.os2 != 0 and be16(f.data, f.t.os2) >= 2 and bei16(f.data, f.t.os2 + 88) > 0) return @floatFromInt(bei16(f.data, f.t.os2 + 88));
+        if (f.bounds(f.glyphIndex('H'))) |b| return b[3];
+        return f.units_per_em * 0.7;
+    }
+
     /// A glyph's advance, in font units.
     pub fn advance(f: *const Font, g: u16) f32 {
         const i = @min(g, f.num_hmetrics - 1);
@@ -312,14 +329,17 @@ pub const Font = struct {
     /// Sends a glyph's outline to `sink`, transformed by `m` (a, b, c, d,
     /// e, f: x' = a x + c y + e, y' = b x + d y + f).
     pub fn outline(f: *const Font, g: u16, m: [6]f32, sink: Sink) void {
-        f.outlineDepth(g, m, sink, 0);
+        // Components nest and repeat; a font from the web may have them do so
+        // without end.
+        var budget: u32 = 512;
+        f.outlineDepth(g, m, sink, 0, &budget);
     }
 
-    fn outlineDepth(f: *const Font, g: u16, m: [6]f32, sink: Sink, depth: u8) void {
+    fn outlineDepth(f: *const Font, g: u16, m: [6]f32, sink: Sink, depth: u8, budget: *u32) void {
         const r = f.glyphRange(g) orelse return;
         const contours = bei16(f.data, r[0]);
         if (contours >= 0) return f.simple(r[0], @intCast(contours), m, sink);
-        if (depth < 8) f.composite(r[0] + 10, m, sink, depth);
+        if (depth < 8) f.composite(r[0] + 10, m, sink, depth, budget);
     }
 
     fn simple(f: *const Font, at: usize, contours: usize, m: [6]f32, sink: Sink) void {
@@ -375,10 +395,12 @@ pub const Font = struct {
         }
     }
 
-    fn composite(f: *const Font, at_in: usize, m: [6]f32, sink: Sink, depth: u8) void {
+    fn composite(f: *const Font, at_in: usize, m: [6]f32, sink: Sink, depth: u8, budget: *u32) void {
         const d = f.data;
         var at = at_in;
         while (true) {
+            if (budget.* == 0 or at + 6 > d.len) return;
+            budget.* -= 1;
             const flags = be16(d, at);
             const g = be16(d, at + 2);
             at += 4;
@@ -425,7 +447,7 @@ pub const Font = struct {
                 m[0] * dx + m[2] * dy + m[4],
                 m[1] * dx + m[3] * dy + m[5],
             };
-            f.outlineDepth(g, cm, sink, depth + 1);
+            f.outlineDepth(g, cm, sink, depth + 1, budget);
             if (flags & 0x20 == 0) break;
         }
     }

@@ -108,7 +108,40 @@ pub const Length = union(enum) {
 pub const Direction = enum { row, column };
 pub const Align = enum { start, center, end, stretch };
 pub const Justify = enum { start, center, end, space_between };
-pub const Weight = enum { regular, medium, semibold, bold };
+/// A font's weight. The names beyond the first four came later and go after
+/// them, so each keeps its number; `TextStyle.css_weight` asks for any other.
+pub const Weight = enum {
+    regular,
+    medium,
+    semibold,
+    bold,
+    thin,
+    extralight,
+    light,
+    extrabold,
+    black,
+
+    /// Its number on CSS's scale of 1 to 1000.
+    pub fn css(w: Weight) u16 {
+        return switch (w) {
+            .thin => 100,
+            .extralight => 200,
+            .light => 300,
+            .regular => 400,
+            .medium => 500,
+            .semibold => 600,
+            .bold => 700,
+            .extrabold => 800,
+            .black => 900,
+        };
+    }
+
+    /// The name nearest a number on CSS's scale.
+    pub fn of(n: u16) Weight {
+        const names = [_]Weight{ .thin, .extralight, .light, .regular, .medium, .semibold, .bold, .extrabold, .black };
+        return names[@min((n +| 50) / 100, 9) -| 1];
+    }
+};
 
 pub const Shadow = struct {
     color: Color = .{ .a = 0.18 },
@@ -280,6 +313,8 @@ pub const Span = struct {
     end: u32,
     color: ?Color = null,
     weight: ?Weight = null,
+    /// A family list for this span (`TextStyle.family`).
+    family: ?[]const u8 = null,
     italic: bool = false,
     mono: bool = false,
     background: ?Color = null,
@@ -288,7 +323,7 @@ pub const Span = struct {
 
     /// Whether it changes the font, so the text is shaped with its runs.
     pub fn styled(s: Span) bool {
-        return s.weight != null or s.italic or s.mono;
+        return s.weight != null or s.family != null or s.italic or s.mono;
     }
 };
 
@@ -326,6 +361,26 @@ pub const TextStyle = struct {
     /// The system face's serif design (New York on Apple systems); others
     /// keep their own.
     serif: bool = false,
+    /// The fonts to draw this text in, by family, comma separated: each
+    /// character in the first that has it (fonts brought with
+    /// `ui.registerFontFace` honouring their ranges), then the system's
+    /// fallback. `system-ui`, `ui-monospace`, `ui-serif` and `ui-rounded` name
+    /// the system's own. Names not found are skipped; none found, or null, is
+    /// the theme's font. Compared by contents; it needs to live as long as the
+    /// style does.
+    family: ?[]const u8 = null,
+    /// A weight on CSS's scale (1 to 1000) in place of `weight` when above 0:
+    /// nearest face, or the exact one on a variable font.
+    css_weight: u16 = 0,
+    /// A width as CSS's `font-stretch` percentage, where a face of it exists.
+    stretch: u16 = 100,
+    /// Standard ligatures (`fi`); CSS turns them off when letters are spaced.
+    ligatures: bool = true,
+
+    /// The weight asked for, on CSS's scale.
+    pub fn weightValue(s: TextStyle) u16 {
+        return if (s.css_weight != 0) s.css_weight else s.weight.css();
+    }
 
     /// Cut to one line that fits, at its end or in its middle.
     pub fn cuts(s: TextStyle) bool {

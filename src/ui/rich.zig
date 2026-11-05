@@ -6,6 +6,7 @@ const std = @import("std");
 const cf = @import("cf.zig");
 const types = @import("types.zig");
 const text = @import("text_mac.zig");
+const stacks = @import("text_stack_mac.zig");
 
 extern "c" fn CFAttributedStringCreateMutable(alloc: ?*anyopaque, max: cf.CFIndex) ?cf.CFAttributedStringRef;
 extern "c" fn CFAttributedStringReplaceString(s: cf.CFAttributedStringRef, range: cf.CFRange, with: cf.CFStringRef) void;
@@ -22,7 +23,7 @@ pub const spansHash = spans_mod.spansHash;
 /// `s` (bytes `offset`… of the paragraph the spans index) as an
 /// attributed string, each span in its font; release with CFRelease.
 pub fn attributed(ts: *text.TextSystem, s: []const u8, base: types.TextStyle, spans: []const types.Span, offset: usize) cf.CFAttributedStringRef {
-    const m = CFAttributedStringCreateMutable(null, 0) orelse return cf.attributed(s, ts.font(base).ref);
+    const m = CFAttributedStringCreateMutable(null, 0) orelse return ts.attributedOf(s, base);
     const str = cf.string(s);
     defer cf.CFRelease(str);
     CFAttributedStringBeginEditing(m);
@@ -31,6 +32,7 @@ pub fn attributed(ts: *text.TextSystem, s: []const u8, base: types.TextStyle, sp
     const total = @min(cf.utf16Offset(s, s.len), str_len);
     CFAttributedStringSetAttribute(m, .{ .location = 0, .length = total }, cf.kCTFontAttributeName, ts.font(base).ref);
     CFAttributedStringSetAttribute(m, .{ .location = 0, .length = total }, cf.kCTForegroundColorFromContextAttributeName, cf.kCFBooleanTrue);
+    if (ts.stackOf(base)) |st| stacks.applyRuns(ts.gpa, m, st, s, 0, s.len);
     const end = offset + s.len;
     for (spans) |sp| {
         if (!sp.styled() or sp.end <= offset or sp.start >= end) continue;
@@ -39,7 +41,9 @@ pub fn attributed(ts: *text.TextSystem, s: []const u8, base: types.TextStyle, sp
         const from = @min(cf.utf16Offset(s, a), total);
         const to = @min(cf.utf16Offset(s, b), total);
         if (to <= from) continue;
-        CFAttributedStringSetAttribute(m, .{ .location = from, .length = to - from }, cf.kCTFontAttributeName, ts.font(spanStyle(base, sp)).ref);
+        const st = spanStyle(base, sp);
+        CFAttributedStringSetAttribute(m, .{ .location = from, .length = to - from }, cf.kCTFontAttributeName, ts.font(st).ref);
+        if (ts.stackOf(st)) |stack| stacks.applyRuns(ts.gpa, m, stack, s, a, b);
     }
     CFAttributedStringEndEditing(m);
     return m;

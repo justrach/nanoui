@@ -13,6 +13,8 @@ const atlas_mod = @import("atlas.zig");
 const shaper = @import("shaper.zig");
 const fonts = @import("fonts.zig");
 const utf8 = @import("utf8.zig");
+const stacks = @import("text_stack_mac.zig");
+const registry = @import("font_registry.zig");
 pub const rich = @import("rich.zig");
 
 pub const Atlas = atlas_mod.Atlas;
@@ -22,6 +24,10 @@ pub const subpixel_bins = atlas_mod.subpixel_bins;
 extern "c" fn CTFontGetAscent(font: cf.CTFontRef) f64;
 extern "c" fn CTFontGetDescent(font: cf.CTFontRef) f64;
 extern "c" fn CTFontGetLeading(font: cf.CTFontRef) f64;
+extern "c" fn CTFontGetXHeight(font: cf.CTFontRef) f64;
+extern "c" fn CTFontGetCapHeight(font: cf.CTFontRef) f64;
+extern "c" fn CTFontGetGlyphsForCharacters(font: cf.CTFontRef, chars: [*]const u16, glyphs: [*]u16, n: cf.CFIndex) bool;
+extern "c" fn CTFontGetAdvancesForGlyphs(font: cf.CTFontRef, orientation: u32, glyphs: [*]const u16, advances: ?*anyopaque, n: cf.CFIndex) f64;
 extern "c" fn CTLineGetGlyphRuns(line: cf.CTLineRef) *anyopaque;
 extern "c" fn CFArrayGetCount(arr: *anyopaque) cf.CFIndex;
 extern "c" fn CFArrayGetValueAtIndex(arr: *anyopaque, i: cf.CFIndex) *anyopaque;
@@ -39,6 +45,10 @@ pub const Font = struct {
     ascent: f32,
     descent: f32,
     leading: f32,
+    /// The height of its lowercase and capitals, and the advance of `0`.
+    x_height: f32 = 0,
+    cap_height: f32 = 0,
+    zero_width: f32 = 0,
 
     pub fn lineHeight(f: Font) f32 {
         return @ceil(f.ascent + f.descent + f.leading);
@@ -55,10 +65,21 @@ pub const Layout = struct { width: f32, glyphs: []const Glyph };
 /// A line of wrapped text: a byte range and its width.
 pub const Line = struct { start: usize, end: usize, width: f32 };
 
-const FontKey = struct { size_bits: u32, weight: types.Weight, mono: bool, italic: bool, tabular: bool, rounded: bool, serif: bool };
+const FontKey = struct { size_bits: u32, weight: types.Weight, mono: bool, italic: bool, tabular: bool, rounded: bool, serif: bool, family: u64, css_weight: u16, stretch: u16 };
 
 fn fontKey(style: types.TextStyle) FontKey {
-    return .{ .size_bits = @bitCast(style.size), .weight = style.weight, .mono = style.mono, .italic = style.italic, .tabular = style.tabular, .rounded = style.rounded and !style.mono, .serif = style.serif and !style.mono };
+    return .{
+        .size_bits = @bitCast(style.size),
+        .weight = style.weight,
+        .mono = style.mono,
+        .italic = style.italic,
+        .tabular = style.tabular,
+        .rounded = style.rounded and !style.mono,
+        .serif = style.serif and !style.mono,
+        .family = if (style.family) |f| std.hash.Wyhash.hash(0x66, f) else 0,
+        .css_weight = style.css_weight,
+        .stretch = style.stretch,
+    };
 }
 
 pub const TextSystem = struct {
@@ -70,6 +91,16 @@ pub const TextSystem = struct {
     fonts: std.AutoHashMapUnmanaged(FontKey, Font) = .empty,
     /// Every font a run used, retained; glyphs refer to them by index.
     run_fonts: std.ArrayList(cf.CTFontRef) = .empty,
+    /// Each run font's points of outline added (a bold it lacks).
+    run_strokes: std.ArrayList(f32) = .empty,
+    /// The fonts of each style that names families (`TextStyle.family`).
+    stacks: std.AutoHashMapUnmanaged(FontKey, ?*stacks.Stack) = .empty,
+    /// Installed families' faces by name, looked up once (null: not installed).
+    installed: std.StringHashMapUnmanaged(?*anyopaque) = .empty,
+    /// The stack the line being read was shaped with.
+    shaping: ?*stacks.Stack = null,
+    /// `font_registry.generation` when the caches were last good.
+    fonts_seen: u64 = 0,
     /// The fast path's cached shaping of printable ASCII, per font.
     tables: std.AutoHashMapUnmanaged(FontKey, *shaper.Table) = .empty,
     layouts: std.AutoHashMapUnmanaged(u64, Layout) = .empty,
@@ -102,6 +133,11 @@ pub const TextSystem = struct {
         self.tables.deinit(self.gpa);
         for (self.run_fonts.items) |f| cf.CFRelease(f);
         self.run_fonts.deinit(self.gpa);
+        self.run_strokes.deinit(self.gpa);
+        self.dropStacks();
+        self.stacks.deinit(self.gpa);
+        self.dropInstalled();
+        self.installed.deinit(self.gpa);
         freeLayouts(self.gpa, &self.layouts);
         freeLayouts(self.gpa, &self.previous);
         self.layouts.deinit(self.gpa);
@@ -151,10 +187,70 @@ pub const TextSystem = struct {
         self.tables.clearRetainingCapacity();
         for (self.run_fonts.items) |f| cf.CFRelease(f);
         self.run_fonts.clearRetainingCapacity();
+        self.run_strokes.clearRetainingCapacity();
+        self.dropStacks();
+        self.dropInstalled();
         freeLayouts(self.gpa, &self.layouts);
         freeLayouts(self.gpa, &self.previous);
         self.wraps.clear(self.gpa);
         self.atlas.reset();
+    }
+
+    fn dropStacks(self: *TextSystem) void {
+        var it = self.stacks.valueIterator();
+        while (it.next()) |st| if (st.*) |x| x.destroy(self.gpa);
+        self.stacks.clearRetainingCapacity();
+    }
+
+    fn dropInstalled(self: *TextSystem) void {
+        var it = self.installed.iterator();
+        while (it.next()) |e| {
+            self.gpa.free(e.key_ptr.*);
+            if (e.value_ptr.*) |all| cf.CFRelease(all);
+        }
+        self.installed.clearRetainingCapacity();
+    }
+
+    /// Fonts came or went (`ui.registerFontFace`): what was shaped goes.
+    pub fn syncFonts(self: *TextSystem) void {
+        if (self.fonts_seen == registry.generation) return;
+        self.fonts_seen = registry.generation;
+        self.dropCaches();
+    }
+
+    /// An installed family's faces, looked up once.
+    pub fn facesOf(self: *TextSystem, name: []const u8) ?*anyopaque {
+        if (self.installed.get(name)) |all| return all;
+        const all = stacks.familyFaces(name);
+        const owned = self.gpa.dupe(u8, name) catch return all;
+        self.installed.put(self.gpa, owned, all) catch self.gpa.free(owned);
+        return all;
+    }
+
+    /// Whether a name of a family list would find a font: brought, or installed.
+    pub fn hasFamily(self: *TextSystem, name: []const u8) bool {
+        if (registry.hasFamily(name)) return true;
+        const eq = std.ascii.eqlIgnoreCase;
+        if (eq(name, "system-ui") or eq(name, "ui-monospace") or eq(name, "ui-serif") or eq(name, "ui-rounded")) return true;
+        if (self.facesOf(name) != null) return true;
+        const f = stacks.byName(name, 12) orelse return false;
+        cf.CFRelease(f);
+        return true;
+    }
+
+    /// The family name of the font a line in `style` takes its metrics from, in `buf`.
+    pub fn familyName(self: *TextSystem, style: types.TextStyle, buf: []u8) []const u8 {
+        return stacks.familyName(self.font(style).ref, buf);
+    }
+
+    /// The fonts of a style that names families; null when it names none that exist.
+    pub fn stackOf(self: *TextSystem, style: types.TextStyle) ?*stacks.Stack {
+        const list = style.family orelse return null;
+        const fk = fontKey(style);
+        if (self.stacks.get(fk)) |st| return st;
+        const st = stacks.build(self.gpa, list, style, self.zoom, self);
+        self.stacks.put(self.gpa, fk, st) catch {};
+        return st;
     }
 
     /// Scales every text by `z`: a change drops every cached font, shaping and wrap.
@@ -174,6 +270,7 @@ pub const TextSystem = struct {
     /// Called at the start of every frame: layouts unused for two frames go.
     pub fn beginFrame(self: *TextSystem) void {
         self.atlas.reset_during_frame = false;
+        self.syncFonts();
         if (self.layouts.count() >= 4096) {
             freeLayouts(self.gpa, &self.previous);
             std.mem.swap(std.AutoHashMapUnmanaged(u64, Layout), &self.layouts, &self.previous);
@@ -190,15 +287,26 @@ pub const TextSystem = struct {
     pub fn font(self: *TextSystem, style: types.TextStyle) Font {
         const fk = fontKey(style);
         if (self.fonts.get(fk)) |f| return f;
-        var ref = fonts.create(if (style.mono) self.mono_family else self.family, style.size * self.zoom, style.weight, style.italic, style.mono);
-        if (style.tabular) ref = fonts.tabular(ref);
-        if (fontKey(style).rounded) ref = fonts.rounded(ref);
-        if (fontKey(style).serif) ref = fonts.serif(ref);
+        var ref: cf.CTFontRef = undefined;
+        if (self.stackOf(style)) |st| {
+            ref = @ptrCast(cf.CFRetain(st.entries[st.primary].ref));
+        } else {
+            ref = fonts.create(if (style.mono) self.mono_family else self.family, style.size * self.zoom, types.Weight.of(style.weightValue()), style.italic, style.mono);
+            if (style.tabular) ref = fonts.tabular(ref);
+            if (fontKey(style).rounded) ref = fonts.rounded(ref);
+            if (fontKey(style).serif) ref = fonts.serif(ref);
+        }
+        const zero_char = [1]u16{'0'};
+        var zero: [1]u16 = .{0};
+        const has_zero = CTFontGetGlyphsForCharacters(ref, &zero_char, &zero, 1);
         const f: Font = .{
             .ref = ref,
             .ascent = @floatCast(CTFontGetAscent(ref)),
             .descent = @floatCast(CTFontGetDescent(ref)),
             .leading = @floatCast(CTFontGetLeading(ref)),
+            .x_height = @floatCast(CTFontGetXHeight(ref)),
+            .cap_height = @floatCast(CTFontGetCapHeight(ref)),
+            .zero_width = if (has_zero) @floatCast(CTFontGetAdvancesForGlyphs(ref, 0, &zero, null, 1)) else 0,
         };
         self.fonts.put(self.gpa, fk, f) catch {};
         return f;
@@ -211,11 +319,21 @@ pub const TextSystem = struct {
         h.update(std.mem.asBytes(&style.mono_scale));
         h.update(&.{ @backingInt(style.weight), @intFromBool(style.mono), @intFromBool(style.italic), @intFromBool(style.tabular), @intFromBool(style.rounded), @intFromBool(style.serif) });
         h.update(std.mem.asBytes(&style.tracking));
+        if (style.family) |f| h.update(f);
+        h.update(std.mem.asBytes(&style.css_weight));
+        h.update(std.mem.asBytes(&style.stretch));
+        h.update(&.{@intFromBool(style.ligatures)});
         return h.final();
     }
 
+    /// `s` in `style`'s fonts, each character in the one that has it.
+    pub fn attributedOf(self: *TextSystem, s: []const u8, style: types.TextStyle) cf.CFAttributedStringRef {
+        if (self.stackOf(style)) |st| return stacks.attributed(self.gpa, st, s, style.ligatures);
+        return cf.attributed(s, self.font(style).ref);
+    }
+
     fn line(self: *TextSystem, s: []const u8, style: types.TextStyle) cf.CTLineRef {
-        const attr = cf.attributed(s, self.font(style).ref);
+        const attr = self.attributedOf(s, style);
         defer cf.CFRelease(attr);
         return cf.CTLineCreateWithAttributedString(attr).?;
     }
@@ -224,10 +342,27 @@ pub const TextSystem = struct {
     pub fn fontId(self: *TextSystem, f: cf.CTFontRef) u16 {
         const h = CFHash(f);
         for (self.run_fonts.items, 0..) |known, i| {
+            if (self.run_strokes.items[i] != 0) continue;
             if (known == f or (CFHash(known) == h and CFEqual(known, f))) return @intCast(i);
         }
         self.run_fonts.ensureUnusedCapacity(self.gpa, 1) catch return 0;
+        self.run_strokes.ensureUnusedCapacity(self.gpa, 1) catch return 0;
         self.run_fonts.appendAssumeCapacity(@ptrCast(cf.CFRetain(f)));
+        self.run_strokes.append(self.gpa, 0) catch {};
+        return @intCast(self.run_fonts.items.len - 1);
+    }
+
+    /// The same with `stroke` points of outline added: glyphs of the same
+    /// font drawn differently, so it has an index of its own.
+    fn strokedId(self: *TextSystem, f: cf.CTFontRef, stroke: f32) u16 {
+        const h = CFHash(f);
+        for (self.run_fonts.items, 0..) |known, i| {
+            if (self.run_strokes.items[i] == stroke and (known == f or (CFHash(known) == h and CFEqual(known, f)))) return @intCast(i);
+        }
+        self.run_fonts.ensureUnusedCapacity(self.gpa, 1) catch return 0;
+        self.run_strokes.ensureUnusedCapacity(self.gpa, 1) catch return 0;
+        self.run_fonts.appendAssumeCapacity(@ptrCast(cf.CFRetain(f)));
+        self.run_strokes.appendAssumeCapacity(stroke);
         return @intCast(self.run_fonts.items.len - 1);
     }
 
@@ -261,10 +396,14 @@ pub const TextSystem = struct {
     }
 
     fn shape(self: *TextSystem, s: []const u8, style: types.TextStyle) !Layout {
+        const stack = self.stackOf(style);
         // The fast path's tables are the font's own glyphs, not its features (tabular digits).
-        if (s.len <= 256 and !style.tabular) if (try self.shapeFast(s, style)) |l| return l;
+        const fast = if (stack) |st| st.fast else true;
+        if (fast and s.len <= 256 and !style.tabular) if (try self.shapeFast(s, style)) |l| return l;
         const ln = self.line(s, style);
         defer cf.CFRelease(ln);
+        self.shaping = stack;
+        defer self.shaping = null;
         return self.glyphsOf(ln, s);
     }
 
@@ -294,7 +433,8 @@ pub const TextSystem = struct {
             const count: usize = @intCast(CTRunGetGlyphCount(run));
             if (count == 0) continue;
             const run_font = CFDictionaryGetValue(CTRunGetAttributes(run), cf.kCTFontAttributeName) orelse continue;
-            const fid = self.fontId(@ptrCast(run_font));
+            const stroke = if (self.shaping) |st| st.strokeOf(run_font) else 0;
+            const fid = if (stroke > 0) self.strokedId(@ptrCast(run_font), stroke) else self.fontId(@ptrCast(run_font));
             try self.scratch_glyphs.resize(self.gpa, count);
             try self.scratch_points.resize(self.gpa, count);
             const all: cf.CFRange = .{ .location = 0, .length = 0 };
@@ -337,7 +477,7 @@ pub const TextSystem = struct {
     /// its strokes thickened `dilation` levels (`atlas.dilationFor`).
     pub fn glyph(self: *TextSystem, g: Glyph, bin: u8, dilation: u8) ?Sprite {
         if (g.font >= self.run_fonts.items.len) return null;
-        return self.atlas.glyph(g.font, self.run_fonts.items[g.font], g.glyph, bin, dilation);
+        return self.atlas.glyph(g.font, self.run_fonts.items[g.font], g.glyph, bin, dilation, self.run_strokes.items[g.font]);
     }
 
     pub const dilationFor = @import("atlas.zig").dilationFor;
@@ -385,7 +525,7 @@ pub const TextSystem = struct {
         const styled = rich.styled(spans);
         var lines: std.ArrayList(Line) = .empty;
         defer lines.deinit(self.gpa);
-        const attr = if (styled) rich.attributed(self, s, style, spans, 0) else cf.attributed(s, self.font(style).ref);
+        const attr = if (styled) rich.attributed(self, s, style, spans, 0) else self.attributedOf(s, style);
         defer cf.CFRelease(attr);
         const ts = cf.CTTypesetterCreateWithAttributedString(attr).?;
         defer cf.CFRelease(ts);
@@ -409,7 +549,7 @@ pub const TextSystem = struct {
     pub fn caretX(self: *TextSystem, s: []const u8, style: types.TextStyle, index: usize) f32 {
         const to = @min(index, s.len);
         if (to == 0) return 0;
-        if (shaper.isSimpleAscii(s[0..to])) return self.layout(s[0..to], style).width;
+        if (shaper.isSimpleAscii(s[0..to]) and style.family == null) return self.layout(s[0..to], style).width;
         const l = self.line(s, style);
         defer cf.CFRelease(l);
         return @floatCast(cf.CTLineGetOffsetForStringIndex(l, cf.utf16Offset(s, to), null));

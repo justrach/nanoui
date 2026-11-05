@@ -9,6 +9,8 @@ const fontdb = @import("tt/fontdb.zig");
 const tt = @import("tt/font.zig");
 const atlas_mod = @import("atlas_tt.zig");
 const utf8 = @import("utf8.zig");
+const stacks = @import("text_stack_tt.zig");
+const registry = @import("font_registry.zig");
 pub const rich = @import("rich_tt.zig");
 
 pub const Atlas = atlas_mod.Atlas;
@@ -22,6 +24,10 @@ pub const Font = struct {
     /// The run font of its face at its size.
     id: u16,
     weight: u16,
+    /// The height of its lowercase and capitals, and the advance of `0`.
+    x_height: f32 = 0,
+    cap_height: f32 = 0,
+    zero_width: f32 = 0,
 
     pub fn lineHeight(f: Font) f32 {
         return @ceil(f.ascent + f.descent + f.leading);
@@ -33,18 +39,17 @@ pub const Glyph = struct { font: u16, glyph: u16, x: f32, y: f32, index: u32 = 0
 pub const Layout = struct { width: f32, glyphs: []const Glyph };
 pub const Line = struct { start: usize, end: usize, width: f32 };
 
-const FontKey = struct { size_bits: u32, weight: types.Weight, mono: bool, italic: bool };
+const FontKey = struct { size_bits: u32, weight: types.Weight, mono: bool, italic: bool, family: u64, css_weight: u16, stretch: u16 };
 
 fn fontKey(style: types.TextStyle) FontKey {
-    return .{ .size_bits = @bitCast(style.size), .weight = style.weight, .mono = style.mono, .italic = style.italic };
-}
-
-fn weightOf(w: types.Weight) u16 {
-    return switch (w) {
-        .regular => 400,
-        .medium => 500,
-        .semibold => 600,
-        .bold => 700,
+    return .{
+        .size_bits = @bitCast(style.size),
+        .weight = style.weight,
+        .mono = style.mono,
+        .italic = style.italic,
+        .family = if (style.family) |f| std.hash.Wyhash.hash(0x66, f) else 0,
+        .css_weight = style.css_weight,
+        .stretch = style.stretch,
     };
 }
 
@@ -59,6 +64,10 @@ pub const TextSystem = struct {
     /// Faces at sizes, as glyphs refer to them.
     run_fonts: std.ArrayList(atlas_mod.RunFont) = .empty,
     run_faces: std.ArrayList(u32) = .empty,
+    /// The fonts of each style that names families (`TextStyle.family`).
+    stacks: std.AutoHashMapUnmanaged(FontKey, ?*stacks.Stack) = .empty,
+    /// `font_registry.generation` when the caches were last good.
+    fonts_seen: u64 = 0,
     layouts: std.AutoHashMapUnmanaged(u64, Layout) = .empty,
     previous: std.AutoHashMapUnmanaged(u64, Layout) = .empty,
     wraps: @import("wrap_cache.zig").WrapCache(Line) = .{},
@@ -76,6 +85,8 @@ pub const TextSystem = struct {
         self.fonts.deinit(self.gpa);
         self.run_fonts.deinit(self.gpa);
         self.run_faces.deinit(self.gpa);
+        self.dropStacks();
+        self.stacks.deinit(self.gpa);
         freeLayouts(self.gpa, &self.layouts);
         freeLayouts(self.gpa, &self.previous);
         self.layouts.deinit(self.gpa);
@@ -107,10 +118,53 @@ pub const TextSystem = struct {
         self.fonts.clearRetainingCapacity();
         self.run_fonts.clearRetainingCapacity();
         self.run_faces.clearRetainingCapacity();
+        self.dropStacks();
         freeLayouts(self.gpa, &self.layouts);
         freeLayouts(self.gpa, &self.previous);
         self.wraps.clear(self.gpa);
         self.atlas.reset();
+    }
+
+    fn dropStacks(self: *TextSystem) void {
+        var it = self.stacks.valueIterator();
+        while (it.next()) |st| if (st.*) |x| x.destroy(self.gpa);
+        self.stacks.clearRetainingCapacity();
+    }
+
+    /// Fonts came or went (`ui.registerFontFace`): what was shaped goes.
+    pub fn syncFonts(self: *TextSystem) void {
+        if (self.fonts_seen == registry.generation) return;
+        self.fonts_seen = registry.generation;
+        self.dropCaches();
+        self.db.dropBrought();
+    }
+
+    /// Whether a name of a family list would find a font: brought, or installed.
+    pub fn hasFamily(self: *TextSystem, name: []const u8) bool {
+        if (registry.hasFamily(name)) return true;
+        const eq = std.ascii.eqlIgnoreCase;
+        if (eq(name, "system-ui") or eq(name, "ui-monospace") or eq(name, "ui-rounded")) return true;
+        return self.db.family(name, 400, false) != null;
+    }
+
+    /// The family name of the font a line in `style` takes its metrics from, in `buf`.
+    pub fn familyName(self: *TextSystem, style: types.TextStyle, buf: []u8) []const u8 {
+        const f = self.font(style);
+        if (f.id >= self.run_fonts.items.len) return "";
+        const name = self.run_fonts.items[f.id].font.style.name();
+        const n = @min(name.len, buf.len);
+        @memcpy(buf[0..n], name[0..n]);
+        return buf[0..n];
+    }
+
+    /// The fonts of a style that names families; null when it names none that exist.
+    pub fn stackOf(self: *TextSystem, style: types.TextStyle) ?*stacks.Stack {
+        const list = style.family orelse return null;
+        const fk = fontKey(style);
+        if (self.stacks.get(fk)) |st| return st;
+        const st = stacks.build(self, list, style);
+        self.stacks.put(self.gpa, fk, st) catch {};
+        return st;
     }
 
     /// Scales every text by `z`: a change drops every cached font, shaping and wrap.
@@ -128,6 +182,7 @@ pub const TextSystem = struct {
 
     pub fn beginFrame(self: *TextSystem) void {
         self.atlas.reset_during_frame = false;
+        self.syncFonts();
         if (self.layouts.count() >= 4096) {
             freeLayouts(self.gpa, &self.previous);
             std.mem.swap(std.AutoHashMapUnmanaged(u64, Layout), &self.layouts, &self.previous);
@@ -143,7 +198,7 @@ pub const TextSystem = struct {
 
     /// The run font of `face` at `size`, slanted when italics were asked
     /// of an upright face.
-    fn runFont(self: *TextSystem, face: u32, size: f32, slant: bool, weight: u16) u16 {
+    pub fn runFont(self: *TextSystem, face: u32, size: f32, slant: bool, weight: u16) u16 {
         const f = self.db.load(face) orelse return 0xffff;
         const skew: f32 = if (slant and !f.style.italic) 0.2 else 0;
         // Semibold and bold of a face that is neither: thickened.
@@ -162,14 +217,29 @@ pub const TextSystem = struct {
     pub fn font(self: *TextSystem, style: types.TextStyle) Font {
         const fk = fontKey(style);
         if (self.fonts.get(fk)) |f| return f;
-        const weight = weightOf(style.weight);
+        const weight = style.weightValue();
         const size = style.size * self.zoom;
-        const face = self.db.match(if (style.mono) self.mono_family else self.family, weight, style.italic, style.mono);
         var f: Font = .{ .ascent = size * 0.8, .descent = size * 0.2, .leading = 0, .id = 0xffff, .weight = weight };
-        if (face) |fc| if (self.db.load(fc)) |tf| {
-            const k = size / tf.units_per_em;
-            f = .{ .ascent = tf.ascent * k, .descent = tf.descent * k, .leading = tf.line_gap * k, .id = self.runFont(fc, size, style.italic, weight), .weight = weight };
-        };
+        var tf: ?*const tt.Font = null;
+        if (self.stackOf(style)) |st| {
+            f.id = st.entries[st.primary].id;
+            tf = self.run_fonts.items[f.id].font;
+        } else {
+            const face = self.db.match(if (style.mono) self.mono_family else self.family, weight, style.italic, style.mono);
+            if (face) |fc| if (self.db.load(fc)) |loaded| {
+                f.id = self.runFont(fc, size, style.italic, weight);
+                tf = loaded;
+            };
+        }
+        if (tf) |t| {
+            const k = size / t.units_per_em;
+            f.ascent = t.ascent * k;
+            f.descent = t.descent * k;
+            f.leading = t.line_gap * k;
+            f.x_height = t.xHeight() * k;
+            f.cap_height = t.capHeight() * k;
+            f.zero_width = t.advance(t.glyphIndex('0')) * k;
+        }
         self.fonts.put(self.gpa, fk, f) catch {};
         return f;
     }
@@ -181,6 +251,9 @@ pub const TextSystem = struct {
         h.update(std.mem.asBytes(&style.mono_scale));
         h.update(&.{ @backingInt(style.weight), @intFromBool(style.mono), @intFromBool(style.italic), @intFromBool(style.tabular) });
         h.update(std.mem.asBytes(&style.tracking));
+        if (style.family) |f| h.update(f);
+        h.update(std.mem.asBytes(&style.css_weight));
+        h.update(std.mem.asBytes(&style.stretch));
         return h.final();
     }
 
@@ -222,6 +295,7 @@ pub const TextSystem = struct {
         var x = x0;
         if (f.id == 0xffff) return x + @as(f32, @floatFromInt(s.len)) * size * 0.5;
         const primary = self.run_fonts.items[f.id];
+        const stack = self.stackOf(style);
         var prev: ?struct { id: u16, g: u16, digit: bool } = null;
         var i: usize = 0;
         while (i < s.len) {
@@ -233,6 +307,11 @@ pub const TextSystem = struct {
             var id = f.id;
             var rf = primary;
             var g = rf.font.glyphIndex(if (cp == '\t') ' ' else cp);
+            if (stack) |st| if (st.pick(self.run_fonts.items, if (cp == '\t') ' ' else cp)) |p| {
+                id = p.id;
+                rf = self.run_fonts.items[id];
+                g = p.glyph;
+            };
             if (g == 0 and cp >= 0x20) {
                 if (self.db.fallback(cp, f.weight)) |face| {
                     const fid = self.runFont(face, size, style.italic, f.weight);

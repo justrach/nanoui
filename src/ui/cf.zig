@@ -42,6 +42,11 @@ pub extern "c" fn CGContextRelease(ctx: CGContextRef) void;
 pub extern "c" fn CGContextScaleCTM(ctx: CGContextRef, sx: f64, sy: f64) void;
 pub extern "c" fn CGContextSetTextPosition(ctx: CGContextRef, x: f64, y: f64) void;
 pub extern "c" fn CGContextSetGrayFillColor(ctx: CGContextRef, gray: f64, alpha: f64) void;
+pub extern "c" fn CGContextSetGrayStrokeColor(ctx: CGContextRef, gray: f64, alpha: f64) void;
+pub extern "c" fn CGContextSetLineWidth(ctx: CGContextRef, width: f64) void;
+pub extern "c" fn CGContextSetTextDrawingMode(ctx: CGContextRef, mode: i32) void;
+/// `kCGTextFillStroke`.
+pub const text_fill_stroke: i32 = 2;
 pub extern "c" fn CGContextSetShouldSmoothFonts(ctx: CGContextRef, v: bool) void;
 pub extern "c" fn CGContextSetShouldAntialias(ctx: CGContextRef, v: bool) void;
 pub extern "c" fn CGContextSetAllowsFontSubpixelPositioning(ctx: CGContextRef, v: bool) void;

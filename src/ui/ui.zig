@@ -99,6 +99,14 @@ pub const ImageOptions = widgets.ImageOptions;
 pub const svg = widgets.svg;
 /// A font the app brings, found by family name (`Theme.font`, …).
 pub const registerFont = @import("font_registry.zig").register;
+/// A face from a TrueType, OpenType, WOFF or WOFF2 file's bytes (or an installed
+/// font), under a family `TextStyle.family` finds it by.
+pub const registerFontFace = @import("font_registry.zig").registerFace;
+pub const FontFaceOptions = @import("font_registry.zig").FaceOptions;
+/// Takes away the families `registerFontFace` added whose names start so.
+pub const unregisterFontFamilies = @import("font_registry.zig").unregisterFamilies;
+/// A tiny font made on the spot, for tests that need one that isn't installed.
+pub const test_font = @import("tt/testfont.zig");
 pub const SvgOptions = widgets.SvgOptions;
 pub const text = widgets.text;
 pub const textf = widgets.textf;
@@ -213,6 +221,10 @@ test {
     if (@import("builtin").os.tag == .linux) _ = @import("tests_opengl.zig");
     _ = @import("tt/raster.zig");
     _ = @import("tt/tests.zig");
+    _ = @import("tt/tests_decode.zig");
+    _ = @import("tt/brotli.zig");
+    _ = @import("font_registry.zig");
+    _ = @import("tests_text_family.zig");
     _ = @import("png.zig");
     _ = @import("png_decode.zig");
     _ = @import("jpeg_decode.zig");
