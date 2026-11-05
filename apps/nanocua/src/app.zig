@@ -262,8 +262,9 @@ pub const App = struct {
     fn bringForward(a: *App, stay_above: bool) void {
         if (a.hidden) return;
         const w = a.window orelse return;
-        if (stay_above) if (a.raise) |f| f(w, true);
+        if (a.raise) |f| f(w, true);
         w.focus();
+        if (!stay_above) if (a.raise) |f| f(w, false);
     }
 
     /// The panel's Allow or Deny. Allow needs a person's click, and the question

@@ -119,12 +119,24 @@ pub fn screenRecording() bool {
     return capture.allowed();
 }
 
-/// Keeps nanocua's window above other apps' while a question waits: macOS may
-/// refuse to bring an app forward that nobody clicked.
+/// Puts nanocua's window where the user is, above other apps', until `on` is
+/// false. macOS may refuse to activate an app nobody clicked, and the window can
+/// be on another Space, while the user's app is full screen on its own.
 pub fn raise(window: *nanoui.Window, on: bool) void {
     const floating: objc.NSInteger = 3;
+    const move_to_active_space: usize = 1 << 1;
+    const full_screen_auxiliary: usize = 1 << 8;
     objc.msg(void, window.nswindow, "setLevel:", .{if (on) floating else @as(objc.NSInteger, 0)});
-    if (on) objc.msg(void, window.nswindow, "orderFrontRegardless", .{});
+    // Only an accessory app's window can appear over another app's full screen.
+    const regular: objc.NSInteger = 0;
+    const accessory: objc.NSInteger = 1;
+    const nsapp = objc.msg(objc.Object, objc.class("NSApplication"), "sharedApplication", .{});
+    _ = objc.msg(objc.BOOL, nsapp, "setActivationPolicy:", .{if (on) accessory else regular});
+    if (!on) return;
+    objc.msg(void, window.nswindow, "setCollectionBehavior:", .{move_to_active_space | full_screen_auxiliary});
+    // Moving to the active Space happens as a window is shown, not while it's up.
+    objc.msg(void, window.nswindow, "orderOut:", .{@as(?objc.Object, null)});
+    objc.msg(void, window.nswindow, "orderFrontRegardless", .{});
 }
 
 pub const Permission = enum(usize) { accessibility = 1, screen = 2 };

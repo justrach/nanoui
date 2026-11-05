@@ -105,13 +105,15 @@ pub fn move(t: Target, x: f64, y: f64) void {
 /// Gestures so far. Only the backend's queue sends events.
 var next_group: i64 = 0;
 
-/// Starts a gesture: a move first, so an app in the background knows where the
+/// Starts a gesture: makes the window key, without raising it, or the app spends
+/// the click on that; then a move, so an app in the background knows where the
 /// pointer now is before a press arrives.
 fn prepare(t: Target, x: f64, y: f64) Target {
     var out = t;
     if (out == .app) {
         next_group += 1;
         out.app.group = next_group;
+        if (out.app.window != 0 and skylight.focusWindow(out.app.pid, out.app.window)) _ = usleep(50_000);
     }
     move(out, x, y);
     _ = usleep(15_000);
