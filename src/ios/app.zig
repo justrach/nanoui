@@ -13,6 +13,8 @@ const dev = @import("../dev.zig");
 const window_mod = @import("window.zig");
 const menu_mod = @import("../menu_accel.zig");
 const ui = @import("../ui/ui.zig");
+const tsgen = @import("../tsgen.zig");
+const ipc = @import("../ipc.zig").ipc(Window, App);
 const Window = window_mod.Window;
 
 extern "c" fn UIApplicationMain(argc: c_int, argv: [*]?[*:0]u8, principal: ?objc.Object, delegate: ?objc.Object) c_int;
@@ -38,6 +40,10 @@ pub const App = struct {
     options: Options,
     windows: std.ArrayList(*Window) = .empty,
     main_menu: ?*menu_mod.Menu = null,
+    /// What pages call (`ipc.zig`), and the client they load it through.
+    services: std.StringHashMapUnmanaged(ipc.Service) = .empty,
+    events: std.ArrayList(tsgen.Service) = .empty,
+    client_js: ?[]u8 = null,
     flags: dev.Flags = .{},
     /// The UIWindow nanoui's windows show in, once UIKit made it.
     uiwindow: ?objc.Object = null,
@@ -86,6 +92,9 @@ pub const App = struct {
     pub fn destroy(self: *App) void {
         while (self.windows.items.len > 0) self.windows.items[self.windows.items.len - 1].close();
         self.windows.deinit(self.gpa);
+        self.services.deinit(self.gpa);
+        self.events.deinit(self.gpa);
+        if (self.client_js) |js| self.gpa.free(js);
         if (self.main_menu) |m| m.destroy();
         if (self.placeholder) |p| objc.release(p);
         if (self.uiwindow) |w| objc.release(w);
@@ -93,15 +102,30 @@ pub const App = struct {
         self.gpa.destroy(self);
     }
 
-    /// Pages are not supported on iOS yet: services have no caller.
+    /// Binds a service: pages call its methods as `Name.method(...)`
+    /// through the generated client (`nanoui.js`).
     pub fn bind(self: *App, service: anytype) !void {
-        _ = self;
-        _ = service;
+        const T = @typeInfo(@TypeOf(service)).pointer.child;
+        const svc = ipc.service(T, service);
+        try self.services.put(self.gpa, svc.name, svc);
     }
 
+    /// Declares a typed event (`nanoui.Event(...)`) for the generated client.
     pub fn registerEvent(self: *App, comptime E: type) !void {
-        _ = self;
-        _ = E;
+        try self.events.append(self.gpa, E.client);
+    }
+
+    /// The generated JavaScript client, served to pages at `/nanoui.js`.
+    pub fn clientJs(self: *App) ![]const u8 {
+        if (self.client_js) |js| return js;
+        var aw: std.Io.Writer.Allocating = .init(self.gpa);
+        errdefer aw.deinit();
+        try aw.writer.writeAll(tsgen.runtime_js);
+        var it = self.services.valueIterator();
+        while (it.next()) |svc| try aw.writer.writeAll(svc.client.js);
+        for (self.events.items) |e| try aw.writer.writeAll(e.js);
+        self.client_js = try aw.toOwnedSlice();
+        return self.client_js.?;
     }
 
     pub fn newWindow(self: *App, options: window_mod.Options) !*Window {
@@ -131,7 +155,8 @@ pub const App = struct {
     /// Runs UIKit: it never returns while the app runs. With
     /// `--nanoui-snapshot` it renders the first window offscreen instead.
     pub fn run(self: *App) !void {
-        if (self.flags.generate_dir != null) return error.PagesUnsupported;
+        // The client is written from a Mac or a PC's build; a phone has no project to write it into.
+        if (self.flags.generate_dir != null) return error.GenerateUnsupported;
         if (self.flags.snapshot) |path| return dev.snapshot(self, path);
         if (self.stopping) return;
         self.running = true;

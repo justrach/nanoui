@@ -3,14 +3,15 @@
 //! full screen too, until `close` or `hide` (`App.arrange`). Not page
 //! sheets: their swipe to dismiss would take every drag down from the
 //! view, which scrolls itself. What a desktop window has and a screen
-//! hasn't (a position, a size, minimizing) is accepted and ignored. Pages
-//! (WKWebView) are not supported yet.
+//! hasn't (a position, a size, minimizing) is accepted and ignored. A window
+//! shows a page (WKWebView, `page_webkit.zig`) or native UI.
 const std = @import("std");
 const objc = @import("../objc.zig");
 const App = @import("app.zig").App;
 const Surface = @import("surface.zig").Surface;
 const window_types = @import("../window_types.zig");
 const ui = @import("../ui/ui.zig");
+const Page = @import("../page_webkit.zig").Page;
 
 pub const Asset = window_types.Asset;
 pub const PageOptions = window_types.PageOptions;
@@ -32,7 +33,12 @@ pub const Window = struct {
     /// Made once UIKit runs (`realize`): before, the window is its options.
     controller: ?objc.Object = null,
     surface: ?*Surface = null,
-    view: ui.View,
+    /// A window shows one or the other. Null `view`: a page, made with the
+    /// controller, in `page_host`.
+    view: ?ui.View = null,
+    page_options: ?PageOptions = null,
+    page: ?*Page = null,
+    page_host: ?objc.Object = null,
     theme: ?ui.Theme = null,
     full_bleed: bool = false,
     /// What a snapshot draws when there is no screen: the size asked for.
@@ -50,14 +56,11 @@ pub const Window = struct {
     title: [256:0]u8 = @splat(0),
 
     pub fn create(app: *App, options: Options) !*Window {
-        const view = switch (options.content) {
-            .page => return error.PagesUnsupported,
-            .view => |v| v,
-        };
         const self = try app.gpa.create(Window);
         self.* = .{
             .app = app,
-            .view = view,
+            .view = if (options.content == .view) options.content.view else null,
+            .page_options = if (options.content == .page) options.content.page else null,
             .theme = options.theme,
             .full_bleed = options.full_bleed,
             .width = options.width,
@@ -80,12 +83,67 @@ pub const Window = struct {
         self.controller = vc;
         objc.msg(void, vc, "setModalPresentationStyle:", .{@as(objc.NSInteger, 0)}); // full screen
         objc.msg(void, vc, "setTitle:", .{objc.nsString(std.mem.sliceTo(&self.title, 0))});
-        self.surface = Surface.create(self, self.view, self.theme, self.full_bleed) catch |err| {
+        const view = self.view orelse return self.realizePage(vc);
+        self.surface = Surface.create(self, view, self.theme, self.full_bleed) catch |err| {
             std.log.err("nanoui: window: {s}", .{@errorName(err)});
             return;
         };
         objc.msg(void, vc, "setView:", .{self.surface.?.uiview});
     }
+
+    fn realizePage(self: *Window, vc: objc.Object) void {
+        const screen = objc.msg(objc.Object, objc.class("UIScreen"), "mainScreen", .{});
+        const host = objc.msg(objc.Object, objc.alloc("UIView"), "initWithFrame:", .{objc.msg(objc.CGRect, screen, "bounds", .{})});
+        objc.msg(void, host, "setBackgroundColor:", .{objc.msg(objc.Object, objc.class("UIColor"), "systemBackgroundColor", .{})});
+        self.page_host = host;
+        self.page = Page.create(self, self.page_options.?) catch |err| {
+            std.log.err("nanoui: page: {s}", .{@errorName(err)});
+            return;
+        };
+        objc.msg(void, vc, "setView:", .{host});
+    }
+
+    /// Points a page's window at `url`: a path from the app's assets, or an
+    /// absolute `http(s)://` one. No effect on a native-UI window.
+    pub fn setPageUrl(self: *Window, url: []const u8) void {
+        if (self.page) |p| p.load(url);
+    }
+
+    /// Shows entry `i` of `PageOptions.pages` (the bar's buttons).
+    pub fn showPage(self: *Window, i: usize) void {
+        const p = self.page orelse return;
+        if (i >= p.queue.options.pages.len) return;
+        p.load(p.queue.options.pages[i].url);
+    }
+
+    /// Queues an encoded message for the page and takes ownership of it.
+    /// Safe from any thread.
+    pub fn sendOwned(self: *Window, msg: []u8) void {
+        if (objc.isMainThread()) {
+            defer self.app.gpa.free(msg);
+            if (self.page) |p| p.enqueue(msg, true);
+            return;
+        }
+        const job = self.app.gpa.create(Job) catch return self.app.gpa.free(msg);
+        job.* = .{ .window = self, .msg = msg };
+        objc.dispatchMain(job, Job.run);
+    }
+
+    const Job = struct {
+        window: *Window,
+        msg: []u8,
+
+        fn run(ctx: ?*anyopaque) callconv(.c) void {
+            const job: *Job = @ptrCast(@alignCast(ctx.?));
+            const gpa = job.window.app.gpa;
+            defer gpa.destroy(job);
+            defer gpa.free(job.msg);
+            // The window may have closed since: only those still open.
+            for (job.window.app.windows.items) |w| if (w == job.window) {
+                if (w.page) |p| p.enqueue(job.msg, true);
+            };
+        }
+    };
 
     /// Off the screen, its owner told, and freed.
     pub fn close(self: *Window) void {
@@ -98,6 +156,10 @@ pub const Window = struct {
         if (self.on_close) |cb| cb.func(cb.ctx, self);
         if (self.surface) |s| s.destroy();
         self.surface = null;
+        if (self.page) |p| p.destroy();
+        self.page = null;
+        if (self.page_host) |h| objc.release(h);
+        self.page_host = null;
         if (self.controller) |vc| {
             objc.setZig(vc, null);
             objc.release(vc);
@@ -189,8 +251,9 @@ pub const Window = struct {
 
     /// What `--nanoui-snapshot` draws of this window.
     pub fn nativeView(self: *Window) ?NativeView {
-        if (self.surface) |s| if (s.size.w > 0) return .{ .view = self.view, .width = s.size.w, .height = s.size.h, .scale = s.scale, .theme = self.theme };
-        return .{ .view = self.view, .width = @floatCast(self.width), .height = @floatCast(self.height), .scale = 3, .theme = self.theme };
+        const view = self.view orelse return null;
+        if (self.surface) |s| if (s.size.w > 0) return .{ .view = view, .width = s.size.w, .height = s.size.h, .scale = s.scale, .theme = self.theme };
+        return .{ .view = view, .width = @floatCast(self.width), .height = @floatCast(self.height), .scale = 3, .theme = self.theme };
     }
 
     pub fn logFrame(self: *Window) void {
