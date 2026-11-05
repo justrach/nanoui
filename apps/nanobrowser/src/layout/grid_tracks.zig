@@ -310,7 +310,15 @@ fn sizeAxis(list: []Track, cons: []Contribution, avail: ?f32, gap: f32, stretch:
     for (list) |*t| t.limit = t.base;
 }
 
-fn columnContributions(c: *Ctx, items: []const Placed, only_min: bool) Error![]Contribution {
+/// Spanning more than one track, a flexible one among them: such an item has no
+/// automatic minimum size (CSS Grid §6.6), and its content can't push the tracks.
+fn crossesFlexible(list: []Track, from: i32, to: i32) bool {
+    if (to - from <= 1) return false;
+    for (spanRange(list, from, to)) |*t| if (isFlexible(t)) return true;
+    return false;
+}
+
+fn columnContributions(c: *Ctx, list: []Track, items: []const Placed, only_min: bool) Error![]Contribution {
     var cons: std.ArrayList(Contribution) = .empty;
     for (items) |*it| {
         // A subgrid asks through what's in it, track by track.
@@ -322,7 +330,8 @@ fn columnContributions(c: *Ctx, items: []const Placed, only_min: bool) Error![]C
             continue;
         }
         const o = try intrinsic_mod.outer(c, it.b);
-        const lo = if (it.b.style.clips() and it.b.style.min_width.kind == .auto) @min(o.min, ctx.edgesOf(it.b.style, 0).margin.horizontal() + borderPad(it.b)) else o.min;
+        const no_auto_min = it.b.style.min_width.kind == .auto and (it.b.style.clips() or (it.b.style.width.kind == .auto and crossesFlexible(list, it.c0, it.c1)));
+        const lo = if (no_auto_min) @min(o.min, ctx.edgesOf(it.b.style, 0).margin.horizontal() + borderPad(it.b)) else o.min;
         const hi = if (only_min) o.min else o.max;
         try cons.append(c.arena, .{ .lo = lo, .hi = hi, .from = it.c0, .to = it.c1 });
     }
@@ -335,20 +344,23 @@ fn borderPad(b: anytype) f32 {
 }
 
 pub fn sizeColumns(c: *Ctx, list: []Track, items: []const Placed, avail: f32, gap: f32, stretch: bool) Error!void {
-    const cons = try columnContributions(c, items, false);
+    const cons = try columnContributions(c, list, items, false);
     sizeAxis(list, cons, avail, gap, stretch);
 }
 
 pub fn sizeRows(a: Allocator, list: []Track, items: []const Placed, heights: []const f32, extra: []const Contribution, avail: ?f32, gap: f32, stretch: bool) Error!void {
     const cons = try a.alloc(Contribution, items.len + extra.len);
-    for (items, heights, 0..) |*it, h, i| cons[i] = .{ .lo = h, .hi = h, .from = it.r0, .to = it.r1 };
+    for (items, heights, 0..) |*it, h, i| {
+        const none = it.b.style.height.kind == .auto and it.b.style.min_height.kind == .auto and crossesFlexible(list, it.r0, it.r1);
+        cons[i] = .{ .lo = if (none) 0 else h, .hi = h, .from = it.r0, .to = it.r1 };
+    }
     @memcpy(cons[items.len..], extra);
     sizeAxis(list, cons, avail, gap, stretch);
 }
 
 /// The columns' total when nothing asks for a particular width.
 pub fn intrinsicColumns(c: *Ctx, list: []Track, items: []const Placed, gap: f32, want_max: bool) Error!f32 {
-    const cons = try columnContributions(c, items, !want_max);
+    const cons = try columnContributions(c, list, items, !want_max);
     sizeAxis(list, cons, null, gap, false);
     return total(list, gap);
 }

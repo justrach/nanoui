@@ -100,6 +100,18 @@ test "sandbox without allow-scripts runs nothing" {
     });
 }
 
+test "sandbox with allow-same-origin alone can be reached into, and runs nothing" {
+    var r: Run = undefined;
+    try r.start();
+    defer r.stop();
+    try r.html("<!doctype html><body><iframe id=s sandbox=allow-same-origin></iframe>");
+    try u.table(&r, &.{
+        .{ .js = "typeof s.contentWindow.history", .want = "object" },
+        .{ .js = "s.contentDocument.body.tagName", .want = "BODY" },
+        .{ .js = "var sc = s.contentDocument.createElement('script'); sc.textContent = 'parent.bad = 1'; s.contentDocument.body.append(sc); window.bad", .want = "undefined" },
+    });
+}
+
 test "frames far from the viewport wait, and nesting has a limit" {
     var r: Run = undefined;
     try r.start();

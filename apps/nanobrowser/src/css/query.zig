@@ -62,6 +62,8 @@ pub fn closest(node: *Node, selector: []const u8, arena: Allocator) Error!?*Node
     var ctx = context(node);
     var at: ?*Node = if (node.kind == .element) node else node.parentElement();
     while (at) |n| : (at = n.parentElement()) {
+        // A shadow tree ends at its root, which is no element to scripts.
+        if (n.is_shadow) return null;
         if (hit(list, n, &ctx)) return n;
     }
     return null;

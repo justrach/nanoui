@@ -40,6 +40,12 @@ pub fn of(c: *Ctx, b: *Box) Error!Sizes {
     }
     n.content_min = out.min;
     n.content_max = out.max;
+    // A height and a shape say the width, whatever's inside.
+    if (b.kind != .replaced and s.aspect_ratio > 0 and s.width.kind == .auto) if (fixed(s.height, s.box_sizing == .border_box, ctx_bpv(e))) |h| {
+        const ratio = ctx.clean(s.aspect_ratio);
+        const v = if (s.box_sizing == .border_box) h * ratio else (h - ctx_bpv(e)) * ratio + bp;
+        out = .{ .min = @max(v, out.min), .max = @max(v, out.min) };
+    };
     if (b.kind != .replaced) {
         if (fixed(s.width, s.box_sizing == .border_box, bp)) |v| {
             // A table never gets narrower than its content.
@@ -61,6 +67,10 @@ pub fn of(c: *Ctx, b: *Box) Error!Sizes {
     n.min_w = out.min;
     n.max_w = out.max;
     return out;
+}
+
+fn ctx_bpv(e: ctx.EdgeSet) f32 {
+    return e.border.vertical() + e.padding.vertical();
 }
 
 /// A length with no percentage, as a border-box size.

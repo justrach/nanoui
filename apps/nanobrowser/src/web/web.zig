@@ -38,8 +38,9 @@ pub fn parsed(p: *Page) void {
 }
 
 /// The world of a page another page's script has reached for, made if it had none.
+/// A frame sandboxed without scripts has one too: its own never run, but what's
+/// around it may still reach in, given `allow-same-origin`.
 pub fn ensureWorld(p: *Page) ?*World {
-    if (p.no_scripts) return null;
     const had = p.js != null;
     const w = worldFor(p) orelse return null;
     if (!had) {

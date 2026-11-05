@@ -190,8 +190,8 @@ class Navigator {
   get productSub() { return "20030107"; }
   get vendor() { return ""; }
   get vendorSub() { return ""; }
-  get language() { return "en"; }
-  get languages() { return ["en"]; }
+  get language() { return "en-US"; }
+  get languages() { return ["en-US", "en"]; }
   get platform() { return $.platform; }
   get onLine() { return true; }
   get cookieEnabled() { return true; }
@@ -502,13 +502,13 @@ $.hook("remoteOp", (op, o, a, b) => {
 });
 // A window of another origin: it can be sent messages and sent elsewhere, and little else.
 const crossWindows = new Map();
-const blocked = () => { throw new DOMException(`Blocked a frame with origin "${$.pageOrigin()}" from accessing a cross-origin frame.`, "SecurityError"); };
+const blocked = (what) => { throw new DOMException(`Failed to read a named property '${String(what)}' from 'Window': Blocked a frame with origin "${$.pageOrigin()}" from accessing a cross-origin frame.`, "SecurityError"); };
 $.hook("crossWindow", (id) => {
   let w = crossWindows.get(id);
   if (w) return w;
   const place = new Proxy({}, {
-    get(_, k) { if (k === "replace" || k === "assign") return (u) => $.navigateFrame(id, String(u)); blocked(); },
-    set(_, k, v) { if (k === "href") { $.navigateFrame(id, String(v)); return true; } blocked(); },
+    get(_, k) { if (k === "replace" || k === "assign") return (u) => $.navigateFrame(id, String(u)); blocked(k); },
+    set(_, k, v) { if (k === "href") { $.navigateFrame(id, String(v)); return true; } blocked(k); },
   });
   const known = {
     postMessage(data, target) { $.postTo(id, JSON.stringify({ v: data }), String((typeof target === "object" && target ? target.targetOrigin : target) ?? "/")); },
@@ -526,12 +526,12 @@ $.hook("crossWindow", (id) => {
       if (k === Symbol.toStringTag) return "Window";
       if (typeof k === "symbol" || k === "then") return undefined;
       if (/^[0-9]+$/.test(k)) return $.framesOf(id)[Number(k) * 2];
-      blocked();
+      blocked(k);
     },
-    set(_, k, v) { if (k === "location") { $.navigateFrame(id, String(v)); return true; } blocked(); },
+    set(_, k, v) { if (k === "location") { $.navigateFrame(id, String(v)); return true; } blocked(k); },
     has(_, k) { return k in known || k === "location" || k === "parent" || k === "top"; },
     ownKeys() { return []; },
-    getOwnPropertyDescriptor() { blocked(); },
+    getOwnPropertyDescriptor(_, k) { blocked(k); },
     getPrototypeOf() { return null; },
   });
   crossWindows.set(id, w);

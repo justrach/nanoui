@@ -46,11 +46,23 @@ pub fn cookieLine(a: std.mem.Allocator, url: []const u8) ?[]const u8 {
     return if (s.len > 0) s else null;
 }
 
+/// What our user agent string claims, as Chromium says it to servers.
+pub const client_hints = [_]http.Header{
+    .{ .name = "sec-ch-ua", .value = "\"Chromium\";v=\"142\", \"Not_A Brand\";v=\"99\"" },
+    .{ .name = "sec-ch-ua-mobile", .value = "?0" },
+    .{ .name = "sec-ch-ua-platform", .value = switch (@import("builtin").os.tag) {
+        .macos => "\"macOS\"",
+        .windows => "\"Windows\"",
+        .ios => "\"iOS\"",
+        else => "\"Linux\"",
+    } },
+};
+
 /// What every request of the page's own carries.
 pub fn defaultHeaders(w: *World, url: []const u8, buf: *[4]http.Header) []const http.Header {
     buf[0] = .{ .name = "User-Agent", .value = page_mod.user_agent };
     buf[1] = .{ .name = "Accept", .value = "*/*" };
-    buf[2] = .{ .name = "Accept-Language", .value = "en" };
+    buf[2] = .{ .name = "Accept-Language", .value = "en-US,en;q=0.9" };
     if (cookieLine(w.page.arena(), url)) |c| {
         buf[3] = .{ .name = "Cookie", .value = c };
         return buf[0..4];
@@ -133,7 +145,7 @@ fn request(vm: *Vm, _: Value, args: []const Value) Error!Value {
     }
     if (!hasHeader(headers.items, "User-Agent")) try headers.append(a, .{ .name = "User-Agent", .value = page_mod.user_agent });
     if (!hasHeader(headers.items, "Accept")) try headers.append(a, .{ .name = "Accept", .value = "*/*" });
-    if (!hasHeader(headers.items, "Accept-Language")) try headers.append(a, .{ .name = "Accept-Language", .value = "en" });
+    if (!hasHeader(headers.items, "Accept-Language")) try headers.append(a, .{ .name = "Accept-Language", .value = "en-US,en;q=0.9" });
     if (cross and !std.ascii.startsWithIgnoreCase(url, "data:")) {
         const here = originOf(p.url());
         try headers.append(a, .{ .name = "Origin", .value = if (here.len > 0) here else "null" });

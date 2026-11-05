@@ -282,6 +282,28 @@ test "border-collapse: each line's winner, halved between the boxes beside it" {
     try u.close(a.h, b.h, "one row");
 }
 
+test "an item spanning flexible tracks has no automatic minimum size" {
+    const p = try Page.make(
+        \\<!doctype html><div style="display:grid;grid-template-columns:repeat(4,1fr);width:400px"><div id=a style="grid-column:1/5"><div style="width:900px;height:5px"></div></div></div>
+        \\<div style="display:grid;grid-template-columns:1fr;width:400px"><div id=b><div style="width:900px;height:5px"></div></div></div>
+    , reset);
+    defer p.done();
+    try p.rect("a", 0, 0, 400, 5);
+    try p.rect("b", 0, 5, 900, 5);
+}
+
+test "aspect-ratio and a height say an inline-block's width" {
+    const p = try Page.make("<!doctype html><div id=o style=\"display:inline-block\"><div id=b style=\"aspect-ratio:9/16;height:320px\"></div></div>", reset);
+    defer p.done();
+    try p.rect("b", 0, 0, 180, 320);
+}
+
+test "env() of what a window has none of is nothing" {
+    const p = try Page.make("<!doctype html><div id=a style=\"--s:env(safe-area-inset-left);padding-left:max(22px,var(--s));height:1px\"></div>", reset);
+    defer p.done();
+    try std.testing.expectEqual(@as(f32, 22), @as(*box.Box, @ptrCast(@alignCast(p.find("a").?.box.?))).padding.left);
+}
+
 test "subgrid: columns and rows from the grid around it" {
     const p = try Page.make(
         \\<!doctype html><div style="display:grid;grid-template-columns:100px 100px;width:200px"><div id=s style="display:grid;grid-template-columns:subgrid;grid-column:1/3"><div id=s1 style="height:5px"></div><div id=s2 style="height:5px"></div></div></div>

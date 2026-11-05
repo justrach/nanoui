@@ -186,6 +186,7 @@ fn inserted(w: *World, n: *Node) Error!void {
     var at: ?*Node = n;
     while (at) |x| : (at = x.nextDeep(n)) {
         if (x.kind != .element) continue;
+        if (x.isTag("script") and w.page.no_scripts) continue;
         if (x.isTag("script") or custom.isCustomName(x.tag)) {
             try pending.append(w.gpa, x);
         } else if (x.isTag("iframe")) {
@@ -217,7 +218,7 @@ fn removed(w: *World, n: *Node) Error!void {
     var pending: std.ArrayList(*Node) = .empty;
     defer pending.deinit(w.gpa);
     var at: ?*Node = n;
-    while (at) |x| : (at = x.nextInTree(n)) {
+    while (at) |x| : (at = x.nextDeep(n)) {
         if (x.kind == .element and w.custom.upgraded.contains(x)) try pending.append(w.gpa, x);
     }
     for (pending.items) |x| try custom.disconnected(w, x);

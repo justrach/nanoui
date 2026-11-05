@@ -126,7 +126,7 @@ fn frameShared(vm: *Vm, _: Value, args: []const Value) Error!Value {
     const w = bind.world(vm);
     const n = try bind.nodeArg(vm, args, 0, "contentDocument");
     const child = frames.childPage(w.page, n) orelse return Value.false;
-    return Value.fromBool(frames.sameOrigin(w.page, child) and !child.no_scripts);
+    return Value.fromBool(frames.sameOrigin(w.page, child));
 }
 
 fn isFramed(vm: *Vm, _: Value, _: []const Value) Error!Value {

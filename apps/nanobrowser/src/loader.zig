@@ -21,8 +21,8 @@ const frames = @import("frames.zig");
 const headers = [_]http.Header{
     .{ .name = "User-Agent", .value = page_mod.user_agent },
     .{ .name = "Accept", .value = "text/html,application/xhtml+xml,image/png,image/jpeg,image/gif,image/svg+xml,text/css,*/*;q=0.8" },
-    .{ .name = "Accept-Language", .value = "en" },
-};
+    .{ .name = "Accept-Language", .value = "en-US,en;q=0.9" },
+} ++ net.client_hints;
 
 /// One sheet's place: its imports come before it.
 pub const Slot = struct {

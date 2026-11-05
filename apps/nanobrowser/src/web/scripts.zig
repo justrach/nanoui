@@ -88,7 +88,7 @@ fn kindOf(n: *const Node) ?Kind {
 pub fn hasScripts(doc: *dom.Document) bool {
     const root = doc.node;
     var at = root.first_child;
-    while (at) |n| : (at = n.nextInTree(root)) {
+    while (at) |n| : (at = n.nextDeep(root)) {
         if (n.kind != .element) continue;
         if (n.isTag("script") and kindOf(n) != null) return true;
         for (n.attrs.items) |a| if (a.name.len > 2 and a.name[0] == 'o' and a.name[1] == 'n') return true;

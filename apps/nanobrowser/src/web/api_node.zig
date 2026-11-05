@@ -260,7 +260,13 @@ fn cloneNode(vm: *Vm, this: Value, args: []const Value) Error!Value {
 fn contains(vm: *Vm, this: Value, args: []const Value) Error!Value {
     const n = try nodeOf(vm, this);
     const o = bind.asNode(bind.arg(args, 0)) orelse return Value.false;
-    return Value.fromBool(n.contains(o));
+    // What's in a shadow tree isn't in its host, as scripts see it.
+    var at: ?*const Node = o;
+    while (at) |x| : (at = x.parent) {
+        if (x == n) return Value.true;
+        if (x.is_shadow) return Value.false;
+    }
+    return Value.false;
 }
 
 fn hasChildNodes(vm: *Vm, this: Value, _: []const Value) Error!Value {
