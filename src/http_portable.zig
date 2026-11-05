@@ -59,9 +59,11 @@ pub fn decodeData(gpa: std.mem.Allocator, url: []const u8) ![]u8 {
     errdefer text.deinit(gpa);
     var i: usize = 0;
     while (i < raw.len) : (i += 1) {
-        if (raw[i] == '%' and i + 2 < raw.len) {
-            const byte = std.fmt.parseInt(u8, raw[i + 1 .. i + 3], 16) catch return error.NotAUrl;
-            try text.append(gpa, byte);
+        // A `%` that isn't an escape is itself, as URLs have it: pages write
+        // `width='100%'` straight into their addresses.
+        const byte = if (raw[i] == '%' and i + 2 < raw.len) std.fmt.parseInt(u8, raw[i + 1 .. i + 3], 16) catch null else null;
+        if (byte) |b| {
+            try text.append(gpa, b);
             i += 2;
         } else try text.append(gpa, raw[i]);
     }
@@ -377,6 +379,9 @@ test "URLs split for a request; data URLs read" {
     const a = try decodeData(gpa, "data:text/plain,hello%20zig");
     defer gpa.free(a);
     try std.testing.expectEqualStrings("hello zig", a);
+    const stray = try decodeData(gpa, "data:text/plain,50%' %zz 100%");
+    defer gpa.free(stray);
+    try std.testing.expectEqualStrings("50%' %zz 100%", stray);
     const b = try decodeData(gpa, "data:text/plain;base64,aGVsbG8gemln");
     defer gpa.free(b);
     try std.testing.expectEqualStrings("hello zig", b);
