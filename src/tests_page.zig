@@ -27,3 +27,7 @@ test "the bridge posts through whichever webview the page is in" {
     try testing.expect(std.mem.indexOf(u8, page.bridge_js, "webkit") != null);
     try testing.expect(std.mem.indexOf(u8, page.bridge_js, "__nanoui_setPages") != null);
 }
+
+test {
+    _ = @import("ipc.zig");
+}

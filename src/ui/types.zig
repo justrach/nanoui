@@ -351,7 +351,16 @@ pub const Style = struct {
     /// copied, as a terminal's or a page's (`selection.zig`).
     selectable: bool = false,
     /// A single press on it moves the window, as a title bar's does (a
-    /// tab strip's empty space); a double click still comes to the box.
+    /// tab strip's empty space).
+    ///
+    /// Double clicks differ by platform. On macOS a double click still
+    /// comes to the box (its handler may zoom the window itself). On
+    /// Windows the box *is* the caption: in an app-drawn title bar
+    /// (`TitleBar.hidden`) `WM_NCHITTEST` answers HTCAPTION over it, so the
+    /// system takes the press and its double click maximizes or restores
+    /// the window as a caption's does; in a borderless window the surface
+    /// hands the press to the system's move loop and zooms on a double
+    /// click itself. Either way the box never sees the double click there.
     window_drag: bool = false,
     /// The window's maximize button, drawn by the app in its own title bar
     /// (`TitleBar.hidden`): Windows hit-tests it as the system's

@@ -7,6 +7,21 @@
 const std = @import("std");
 const tsgen = @import("tsgen.zig");
 
+/// The scheme, `://` and host of `url`; "" for a URL without them.
+pub fn originOf(url: []const u8) []const u8 {
+    const sep = std.mem.indexOf(u8, url, "://") orelse return "";
+    const rest = url[sep + 3 ..];
+    const end = std.mem.indexOfAny(u8, rest, "/?#") orelse rest.len;
+    return url[0 .. sep + 3 + end];
+}
+
+test "a call's origin is its page's scheme and host" {
+    try std.testing.expectEqualStrings("nanoui://localhost", originOf("nanoui://localhost/code.html?x=1"));
+    try std.testing.expectEqualStrings("https://example.com", originOf("https://example.com"));
+    try std.testing.expectEqualStrings("http://localhost:5173", originOf("http://localhost:5173#top"));
+    try std.testing.expectEqualStrings("", originOf("/index.html"));
+}
+
 pub fn ipc(comptime Window: type, comptime App: type) type {
     return struct {
         /// The context of a call, for methods that take `*nanoui.Call` after self.
@@ -15,6 +30,22 @@ pub fn ipc(comptime Window: type, comptime App: type) type {
             /// Freed when the reply is sent: allocate results here.
             arena: std.mem.Allocator,
             window: *Window,
+            /// The page the call came from (the window's own or a docked
+            /// one), as the platform's `*Page`: compare it with a page the
+            /// app made to know who is calling.
+            page: ?*anyopaque = null,
+            /// That page's `PageOptions.label`.
+            label: []const u8 = "",
+            /// The URL that page was last told to load (`origin` and a path
+            /// for the app's own assets, else a remote page's).
+            url: []const u8 = "",
+
+            /// The scheme and host of `url` (`nanoui://localhost`,
+            /// `https://example.com`), without a path: what to check before
+            /// trusting a call that only one of the app's pages may make.
+            pub fn origin(call: *const Call) []const u8 {
+                return originOf(call.url);
+            }
         };
 
         pub const Service = struct {
@@ -136,7 +167,8 @@ pub fn ipc(comptime Window: type, comptime App: type) type {
                 var aw: std.Io.Writer.Allocating = .init(a);
                 aw.writer.print("{{\"t\":\"reply\",\"id\":{d},", .{pageId(env.id)}) catch return;
                 const mark = aw.written().len;
-                callMethod(app, window, a, env.m, env.a, &aw.writer) catch |err| {
+                var call: Call = .{ .arena = a, .window = window, .page = @ptrCast(page), .label = page.queue.options.label, .url = page.queue.current_url };
+                callMethod(app, &call, env.m, env.a, &aw.writer) catch |err| {
                     aw.shrinkRetainingCapacity(mark);
                     aw.writer.writeAll("\"ok\":false,\"e\":") catch return;
                     const text = std.fmt.allocPrint(a, "{s}: {s}", .{ env.m, @errorName(err) }) catch return;
@@ -166,12 +198,11 @@ pub fn ipc(comptime Window: type, comptime App: type) type {
             }
         }
 
-        fn callMethod(app: *App, window: *Window, arena: std.mem.Allocator, method: []const u8, args: []const std.json.Value, out: *std.Io.Writer) !void {
+        fn callMethod(app: *App, call: *Call, method: []const u8, args: []const std.json.Value, out: *std.Io.Writer) !void {
             const dot = std.mem.indexOfScalar(u8, method, '.') orelse return error.UnknownMethod;
             const svc = app.services.get(method[0..dot]) orelse return error.UnknownService;
             try out.writeAll("\"ok\":true,\"v\":");
-            var call: Call = .{ .arena = arena, .window = window };
-            try svc.dispatch(svc.ctx, &call, method[dot + 1 ..], args, out);
+            try svc.dispatch(svc.ctx, call, method[dot + 1 ..], args, out);
         }
     };
 }

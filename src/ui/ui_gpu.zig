@@ -50,7 +50,7 @@ pub fn d3d11DeviceGeneration() u64 {
 
 /// A cursor made from pixels (an NSCursor on macOS, an HCURSOR from
 /// `CreateIconIndirect` on Windows): `rgba` straight alpha, `w` × `h`,
-/// shown at one point a pixel (one pixel a pixel on Windows) with its hot
+/// shown at one point a pixel (on Windows too, made larger at 150% or 200%) with its hot
 /// spot at (`hot_x`, `hot_y`) from its top left. Show it with `setCursor`;
 /// free it with `freeCursor` once nothing shows it. Null where custom
 /// cursors aren't drawn (the arrow stays).
@@ -105,11 +105,18 @@ test "makeCursor makes a cursor from pixels" {
     if (comptime builtin.os.tag == .windows) {
         // An HCURSOR, not an icon, with the hot spot it was given.
         try std.testing.expect(cur != null);
-        const hot = @import("../windows/cursor.zig").hotSpot(cur.?) orelse return error.NotACursor;
-        try std.testing.expectEqual([2]u32{ 8, 8 }, hot);
+        const wc = @import("../windows/cursor.zig");
+        const s = wc.systemScale();
+        const at = struct {
+            fn f(v: f32, k: f32) u32 {
+                return @intFromFloat(@round(if (k > 1.01) v * k else v));
+            }
+        }.f;
+        const hot = wc.hotSpot(cur.?) orelse return error.NotACursor;
+        try std.testing.expectEqual([2]u32{ at(8, s), at(8, s) }, hot);
         const corner = makeCursor(&px, 16, 16, 0, 15);
         defer freeCursor(corner);
-        try std.testing.expectEqual([2]u32{ 0, 15 }, @import("../windows/cursor.zig").hotSpot(corner.?).?);
+        try std.testing.expectEqual([2]u32{ 0, at(15, s) }, wc.hotSpot(corner.?).?);
         try std.testing.expect(makeCursor(px[0..10], 16, 16, 0, 0) == null);
         return;
     }

@@ -162,11 +162,41 @@ pub fn restore(self: *Window) bool {
     var text_buf: [128]u8 = undefined;
     const text = std.Io.Dir.cwd().readFile(self.app.io, path, &text_buf) catch return false;
     var p = decode(text) orelse return false;
-    if (MonitorFromRect(&p.normal, 0) == null) return false; // MONITOR_DEFAULTTONULL
+    if (!onAMonitor(p.normal)) return false;
     self.restore_maximized = p.show_cmd == SW_SHOWMAXIMIZED;
     p.show_cmd = if (w.IsWindowVisible(h) != 0) (if (self.restore_maximized) SW_SHOWMAXIMIZED else 1) else 0;
     if (w.IsWindowVisible(h) != 0) self.restore_maximized = false;
     return SetWindowPlacement(h, &p) != 0;
+}
+
+/// `rect` in workspace coordinates (`WINDOWPLACEMENT.rcNormalPosition`'s,
+/// offset by a taskbar on the top or left) in screen coordinates, as the
+/// monitor `whole`, with its work area `work`, places it.
+pub fn workspaceToScreen(rect: w.RECT, whole: w.RECT, work: w.RECT) w.RECT {
+    const dx = work.left - whole.left;
+    const dy = work.top - whole.top;
+    return .{ .left = rect.left + dx, .top = rect.top + dy, .right = rect.right + dx, .bottom = rect.bottom + dy };
+}
+
+/// Whether a monitor shows the placement's rect (workspace coordinates):
+/// it is made screen coordinates on the monitor nearest it first, which
+/// `MonitorFromRect` wants.
+fn onAMonitor(normal: w.RECT) bool {
+    const near = MonitorFromRect(&normal, 2) orelse return false; // MONITOR_DEFAULTTONEAREST
+    var info: w.MONITORINFO = .{};
+    if (w.GetMonitorInfoW(near, &info) == 0) return MonitorFromRect(&normal, 0) != null;
+    const screen = workspaceToScreen(normal, info.rc_monitor, info.rc_work);
+    return MonitorFromRect(&screen, 0) != null; // MONITOR_DEFAULTTONULL
+}
+
+test "a taskbar on the left moves a workspace rect right into screen coordinates" {
+    const whole: w.RECT = .{ .left = 0, .top = 0, .right = 1920, .bottom = 1080 };
+    const work: w.RECT = .{ .left = 48, .top = 0, .right = 1920, .bottom = 1080 };
+    const r = workspaceToScreen(.{ .left = 10, .top = 20, .right = 110, .bottom = 220 }, whole, work);
+    try std.testing.expectEqual(w.RECT{ .left = 58, .top = 20, .right = 158, .bottom = 220 }, r);
+    // A taskbar at the bottom changes nothing.
+    const bottom: w.RECT = .{ .left = 0, .top = 0, .right = 1920, .bottom = 1032 };
+    try std.testing.expectEqual(w.RECT{ .left = 10, .top = 20, .right = 110, .bottom = 220 }, workspaceToScreen(.{ .left = 10, .top = 20, .right = 110, .bottom = 220 }, whole, bottom));
 }
 
 test "a placement's line reads back as it was written" {

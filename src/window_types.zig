@@ -14,6 +14,9 @@ pub const PageOptions = struct {
     /// `assets`; absolute URLs (`http://localhost:5173`) load as is.
     url: []const u8 = "/",
     assets: []const Asset = &.{},
+    /// A name the app gives the page ("motion-code"), carried by every call
+    /// it makes (`Call.label`) so a service can tell its pages apart.
+    label: []const u8 = "",
     /// Web Inspector (right click > Inspect Element).
     inspectable: bool = true,
     /// Pages the window can switch between, shown as a bar on every one of
