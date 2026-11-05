@@ -122,8 +122,8 @@ pub const Db = struct {
     /// those the app brought. A valid persistent index replaces the scan.
     pub fn scan(db: *Db) void {
         db.addBundled();
-        db.disk_start = db.faces.items.len;
         if (db.scanned) return;
+        db.disk_start = db.faces.items.len;
         db.scanned = true;
         if (db.loadCached()) return;
         db.scanFonts();
@@ -245,7 +245,10 @@ pub const Db = struct {
 
     pub fn scanDir(db: *Db, path: []const u8) void {
         db.recordDir(path);
-        var dir = std.Io.Dir.cwd().openDir(db.io, path, .{ .iterate = true }) catch return;
+        var dir = std.Io.Dir.cwd().openDir(db.io, path, .{ .iterate = true }) catch {
+            db.cache_broken = true;
+            return;
+        };
         defer dir.close(db.io);
         db.scan_directories += 1;
         var walker = dir.walk(db.gpa) catch {
@@ -277,9 +280,15 @@ pub const Db = struct {
     /// Reads a file's faces' styles, touching only the tables they need.
     pub fn addFile(db: *Db, path: []const u8) void {
         db.scan_files += 1;
-        var file = std.Io.Dir.cwd().openFile(db.io, path, .{}) catch return;
+        var file = std.Io.Dir.cwd().openFile(db.io, path, .{}) catch {
+            db.cache_broken = true;
+            return;
+        };
         defer file.close(db.io);
-        const stat = file.stat(db.io) catch return;
+        const stat = file.stat(db.io) catch {
+            db.cache_broken = true;
+            return;
+        };
         const len = stat.size;
         if (len < 12 or len > 256 << 20) return;
         // Untouched pages of an anonymous mapping cost nothing: the

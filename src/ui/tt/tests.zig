@@ -2,6 +2,7 @@
 //! installed (Arial on macOS, DejaVu Sans on Linux, Arial on Windows);
 //! skipped elsewhere.
 const std = @import("std");
+const builtin = @import("builtin");
 const font = @import("font.zig");
 const fontdb = @import("fontdb.zig");
 const fontmap = @import("fontmap.zig");
@@ -293,4 +294,143 @@ test "an unsupported cmap does not invalidate other warm font faces" {
         try std.testing.expectEqual(expected, db.cache.state);
         try std.Io.Dir.cwd().access(std.testing.io, cache_path, .{});
     }
+}
+
+const CreateFileW = if (builtin.os.tag == .windows) struct {
+    pub extern "kernel32" fn CreateFileW(
+        path: [*:0]const u16,
+        access: u32,
+        share: u32,
+        security: ?*anyopaque,
+        creation: u32,
+        attributes: u32,
+        template: ?*anyopaque,
+    ) callconv(.winapi) ?*anyopaque;
+    pub extern "kernel32" fn CloseHandle(handle: *anyopaque) callconv(.winapi) i32;
+} else struct {};
+
+fn dupeZ(allocator: std.mem.Allocator, path: []const u8) ![:0]u8 {
+    const z = try allocator.alloc(u8, path.len + 1);
+    @memcpy(z[0..path.len], path);
+    z[path.len] = 0;
+    return z[0..path.len :0];
+}
+
+fn denyRead(path: []const u8) !?*anyopaque {
+    switch (builtin.os.tag) {
+        .windows => {
+            const wide = try std.unicode.utf8ToUtf16LeAllocZ(std.testing.allocator, path);
+            defer std.testing.allocator.free(wide);
+            const handle = CreateFileW.CreateFileW(wide.ptr, 0x80000000, 0, null, 3, 0x80, null);
+            if (handle == null) return error.SkipZigTest;
+            if (std.Io.Dir.cwd().openFile(std.testing.io, path, .{})) |probe| {
+                probe.close(std.testing.io);
+                _ = CreateFileW.CloseHandle(handle.?);
+                return error.SkipZigTest;
+            } else |_| {}
+            return handle;
+        },
+        .linux => {
+            const z = try dupeZ(std.testing.allocator, path);
+            defer std.testing.allocator.free(z);
+            if (std.os.linux.chmod(z.ptr, 0) != 0) return error.SkipZigTest;
+            if (std.Io.Dir.cwd().openFile(std.testing.io, path, .{})) |probe| {
+                probe.close(std.testing.io);
+                _ = std.os.linux.chmod(z.ptr, 0o644);
+                return error.SkipZigTest;
+            } else |_| {}
+            return null;
+        },
+        else => return error.SkipZigTest,
+    }
+}
+
+fn restoreRead(handle: ?*anyopaque, path: []const u8) void {
+    switch (builtin.os.tag) {
+        .windows => {
+            if (handle) |h| _ = CreateFileW.CloseHandle(h);
+        },
+        .linux => {
+            const z = dupeZ(std.testing.allocator, path) catch return;
+            defer std.testing.allocator.free(z);
+            _ = std.os.linux.chmod(z.ptr, 0o644);
+        },
+        else => {},
+    }
+}
+
+test "an unreadable font during a cold scan does not stay missing after access is restored" {
+    const gpa = std.testing.allocator;
+    const data = load(gpa) orelse return error.SkipZigTest;
+    defer gpa.free(data);
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDir(std.testing.io, "fonts", .default_dir);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "fonts/a.ttf", .data = data });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "fonts/b.ttf", .data = data });
+    var root_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root_len = try tmp.dir.realPath(std.testing.io, &root_buf);
+    const root = root_buf[0..root_len];
+    const fonts_dir = try std.fs.path.join(gpa, &.{ root, "fonts" });
+    defer gpa.free(fonts_dir);
+    const cache_dir = try std.fs.path.join(gpa, &.{ root, "cache" });
+    defer gpa.free(cache_dir);
+    const cache_path = try std.fs.path.join(gpa, &.{ cache_dir, "font-index-v2.bin" });
+    defer gpa.free(cache_path);
+    const blocked = try std.fs.path.join(gpa, &.{ fonts_dir, "b.ttf" });
+    defer gpa.free(blocked);
+
+    const lock = try denyRead(blocked);
+    {
+        var db = fontdb.Db.init(gpa, std.testing.io);
+        defer db.deinit();
+        db.fonts_dir = fonts_dir;
+        db.enableCache(cache_dir);
+        db.scan();
+        try std.testing.expect(db.cache_broken);
+        try std.testing.expectEqual(@import("fontindex.zig").State.write_failed, db.cache.state);
+        try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(std.testing.io, cache_path, .{}));
+    }
+    restoreRead(lock, blocked);
+    {
+        var db = fontdb.Db.init(gpa, std.testing.io);
+        defer db.deinit();
+        db.fonts_dir = fonts_dir;
+        db.cache_path = cache_path;
+        db.scan();
+        try std.testing.expectEqual(@import("fontindex.zig").State.written, db.cache.state);
+        try std.testing.expectEqual(@as(usize, 2), db.faces.items.len);
+    }
+}
+
+test "a second scan preserves the disk face start and failed loads still invalidate" {
+    const gpa = std.testing.allocator;
+    const data = load(gpa) orelse return error.SkipZigTest;
+    defer gpa.free(data);
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDir(std.testing.io, "fonts", .default_dir);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "fonts/one.ttf", .data = data });
+    var root_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root_len = try tmp.dir.realPath(std.testing.io, &root_buf);
+    const root = root_buf[0..root_len];
+    const fonts_dir = try std.fs.path.join(gpa, &.{ root, "fonts" });
+    defer gpa.free(fonts_dir);
+    const cache_dir = try std.fs.path.join(gpa, &.{ root, "cache" });
+    defer gpa.free(cache_dir);
+    const cache_path = try std.fs.path.join(gpa, &.{ cache_dir, "font-index-v2.bin" });
+    defer gpa.free(cache_path);
+
+    var db = fontdb.Db.init(gpa, std.testing.io);
+    defer db.deinit();
+    db.fonts_dir = fonts_dir;
+    db.cache_path = cache_path;
+    db.scan();
+    const start = db.disk_start;
+    try std.testing.expect(db.faces.items.len > start);
+    db.scan();
+    try std.testing.expectEqual(start, db.disk_start);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "fonts/one.ttf", .data = "broken" });
+    try std.testing.expect(db.load(@intCast(start)) == null);
+    try std.testing.expectEqual(@import("fontindex.zig").State.stale, db.cache.state);
 }
