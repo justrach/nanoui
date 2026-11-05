@@ -7,6 +7,8 @@ const style = @import("style.zig");
 const values = @import("values.zig");
 const colors = @import("colors.zig");
 const properties = @import("properties.zig");
+const parser = @import("parser.zig");
+const prop = @import("prop.zig");
 
 const Node = dom.Node;
 const Style = style.Style;
@@ -93,6 +95,7 @@ fn fontSizeAttr(raw: []const u8) ?f32 {
 
 /// Text style hints, applied in the cascade's early passes.
 pub fn early(node: *Node, ctx: *values.Ctx, phase: u2) void {
+    if (node.ns == .svg and phase == 1) if (node.attr("color")) |v| presentation(ctx, "color", v);
     if (node.ns != .html or node.attrs.items.len == 0) return;
     const s = ctx.style;
     if (phase == 0) {
@@ -140,6 +143,7 @@ fn tableAncestor(node: *const Node) ?*const Node {
 
 /// Box hints, applied before author rules in the last pass.
 pub fn late(node: *Node, ctx: *values.Ctx) void {
+    if (node.ns == .svg) return svgAttributes(node, ctx);
     if (node.ns != .html) return;
     const s = ctx.style;
     const tag = node.tag;
@@ -209,6 +213,29 @@ pub fn late(node: *Node, ctx: *values.Ctx) void {
     if (is(tag, "ol") or is(tag, "ul") or is(tag, "li")) listHints(node, s);
     if (is(tag, "img") or is(tag, "object") or is(tag, "embed")) imageHints(node, s);
     if (is(tag, "hr")) hrHints(node, ctx);
+}
+
+/// SVG's attributes that are style: read as CSS, below every author rule.
+fn svgAttributes(node: *Node, ctx: *values.Ctx) void {
+    for (node.attrs.items) |a| {
+        if (!isPresentation(a.name)) continue;
+        presentation(ctx, a.name, a.value);
+    }
+}
+
+fn isPresentation(name: []const u8) bool {
+    const l = [_][]const u8{ "fill", "fill-opacity", "fill-rule", "clip-rule", "clip-path", "mask", "stroke", "stroke-width", "stroke-opacity", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stroke-dasharray", "stroke-dashoffset", "stop-color", "stop-opacity", "opacity", "visibility", "display", "paint-order", "vector-effect" };
+    for (l) |x| if (std.mem.eql(u8, name, x)) return true;
+    return false;
+}
+
+fn presentation(ctx: *values.Ctx, name: []const u8, value: []const u8) void {
+    const text = std.fmt.allocPrint(ctx.arena, "{s}:{s}", .{ name, value }) catch return;
+    const d = parser.parseDeclarations(ctx.arena, text) catch return;
+    for (d.items) |x| {
+        if (x.prop == .custom or x.prop == .all) continue;
+        _ = properties.apply(ctx, x.prop, x.value);
+    }
 }
 
 fn widthHolder(tag: []const u8) bool {

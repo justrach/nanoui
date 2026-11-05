@@ -45,6 +45,11 @@ const Image = struct {
 const Pos = struct { x_pct: f32 = 0, x_px: f32 = 0, y_pct: f32 = 0, y_px: f32 = 0 };
 const Size = struct { kind: style.BackgroundSize = .auto, x: Len = Len.auto, y: Len = Len.auto };
 
+/// `background-position`'s grammar, into its fields.
+pub fn position(ctx: *Ctx, t: []const Token) bool {
+    return backgroundPosition(ctx, t);
+}
+
 /// One image at `c`: a URL, a gradient, `none`, or null when it is not one.
 fn imageAt(ctx: *Ctx, c: *Cur) ?Image {
     const t = c.peek() orelse return null;

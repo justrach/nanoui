@@ -9,6 +9,7 @@ const css = @import("css/css.zig");
 const box = @import("layout/box.zig");
 const display = @import("paint/display.zig");
 const gradient = @import("paint/gradient.zig");
+const svg_markup = @import("paint/svg_markup.zig");
 const loader = @import("loader.zig");
 const web = @import("web/web.zig");
 const view_mod = @import("page_view.zig");
@@ -43,6 +44,10 @@ pub const Page = struct {
     /// Style sheets in document order, and what fetches them (`loader.zig`).
     sheets: loader.Sheets = .{},
     pictures: loader.Pictures = .{},
+    /// What inline `<svg>`s were last drawn from.
+    svgs: svg_markup.Cache = .{},
+    /// The screen and window `srcset` and `media` were last answered for.
+    pick_signature: u64 = 0,
     icon: ?[]const u8 = null,
     icon_key: []const u8 = "",
     icon_asked: bool = false,
@@ -165,6 +170,7 @@ pub const Page = struct {
         p.find.query.deinit(gpa);
         p.sheets.deinit(gpa);
         p.pictures.deinit(gpa);
+        p.svgs.deinit(gpa);
         gpa.free(p.final_url);
         p.doc_arena.deinit();
         gpa.destroy(p);

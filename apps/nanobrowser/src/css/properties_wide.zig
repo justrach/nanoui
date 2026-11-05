@@ -105,6 +105,23 @@ pub fn copy(p: Prop, d: *Style, s: *const Style) void {
         .outline, .outline_width, .outline_style, .outline_color => d.outline = s.outline,
         .outline_offset => d.outline_offset = s.outline_offset,
         .background => sides(d, s, &.{ "background", "background_image", "background_gradient", "background_more", "background_clip", "background_size", "background_size_x", "background_size_y", "background_repeat", "background_x", "background_y", "background_x_px", "background_y_px", "background_origin", "background_fixed", "bg_sizes", "bg_positions", "bg_repeats", "bg_clips", "bg_origins", "bg_fixed" }),
+        .fill => d.svg.fill = s.svg.fill,
+        .fill_opacity => d.svg.fill_opacity = s.svg.fill_opacity,
+        .fill_rule => d.svg.fill_evenodd = s.svg.fill_evenodd,
+        .clip_rule => d.svg.clip_evenodd = s.svg.clip_evenodd,
+        .stroke => d.svg.stroke = s.svg.stroke,
+        .stroke_width => d.svg.stroke_width = s.svg.stroke_width,
+        .stroke_opacity => d.svg.stroke_opacity = s.svg.stroke_opacity,
+        .stroke_linecap => d.svg.cap = s.svg.cap,
+        .stroke_linejoin => d.svg.join = s.svg.join,
+        .stroke_miterlimit => d.svg.miter_limit = s.svg.miter_limit,
+        .stroke_dasharray => d.svg.dash = s.svg.dash,
+        .stroke_dashoffset => d.svg.dash_offset = s.svg.dash_offset,
+        .stop_color => d.svg.stop_color = s.svg.stop_color,
+        .stop_opacity => d.svg.stop_opacity = s.svg.stop_opacity,
+        .paint_order => d.svg.stroke_first = s.svg.stroke_first,
+        .vector_effect => d.svg.non_scaling_stroke = s.svg.non_scaling_stroke,
+        .object_position => sides(d, s, &.{ "object_x", "object_y", "object_x_px", "object_y_px" }),
         .background_color => d.background = s.background,
         .background_image => sides(d, s, &.{ "background_image", "background_gradient", "background_more" }),
         .background_clip => sides(d, s, &.{ "background_clip", "bg_clips" }),
@@ -122,7 +139,10 @@ pub fn copy(p: Prop, d: *Style, s: *const Style) void {
         .appearance => d.appearance_none = s.appearance_none,
         .isolation, .mix_blend_mode, .will_change, .contain => d.makes_context = s.makes_context,
         .clip => d.clip_rect = s.clip_rect,
-        .clip_path => d.clip_path = s.clip_path,
+        .clip_path => {
+            d.clip_path = s.clip_path;
+            d.svg.clip_path = s.svg.clip_path;
+        },
         .filter => d.filters = s.filters,
         .backdrop_filter => d.backdrop_blur = s.backdrop_blur,
         .rotate => d.rotate = s.rotate,
@@ -212,6 +232,7 @@ pub fn inherit(p: *const Style) Style {
         "caption_bottom",  "tab_size",         "dark_scheme",          "text_fill",
         "text_shadows",    "accent",
     });
+    s.svg = p.svg.inherited();
     return s;
 }
 

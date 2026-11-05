@@ -304,6 +304,11 @@ const performance = {
 };
 Object.defineProperty(g, "performance", { value: performance, enumerable: true, configurable: true });
 def(g, "PerformanceEntry", PerformanceEntry);
+class PerformanceNavigation { constructor() { this.type = 0; this.redirectCount = 0; } toJSON() { return { type: this.type, redirectCount: this.redirectCount }; } }
+Object.assign(PerformanceNavigation, { TYPE_NAVIGATE: 0, TYPE_RELOAD: 1, TYPE_BACK_FORWARD: 2, TYPE_RESERVED: 255 });
+Object.assign(PerformanceNavigation.prototype, { TYPE_NAVIGATE: 0, TYPE_RELOAD: 1, TYPE_BACK_FORWARD: 2, TYPE_RESERVED: 255 });
+def(g, "PerformanceNavigation", PerformanceNavigation);
+if (!performance.navigation) performance.navigation = new PerformanceNavigation();
 class PerformanceObserver { constructor(cb) { this.cb = cb; } observe() {} disconnect() {} takeRecords() { return []; } static get supportedEntryTypes() { return []; } }
 def(g, "PerformanceObserver", PerformanceObserver);
 
@@ -429,6 +434,46 @@ for (const name of Object.getOwnPropertyNames(g)) {
   Object.defineProperty(c.prototype, Symbol.toStringTag, { value: name, configurable: true });
 }
 Object.defineProperty(document, Symbol.toStringTag, { value: "HTMLDocument", configurable: true });
+
+// Speech recognition is an offer a page makes (Google's and YouTube's microphones
+// are drawn if it's there); pressing it says what a browser with no permission says.
+g.webkitSpeechRecognition = class webkitSpeechRecognition extends EventTarget {
+  constructor() { super(); this.lang = ""; this.continuous = false; this.interimResults = false; this.maxAlternatives = 1; this.onerror = null; this.onend = null; this.onstart = null; this.onresult = null; }
+  start() {
+    setTimeout(() => {
+      const fire = (name, props) => { const e = new Event(name); Object.assign(e, props); this.dispatchEvent(e); const f = this["on" + name]; if (typeof f === "function") f.call(this, e); };
+      fire("error", { error: "not-allowed", message: "" });
+      fire("end", {});
+    }, 0);
+  }
+  stop() {}
+  abort() {}
+};
+Object.defineProperty(g, "webkitSpeechRecognition", { enumerable: false });
+
+// Audio is silent here, and offering it is what draws those same microphones: a
+// context whose nodes connect and make no sound, never started.
+class AudioNodeStub extends EventTarget {
+  constructor(context) { super(); this.context = context; this.numberOfInputs = 1; this.numberOfOutputs = 1; this.channelCount = 2; }
+  connect(to) { return to; }
+  disconnect() {}
+}
+class AudioContext extends EventTarget {
+  constructor() { super(); this.state = "suspended"; this.sampleRate = 44100; this.currentTime = 0; this.baseLatency = 0; this.onstatechange = null; this.destination = new AudioNodeStub(this); this.listener = {}; }
+  resume() { return Promise.resolve(); }
+  suspend() { return Promise.resolve(); }
+  close() { this.state = "closed"; return Promise.resolve(); }
+  decodeAudioData(bytes, ok, failed) { const e = new DOMException("Unable to decode audio data", "EncodingError"); if (failed) failed(e); return Promise.reject(e); }
+}
+for (const name of ["createGain", "createOscillator", "createBufferSource", "createAnalyser", "createBiquadFilter", "createDynamicsCompressor", "createScriptProcessor", "createMediaElementSource", "createMediaStreamSource", "createMediaStreamDestination", "createChannelSplitter", "createChannelMerger", "createDelay", "createPanner", "createStereoPanner", "createWaveShaper", "createConvolver"]) {
+  def(AudioContext.prototype, name, function () {
+    const param = { value: 0, defaultValue: 0, setValueAtTime() { return param; }, linearRampToValueAtTime() { return param; }, exponentialRampToValueAtTime() { return param; }, cancelScheduledValues() { return param; } };
+    const n = new AudioNodeStub(this);
+    return Object.assign(n, { gain: param, frequency: param, detune: param, Q: param, delayTime: param, pan: param, start() {}, stop() {}, frequencyBinCount: 1024, fftSize: 2048, getByteFrequencyData() {}, getByteTimeDomainData() {}, getFloatFrequencyData() {}, getFloatTimeDomainData() {} });
+  });
+}
+def(AudioContext.prototype, "createBuffer", function (channels, length, rate) { return { numberOfChannels: channels, length, sampleRate: rate, duration: length / rate, getChannelData() { return new Float32Array(length); } }; });
+def(g, "AudioContext", AudioContext);
 
 // Things libraries feature-detect that aren't here on purpose stay undefined:
 // WebSocket, Worker, ServiceWorker, IndexedDB, WebGL, WebRTC.

@@ -229,6 +229,7 @@ pub const Prop = enum(u16) {
     caret_color,
     clip,
     clip_path,
+    clip_rule,
     column_count,
     column_width,
     columns,
@@ -238,6 +239,8 @@ pub const Prop = enum(u16) {
     container_type,
     empty_cells,
     fill,
+    fill_opacity,
+    fill_rule,
     filter,
     font_feature_settings,
     font_kerning,
@@ -254,6 +257,7 @@ pub const Prop = enum(u16) {
     outline_offset,
     overflow_anchor,
     overscroll_behavior,
+    paint_order,
     page_break_after,
     page_break_before,
     page_break_inside,
@@ -268,7 +272,15 @@ pub const Prop = enum(u16) {
     scrollbar_color,
     scrollbar_gutter,
     scrollbar_width,
+    stop_color,
+    stop_opacity,
     stroke,
+    stroke_dasharray,
+    stroke_dashoffset,
+    stroke_linecap,
+    stroke_linejoin,
+    stroke_miterlimit,
+    stroke_opacity,
     stroke_width,
     text_rendering,
     text_fill_color,
@@ -288,6 +300,7 @@ pub const Prop = enum(u16) {
     tap_highlight_color,
     unicode_bidi,
     user_select,
+    vector_effect,
     will_change,
     writing_mode,
 };
@@ -365,7 +378,7 @@ pub fn phase(p: Prop) u2 {
 /// Whether the property inherits, for `unset`.
 pub fn isInherited(p: Prop) bool {
     return switch (p) {
-        .color_scheme, .direction, .font, .font_size, .font_family, .font_weight, .font_style, .font_variant, .font_variant_numeric, .font_stretch, .line_height, .color, .text_fill_color, .text_shadow, .accent_color, .visibility, .cursor, .pointer_events, .letter_spacing, .word_spacing, .text_align, .text_indent, .white_space, .white_space_collapse, .text_wrap, .text_wrap_mode, .text_transform, .list_style, .list_style_type, .list_style_position, .list_style_image, .border_collapse, .border_spacing, .caption_side, .word_break, .overflow_wrap, .word_wrap, .tab_size => true,
+        .color_scheme, .direction, .font, .font_size, .font_family, .font_weight, .font_style, .font_variant, .font_variant_numeric, .font_stretch, .line_height, .color, .text_fill_color, .text_shadow, .accent_color, .visibility, .cursor, .pointer_events, .letter_spacing, .word_spacing, .text_align, .text_indent, .white_space, .white_space_collapse, .text_wrap, .text_wrap_mode, .text_transform, .list_style, .list_style_type, .list_style_position, .list_style_image, .border_collapse, .border_spacing, .caption_side, .word_break, .overflow_wrap, .word_wrap, .tab_size, .fill, .fill_opacity, .fill_rule, .clip_rule, .stroke, .stroke_width, .stroke_opacity, .stroke_linecap, .stroke_linejoin, .stroke_miterlimit, .stroke_dasharray, .stroke_dashoffset, .paint_order => true,
         else => false,
     };
 }

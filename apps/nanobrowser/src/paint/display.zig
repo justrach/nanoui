@@ -147,6 +147,8 @@ pub const Kind = union(enum) {
         corners: u4 = 15,
         /// Drawn in this one color: a filter that leaves only its shape.
         tint: ?css.Color = null,
+        /// Its `object-position` and how an SVG takes the text's color.
+        style: *const css.Style,
     };
     pub const Background = struct { url: []const u8, layer: *const BgLayer, radius: f32, corners: u4 = 15 };
 };

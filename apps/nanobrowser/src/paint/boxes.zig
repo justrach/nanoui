@@ -43,7 +43,7 @@ pub fn self(b: *Builder, x: *const Box, at: At, list: *List) !void {
     const cr = shifted(x.contentRect(), at);
     if (x.kind == .replaced) if (x.node) |n| {
         const c = Corners.of(st, x.w, x.h);
-        try b.add(list, item(.{ .image = .{ .node = n, .fit = st.object_fit, .radius = c.largest(), .corners = c.mask() } }, cr, at, node));
+        try b.add(list, item(.{ .image = .{ .node = n, .fit = st.object_fit, .radius = c.largest(), .corners = c.mask(), .style = st } }, cr, at, node));
     };
     if (x.kind == .control) try b.add(list, item(.{ .control = x }, .{ .x = x.x + at.tx, .y = x.y + at.ty, .w = x.w, .h = x.h }, at, node));
     if (x.marker) |m| try b.add(list, item(.{ .bullet = .{ .shape = st.list_style, .color = st.color } }, shifted(m, at), at, null));

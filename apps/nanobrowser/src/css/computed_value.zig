@@ -26,6 +26,25 @@ fn kw(a: Allocator, v: anytype) Allocator.Error![]const u8 {
     return out;
 }
 
+fn paintText(a: Allocator, p: style.SvgPaint, current: Color) Allocator.Error![]const u8 {
+    return switch (p.kind) {
+        .none => "none",
+        .current => try colorWords(a, current),
+        .color => try colorWords(a, p.color),
+        .url => try P(a, "url(\"#{s}\")", .{p.url}),
+    };
+}
+
+fn colorWords(a: Allocator, c: Color) Allocator.Error![]const u8 {
+    const b = struct {
+        fn f(v: f32) u32 {
+            return @intFromFloat(std.math.clamp(v, 0, 1) * 255 + 0.5);
+        }
+    }.f;
+    if (c.a >= 1) return P(a, "rgb({d}, {d}, {d})", .{ b(c.r), b(c.g), b(c.b) });
+    return P(a, "rgba({d}, {d}, {d}, {d})", .{ b(c.r), b(c.g), b(c.b), c.a });
+}
+
 fn pxText(a: Allocator, v: f32) Allocator.Error![]const u8 {
     return P(a, "{d}px", .{v});
 }
@@ -197,6 +216,10 @@ fn text(a: Allocator, s: *const Style, p: prop.Prop) Allocator.Error!?[]const u8
         .filter => if (s.filters.len > 0) "filter" else "none",
         .clip_path => if (s.clip_path != null) "shape" else "none",
         .appearance => boolWord(s.appearance_none, "none", "auto"),
+        .object_position => try P(a, "{d}% {d}%", .{ s.object_x, s.object_y }),
+        .fill => try paintText(a, s.svg.fill, s.color),
+        .stroke => try paintText(a, s.svg.stroke, s.color),
+        .stroke_width => try pxText(a, s.svg.stroke_width),
         .content => try P(a, "\"{s}\"", .{s.content}),
         else => null,
     };

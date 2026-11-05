@@ -12,6 +12,7 @@ const classes = @import("classes.zig");
 const page_input = @import("../page_input.zig");
 const loader = @import("../loader.zig");
 const web = @import("web.zig");
+const replay = @import("../paint/replay.zig");
 const Node = dom.Node;
 const Value = js.Value;
 const Vm = js.Vm;
@@ -249,9 +250,14 @@ fn imageComplete(vm: *Vm, this: Value, _: []const Value) Error!Value {
 fn imageSize(w: *World, n: *Node) ?ui.Size {
     if (n.image.len == 0) return null;
     const p = w.page;
+    if (replay.isSvg(n.image)) {
+        const v = replay.svgSize(n.image) orelse return null;
+        return .{ .w = v[0], .h = v[1] };
+    }
     const c = p.host.uiContext(p.host.ctx) orelse return null;
     const s = ui.imageSize(c, n.image_key, n.image) orelse return null;
-    return s;
+    const d = @max(n.image_density, 0.001);
+    return .{ .w = s.w / d, .h = s.h / d };
 }
 
 fn naturalWidth(vm: *Vm, this: Value, _: []const Value) Error!Value {

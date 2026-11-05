@@ -140,6 +140,17 @@ pub const ImageOptions = struct {
     part: [4]f32 = .{ 0, 0, 1, 1 },
 };
 
+/// What pictures may cost in this view's window (`images.Limits`): an app that
+/// shows large ones asks here, before drawing them.
+pub fn imageLimits(c: *Context, limits: @import("images.zig").Limits) void {
+    c.text.images.limits = limits;
+}
+
+/// Whether pictures of a MIME type can be decoded on this system.
+pub fn imageTypeDecodes(mime: []const u8) bool {
+    return @import("images.zig").decodes(mime);
+}
+
 /// A picture's own size in pixels, from its header; null if it can't be
 /// read. Same key as `image`: read once.
 pub fn imageSize(c: *Context, key_name: []const u8, bytes: []const u8) ?types.Size {
@@ -178,6 +189,9 @@ pub const SvgOptions = struct {
     /// the theme). Null draws its own colors, `currentColor` as the
     /// theme's text.
     color: ?Color = null,
+    /// `currentColor` when it isn't the theme's text (a page's picture, whose
+    /// documents start from black).
+    current: ?Color = null,
     opacity: f32 = 1,
 };
 
@@ -190,7 +204,7 @@ pub fn svg(c: *Context, opts: SvgOptions) bool {
     const ph: u32 = @intFromFloat(@max(1, @round(h * c.scale)));
     // Tinted, it's drawn white and filled with the color as it's painted;
     // otherwise currentColor is the theme's text, part of what it's kept by.
-    const cur = if (opts.color != null) Color{ .r = 1, .g = 1, .b = 1 } else c.theme.text;
+    const cur = if (opts.color != null) Color{ .r = 1, .g = 1, .b = 1 } else opts.current orelse c.theme.text;
     var hasher = std.hash.Wyhash.init(0x5c6);
     hasher.update(opts.key);
     hasher.update(std.mem.asBytes(&[2]u32{ pw, ph }));

@@ -106,6 +106,7 @@ pub const sheet =
     \\iframe { border: 2px inset ButtonBorder; }
     \\svg:not(:root) { overflow: hidden; }
     \\marquee { display: inline-block; }
+    \\[popover]:not(:popover-open) { display: none; }
     \\dialog { position: absolute; left: 0; right: 0; width: fit-content; height: fit-content; margin: auto; border: solid; padding: 1em; background-color: Canvas; color: CanvasText; }
     \\frameset { display: block; }
     \\frame { display: block; }

@@ -258,11 +258,24 @@ const P = struct {
             if (!supports.evaluate(p.arena, pre)) return p.skipBlock();
             return p.group(scope);
         }
-        // Size queries have no container sizes to test: treated as matching.
-        if (is(name, "container") or is(name, "scope") or is(name, "starting-style")) {
-            if (is(name, "starting-style")) return p.skipBlock();
-            return p.group(scope);
+        if (is(name, "container")) {
+            // Style queries aren't tested: treated as matching.
+            for (pre) |t| if (t.kind == .function) return p.group(scope);
+            // Containers have no sizes while rules are matched, so a size query
+            // asks of the window, the largest any of them can be. Taking them
+            // all as true would apply each breakpoint's rules at once.
+            var q = pre;
+            while (q.len > 0 and q[0].kind == .whitespace) q = q[1..];
+            if (q.len > 0 and q[0].kind == .ident and !q[0].isIdent("not")) q = q[1..];
+            if (trim(q).len == 0) return p.group(scope);
+            const list = try media.parseList(p.arena, q);
+            const cond = try p.arena.create(Cond);
+            cond.* = .{ .media = list, .parent = scope.cond };
+            try p.conds.append(p.arena, cond);
+            return p.group(.{ .selectors = scope.selectors, .cond = cond, .layer = scope.layer });
         }
+        if (is(name, "scope")) return p.group(scope);
+        if (is(name, "starting-style")) return p.skipBlock();
         if (is(name, "font-face")) {
             const decls = try p.declarationBlock();
             try p.font_faces.append(p.arena, .{ .decls = decls });

@@ -42,13 +42,8 @@ fn adoptTree(n: *Node, doc: *dom.Document) void {
 /// An inline `<svg>` is drawn from its markup: what changes in it asks for that again.
 fn svgChanged(n: *Node) void {
     if (n.ns != .svg) return;
-    var at: ?*Node = n;
-    while (at) |x| : (at = x.parent) {
-        if (x.kind == .element and x.ns == .svg and x.isTag("svg")) {
-            x.image = "";
-            x.image_key = "";
-        }
-    }
+    n.doc.svg_version +%= 1;
+    n.doc.svg_dirty = true;
 }
 
 /// Moves `child` to before `ref` in `parent`, a fragment giving its children.
@@ -266,11 +261,21 @@ fn filterHas(w: *World, filter: Value, name: []const u8) Error!bool {
 fn attrChanged(w: *World, n: *Node, name: []const u8, old: ?[]const u8, value: ?[]const u8) Error!void {
     if (firesOnAttr(name)) w.listen(name[2..]);
     if (n.kind == .element and n.ns == .html) {
-        if (n.isTag("img") or n.isTag("source")) {
-            if (std.mem.eql(u8, name, "src") or std.mem.eql(u8, name, "srcset")) {
+        if (n.isTag("img")) {
+            if (std.mem.eql(u8, name, "src") or std.mem.eql(u8, name, "srcset") or std.mem.eql(u8, name, "sizes")) {
                 n.image_key = "";
                 n.image = "";
                 try @import("api_forms.zig").imageAsked(w, n);
+            }
+        } else if (n.isTag("source")) {
+            // What it says goes to the picture it's beside.
+            if (std.mem.eql(u8, name, "srcset") or std.mem.eql(u8, name, "media") or std.mem.eql(u8, name, "type") or std.mem.eql(u8, name, "sizes")) {
+                var k = if (n.parent) |up| up.first_child else null;
+                while (k) |x| : (k = x.next) if (x.isTag("img")) {
+                    x.image_key = "";
+                    x.image = "";
+                    try @import("api_forms.zig").imageAsked(w, x);
+                };
             }
         } else if (n.isTag("link")) {
             if (std.mem.eql(u8, name, "href") or std.mem.eql(u8, name, "rel")) loader.forget(w.page, n);
