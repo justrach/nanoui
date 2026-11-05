@@ -356,6 +356,24 @@ test "hover sensitivity and invalidation" {
     try near(p.s("after").color.g, 128.0 / 255.0);
 }
 
+test ":has with a state restyles from the element it sits on" {
+    const p = try Page.make(
+        \\<!doctype html><body id=b><div id=far></div><div id=card class=card><a id=a href=x>x</a></div>
+    ,
+        \\.card:has(:hover) { color: red; }
+    , vp);
+    defer p.done();
+    try expect(p.engine.invalidatedByState(p.el("a")) == p.el("card"));
+    try expect(p.engine.invalidatedByState(p.el("far")) == null);
+    const s = try Page.make(
+        \\<!doctype html><body id=b><div id=one class=one></div><a id=a href=x>x</a>
+    ,
+        \\.one:has(+ :hover) { color: red; }
+    , vp);
+    defer s.done();
+    try expect(s.engine.invalidatedByState(s.el("a")) == s.doc.documentElement());
+}
+
 test "color-scheme and the dark viewport" {
     const dark: css.Viewport = .{ .width = 100, .height = 100, .dark = true };
     {

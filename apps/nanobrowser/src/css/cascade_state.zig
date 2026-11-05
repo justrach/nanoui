@@ -25,9 +25,9 @@ fn compoundHasState(c: *const sel.Compound, is_self: bool) bool {
     return false;
 }
 
-fn usesHasState(s: *const sel.Selector) bool {
+fn hasStateOnSibling(s: *const sel.Selector) bool {
     for (s.compounds) |*c| for (c.simples) |*x| switch (x.*) {
-        .has => |l| for (l) |y| if (y.uses_state) return true,
+        .has => |l| for (l) |y| if (y.uses_state and (y.leading == .next or y.leading == .later)) return true,
         else => {},
     };
     return false;
@@ -52,8 +52,9 @@ pub fn invalidatedBy(ix: *const rule_index.Index, doc: *dom.Document, node: *Nod
 
 /// The element that must restyle if `a`'s state flip affects this selector.
 fn affected(s: *const sel.Selector, a: *Node, is_self: bool, ctx: *match.Ctx, doc: *dom.Document) ?*Node {
-    // `:has(:hover)` reaches any ancestor: only the root is safe.
-    if (usesHasState(s)) return doc.documentElement();
+    // `:has(+ :hover)` sits on an element off the pointer's chain: only the root
+    // is safe. Other `:has`es sit on an ancestor, which the loop below finds.
+    if (hasStateOnSibling(s)) return doc.documentElement();
     for (s.compounds, 0..) |*c, i| {
         if (!compoundHasState(c, is_self)) continue;
         if (!match.compound(c, a, ctx)) continue;

@@ -188,6 +188,7 @@ pub fn relayout(p: *Page, c: *ui.Context) void {
     const a = p.layout_arena.allocator();
     var fonts: Fonts = .{ .p = p, .c = c };
     const m = fonts.measurer();
+    p.layouts +%= 1;
     p.doc.layout_dirty = false;
     var tree = layout.run(a, p.doc, .{ .width = p.viewport_w, .height = p.viewport_h }, m) catch {
         p.tree = null;
@@ -421,6 +422,7 @@ pub fn view(p: *Page, c: *ui.Context, rect: box.Rect) void {
     if (under.page != p) {
         // Over a frame: its page hears, and this one sees the pointer leave.
         input.pointer(p, c, it, null, mouse.x, mouse.y, inside and false);
+        under.page.hover_held_until = @max(under.page.hover_held_until, p.hover_held_until);
         input.pointer(under.page, c, it, under.node, mouse.x, mouse.y, inside);
         if (c.input.pressed and it.hovered) frames.focusChain(under.page);
     } else {
@@ -428,7 +430,7 @@ pub fn view(p: *Page, c: *ui.Context, rect: box.Rect) void {
         if (c.input.pressed and it.hovered) frames.focusChain(p);
     }
     if (p.dead) return;
-    if (p.doc.layout_dirty or p.doc.style_dirty) {
+    if (p.doc.layout_dirty or p.doc.style_dirty or p.list_dirty) {
         // What the pointer did restyled it, or a script changed it: this
         // frame shows that.
         prepare(p, c, rect.w, rect.h);
@@ -473,9 +475,11 @@ fn wheel(p: *Page, l: *display.List, x: f32, y: f32, dx: f32, dy: f32) void {
 pub fn scrollBy(p: *Page, l: *display.List, i: u32, dx: f32, dy: f32) void {
     const c = &l.clips[i];
     const m = l.maxScroll(i);
+    const was = [2]f32{ c.scroll_x, c.scroll_y };
     c.scroll_x = std.math.clamp(c.scroll_x + dx, 0, m[0]);
     c.scroll_y = std.math.clamp(c.scroll_y + dy, 0, m[1]);
     p.restore_scroll = 0;
+    if (c.scroll_x != was[0] or c.scroll_y != was[1]) p.hover_held_until = p.engine.now + 0.12;
     const key = if (i == 1) p.doc.node else c.node orelse return;
     p.scrolls.put(p.gpa, key, .{ c.scroll_x, c.scroll_y }) catch {};
     web.scrolled(p, key);

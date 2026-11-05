@@ -9,6 +9,7 @@ const Run = util.Run;
 
 test {
     _ = @import("tests_motion.zig");
+    _ = @import("tests_pointer.zig");
     _ = @import("tests_forms.zig");
 }
 

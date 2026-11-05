@@ -60,6 +60,8 @@ pub const Page = struct {
     /// alone, each frame of an animation say.
     list_arena: std.heap.ArenaAllocator,
     list_dirty: bool = false,
+    /// How many times the page has been laid out.
+    layouts: u32 = 0,
     list: ?display.List = null,
     tree: ?box.Tree = null,
     viewport_w: f32 = 0,
@@ -88,6 +90,8 @@ pub const Page = struct {
     find: find_mod.Find = .{},
     /// What the pointer was last over, to tell scripts it moved.
     pointer: [2]f32 = .{ -1, -1 },
+    /// Until when what's under a still pointer doesn't count as hovered: it scrolled.
+    hover_held_until: f64 = 0,
     /// Where the page's rectangle last was in the window: scripts' coordinates start here.
     origin: [2]f32 = .{ 0, 0 },
 

@@ -11,10 +11,16 @@ const view = @import("page_view.zig");
 const Page = @import("page.zig").Page;
 
 /// Called each frame with the element under the pointer.
-pub fn pointer(p: *Page, c: *ui.Context, it: ui.Interaction, node: ?*dom.Node, x: f32, y: f32, inside: bool) void {
+pub fn pointer(p: *Page, c: *ui.Context, it: ui.Interaction, under: ?*dom.Node, x: f32, y: f32, inside: bool) void {
     const moved = x != p.pointer[0] or y != p.pointer[1];
     p.pointer = .{ x, y };
     const old = p.doc.hover;
+    // A page moving under a still pointer isn't the person pointing at anything:
+    // as in other browsers, hover waits for it to stop. Else each frame of a
+    // scroll restyles what passes under the pointer.
+    const held = inside and p.hover_held_until > c.time and !moved and !c.input.pressed and !c.input.released and !c.input.secondary;
+    if (held) c.frameIn(@floatCast(@max(p.hover_held_until - c.time, 0.001)));
+    const node = if (held) old else under;
     if (node != old and inside) {
         setState(p, &p.doc.hover, node);
         web.pointerMoved(p, old, node, x, y);
@@ -71,7 +77,12 @@ fn setState(p: *Page, slot: *?*dom.Node, to: ?*dom.Node) void {
         const n = maybe orelse continue;
         const top = p.engine.invalidatedByState(n) orelse if (always) n else continue;
         const change = p.engine.restyleSubtree(top) catch continue;
-        if (change != .none) p.doc.touchLayout();
+        switch (change) {
+            .none => {},
+            // Boxes hold the very styles that changed.
+            .paint => p.list_dirty = true,
+            .layout => p.doc.touchLayout(),
+        }
     }
 }
 
