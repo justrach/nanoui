@@ -153,8 +153,12 @@ pub const Texture = struct {
     /// `rgba16f`) whatever `format` says; `range`, `matrix`, `transfer` and
     /// the LUTs apply as to any texture. The app keeps it alive until the
     /// frame is drawn, and nanoui holds a reference of its own until the
-    /// frame after it, so a decoder may recycle the surface once the next
-    /// frame is built. One made on another device is read back by the CPU.
+    /// window's next frame is prepared (it was presented by then). A
+    /// window that stops drawing (idle, minimized, paused) keeps its last
+    /// frame's textures held until it draws again or closes, so a decoder
+    /// with a fixed surface pool must expect one surface per texture that
+    /// frame drew to stay pinned meanwhile. One made on another device is
+    /// read back by the CPU.
     d3d11_texture: ?*anyopaque = null,
     subresource: u32 = 0,
     format: Format = .bgra8,

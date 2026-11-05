@@ -14,8 +14,11 @@
 //! the slot's target, anything else is copied out of the decoder's array
 //! into a texture the colour stage can sample and converted into the
 //! target by `texture_post.hlsl` (`d3d11_video.zig`). Each is held (AddRef)
-//! until the frame after it is prepared, which is after this one was
-//! presented. Where the colour stage can't be compiled (Wine), or the
+//! until the window's next frame is prepared, which is after this one was
+//! presented. A window that stops drawing (idle, minimized, paused) keeps
+//! its last frame's textures held until it draws again or is closed: an
+//! app decoding into a fixed pool must expect that many of its surfaces
+//! (one per texture the last frame drew) to stay pinned meanwhile. Where the colour stage can't be compiled (Wine), or the
 //! texture is another device's, it is read back and uploaded as above.
 const std = @import("std");
 const gpu = @import("gpu.zig");
@@ -126,33 +129,38 @@ pub const Slots = struct {
     }
 
     /// An app's texture on this device: copied, or through the colour stage,
-    /// into the slot's target. Null to fall back on the CPU.
+    /// into the slot's target. Null to fall back on the CPU — decided before
+    /// the slot's textures are touched, so a frame that always falls back
+    /// (no colour stage, a copy that fails) keeps the CPU's dynamic texture
+    /// instead of remaking it and the target every frame.
     fn uploadGpu(s: *Slots, device: *Com, context: *Com, t: gpu.Texture, tex: *Com, slot: usize, path: *Path) ?*Com {
         const d = video.describe(tex);
         if (!video.usable(t, d)) return null;
         const e = video.effective(t, d);
-        const en = s.entry(slot) orelse return null;
-        en.releaseDynamic();
-        en.target.reserve(device, e.width, e.height, true);
-        const rtv = en.target.rtv orelse return null;
-        if (d.format == api.bgra8 and !e.needsPost()) {
-            s.hold(tex);
-            video.copyBgra(context, en.target.texture.?, tex, t.subresource, .{ .right = e.width, .bottom = e.height });
-            path.* = .gpu_copy;
-            return en.target.srv;
-        }
-        if (s.post == null and !s.post_failed) {
-            s.post = video.Post.init(device) catch |err| blk: {
+        const copy = d.format == api.bgra8 and !e.needsPost();
+        if (!copy and s.post == null) {
+            if (s.post_failed) return null;
+            s.post = video.Post.init(device) catch |err| {
                 s.post_failed = true;
                 std.log.warn("nanoui: the Direct3D 11 colour stage could not be made ({t}): video frames are converted on the CPU", .{err});
-                break :blk null;
+                return null;
             };
         }
-        const p = if (s.post) |*p| p else return null;
-        if (!en.source.take(device, context, tex, t.subresource, d.format, video.boxOf(e, d))) return null;
+        const en = s.entry(slot) orelse return null;
+        // The planes into the colour stage's copy first: it is the slot's
+        // own texture, so failing here leaves the CPU path's alone.
+        if (!copy and !en.source.take(device, context, tex, t.subresource, d.format, video.boxOf(e, d))) return null;
+        en.target.reserve(device, e.width, e.height, true);
+        const rtv = en.target.rtv orelse return null;
+        en.releaseDynamic();
         s.hold(tex);
-        p.run(device, context, e, &en.source, rtv, e.width, e.height);
-        path.* = .gpu_post;
+        if (copy) {
+            video.copyBgra(context, en.target.texture.?, tex, t.subresource, .{ .right = e.width, .bottom = e.height });
+            path.* = .gpu_copy;
+        } else {
+            s.post.?.run(device, context, e, &en.source, rtv, e.width, e.height);
+            path.* = .gpu_post;
+        }
         return en.target.srv;
     }
 
