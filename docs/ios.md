@@ -52,3 +52,20 @@ Zig 0.17 makes iOS 18 the lowest an app runs on unless the target names
 one, and the app's Info.plist follows it. nanoui runs on iOS 15 and
 later: `-Dtarget=aarch64-ios.15.0` (or `aarch64-ios.15.0-simulator`)
 reaches those devices.
+
+## iPad windows
+
+With `.multiple_windows = true` in `ios.app`, a person can open several windows
+of the app, and the app can open them too:
+
+```zig
+_ = try app.newWindow(.{ .title = "Notes", .own_scene = true, .content = .{ .view = view } });
+app.onNewWindow(&state, makeWindow); // the system's New Window, or a window restored
+```
+
+The first scene shows the app's stack of windows, as a phone does. Every other
+shows one window, made with `.own_scene`. On a phone, a window asking for its
+own scene goes on the stack like any other, so the same code runs on both.
+
+Closing the window in the system's UI closes it in the app, through `on_close`.
+Dialogs and `⌘W` still act on the first scene's stack, not the scene in front.

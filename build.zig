@@ -5,7 +5,7 @@ pub const ios = @import("tools/ios/bundle.zig");
 /// Android APKs, likewise: `@import("nanoui").android.apk(b, lib, .{ .name = "Notes", .id = "com.example.notes" })`.
 pub const android = @import("tools/android/apk.zig");
 
-const examples = [_][]const u8{ "hello", "counter", "gallery", "duo", "board", "basics", "map", "turn", "access", "todo", "sgbus", "browser", "drop" };
+const examples = [_][]const u8{ "hello", "counter", "gallery", "duo", "board", "basics", "map", "turn", "access", "todo", "sgbus", "browser", "drop", "scenes" };
 const frameworks = [_][]const u8{ "AppKit", "WebKit", "Metal", "QuartzCore", "CoreText", "CoreGraphics", "CoreFoundation", "Foundation", "ImageIO", "UniformTypeIdentifiers", "CoreVideo" };
 const ios_frameworks = [_][]const u8{ "UIKit", "CoreLocation", "MapKit", "Metal", "QuartzCore", "CoreText", "CoreGraphics", "CoreFoundation", "Foundation", "ImageIO", "UniformTypeIdentifiers", "CoreVideo" };
 
@@ -219,6 +219,7 @@ fn addIosExample(b: *std.Build, name: []const u8, target: std.Build.ResolvedTarg
     const opts: ios.Options = .{
         .name = title,
         .id = b.fmt("dev.nanoui.{s}", .{name}),
+        .multiple_windows = std.mem.eql(u8, name, "scenes"),
         .location_usage = if (std.mem.eql(u8, name, "basics") or std.mem.eql(u8, name, "map") or std.mem.eql(u8, name, "sgbus")) "The example shows where you are." else null,
     };
     const bundle = ios.app(b, exe, opts);
