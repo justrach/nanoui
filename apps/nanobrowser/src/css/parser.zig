@@ -10,6 +10,7 @@ const media = @import("media.zig");
 const prop = @import("prop.zig");
 const url = @import("url.zig");
 const supports = @import("supports.zig");
+const keyframes_rule = @import("parser_keyframes.zig");
 
 const Token = tk.Token;
 const Declaration = sheet.Declaration;
@@ -36,7 +37,7 @@ const P = struct {
     rules: std.ArrayList(sheet.Rule) = .empty,
     imports: std.ArrayList(sheet.Import) = .empty,
     font_faces: std.ArrayList(sheet.FontFace) = .empty,
-    keyframes: std.ArrayList([]const u8) = .empty,
+    keyframes: std.ArrayList(sheet.Keyframes) = .empty,
     layers: std.ArrayList([]const u8) = .empty,
     conds: std.ArrayList(*const Cond) = .empty,
     anon_layers: u32 = 0,
@@ -44,7 +45,7 @@ const P = struct {
     /// `@import` is only valid before other rules.
     imports_open: bool = true,
 
-    fn next(p: *P) Allocator.Error!Token {
+    pub fn next(p: *P) Allocator.Error!Token {
         if (p.peeked) |t| {
             p.peeked = null;
             return t;
@@ -85,7 +86,7 @@ const P = struct {
 
     /// Tokens onto `temp` until a `{` or `;` at this level, returning which;
     /// `.eof` if neither comes.
-    fn prelude(p: *P, stop_semicolon: bool) Allocator.Error!tk.Kind {
+    pub fn prelude(p: *P, stop_semicolon: bool) Allocator.Error!tk.Kind {
         var nest: u32 = 0;
         while (true) {
             const t = try p.next();
@@ -105,7 +106,7 @@ const P = struct {
         }
     }
 
-    fn skipBlock(p: *P) Allocator.Error!void {
+    pub fn skipBlock(p: *P) Allocator.Error!void {
         var nest: u32 = 1;
         while (nest > 0) {
             const t = try p.next();
@@ -175,7 +176,7 @@ const P = struct {
 
     /// Reads a declaration's or nested rule's tokens. A custom property's value
     /// may hold a `{}` block; anything else's `{` starts a nested rule.
-    fn declOrRule(p: *P, mark: usize) Allocator.Error!tk.Kind {
+    pub fn declOrRule(p: *P, mark: usize) Allocator.Error!tk.Kind {
         var nest: u32 = 0;
         var braces: u32 = 0;
         while (true) {
@@ -267,8 +268,8 @@ const P = struct {
             return;
         }
         if (is(name, "keyframes") or is(name, "-webkit-keyframes") or is(name, "-moz-keyframes")) {
-            if (pre.len > 0) try p.keyframes.append(p.arena, pre[0].text);
-            return p.skipBlock();
+            if (pre.len == 0) return p.skipBlock();
+            return keyframes_rule.parse(p, pre[0].text, scope.cond);
         }
         // @page, @property, @counter-style, @font-feature-values, the unknown.
         return p.skipBlock();
@@ -400,7 +401,7 @@ const P = struct {
     }
 };
 
-fn makeDeclarations(arena: Allocator, items: []const Declaration) Allocator.Error!*Declarations {
+pub fn makeDeclarations(arena: Allocator, items: []const Declaration) Allocator.Error!*Declarations {
     const d = try arena.create(Declarations);
     d.* = .{ .items = try arena.dupe(Declaration, items) };
     for (items) |x| {

@@ -69,6 +69,9 @@ pub fn write(gpa: std.mem.Allocator, p: *Page, file: []const u8) !void {
                 @tagName(s.display), @tagName(s.position), s.font_size, s.font_weight, fg[0], fg[1], fg[2], fg[3], bg[0], bg[1], bg[2], bg[3],
             });
         }
+        if (n.computed) |s| {
+            try out.print(a, ",\"opacity\":{d:.3},\"visibility\":\"{s}\",\"z\":{d},\"transform\":{},\"filters\":{d},\"blur\":{d:.1},\"anims\":{d},\"clipPath\":{}", .{ s.opacity, @tagName(s.visibility), s.z_index orelse 0, s.hasTransform(), s.filters.len, s.backdrop_blur, s.animations.len, s.clip_path != null });
+        }
         try out.appendSlice(a, "}\n");
     }
     const io = std.Io.Threaded.global_single_threaded.io();

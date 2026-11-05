@@ -15,6 +15,7 @@ const prop = @import("prop.zig");
 const hints = @import("hints.zig");
 const parser = @import("parser.zig");
 const cascade = @import("cascade.zig");
+const motion = @import("properties_motion.zig");
 
 const Engine = cascade.Engine;
 const Style = style.Style;
@@ -47,18 +48,47 @@ fn inlineDecls(n: *dom.Node) Allocator.Error!?*const Declarations {
     return d;
 }
 
+/// A style of `@keyframes` for `n`: `base` with the frame's declarations over it,
+/// substituted as the element's own are.
+pub fn frameStyle(e: *Engine, n: *dom.Node, parent: *const Style, scope: ?*const vars.Scope, base: *const Style, d: *const Declarations, out: *Style) Allocator.Error!void {
+    out.* = base.*;
+    var ctx: values.Ctx = .{
+        .style = out,
+        .parent = parent,
+        .base = base,
+        .root_font = e.root_font,
+        .vw = e.viewport.width,
+        .vh = e.viewport.height,
+        .viewport_dark = e.viewport.dark,
+        .node = n,
+        .arena = e.genArena(),
+    };
+    for (d.items) |*x| {
+        if (x.prop == .custom or x.prop == .all or x.wide != .none) continue;
+        var toks = x.value;
+        if (x.has_var) toks = (try vars.substitute(ctx.arena, x.value, scope)) orelse continue;
+        _ = properties.apply(&ctx, x.prop, toks);
+    }
+    for ([_]*style.Border{ &out.border_top, &out.border_right, &out.border_bottom, &out.border_left, &out.outline }) |b| {
+        if (b.style == .none or b.style == .hidden) b.width = 0;
+    }
+    out.inherited_visibility = out.visibility;
+}
+
 /// Computes `n`'s style into `out`.
 pub fn element(e: *Engine, n: *dom.Node, parent: *const Style, parent_scope: ?*const vars.Scope, out: *Style) Allocator.Error!Result {
     const gpa = e.gpa;
     e.matched.clearRetainingCapacity();
     e.pseudo_before.clearRetainingCapacity();
     e.pseudo_after.clearRetainingCapacity();
+    e.pseudo_placeholder.clearRetainingCapacity();
     e.collected.clearRetainingCapacity();
     try e.index.?.collect(gpa, n, &e.match_ctx, &e.collected);
     for (e.collected.items) |m| switch (m.sel.pseudo) {
         .none => try e.matched.append(gpa, m),
         .before => try e.pseudo_before.append(gpa, m),
         .after => try e.pseudo_after.append(gpa, m),
+        .placeholder => try e.pseudo_placeholder.append(gpa, m),
         .other => {},
     };
     std.mem.sort(Entry, e.matched.items, {}, entryLess);
@@ -75,6 +105,13 @@ pub fn element(e: *Engine, n: *dom.Node, parent: *const Style, parent_scope: ?*c
         .is_element = true,
     };
     _ = try run.compute(out);
+    if (e.pseudo_placeholder.items.len > 0 and (n.isTag("input") or n.isTag("textarea"))) {
+        std.mem.sort(Entry, e.pseudo_placeholder.items, {}, entryLess);
+        var ph: Run = .{ .e = e, .node = n, .matched = e.pseudo_placeholder.items, .inline_d = null, .parent = out, .scope = scope, .is_element = false };
+        var made: Style = undefined;
+        _ = try ph.compute(&made);
+        out.placeholder = made.color;
+    }
     return .{
         .scope = scope,
         .before = hasContent(e.pseudo_before.items),
@@ -301,6 +338,7 @@ const Run = struct {
     /// Computed-value fix-ups once everything has been applied.
     fn finish(r: *Run, s: *Style) void {
         s.inherited_visibility = s.visibility;
+        motion.zip(r.ctx.arena, s);
         for ([_]*style.Border{ &s.border_top, &s.border_right, &s.border_bottom, &s.border_left, &s.outline }) |b| {
             if (b.style == .none or b.style == .hidden) b.width = 0;
         }
@@ -330,12 +368,14 @@ const Run = struct {
             s.overflow_x = .visible;
             s.overflow_y = .visible;
         }
-        // Glyphs filled with a background: colored text, in the gradient's
-        // middle color when the text's own is see-through.
+        // Glyphs filled with a background: their fill, when it shows through,
+        // follows the gradient (`display.zig`); a picture's is one color.
         if (s.background_clip == .text) {
-            if (s.color.a == 0) if (s.background_gradient) |g| if (g.stops.len > 0) {
-                s.color = g.stops[g.stops.len / 2].color;
-            };
+            if (s.background_gradient) |g| {
+                s.text_gradient = g;
+            } else if (s.background_image.len > 0 and (s.text_fill orelse s.color).a == 0) {
+                s.text_fill = if (s.background.a > 0) s.background else style.Color{ .r = 0.45, .g = 0.45, .b = 0.45 };
+            }
             s.background = .transparent;
             s.background_image = "";
             s.background_gradient = null;

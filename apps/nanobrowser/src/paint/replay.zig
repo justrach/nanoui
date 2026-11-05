@@ -4,7 +4,7 @@
 //!
 //! `host` gives what the list only names:
 //!   host.picture(url) ?[]const u8         a background's bytes; asks for them the first time
-//!   host.gradient(g) ?[]const u8          a gradient as an encoded picture
+//!   host.gradient(g, w, h, nx, ny, scale) ?[]const u8   tiles of a gradient as a picture
 //!   host.control(c, box, x, y, opacity)   draws a form control at (x, y) in the open box
 const std = @import("std");
 const nanoui = @import("nanoui");
@@ -12,6 +12,9 @@ const ui = nanoui.ui;
 const css = @import("../css/style.zig");
 const box = @import("../layout/box.zig");
 const display = @import("display.zig");
+const replay_box = @import("replay_box.zig");
+const backgrounds = @import("backgrounds.zig");
+const paint_gradient = @import("gradient.zig");
 const Rect = box.Rect;
 
 pub fn color(k: css.Color) ui.Color {
@@ -30,22 +33,93 @@ fn overlaps(a: Rect, b: Rect) bool {
     return a.x < b.x + b.w and b.x < a.x + a.w and a.y < b.y + b.h and b.y < a.y + a.h;
 }
 
+fn toAffine(m: css.fx.Mat) ui.Affine {
+    return .{ .a = m.a, .b = m.b, .c = m.c, .d = m.d, .e = m.e, .f = m.f };
+}
+
+/// What a group has of anything that shows. Items are in order; `from` opens it.
+fn groupEnd(items: []const display.Item, from: usize) usize {
+    var depth: u32 = 0;
+    var i = from;
+    while (i < items.len) : (i += 1) switch (items[i].kind) {
+        .group_begin => depth += 1,
+        .group_end => {
+            depth -= 1;
+            if (depth == 0) return i;
+        },
+        else => {},
+    };
+    return items.len - 1;
+}
+
+fn shows(l: *const display.List, it: *const display.Item) bool {
+    const clip = &l.clips[it.clip];
+    if (clip.visible.w <= 0 or clip.visible.h <= 0) return false;
+    var r = l.placed(it);
+    const reach: f32 = if (it.kind == .fill and it.kind.fill.shadow != null) shadowReach(it.kind.fill.shadow.?) else 0;
+    r = .{ .x = r.x - reach, .y = r.y - reach, .w = r.w + 2 * reach, .h = r.h + 2 * reach };
+    if (it.xform != 0) {
+        const t = &l.xforms[it.xform];
+        if (t.inverse == null) return false;
+        r = display.boundsOf(t.window, r);
+    }
+    return overlaps(r, clip.visible);
+}
+
 /// Draws what of `l` shows, in the open box, which is at `rect` (window
 /// coordinates; `l` was resolved for it) and clips.
 pub fn replay(c: *ui.Context, l: *const display.List, host: anytype, rect: Rect) void {
     var open_clip: u32 = 0;
+    var open_xform: u32 = 0;
+    var groups: u32 = 0;
     var ox = rect.x;
     var oy = rect.y;
-    for (l.items) |*it| {
-        if (it.kind == .hit) continue;
+    var i: usize = 0;
+    while (i < l.items.len) : (i += 1) {
+        const it = &l.items[i];
+        switch (it.kind) {
+            .hit => continue,
+            .group_begin, .group_end => {
+                if (open_xform != 0) c.end();
+                if (open_clip != 0) c.end();
+                open_xform = 0;
+                open_clip = 0;
+                ox = rect.x;
+                oy = rect.y;
+                if (it.kind == .group_end) {
+                    if (groups > 0) {
+                        c.end();
+                        groups -= 1;
+                    }
+                    continue;
+                }
+                // Nothing of it in the window: not a pass of the renderer.
+                const end = groupEnd(l.items, i);
+                var any = false;
+                for (l.items[i + 1 .. end]) |*x| {
+                    if (x.kind != .hit and x.kind != .group_begin and x.kind != .group_end and shows(l, x)) {
+                        any = true;
+                        break;
+                    }
+                }
+                if (!any) {
+                    i = end;
+                    continue;
+                }
+                _ = c.open(.{ .absolute = true, .width = .{ .px = rect.w }, .height = .{ .px = rect.h }, .group = true, .opacity = it.kind.group_begin }, null);
+                groups += 1;
+                continue;
+            },
+            else => {},
+        }
+        if (!shows(l, it)) continue;
         const clip = &l.clips[it.clip];
-        if (clip.visible.w <= 0 or clip.visible.h <= 0) continue;
         const r = l.placed(it);
-        const reach: f32 = if (it.kind == .fill and it.kind.fill.shadow != null) shadowReach(it.kind.fill.shadow.?) else 0;
-        if (!overlaps(.{ .x = r.x - reach, .y = r.y - reach, .w = r.w + 2 * reach, .h = r.h + 2 * reach }, clip.visible)) continue;
         const wanted: u32 = if (it.clip <= 1) 0 else it.clip;
-        if (wanted != open_clip) {
+        if (wanted != open_clip or it.xform != open_xform) {
+            if (open_xform != 0) c.end();
             if (open_clip != 0) c.end();
+            open_xform = 0;
             open_clip = wanted;
             ox = rect.x;
             oy = rect.y;
@@ -60,21 +134,53 @@ pub fn replay(c: *ui.Context, l: *const display.List, host: anytype, rect: Rect)
                     .height = .{ .px = clip.visible.h },
                     .clip = true,
                     .radius = clip.radius,
+                    .clip_corners = clip.corners,
                 }, null);
                 ox = clip.visible.x;
                 oy = clip.visible.y;
             }
+            if (it.xform != 0) {
+                _ = c.open(.{ .absolute = true, .transform = toAffine(l.xforms[it.xform].window) }, null);
+                open_xform = it.xform;
+            }
         }
-        draw(c, it, r.x - ox, r.y - oy, r, host);
+        // What's in a transform can be anywhere: nothing is cut to the window for it.
+        const view = if (it.xform != 0) r else rect;
+        draw(c, it, r.x - ox, r.y - oy, r, view, host);
     }
+    if (open_xform != 0) c.end();
     if (open_clip != 0) c.end();
+    while (groups > 0) : (groups -= 1) c.end();
 }
 
 fn shadowReach(s: css.Shadow) f32 {
-    return s.blur + s.spread + @max(@abs(s.x), @abs(s.y));
+    return s.blur * 1.5 + @max(s.spread, 0) + @max(@abs(s.x), @abs(s.y));
 }
 
-fn draw(c: *ui.Context, it: *const display.Item, x: f32, y: f32, r: Rect, host: anytype) void {
+/// `background-clip: text`: each character the gradient's color where it is.
+/// Nanoui can't fill glyphs with a picture, but it can color them one by one.
+fn gradientSpans(c: *ui.Context, t: display.Kind.Text, doc_x: f32, s: ui.TextStyle) []const ui.Span {
+    const tg = t.gradient orelse return &.{};
+    if (tg.g.stops.len == 0) return &.{};
+    const line = paint_gradient.Line.of(tg.g, tg.box_w, tg.box_h);
+    var spans: std.ArrayList(ui.Span) = .empty;
+    var it = std.unicode.Utf8View.initUnchecked(t.str).iterator();
+    var start: usize = 0;
+    while (it.nextCodepointSlice()) |ch| {
+        const end = start + ch.len;
+        const before = c.text.width(t.str[0..start], s);
+        const after = c.text.width(t.str[0..end], s);
+        const px = doc_x - tg.box_x + (before + after) / 2;
+        const k = paint_gradient.colorAt(tg.g.stops, line.at(px, tg.box_h / 2));
+        const a = k[3];
+        const ink: ui.Color = if (a > 0) .{ .r = k[0] / a, .g = k[1] / a, .b = k[2] / a, .a = a } else .{ .a = 0 };
+        spans.append(c.alloc(), .{ .start = @intCast(start), .end = @intCast(end), .color = ink }) catch return &.{};
+        start = end;
+    }
+    return spans.items;
+}
+
+fn draw(c: *ui.Context, it: *const display.Item, x: f32, y: f32, r: Rect, view: Rect, host: anytype) void {
     const placed: ui.Style = .{
         .absolute = true,
         .offset = .{ .x = x, .y = y },
@@ -83,27 +189,34 @@ fn draw(c: *ui.Context, it: *const display.Item, x: f32, y: f32, r: Rect, host: 
         .opacity = it.opacity,
     };
     switch (it.kind) {
-        .hit => {},
+        .hit, .group_begin, .group_end => {},
         .fill => |f| {
             var s = placed;
             s.radius = f.radius;
             s.corner_circular = true;
             if (f.color.a > 0) s.background = color(f.color);
-            if (f.shadow) |sh| s.shadow = .{ .color = color(sh.color), .blur = sh.blur, .x = sh.x, .y = sh.y, .spread = sh.spread, .knockout = f.color.a == 0 };
+            if (f.shadow) |sh| s.shadow = .{ .color = color(sh.color), .blur = sh.blur, .x = sh.x, .y = sh.y, .spread = sh.spread, .knockout = f.color.a == 0 and !f.solid_shadow };
             _ = c.leaf(s, .none, null);
         },
-        .border => |b| drawBorder(c, b, placed, r),
+        .rounded => |f| replay_box.rounded(c, f.color, f.corners.*, placed, r),
+        .polygon => |f| replay_box.polygon(c, f.color, f.points, placed),
+        .border => |b| replay_box.border(c, b, placed, r),
+        .inset_shadow => |s| replay_box.insetShadow(c, s, placed, r),
+        .frost => |f| {
+            var s = placed;
+            s.radius = f.radius;
+            s.corner_circular = true;
+            s.glass = .{ .style = .frost, .blur = f.blur };
+            _ = c.leaf(s, .none, null);
+        },
         .text => |t| {
             var s = textStyle(t.font);
             s.tracking = t.spacing;
-            _ = c.leaf(.{ .absolute = true, .offset = .{ .x = x, .y = y }, .opacity = it.opacity }, .{ .text = .{ .str = t.str, .style = s, .color = color(t.color) } }, null);
+            _ = c.leaf(.{ .absolute = true, .offset = .{ .x = x, .y = y }, .opacity = it.opacity }, .{ .text = .{ .str = t.str, .style = s, .color = color(t.color), .spans = gradientSpans(c, t, it.rect.x, s) } }, null);
         },
-        .image => |im| drawImage(c, im, placed, r),
-        .background => |bg| if (host.picture(bg.url)) |bytes| drawBackground(c, bg, bytes, placed, r, null),
-        .gradient => |g| if (host.gradient(g.g)) |bytes| {
-            const key = c.print("gradient:{x}", .{std.hash.Wyhash.hash(0, bytes)});
-            drawBackground(c, .{ .url = key, .style = g.style, .radius = g.radius }, bytes, placed, r, .{ .w = r.w, .h = r.h });
-        },
+        .image => |im| drawPicture(c, im, placed, r),
+        .background => |bg| if (host.picture(bg.url)) |bytes| backgrounds.picture(c, bg, bytes, placed, r, view),
+        .gradient => |g| backgrounds.gradient(c, g, host, placed, r, view),
         .mask => |ms| if (host.picture(ms.url)) |bytes| drawMask(c, ms, bytes, placed, r),
         .bullet => |b| {
             var s = placed;
@@ -125,6 +238,39 @@ fn draw(c: *ui.Context, it: *const display.Item, x: f32, y: f32, r: Rect, host: 
     }
 }
 
+/// A picture with what `drawImage` doesn't do itself around it: a tint, and
+/// corners only some of which are round.
+fn drawPicture(c: *ui.Context, im: display.Kind.Image, placed: ui.Style, r: Rect) void {
+    if (im.tint) |k| {
+        const n = im.node;
+        if (n.image.len == 0) return;
+        _ = c.open(placed, null);
+        defer c.end();
+        if (isSvg(n.image)) {
+            _ = ui.svg(c, .{ .key = n.image_key, .bytes = n.image, .width = r.w, .height = r.h, .color = color(k) });
+            return;
+        }
+        _ = ui.image(c, .{ .key = n.image_key, .bytes = n.image, .box = .{ .w = r.w, .h = r.h }, .radius = 0, .tint = color(k) });
+        return;
+    }
+    if (im.corners != 15 and im.radius > 0) {
+        var s = placed;
+        s.clip = true;
+        s.radius = im.radius;
+        s.clip_corners = im.corners;
+        _ = c.open(s, null);
+        defer c.end();
+        var plain = im;
+        plain.radius = 0;
+        var inner = placed;
+        inner.offset = .{};
+        inner.opacity = 1;
+        drawImage(c, plain, inner, r);
+        return;
+    }
+    drawImage(c, im, placed, r);
+}
+
 fn drawMask(c: *ui.Context, ms: display.Kind.Mask, bytes: []const u8, placed: ui.Style, r: Rect) void {
     _ = c.open(placed, null);
     defer c.end();
@@ -133,36 +279,6 @@ fn drawMask(c: *ui.Context, ms: display.Kind.Mask, bytes: []const u8, placed: ui
         return;
     }
     _ = ui.image(c, .{ .key = ms.url, .bytes = bytes, .box = .{ .w = r.w, .h = r.h }, .radius = 0, .tint = color(ms.color) });
-}
-
-fn drawBorder(c: *ui.Context, b: display.Border, placed: ui.Style, r: Rect) void {
-    const w = b.widths;
-    const same = w.top == w.right and w.top == w.bottom and w.top == w.left and sameColor(b.top.color, b.right.color) and sameColor(b.top.color, b.bottom.color) and sameColor(b.top.color, b.left.color);
-    if (same and b.top.color.a > 0) {
-        var s = placed;
-        s.border = color(b.top.color);
-        s.border_width = w.top;
-        s.border_dashed = b.top.style == .dashed or b.top.style == .dotted;
-        _ = c.leaf(s, .none, null);
-        return;
-    }
-    // Each side its own: bars that meet at the corners.
-    const x = placed.offset.x;
-    const y = placed.offset.y;
-    const bar = struct {
-        fn add(cc: *ui.Context, p: ui.Style, k: css.Color, bx: f32, by: f32, bw: f32, bh: f32) void {
-            if (k.a <= 0 or bw <= 0 or bh <= 0) return;
-            _ = cc.leaf(.{ .absolute = true, .offset = .{ .x = bx, .y = by }, .width = .{ .px = bw }, .height = .{ .px = bh }, .background = color(k), .opacity = p.opacity }, .none, null);
-        }
-    }.add;
-    bar(c, placed, b.top.color, x, y, r.w, w.top);
-    bar(c, placed, b.bottom.color, x, y + r.h - w.bottom, r.w, w.bottom);
-    bar(c, placed, b.left.color, x, y + w.top, w.left, r.h - w.top - w.bottom);
-    bar(c, placed, b.right.color, x + r.w - w.right, y + w.top, w.right, r.h - w.top - w.bottom);
-}
-
-fn sameColor(a: css.Color, b: css.Color) bool {
-    return a.r == b.r and a.g == b.g and a.b == b.b and a.a == b.a;
 }
 
 fn drawImage(c: *ui.Context, im: display.Kind.Image, placed: ui.Style, r: Rect) void {
@@ -254,86 +370,6 @@ fn cover(iw: f32, ih: f32, bw: f32, bh: f32) [4]f32 {
     }
     const keep = ir / @max(br, 0.001);
     return .{ 0, (1 - keep) / 2, 1, (1 + keep) / 2 };
-}
-
-/// At most this many tiles of a repeating background: a one-pixel picture
-/// over a tall page is drawn stretched in a band instead of thousands of tiles.
-const max_tiles = 64;
-
-/// A tile's size in a box of `r`, from `background-size` and the picture's own.
-fn tileSize(st: *const css.Style, own: ui.Size, r: Rect) ui.Size {
-    switch (st.background_size) {
-        .cover, .contain => {
-            const a = r.w / @max(own.w, 1);
-            const b = r.h / @max(own.h, 1);
-            const k = if (st.background_size == .cover) @max(a, b) else @min(a, b);
-            return .{ .w = own.w * k, .h = own.h * k };
-        },
-        .auto => {},
-    }
-    const lw = st.background_size_x;
-    const lh = st.background_size_y;
-    if (lw.isLength() and lh.isLength()) return .{ .w = lw.resolve(r.w, 0), .h = lh.resolve(r.h, 0) };
-    if (lw.isLength()) {
-        const w = lw.resolve(r.w, 0);
-        return .{ .w = w, .h = own.h * w / @max(own.w, 1) };
-    }
-    if (lh.isLength()) {
-        const h = lh.resolve(r.h, 0);
-        return .{ .w = own.w * h / @max(own.h, 1), .h = h };
-    }
-    return own;
-}
-
-/// `own`: the picture's size when it isn't in its bytes (a gradient's is its box's).
-fn drawBackground(c: *ui.Context, bg: display.Kind.Background, bytes: []const u8, placed: ui.Style, r: Rect, own_in: ?ui.Size) void {
-    var s = placed;
-    s.clip = true;
-    s.radius = bg.radius;
-    _ = c.open(s, null);
-    defer c.end();
-    const st = bg.style;
-    const svg = isSvg(bytes);
-    const own: ui.Size = own_in orelse if (svg) blk: {
-        const v = svgSize(bytes) orelse [2]f32{ r.w, r.h };
-        break :blk .{ .w = v[0], .h = v[1] };
-    } else ui.imageSize(c, bg.url, bytes) orelse return;
-    const size = tileSize(st, own, r);
-    const w = size.w;
-    const h = size.h;
-    if (w <= 0 or h <= 0) return;
-    const x0 = (r.w - w) * st.background_x / 100 + st.background_x_px;
-    const y0 = (r.h - h) * st.background_y / 100 + st.background_y_px;
-    if (svg) {
-        _ = c.open(.{ .absolute = true, .offset = .{ .x = x0, .y = y0 } }, null);
-        defer c.end();
-        _ = ui.svg(c, .{ .key = bg.url, .bytes = bytes, .width = w, .height = h });
-        return;
-    }
-    // Filling the box from its corner is one tile, however it repeats.
-    const rx = (st.background_repeat == .repeat or st.background_repeat == .repeat_x) and !(x0 == 0 and w >= r.w);
-    const ry = (st.background_repeat == .repeat or st.background_repeat == .repeat_y) and !(y0 == 0 and h >= r.h);
-    // A tile that repeats too often is drawn once, stretched along that axis:
-    // what a thin repeating strip looks like anyway.
-    const nx: f32 = if (rx) @ceil(r.w / w) + 1 else 1;
-    const ny: f32 = if (ry) @ceil(r.h / h) + 1 else 1;
-    if (nx * ny > max_tiles) {
-        tile(c, bg.url, bytes, if (rx) 0 else x0, if (ry) 0 else y0, if (rx) r.w else w, if (ry) r.h else h);
-        return;
-    }
-    const sx: f32 = if (rx) @mod(x0, w) - w else x0;
-    const sy: f32 = if (ry) @mod(y0, h) - h else y0;
-    var j: f32 = 0;
-    while (j < ny) : (j += 1) {
-        var i: f32 = 0;
-        while (i < nx) : (i += 1) tile(c, bg.url, bytes, sx + i * w, sy + j * h, w, h);
-    }
-}
-
-fn tile(c: *ui.Context, key: []const u8, bytes: []const u8, x: f32, y: f32, w: f32, h: f32) void {
-    _ = c.open(.{ .absolute = true, .offset = .{ .x = x, .y = y } }, null);
-    defer c.end();
-    _ = ui.image(c, .{ .key = key, .bytes = bytes, .box = .{ .w = w, .h = h }, .radius = 0 });
 }
 
 test "cover cuts the longer side" {

@@ -1,6 +1,7 @@
 //! A box's computed style: what the cascade (`cascade.zig`) gives layout and
 //! paint. Every relative unit but percentages is resolved to CSS pixels.
 const std = @import("std");
+pub const fx = @import("effects.zig");
 
 /// sRGB, gamma encoded: each part 0 to 1.
 pub const Color = struct {
@@ -80,6 +81,7 @@ pub const Align = enum { auto, normal, start, end, center, stretch, baseline, sp
 pub const ObjectFit = enum { fill, contain, cover, none, scale_down };
 pub const BackgroundSize = enum { auto, cover, contain };
 pub const BackgroundRepeat = enum { repeat, no_repeat, repeat_x, repeat_y };
+pub const BackgroundOrigin = enum { padding_box, border_box, content_box };
 
 pub const Border = struct {
     width: f32 = 0,
@@ -93,35 +95,59 @@ pub const Shadow = struct {
     blur: f32 = 0,
     spread: f32 = 0,
     color: Color = .{ .a = 0 },
+    inset: bool = false,
 };
 
-/// One stop of `linear-gradient`; positions are 0 to 1, evenly spread when
-/// not written.
-pub const GradientStop = struct { color: Color, at: f32 };
+/// One stop of a gradient; positions are 0 to 1 of its line, plus `px` pixels
+/// along it, evenly spread when not written (`known` false: with pixels about,
+/// only the box can say where).
+pub const GradientStop = struct { color: Color, at: f32, px: f32 = 0, known: bool = true };
 pub const Gradient = struct {
     /// Degrees, CSS's: 180 runs top to bottom. A conic gradient's start.
     angle: f32 = 180,
+    /// A corner named (`to top right`): the angle follows the box's shape.
+    /// -1 or 1 along each axis; 0, 0 when an angle was written.
+    to_x: i8 = 0,
+    to_y: i8 = 0,
     stops: []const GradientStop = &.{},
     shape: GradientShape = .linear,
-    /// Radial and conic: the center, 0 to 1 across the box. Radial: its
-    /// radii in the same terms, where the last stop falls.
+    repeating: bool = false,
+    /// A stop's position has pixels in it, or isn't known until there's a box.
+    has_px: bool = false,
+    /// Radial and conic: the center, 0 to 1 across the box, plus pixels.
     cx: f32 = 0.5,
     cy: f32 = 0.5,
+    cx_px: f32 = 0,
+    cy_px: f32 = 0,
+    /// Radial: its radii, where the last stop falls: fractions of the box's
+    /// width and height (kept for what has no box at hand), or the
+    /// lengths and extent below when one was written.
     rx: f32 = 0.7071,
     ry: f32 = 0.7071,
+    circle: bool = false,
+    extent: GradientExtent = .farthest_corner,
+    size_x: ?Len = null,
+    size_y: ?Len = null,
 };
 pub const GradientShape = enum { linear, radial, conic };
+pub const GradientExtent = enum { closest_side, farthest_side, closest_corner, farthest_corner };
 
 /// Which of a box's edges a background stops at. `text`: its glyphs, which
 /// the cascade turns into colored text (nanoui has no text masks).
 pub const BackgroundClip = enum { border_box, padding_box, content_box, text };
 
-/// A background layer under the first: the same size and position as it.
+/// A background layer under the first: its own size and position come from the
+/// `bg_*` lists of its style, by its place among the layers.
 pub const BackgroundLayer = struct {
     url: []const u8 = "",
     gradient: ?Gradient = null,
     clip: BackgroundClip = .border_box,
 };
+
+/// What a `background-size` value says.
+pub const BgSize = struct { kind: BackgroundSize = .auto, x: Len = .auto, y: Len = .auto };
+/// What a `background-position` value says.
+pub const BgPos = struct { x_pct: f32 = 0, x_px: f32 = 0, y_pct: f32 = 0, y_px: f32 = 0 };
 
 /// A track of `grid-template-columns`/`rows`.
 pub const Track = struct {
@@ -161,12 +187,8 @@ pub const GridArea = struct { name: []const u8, col0: i16, col1: i16, row0: i16,
 /// `start_name`, `end_name`: lines or areas named instead of numbered.
 pub const GridPlace = struct { start: i16 = 0, end: i16 = 0, span: u16 = 1, start_name: []const u8 = "", end_name: []const u8 = "" };
 
-/// The 2D transforms a box can draw with; the rest are dropped.
-pub const Transform = struct {
-    x: Len = .zero,
-    y: Len = .zero,
-    scale: f32 = 1,
-};
+/// `transform`'s functions: `effects.zig`.
+pub const Transform = fx.Transform;
 
 pub const Style = struct {
     display: Display = .inline_,
@@ -213,7 +235,12 @@ pub const Style = struct {
     /// left), in pixels; percentages in `radius_pct`, of the box's width.
     radius: [4]f32 = .{ 0, 0, 0, 0 },
     radius_pct: [4]f32 = .{ 0, 0, 0, 0 },
+    /// The corners' vertical radii, after a `/` or as the second value of a
+    /// corner's property: percentages of the box's height.
+    radius_y: [4]f32 = .{ 0, 0, 0, 0 },
+    radius_y_pct: [4]f32 = .{ 0, 0, 0, 0 },
     outline: Border = .{},
+    outline_offset: f32 = 0,
 
     background: Color = .transparent,
     background_image: []const u8 = "",
@@ -232,12 +259,59 @@ pub const Style = struct {
     /// `background-size` given as lengths (`background_size` stays `auto`).
     background_size_x: Len = .auto,
     background_size_y: Len = .auto,
+    background_origin: BackgroundOrigin = .padding_box,
+    /// `background-attachment: fixed`.
+    background_fixed: bool = false,
+    /// Comma lists, when they have more than one value: each layer takes its
+    /// own, by its place among the layers, repeating as CSS says. Empty: every
+    /// layer has what the single fields above say.
+    bg_sizes: []const BgSize = &.{},
+    bg_positions: []const BgPos = &.{},
+    bg_repeats: []const BackgroundRepeat = &.{},
+    bg_clips: []const BackgroundClip = &.{},
+    bg_origins: []const BackgroundOrigin = &.{},
+    bg_fixed: []const bool = &.{},
+    /// The first shadow that shows outside the box, and all of them, the
+    /// topmost first, inset ones too.
     shadow: ?Shadow = null,
+    shadows: []const Shadow = &.{},
     object_fit: ObjectFit = .fill,
     transform: ?Transform = null,
+    /// The `translate`, `rotate` and `scale` properties.
+    translate_x: Len = .zero,
+    translate_y: Len = .zero,
+    rotate: f32 = 0,
+    scale_x: f32 = 1,
+    scale_y: f32 = 1,
+    transform_origin_x: Len = .{ .pct = 50 },
+    transform_origin_y: Len = .{ .pct = 50 },
+    /// `clip` (absolute boxes only) and `clip-path`.
+    clip_rect: ?fx.ClipRect = null,
+    clip_path: ?fx.ClipPath = null,
+    filters: []const fx.Filter = &.{},
+    /// `backdrop-filter: blur()`'s radius, pixels; 0 for none.
+    backdrop_blur: f32 = 0,
+    /// `appearance: none`: the author's CSS draws the control.
+    appearance_none: bool = false,
+    /// What `animation-*` and `transition-*` wrote, and what they come to
+    /// (`properties_motion.zig`).
+    anim_raw: ?*const @import("properties_motion.zig").AnimRaw = null,
+    trans_raw: ?*const @import("properties_motion.zig").TransRaw = null,
+    animations: []const fx.Animation = &.{},
+    transitions: []const fx.Transition = &.{},
 
     // Inherited.
     color: Color = .{},
+    /// `-webkit-text-fill-color`: what glyphs fill with, over `color`.
+    text_fill: ?Color = null,
+    /// `background-clip: text`'s gradient, for glyphs with a see-through fill.
+    text_gradient: ?Gradient = null,
+    /// `text-shadow`, the topmost first.
+    text_shadows: []const Shadow = &.{},
+    /// `accent-color`: a control's checked part.
+    accent: ?Color = null,
+    /// `::placeholder`'s color.
+    placeholder: ?Color = null,
     font_size: f32 = 16,
     font_weight: u16 = 400,
     italic: bool = false,
@@ -335,6 +409,11 @@ pub const Style = struct {
 
     pub fn isOutOfFlow(s: *const Style) bool {
         return s.position == .absolute or s.position == .fixed;
+    }
+
+    /// Whether any transform applies; a containing block for what's in it.
+    pub fn hasTransform(s: *const Style) bool {
+        return s.transform != null or s.rotate != 0 or s.scale_x != 1 or s.scale_y != 1 or s.translate_x.px != 0 or s.translate_x.pct != 0 or s.translate_y.px != 0 or s.translate_y.pct != 0;
     }
 
     pub fn clips(s: *const Style) bool {

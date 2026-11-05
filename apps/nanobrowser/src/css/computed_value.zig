@@ -8,6 +8,7 @@ const prop = @import("prop.zig");
 const vars = @import("vars.zig");
 const tk = @import("tokenizer.zig");
 const cascade = @import("cascade.zig");
+const transform_mod = @import("transform.zig");
 
 const Style = style.Style;
 const Len = style.Len;
@@ -173,6 +174,29 @@ fn text(a: Allocator, s: *const Style, p: prop.Prop) Allocator.Error!?[]const u8
         .column_gap => try lenText(a, s.column_gap),
         .border_collapse => boolWord(s.border_collapse, "collapse", "separate"),
         .object_fit => try kw(a, s.object_fit),
+        .transform => if (s.transform != null) blk: {
+            // What it comes to without a box: percentages count for nothing.
+            const m = transform_mod.of(s, 0, 0) orelse break :blk "none";
+            break :blk try P(a, "matrix({d}, {d}, {d}, {d}, {d}, {d})", .{ m.a, m.b, m.c, m.d, m.e, m.f });
+        } else "none",
+        .animation_name => blk: {
+            if (s.animations.len == 0) break :blk "none";
+            var out: std.ArrayList(u8) = .empty;
+            for (s.animations, 0..) |x, i| {
+                if (i > 0) try out.appendSlice(a, ", ");
+                try out.appendSlice(a, x.name);
+            }
+            break :blk out.items;
+        },
+        .animation_duration => if (s.animations.len > 0) try P(a, "{d}s", .{s.animations[0].duration}) else "0s",
+        .animation_delay => if (s.animations.len > 0) try P(a, "{d}s", .{s.animations[0].delay}) else "0s",
+        .transition_duration => if (s.transitions.len > 0) try P(a, "{d}s", .{s.transitions[0].duration}) else "0s",
+        .transition_delay => if (s.transitions.len > 0) try P(a, "{d}s", .{s.transitions[0].delay}) else "0s",
+        .transition_property => if (s.transitions.len > 0) s.transitions[0].name else "none",
+        .box_shadow => if (s.shadows.len > 0) try P(a, "{s} {d}px {d}px {d}px {d}px", .{ try colorText(a, s.shadows[0].color), s.shadows[0].x, s.shadows[0].y, s.shadows[0].blur, s.shadows[0].spread }) else "none",
+        .filter => if (s.filters.len > 0) "filter" else "none",
+        .clip_path => if (s.clip_path != null) "shape" else "none",
+        .appearance => boolWord(s.appearance_none, "none", "auto"),
         .content => try P(a, "\"{s}\"", .{s.content}),
         else => null,
     };

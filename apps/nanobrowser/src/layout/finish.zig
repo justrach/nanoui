@@ -66,8 +66,8 @@ fn visit(c: *Ctx, b: *Box, ox: f32, oy: f32, cbs: Cbs) Error!void {
 
 fn nextCbs(b: *Box, cbs: Cbs) Cbs {
     var out = cbs;
-    if (b.style.position != .static or b.style.transform != null) out.abs = b;
-    if (b.style.transform != null) out.fixed = b;
+    if (b.style.position != .static or b.style.hasTransform()) out.abs = b;
+    if (b.style.hasTransform()) out.fixed = b;
     return out;
 }
 

@@ -104,7 +104,7 @@ pub const Parser = struct {
                 combinator = .descendant;
             } else return null;
             // Nothing follows a pseudo-element but its own pseudo-classes.
-            if (sel.pseudo != .none and sel.pseudo != .other) return null;
+            if (sel.pseudo != .none and sel.pseudo != .other and sel.pseudo != .placeholder) return null;
         }
         if (relative) sel.leading = leading orelse .descendant;
         // Inside a style rule, a selector with no `&` is relative to the parent.
@@ -410,6 +410,8 @@ fn pseudoElement(name: []const u8, st: *CompoundState_) ??Simple {
         st.pseudo = .before;
     } else if (std.ascii.eqlIgnoreCase(name, "after")) {
         st.pseudo = .after;
+    } else if (std.ascii.eqlIgnoreCase(name, "placeholder") or std.ascii.eqlIgnoreCase(name, "-webkit-input-placeholder")) {
+        st.pseudo = .placeholder;
     } else if (isOtherElement(name) or std.ascii.startsWithIgnoreCase(name, "-webkit-")) {
         st.pseudo = .other;
     } else return null;
@@ -426,7 +428,7 @@ fn legacyElement(name: []const u8) bool {
 }
 
 fn isOtherElement(name: []const u8) bool {
-    const l = [_][]const u8{ "marker", "selection", "placeholder", "first-line", "first-letter", "backdrop", "file-selector-button", "details-content", "target-text", "cue", "scroll-marker" };
+    const l = [_][]const u8{ "marker", "selection", "first-line", "first-letter", "backdrop", "file-selector-button", "details-content", "target-text", "cue", "scroll-marker" };
     for (l) |x| if (std.ascii.eqlIgnoreCase(name, x)) return true;
     return false;
 }

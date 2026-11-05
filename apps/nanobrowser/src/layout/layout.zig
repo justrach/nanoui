@@ -86,7 +86,7 @@ pub fn offsetParent(node: *dom.Node) ?*dom.Node {
         if (p.kind != .element) break;
         if (p.isTag("body")) return p;
         if (p.computed) |s| {
-            if (s.position != .static or s.transform != null) return p;
+            if (s.position != .static or s.hasTransform()) return p;
         }
         if (is_static and (p.isTag("td") or p.isTag("th") or p.isTag("table"))) return p;
     }

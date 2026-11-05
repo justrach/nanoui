@@ -292,6 +292,11 @@ pub const Document = struct {
         return false;
     }
 
+    /// `n` and what's under it restyle.
+    pub fn markStyle(d: *Document, n: *Node) void {
+        d.touchUnder(n);
+    }
+
     /// The style of what's under `n` may have changed: only that restyles.
     fn touchUnder(d: *Document, n: *Node) void {
         d.style_dirty = true;

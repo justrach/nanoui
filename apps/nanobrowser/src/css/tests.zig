@@ -88,7 +88,9 @@ test "parser: rules, recovery, at-rules" {
     try eq("x", s.imports[1].layer);
     try expect(s.font_faces.len == 1);
     try expect(s.keyframes.len == 1);
-    try eq("spin", s.keyframes[0]);
+    try eq("spin", s.keyframes[0].name);
+    try expect(s.keyframes[0].frames.len == 2);
+    try expect(s.keyframes[0].frames[1].at == 1);
     // a, b, g, h, j survive; the two with bad selectors don't.
     try expect(s.rules.len == 5);
     try expect(s.rules[0].decls.items.len == 2);
