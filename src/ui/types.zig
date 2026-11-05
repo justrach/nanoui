@@ -290,6 +290,10 @@ pub const TextStyle = struct {
     /// In the system's font, not the theme's: as GPUI draws what a window
     /// lays out on its own, its tooltips.
     system_font: bool = false,
+    /// Every digit the same width (OpenType `tnum`, CSS's `tabular-nums`), so
+    /// a count that changes doesn't move what's beside it. CoreText only:
+    /// where nanoui reads fonts itself, digits keep their own widths.
+    tabular: bool = false,
     /// Line height as a multiple of the font's (1.5 for airy prose).
     leading: f32 = 1,
     /// Line height in points (CSS's `line-height: 22px`), taking the place

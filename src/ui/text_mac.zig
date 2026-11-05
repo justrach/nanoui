@@ -54,10 +54,10 @@ pub const Layout = struct { width: f32, glyphs: []const Glyph };
 /// A line of wrapped text: a byte range and its width.
 pub const Line = struct { start: usize, end: usize, width: f32 };
 
-const FontKey = struct { size_bits: u32, weight: types.Weight, mono: bool, italic: bool, system: bool = false };
+const FontKey = struct { size_bits: u32, weight: types.Weight, mono: bool, italic: bool, system: bool = false, tabular: bool = false };
 
 fn fontKey(style: types.TextStyle) FontKey {
-    return .{ .size_bits = @bitCast(style.size), .weight = style.weight, .mono = style.mono, .italic = style.italic, .system = style.system_font };
+    return .{ .size_bits = @bitCast(style.size), .weight = style.weight, .mono = style.mono, .italic = style.italic, .system = style.system_font, .tabular = style.tabular };
 }
 
 pub const TextSystem = struct {
@@ -189,7 +189,8 @@ pub const TextSystem = struct {
     pub fn font(self: *TextSystem, style: types.TextStyle) Font {
         const fk = fontKey(style);
         if (self.fonts.get(fk)) |f| return f;
-        const ref = fonts.create(if (style.mono) self.mono_family else if (style.system_font) null else self.family, style.size * self.zoom, style.weight, style.italic, style.mono);
+        const base = fonts.create(if (style.mono) self.mono_family else if (style.system_font) null else self.family, style.size * self.zoom, style.weight, style.italic, style.mono);
+        const ref = if (style.tabular) fonts.tabular(base) else base;
         const f: Font = .{
             .ref = ref,
             .ascent = @floatCast(CTFontGetAscent(ref)),
@@ -205,7 +206,7 @@ pub const TextSystem = struct {
         h.update(s);
         h.update(std.mem.asBytes(&style.size));
         h.update(std.mem.asBytes(&style.mono_scale));
-        h.update(&.{ @intFromEnum(style.weight), @intFromBool(style.mono), @intFromBool(style.italic), @intFromBool(style.system_font) });
+        h.update(&.{ @backingInt(style.weight), @intFromBool(style.mono), @intFromBool(style.italic), @intFromBool(style.system_font), @intFromBool(style.tabular) });
         return h.final();
     }
 
@@ -356,7 +357,7 @@ pub const TextSystem = struct {
     /// `s` with its spans broken into lines no wider than `max_width`.
     pub fn wrapAttributed(self: *TextSystem, s: []const u8, style: types.TextStyle, spans: []const types.Span, max_width: f32) []const Line {
         const styled = rich.styled(spans);
-        const k = key(s, style, (@as(u64, @intFromFloat(@max(0, @min(max_width, 1e6)))) + 2) ^ (if (styled) rich.spansHash(spans, 0, s.len) else 0) ^ (@as(u64, @intFromEnum(self.wrap_rule)) << 60));
+        const k = key(s, style, (@as(u64, @intFromFloat(@max(0, @min(max_width, 1e6)))) + 2) ^ (if (styled) rich.spansHash(spans, 0, s.len) else 0) ^ (@as(u64, @backingInt(self.wrap_rule)) << 60));
         if (self.wraps.get(self.gpa, k)) |lines| return lines;
         if (self.oneLine(s, style, spans, max_width)) |line_| {
             const one = self.gpa.alloc(Line, 1) catch return &.{};

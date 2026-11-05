@@ -109,6 +109,37 @@ pub fn weightValue(w: types.Weight) f64 {
     };
 }
 
+extern "c" const kCTFontFeatureSettingsAttribute: cf.CFStringRef;
+extern "c" const kCTFontOpenTypeFeatureTag: cf.CFStringRef;
+extern "c" const kCTFontOpenTypeFeatureValue: cf.CFStringRef;
+extern "c" fn CFArrayCreate(alloc: ?*anyopaque, values: [*]const ?*const anyopaque, count: cf.CFIndex, callbacks: *const anyopaque) ?*anyopaque;
+extern "c" const kCFTypeArrayCallBacks: anyopaque;
+
+/// `base`, released, with OpenType's `tnum` on; `base` if that can't be made.
+pub fn tabular(base: cf.CTFontRef) cf.CTFontRef {
+    const tag = cf.string("tnum");
+    defer cf.CFRelease(tag);
+    const on: i32 = 1;
+    const value = CFNumberCreate(null, kCFNumberSInt32Type, &on) orelse return base;
+    defer cf.CFRelease(value);
+    const fkeys = [_]?*const anyopaque{ kCTFontOpenTypeFeatureTag, kCTFontOpenTypeFeatureValue };
+    const fvals = [_]?*const anyopaque{ tag, value };
+    const feature = cf.CFDictionaryCreate(null, &fkeys, &fvals, 2, &cf.kCFTypeDictionaryKeyCallBacks, &cf.kCFTypeDictionaryValueCallBacks) orelse return base;
+    defer cf.CFRelease(feature);
+    const list = [_]?*const anyopaque{feature};
+    const settings = CFArrayCreate(null, &list, 1, &kCFTypeArrayCallBacks) orelse return base;
+    defer cf.CFRelease(settings);
+    const keys = [_]?*const anyopaque{kCTFontFeatureSettingsAttribute};
+    const vals = [_]?*const anyopaque{settings};
+    const attrs = cf.CFDictionaryCreate(null, &keys, &vals, 1, &cf.kCFTypeDictionaryKeyCallBacks, &cf.kCFTypeDictionaryValueCallBacks) orelse return base;
+    defer cf.CFRelease(attrs);
+    const desc = CTFontDescriptorCreateWithAttributes(attrs) orelse return base;
+    defer cf.CFRelease(desc);
+    const copy = CTFontCreateCopyWithAttributes(base, 0, null, desc) orelse return base;
+    cf.CFRelease(base);
+    return copy;
+}
+
 /// A retained font of `family` (or the system's when null or missing).
 pub fn create(family: ?[]const u8, size: f32, weight: types.Weight, italic: bool, mono: bool) cf.CTFontRef {
     if (family) |name| if (named(name, size, weight, italic)) |f| return f;

@@ -63,3 +63,24 @@ test "a registered font wins over an installed face of its family" {
     defer cf.CFRelease(f);
     try testing.expectApproxEqAbs(@as(f64, 150), advance(f, 'H'), 0.01);
 }
+
+/// How wide CoreText sets `s`: features apply in shaping, not in the font's
+/// character map.
+fn shaped(f: cf.CTFontRef, s: []const u8) f64 {
+    const attr = cf.attributed(s, f);
+    defer cf.CFRelease(attr);
+    const line = cf.CTLineCreateWithAttributedString(attr).?;
+    defer cf.CFRelease(line);
+    return cf.CTLineGetTypographicBounds(line, null, null, null);
+}
+
+test "tabular digits all take one width" {
+    const sys = fonts.create(null, 40, .regular, false, false);
+    defer cf.CFRelease(sys);
+    // The system's own 1 is narrower than its 0 until asked otherwise.
+    try testing.expect(shaped(sys, "111") < shaped(sys, "000") - 1);
+    const even = fonts.tabular(@ptrCast(cf.CFRetain(sys)));
+    defer cf.CFRelease(even);
+    try testing.expectApproxEqAbs(shaped(even, "000"), shaped(even, "111"), 0.01);
+    try testing.expectApproxEqAbs(shaped(even, "000"), shaped(even, "789"), 0.01);
+}
