@@ -74,8 +74,11 @@ fn fire(ptr: ?*anyopaque) callconv(.c) void {
     s.setPaced(true);
 }
 
-/// A frame has just gone to the screen: has the window server look.
+/// A frame has just gone to the screen: has the window server look. Not while
+/// another is on its way, which covers one left off the screen a refresh later:
+/// at 60 fps the nudge took about 5% of a core in the window server.
 pub fn presented(s: *Surface) void {
+    if (s.ctx.animating or s.ctx.time_driven != .none) return;
     objc.msg(void, s.window.nswindow, "invalidateShadow", .{});
 }
 
