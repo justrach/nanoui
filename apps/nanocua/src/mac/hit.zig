@@ -24,11 +24,28 @@ fn parent(el: cf.AXUIElementRef) ?cf.AXUIElementRef {
     return @ptrCast(ax.copy(el, "AXParent"));
 }
 
+/// Whether `el` is inside a web page. Chrome answers AXPress on a page's button
+/// with success and doesn't act on it, so a page's controls get a click event,
+/// whose reply doesn't claim more than it knows.
+pub fn inWebPage(el: cf.AXUIElementRef) bool {
+    var buf: [64]u8 = undefined;
+    var at_el: cf.AXUIElementRef = @ptrCast(cf.CFRetain(el));
+    defer cf.CFRelease(at_el);
+    for (0..64) |_| {
+        if (std.mem.eql(u8, role(&buf, at_el), "AXWebArea")) return true;
+        const up = parent(at_el) orelse return false;
+        cf.CFRelease(at_el);
+        at_el = up;
+    }
+    return false;
+}
+
 /// Presses what's at x, y if it's a control, going up from the label or icon
 /// inside it. Writes the control's role into `buf`; null if nothing was pressed.
 pub fn press(buf: []u8, pid: i32, x: f64, y: f64) ?[]const u8 {
     var el = at(pid, x, y) orelse return null;
     defer cf.CFRelease(el);
+    if (inWebPage(el)) return null;
     for (0..4) |_| {
         const r = role(buf, el);
         if (tree.pressable(r)) return if (ax.perform(el, "AXPress")) tree.bareRole(r) else null;

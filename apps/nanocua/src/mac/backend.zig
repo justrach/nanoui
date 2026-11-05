@@ -298,7 +298,7 @@ const Job = struct {
                 if (j.ref) |r| {
                     const el = j.element(r) orelse return;
                     const t = j.events(ax.pidOf(el)) orelse return;
-                    if (button == .left and count == 1 and ax.perform(el, "AXPress")) return w.print("Pressed [{d}].", .{r});
+                    if (button == .left and count == 1 and !hit.inWebPage(el) and ax.perform(el, "AXPress")) return w.print("Pressed [{d}].", .{r});
                     const f = ax.frame(el) orelse return j.fail("[{d}] has no frame to click.", .{r});
                     const c = j.inWindow(t, f) orelse return j.fail("[{d}] is out of sight in its window: scroll to it first.", .{r});
                     const aimed = j.aim(t, c[0], c[1]) orelse return;

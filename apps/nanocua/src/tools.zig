@@ -61,7 +61,8 @@ pub const Tool = enum {
             ,
             .click =>
             \\Clicks in the app you act in, without moving the user's pointer: an element by ref, or x,y in screen
-            \\points, inside that app's window. Controls are pressed through accessibility, which is exact. Anything
+            \\points, inside that app's window. Controls are pressed through accessibility, which is exact, except in
+            \\web pages, which get a click event because browsers can ignore a press while reporting success. Anything
             \\else gets a click event that apps can ignore in the background, so the reply says it isn't confirmed:
             \\check the result. In a window that isn't its app's key window, that first click may only make it key.
             \\button: left (default) or right; count: 2 for a double click.
