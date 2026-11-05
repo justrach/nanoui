@@ -383,6 +383,34 @@ class Range {
   toString() { return ""; }
 }
 for (const [k, v] of [["START_TO_START", 0], ["START_TO_END", 1], ["END_TO_END", 2], ["END_TO_START", 3]]) Range[k] = v;
+// Ranges compare.
+{
+  const RP = Range.prototype;
+  const def = (o, name, value) => { if (!(name in o)) Object.defineProperty(o, name, { value, writable: true, configurable: true, enumerable: false }); };
+  const before = (an, ao, bn, bo) => {
+    if (an === bn) return Math.sign(ao - bo);
+    const p = an.compareDocumentPosition(bn);
+    if (p & Node.DOCUMENT_POSITION_CONTAINED_BY) { let k = bn; while (k.parentNode !== an) k = k.parentNode; return Array.prototype.indexOf.call(an.childNodes, k) < ao ? 1 : -1; }
+    if (p & Node.DOCUMENT_POSITION_CONTAINS) { let k = an; while (k.parentNode !== bn) k = k.parentNode; return Array.prototype.indexOf.call(bn.childNodes, k) < bo ? -1 : 1; }
+    return p & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
+  };
+  def(RP, "comparePoint", function (n, o) {
+    if (before(n, o, this.startContainer, this.startOffset) < 0) return -1;
+    return before(n, o, this.endContainer, this.endOffset) > 0 ? 1 : 0;
+  });
+  def(RP, "isPointInRange", function (n, o) { return this.comparePoint(n, o) === 0; });
+  def(RP, "intersectsNode", function (n) {
+    const p = n.parentNode;
+    if (!p) return true;
+    const i = Array.prototype.indexOf.call(p.childNodes, n);
+    return before(p, i, this.endContainer, this.endOffset) < 0 && before(p, i + 1, this.startContainer, this.startOffset) > 0;
+  });
+  def(RP, "compareBoundaryPoints", function (how, o) {
+    const mine = how === 0 || how === 3 ? [this.startContainer, this.startOffset] : [this.endContainer, this.endOffset];
+    const theirs = how === 0 || how === 1 ? [o.startContainer, o.startOffset] : [o.endContainer, o.endOffset];
+    return before(mine[0], mine[1], theirs[0], theirs[1]);
+  });
+}
 def(g, "Range", Range);
 class Selection {
   anchorNode = null; anchorOffset = 0; focusNode = null; focusOffset = 0; isCollapsed = true; rangeCount = 0; type = "None";

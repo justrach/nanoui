@@ -19,12 +19,14 @@ const World = bind.World;
 const Chunk = struct { name: []const u8, source: [:0]const u8, globals: []const []const u8 = &.{} };
 
 const eager = [_]Chunk{
+    .{ .name = "prelude:es", .source = @embedFile("prelude_es.js") },
     .{ .name = "prelude:events", .source = @embedFile("prelude_events.js") },
     .{ .name = "prelude:dom", .source = @embedFile("prelude_dom.js") },
     .{ .name = "prelude:elements", .source = @embedFile("prelude_elements.js") },
     .{ .name = "prelude:wire", .source = @embedFile("prelude_wire.js") },
     .{ .name = "prelude:window", .source = @embedFile("prelude_window.js") },
     .{ .name = "prelude:frames", .source = @embedFile("prelude_frames.js") },
+    .{ .name = "prelude:gaps", .source = @embedFile("prelude_gaps.js") },
 };
 
 const lazy = [_]Chunk{

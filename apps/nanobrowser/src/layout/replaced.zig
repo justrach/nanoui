@@ -107,7 +107,20 @@ fn styleW(c: *Ctx, b: *Box, cw: ?f32) Error!?f32 {
     return null;
 }
 
-fn styleH(b: *Box, ch: ?f32) ?f32 {
+/// The content height of a parent whose height is written in lengths: what a
+/// percentage of it means even when the caller is only measuring.
+fn parentH(b: *const Box) ?f32 {
+    const p = b.parent orelse return null;
+    const l = p.style.height;
+    if (l.kind != .length or l.hasPct()) return null;
+    const v = @max(0, ctx.len(l, 0));
+    if (p.style.box_sizing != .border_box) return v;
+    const e = ctx.edgesOf(p.style, 0);
+    return @max(0, v - e.padding.vertical() - e.border.vertical());
+}
+
+fn styleH(b: *Box, ch_in: ?f32) ?f32 {
+    const ch = ch_in orelse if (b.style.height.hasPct()) parentH(b) else null;
     if (ctx.specH(b, b.style.height, ch, ctx.bpV(b))) |h| return h - ctx.bpV(b);
     if (b.node) |n| if (attrDim(b, n, "height")) |d| if (d.pct) {
         if (ch) |r| return r * d.px / 100;

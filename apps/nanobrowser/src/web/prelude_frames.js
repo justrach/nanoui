@@ -47,6 +47,10 @@ function crossWindow(id, self) {
 
 const gone = 0, cross = 2;
 const remotes = new Map();
+// A function read off a window, and this window's of that name: what it still does
+// once the frame has gone. Sentry and others read clean natives from an iframe they
+// remove straight away, and go on to bind and call them.
+const localOf = new WeakMap();
 $.hook("makeRemote", (peer, id, callable) => {
   const key = peer + ":" + id;
   let p = remotes.get(key);
@@ -56,15 +60,21 @@ $.hook("makeRemote", (peer, id, callable) => {
   const state = isWindow ? () => $.peerState(peer) : () => 1;
   const far = () => crossWindow(peer, p);
   const send = (data, target, transfer) => $.postTo(peer, $.wire(data, transfer ?? target), targetOrigin(target));
+  const orphan = () => (callable && $.peerState(peer) === gone ? localOf.get(p) ?? Function.prototype : null);
   p = new Proxy(callable ? function () {} : {}, {
     get(_, k) {
+      const left = orphan();
+      if (left) return left[k];
       const s = state();
       if (s === cross) return far()[k];
       if (isWindow) {
         if (k === "postMessage") return s === gone ? () => {} : send;
         if (k === "closed" && s === gone) return true;
       }
-      return typeof k === "symbol" ? (k === Symbol.toStringTag ? call(0, "constructor")?.name : undefined) : call(0, k);
+      if (typeof k === "symbol") return k === Symbol.toStringTag ? call(0, "constructor")?.name : undefined;
+      const v = call(0, k);
+      if (isWindow && typeof v === "function" && typeof g[k] === "function") localOf.set(v, g[k]);
+      return v;
     },
     set(_, k, v) {
       if (state() === cross) { far()[k] = v; return true; }
@@ -80,8 +90,14 @@ $.hook("makeRemote", (peer, id, callable) => {
       return { value: call(0, k), writable: true, enumerable: true, configurable: true };
     },
     getPrototypeOf() { return state() === cross ? null : call(8) ?? null; },
-    apply(_, self, args) { return call(6, self, args); },
-    construct(_, args) { return call(7, args) ?? {}; },
+    apply(_, self, args) {
+      const left = orphan();
+      return left ? Reflect.apply(left, self, args) : call(6, self, args);
+    },
+    construct(_, args) {
+      const left = orphan();
+      return left ? Reflect.construct(left, args) : call(7, args) ?? {};
+    },
   });
   remotes.set(key, p);
   return p;

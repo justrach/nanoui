@@ -177,6 +177,18 @@ test "containment: what's in a container doesn't size it" {
     try u.close(0, b.h, "h");
 }
 
+test "a picture with a percentage height of a parent that has one, as its width's source" {
+    const p = try Page.make(
+        \\<!doctype html><div style="display:flex"><h1 id=h style="display:grid;height:26px;margin:0"><svg id=s viewBox="0 0 104 26" style="width:auto;height:100%"></svg></h1></div>
+    , reset);
+    defer p.done();
+    const h = layout.rectOf(p.find("h").?).?;
+    try u.close(104, h.w, "the holder takes its width");
+    const s = layout.rectOf(p.find("s").?).?;
+    try u.close(104, s.w, "w");
+    try u.close(26, s.h, "h");
+}
+
 /// The text of the first `::before` under a box.
 fn pseudoText(b: *box.Box) ?[]const u8 {
     var k = b.first_child;

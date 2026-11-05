@@ -84,15 +84,17 @@ const sameColor = (a, b) => (a[3] === 0 && b[3] === 0) || a.every((v, i) => Math
 function diff(nano, chrome) {
   const byPath = new Map(chrome.map((r) => [r.path, r]));
   const nanoBy = new Map(nano.map((r) => [r.path, r]));
+  // Inside an <svg>: it's drawn as one picture here, with no boxes for its parts.
+  const inSvg = (p) => /\/svg\[\d+\]\//.test(p);
   const isHead = (p) => /^html\[1\]\/head/.test(p) || /\/(script|style|link|meta|title|noscript|template)\[/.test(p);
   const lines = { missing: [], extra: [], box: [], color: [], font: [], hidden: [], shown: [] };
-  let matched = 0, boxOk = 0;
+  let matched = 0, boxOk = 0, sizeOk = 0;
   const offBy = (r) => {
     const c = byPath.get(r.path);
     return c && r.x !== undefined && c.x !== undefined && !(near(r.x, c.x) && near(r.y, c.y) && near(r.w, c.w) && near(r.h, c.h));
   };
   for (const r of nano) {
-    if (isHead(r.path)) continue;
+    if (isHead(r.path) || inSvg(r.path)) continue;
     const c = byPath.get(r.path);
     if (!c) { lines.extra.push(r); continue; }
     matched++;
@@ -101,6 +103,7 @@ function diff(nano, chrome) {
     if (nanoShown && !chromeShown) { lines.shown.push({ r, c }); continue; }
     if (!nanoShown && chromeShown && (c.w > 0 || c.h > 0)) { lines.hidden.push({ r, c }); continue; }
     if (!nanoShown) continue;
+    if (near(r.w, c.w) && near(r.h, c.h)) sizeOk++;
     if (!offBy(r)) boxOk++;
     else {
       // The cause, not what follows from it: its parent lines up, or differs differently.
@@ -111,16 +114,16 @@ function diff(nano, chrome) {
     if (r.bg && !sameColor(r.bg, c.bg)) lines.color.push({ r, c, bg: true });
     if (r.fontSize !== undefined && Math.abs(r.fontSize - c.fontSize) > 0.5) lines.font.push({ r, c });
   }
-  for (const c of chrome) if (!isHead(c.path) && !nanoBy.has(c.path)) lines.missing.push(c);
-  return { lines, matched, boxOk };
+  for (const c of chrome) if (!isHead(c.path) && !inSvg(c.path) && !nanoBy.has(c.path)) lines.missing.push(c);
+  return { lines, matched, boxOk, sizeOk };
 }
 
 const fmt = (r) => `${r.x?.toFixed(0)},${r.y?.toFixed(0)} ${r.w?.toFixed(0)}x${r.h?.toFixed(0)}`;
 const name = (r) => r.path.split('/').slice(-3).join('/') + (r.id ? `#${r.id}` : '') + (r.cls ? `.${r.cls.split(/\s+/).slice(0, 2).join('.')}` : '');
 
 function report(url, res, log) {
-  const { lines: l, matched, boxOk } = res;
-  const t = [`${url}\nmatched ${matched}, boxes within ${tolerance}px ${boxOk}, causes ${l.box.length}, chrome-only ${l.missing.length}, nano-only ${l.extra.length}\n`];
+  const { lines: l, matched, boxOk, sizeOk } = res;
+  const t = [`${url}\nmatched ${matched}, boxes within ${tolerance}px ${boxOk}, same size ${sizeOk}, causes ${l.box.length}, chrome-only ${l.missing.length}, nano-only ${l.extra.length}\n`];
   const section = (title, list, f) => { if (list.length) t.push(`-- ${title} (${list.length})`, ...list.slice(0, 40).map(f), ''); };
   section('box differs, parent fine (nano vs chrome)', l.box, ({ r, c }) => `${name(r)} [${r.display}/${c.display}] nano ${fmt(r)}  chrome ${fmt(c)}`);
   section('shown here, hidden there', l.shown, ({ r }) => name(r));
@@ -168,6 +171,6 @@ for (const url of urls) {
   await page.waitForTimeout(100);
   await page.screenshot({ path: join(out, `${n}.side.png`) });
   await page.close();
-  console.log(`${n}: elements ${res.matched}, within ${tolerance}px ${res.boxOk} (${Math.round(100 * res.boxOk / Math.max(1, res.matched))}%), causes ${res.lines.box.length}, chrome-only ${res.lines.missing.length}, nano-only ${res.lines.extra.length}`);
+  console.log(`${n}: elements ${res.matched}, placed ${Math.round(100 * res.boxOk / Math.max(1, res.matched))}%, sized ${Math.round(100 * res.sizeOk / Math.max(1, res.matched))}%, causes ${res.lines.box.length}, chrome-only ${res.lines.missing.length}, nano-only ${res.lines.extra.length}`);
 }
 await browser.close();

@@ -201,3 +201,20 @@ test "a window held across a navigation is the same window, and one whose frame 
     try r.expectJs("typeof held.document + held.postMessage('x', '*') + Object.keys(held).length", "undefinedundefined0");
     try r.expectNoErrors();
 }
+
+test "a native read off an iframe that's then removed still binds and runs, as Sentry's does" {
+    var r: Run = undefined;
+    try r.start();
+    defer r.stop();
+    try r.html(
+        \\<!doctype html><body><script>
+        \\var f = document.createElement('iframe'); f.hidden = true; document.head.appendChild(f);
+        \\var w = f.contentWindow, st = w.setTimeout, at = w.btoa;
+        \\document.head.removeChild(f);
+        \\var bound = st.bind(window), fired = 0; bound(() => fired++, 0);
+        \\</script>
+    );
+    try r.waitJs("fired === 1");
+    try r.expectJs("typeof st + ',' + at.call(window, 'hi')", "function,aGk=");
+    try r.expectNoErrors();
+}
