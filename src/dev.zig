@@ -54,6 +54,14 @@ pub const Flags = struct {
 pub fn snapshot(app: anytype, path: []const u8) !void {
     for (app.windows.items) |w| {
         const s = w.nativeView() orelse continue;
+        // The Tester draws the view from here. The hidden window's own frames would
+        // draw it too, with a context of their own: a view that keeps state per window
+        // (which field has the keys) would have two contexts undoing each other.
+        const quiet = struct {
+            var nothing: u8 = 0;
+            fn view(_: *u8, _: *ui.Context) void {}
+        };
+        w.surface.?.view = ui.View.init(&quiet.nothing, quiet.view);
         var t: ui.Tester = undefined;
         try t.init(app.gpa, s.view, .{ .width = s.width, .height = s.height, .scale = s.scale, .dark = app.flags.dark, .theme = s.theme });
         defer t.deinit();

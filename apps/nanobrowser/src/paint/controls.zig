@@ -89,7 +89,8 @@ fn field(p: *Page, c: *ui.Context, b: *const box.Box, x: f32, y: f32, opacity: f
     }, null);
     defer c.end();
     c.next_key_int = @intFromPtr(n);
-    if (web.takeFocusRequest(p, n)) c.focus = c.peekId(null);
+    if (web.takeFocusRequest(p, n) or p.field_pressed == n) c.focus = c.peekId(null);
+    if (p.field_pressed == n) p.field_pressed = null;
     const lines: f32 = @max(1, content.h / @max(line, 1));
     const r = ui.textField(c, buf, .{
         .placeholder = n.attr("placeholder") orelse "",

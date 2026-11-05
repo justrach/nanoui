@@ -79,6 +79,9 @@ pub const Page = struct {
     editors: std.ArrayList(*nanoui.ui.TextBuffer) = .empty,
     /// The field that last had the keyboard, to tell when it loses it.
     field_focus: ?*dom.Node = null,
+    /// A press gave this field the document's focus: the keys go with it, even if the
+    /// style that brought (`:focus-within`) gave it another id than the one pressed.
+    field_pressed: ?*dom.Node = null,
     /// The `<select>` whose list is open.
     open_select: ?*dom.Node = null,
     last_press: ?*dom.Node = null,

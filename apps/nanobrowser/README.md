@@ -37,14 +37,29 @@ typing, and update. It is not a browser to trust with a bank account.
   decoders share one process with everything else, in a language without memory safety.
   CORS is only checked when a response is read (no preflights), and CSP and subresource
   integrity are ignored.
-- **Nothing is kept.** Cookies, `localStorage` and history live for the life of the process.
+- **Little is kept.** `localStorage` and history live for the life of the process. On
+  Apple's systems the system's HTTP client also keeps cookies and a cache of its own on
+  disk, so a site can remember what it decided about this browser between runs.
+- **Bot walls.** Google, Cloudflare and DataDome challenges appear and can't be passed:
+  reCAPTCHA's box draws but times out, and Turnstile stops in its scripts. A search that
+  lands on Google's wall lands there in headless Chromium from the same network too.
 - **Slow on big sites.** No JIT, and a script that inserts CSS rules restyles the whole
   page. A heavy page such as GitHub takes many seconds to settle.
 
-Absent: `WebSocket`, `Worker`, service workers, `indexedDB`, WebGL, WebRTC, video and
-audio, canvas drawing (2D contexts exist and draw nothing), iframes' contents, CSS
-transitions and animations, WebP and AVIF off Apple's systems, web fonts, `contenteditable`,
-bidirectional text and complex scripts off Apple's systems.
+Absent: `WebSocket`, service workers, `indexedDB`, WebGL, WebRTC, video and audio, canvas
+drawing (2D contexts exist and draw nothing), WebP and AVIF off Apple's systems,
+`contenteditable`, bidirectional text and complex scripts off Apple's systems.
+
+A `Worker` runs on the UI thread, a turn at a time among the page's: scripts see what they
+expect of one, but a long computation there holds the window up. `importScripts` only finds
+what the worker's script names literally.
+
+## Comparing with Chromium
+
+`node tools/compare.mjs --out DIR URL...` renders each page here and in headless Chromium at
+the same size with the same user agent, and writes a side-by-side picture and a report of the
+boxes that differ while their parent's doesn't. `NANOBROWSER_DUMP`, `NANOBROWSER_EVAL` and
+`NANOBROWSER_LOG` are what it reads, and work alone.
 
 ## How it is laid out
 

@@ -98,3 +98,26 @@ test "Return reaches the page's script, a controlled app updates as a person use
     try testing.expect(r.t.hasText("1 left"));
     try testing.expect(!r.t.hasText("Buy milk"));
 }
+
+test "a field keeps the keys when its focus changes what's drawn around it" {
+    var r: Run = undefined;
+    try r.start();
+    defer r.stop();
+    // Wikipedia's search box: focused, it shows a menu and a ring; and what holds a
+    // field here is drawn by a chain of boxes that this kind of style changes.
+    r.open(
+        \\data:text/html,<!doctype html><style>.w:focus-within{opacity:.9;transform:translateX(1px)}.w:focus-within+.m{display:block}.m{display:none;opacity:.5;transform:scale(1)}</style>
+        \\<div class=w><input id=f placeholder="Type here"></div><div class=m>menu</div>
+        \\<script>var log=[];f.addEventListener('focus',()=>log.push('focus'));f.addEventListener('blur',()=>log.push('blur'))</script>
+    );
+    try r.t.clickText("Type here");
+    r.t.settle(0.1);
+    r.t.typeText("pen");
+    r.t.settle(0.1);
+    r.t.typeText("guin");
+    r.t.settle(0.1);
+    try r.expectJs("f.value", "penguin");
+    try r.expectJs("document.activeElement === f", "true");
+    try r.expectJs("log.join()", "focus");
+    try r.expectNoErrors();
+}

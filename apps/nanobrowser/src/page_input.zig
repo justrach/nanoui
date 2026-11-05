@@ -33,6 +33,7 @@ pub fn pointer(p: *Page, c: *ui.Context, it: ui.Interaction, node: ?*dom.Node, x
                 const target = focusTarget(n);
                 if (target != was) {
                     setState(p, &p.doc.focus, target);
+                    p.field_pressed = target;
                     web.focusChanged(p, was, target);
                     if (p.dead) return;
                 }
