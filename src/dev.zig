@@ -61,7 +61,8 @@ pub fn snapshot(app: anytype, path: []const u8) !void {
             var nothing: u8 = 0;
             fn view(_: *u8, _: *ui.Context) void {}
         };
-        w.surface.?.view = ui.View.init(&quiet.nothing, quiet.view);
+        // Headless on Linux and Windows there is no surface, and nothing to quiet.
+        if (w.surface) |surface| surface.view = ui.View.init(&quiet.nothing, quiet.view);
         var t: ui.Tester = undefined;
         try t.init(app.gpa, s.view, .{ .width = s.width, .height = s.height, .scale = s.scale, .dark = app.flags.dark, .theme = s.theme });
         defer t.deinit();
