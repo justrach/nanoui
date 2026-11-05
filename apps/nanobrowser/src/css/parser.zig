@@ -11,6 +11,7 @@ const prop = @import("prop.zig");
 const url = @import("url.zig");
 const supports = @import("supports.zig");
 const keyframes_rule = @import("parser_keyframes.zig");
+const font_face = @import("parser_font_face.zig");
 
 const Token = tk.Token;
 const Declaration = sheet.Declaration;
@@ -410,7 +411,7 @@ const P = struct {
                     const end = try p.declOrRule(mark);
                     if (end == .lbrace) {
                         try p.skipBlock();
-                    } else if (try parseFontFaceDeclaration(p.arena, p.base, p.temp.items[mark..])) |d| {
+                    } else if (try font_face.declaration(p.arena, p.base, p.temp.items[mark..])) |d| {
                         try pending.append(p.arena, d);
                     }
                 },
@@ -439,40 +440,8 @@ pub fn trim(t: []const Token) []const Token {
     return s;
 }
 
-fn hashName(name: []const u8) u32 {
+pub fn hashName(name: []const u8) u32 {
     return std.hash.Fnv1a_32.hash(name);
-}
-
-/// `font-family: Optimistic Display`: a family name may be bare words, which
-/// are one string with single spaces. Null when these are anything else.
-fn wordsAsString(arena: Allocator, t: []const Token) Allocator.Error!?[]const Token {
-    if (t.len < 2) return null;
-    var out: std.ArrayList(u8) = .empty;
-    for (t) |x| switch (x.kind) {
-        .ident => {
-            if (out.items.len > 0) try out.append(arena, ' ');
-            try out.appendSlice(arena, x.text);
-        },
-        .whitespace => {},
-        else => return null,
-    };
-    const one = try arena.alloc(Token, 1);
-    one[0] = .{ .kind = .string, .text = out.items };
-    return one;
-}
-
-/// `@font-face` descriptors aren't properties; they're kept under `custom`
-/// with their names.
-fn parseFontFaceDeclaration(arena: Allocator, base: []const u8, raw: []const Token) Allocator.Error!?Declaration {
-    const toks = trim(raw);
-    if (toks.len < 2 or toks[0].kind != .ident) return null;
-    var i: usize = 1;
-    while (i < toks.len and toks[i].kind == .whitespace) : (i += 1) {}
-    if (i >= toks.len or toks[i].kind != .colon) return null;
-    if (std.ascii.eqlIgnoreCase(toks[0].text, "font-family")) if (try wordsAsString(arena, trim(toks[i + 1 ..]))) |one| {
-        return .{ .prop = .custom, .name = toks[0].text, .value = one, .hash = hashName(toks[0].text) };
-    };
-    return .{ .prop = .custom, .name = toks[0].text, .value = try resolveUrls(arena, base, trim(toks[i + 1 ..])), .hash = hashName(toks[0].text) };
 }
 
 /// One declaration from its tokens; null when invalid. Copies what it keeps.
@@ -533,7 +502,7 @@ pub fn parseDeclaration(arena: Allocator, base: []const u8, raw: []const Token) 
 
 /// Copies a value, with `url("x")` folded to one token and every URL joined
 /// to the base.
-fn resolveUrls(arena: Allocator, base: []const u8, value: []const Token) Allocator.Error![]const Token {
+pub fn resolveUrls(arena: Allocator, base: []const u8, value: []const Token) Allocator.Error![]const Token {
     var out: std.ArrayList(Token) = .empty;
     try out.ensureTotalCapacity(arena, value.len);
     var i: usize = 0;
