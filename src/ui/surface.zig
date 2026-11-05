@@ -140,7 +140,8 @@ pub const Surface = struct {
         self.text.deinit();
         if (self.atlas_texture) |t| objc.release(t);
         self.renderer.deinit();
-        if (self.tick_scheduled) self.dead = true else self.gpa.destroy(self);
+        // After the run loop has stopped, a queued tick never fires to free it.
+        if (self.tick_scheduled and self.window.app.running) self.dead = true else self.gpa.destroy(self);
     }
 
     fn updateGeometry(self: *Surface) void {
