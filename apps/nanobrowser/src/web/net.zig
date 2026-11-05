@@ -71,6 +71,27 @@ pub fn defaultHeaders(w: *World, url: []const u8, buf: *[4]http.Header) []const 
     return buf[0..3];
 }
 
+/// What `Referer` says of a request from `from` to `to`: browsers' default
+/// (`strict-origin-when-cross-origin`). Some servers refuse a stylesheet or a font
+/// without one. Null when nothing is to be said.
+pub fn referrer(a: std.mem.Allocator, from: []const u8, to: []const u8) std.mem.Allocator.Error!?[]const u8 {
+    const http_page = std.ascii.startsWithIgnoreCase(from, "http://") or std.ascii.startsWithIgnoreCase(from, "https://");
+    if (!http_page) return null;
+    const to_web = std.ascii.startsWithIgnoreCase(to, "http://") or std.ascii.startsWithIgnoreCase(to, "https://");
+    if (!to_web) return null;
+    if (std.ascii.startsWithIgnoreCase(from, "https://") and !std.ascii.startsWithIgnoreCase(to, "https://")) return null;
+    if (sameOrigin(from, to)) return from[0 .. std.mem.indexOfScalar(u8, from, '#') orelse from.len];
+    return try std.fmt.allocPrint(a, "{s}/", .{originOf(from)});
+}
+
+/// The address a page's requests speak for: for one with no address of its own
+/// (`about:srcdoc`), that of the page that made it.
+pub fn addressOf(p: *const Page) []const u8 {
+    var at = p;
+    while (std.mem.startsWith(u8, at.url(), "about:")) at = (at.frame orelse break).owner;
+    return at.url();
+}
+
 const Req = struct { page: *Page, callback: Value, url: []u8 };
 
 /// `scheme://host:port` of a URL; "" for one with no origin (`data:`, `file:`).
@@ -147,6 +168,7 @@ fn request(vm: *Vm, _: Value, args: []const Value) Error!Value {
     if (!hasHeader(headers.items, "User-Agent")) try headers.append(a, .{ .name = "User-Agent", .value = page_mod.user_agent });
     if (!hasHeader(headers.items, "Accept")) try headers.append(a, .{ .name = "Accept", .value = "*/*" });
     if (!hasHeader(headers.items, "Accept-Language")) try headers.append(a, .{ .name = "Accept-Language", .value = "en-US,en;q=0.9" });
+    if (try referrer(a, addressOf(p), url)) |r| try headers.append(a, .{ .name = "Referer", .value = r });
     if (cross and !std.ascii.startsWithIgnoreCase(url, "data:")) {
         const here = originOf(p.url());
         try headers.append(a, .{ .name = "Origin", .value = if (here.len > 0) here else "null" });
@@ -337,3 +359,15 @@ pub const globals = [_]bind.Method{
     .{ .name = "btoa", .arity = 1, .f = btoa },
     .{ .name = "atob", .arity = 1, .f = atob },
 };
+
+test "a request's Referer, by browsers' default policy" {
+    const a = std.testing.allocator;
+    const same = (try referrer(a, "https://a.test/x/y?q=1#top", "https://a.test/s.css")).?;
+    try std.testing.expectEqualStrings("https://a.test/x/y?q=1", same);
+    const other = (try referrer(a, "https://a.test/x/y?q=1", "https://cdn.test/f.woff2")).?;
+    defer a.free(other);
+    try std.testing.expectEqualStrings("https://a.test/", other);
+    try std.testing.expect(try referrer(a, "https://a.test/", "http://b.test/") == null);
+    try std.testing.expect(try referrer(a, "file:///x.html", "https://b.test/") == null);
+    try std.testing.expect(try referrer(a, "https://a.test/", "data:,x") == null);
+}

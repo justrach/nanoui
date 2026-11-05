@@ -24,12 +24,14 @@ const eager = [_]Chunk{
     .{ .name = "prelude:elements", .source = @embedFile("prelude_elements.js") },
     .{ .name = "prelude:wire", .source = @embedFile("prelude_wire.js") },
     .{ .name = "prelude:window", .source = @embedFile("prelude_window.js") },
+    .{ .name = "prelude:frames", .source = @embedFile("prelude_frames.js") },
 };
 
 const lazy = [_]Chunk{
     .{ .name = "prelude:url", .source = @embedFile("prelude_url.js"), .globals = &.{ "URL", "URLSearchParams", "webkitURL" } },
     .{ .name = "prelude:net", .source = @embedFile("prelude_net.js"), .globals = &.{ "fetch", "Headers", "Request", "Response", "XMLHttpRequest", "FormData", "Blob", "File", "FileReader", "ProgressEvent", "AbortController", "AbortSignal", "TextEncoder", "TextDecoder", "structuredClone", "ReadableStream", "XMLHttpRequestEventTarget", "XMLHttpRequestUpload" } },
     .{ .name = "prelude:observers", .source = @embedFile("prelude_observers.js"), .globals = &.{ "MutationObserver", "MutationRecord", "ResizeObserver", "ResizeObserverEntry", "IntersectionObserver", "IntersectionObserverEntry", "MessageChannel", "MessagePort", "BroadcastChannel", "DOMParser", "XMLSerializer", "Range", "Selection", "NodeFilter", "TreeWalker", "NodeIterator", "getSelection" } },
+    .{ .name = "prelude:matrix", .source = @embedFile("prelude_matrix.js"), .globals = &.{ "DOMMatrix", "DOMMatrixReadOnly", "WebKitCSSMatrix" } },
     .{ .name = "prelude:worker", .source = @embedFile("prelude_worker.js"), .globals = &.{"Worker"} },
 };
 

@@ -325,3 +325,23 @@ test "pictures: load and error events, new Image, complete and natural size" {
     try r.expectJs("log.includes('winload')", "true");
     try r.expectNoErrors();
 }
+
+test "DOMMatrix: what animation libraries read a computed transform with" {
+    var r: Run = undefined;
+    try r.start();
+    defer r.stop();
+    try r.html("<!doctype html><div id=a style='transform:translate(10px,20px) scale(2)'></div>");
+    try util.table(&r, &.{
+        .{ .js = "var m = new DOMMatrix(); m.isIdentity + ',' + m.is2D + ',' + m.a + ',' + m.m44", .want = "true,true,1,1" },
+        .{ .js = "new DOMMatrix('none').isIdentity", .want = "true" },
+        .{ .js = "var c = new DOMMatrix(getComputedStyle(a).getPropertyValue('transform')); [c.a, c.d, c.e, c.f].join()", .want = "2,2,10,20" },
+        .{ .js = "new DOMMatrix('translate(5px, 6px) rotate(90deg)').transformPoint({x: 1, y: 0}).y", .want = "7" },
+        .{ .js = "new DOMMatrix([1,0,0,1,3,4]).toString()", .want = "matrix(1, 0, 0, 1, 3, 4)" },
+        .{ .js = "new DOMMatrix('translateZ(3px)').is2D + ',' + new DOMMatrix('translateZ(3px)').m43", .want = "false,3" },
+        .{ .js = "var t = new DOMMatrix().translate(2, 3).scale(2); [t.e, t.f, t.a].join()", .want = "2,3,2" },
+        .{ .js = "var i = new DOMMatrix('translate(5px,6px) scale(2)').inverse(); i.multiply(new DOMMatrix('translate(5px,6px) scale(2)')).isIdentity", .want = "true" },
+        .{ .js = "var s = new DOMMatrix(); s.scaleSelf(3); s.e = 4; s.toString()", .want = "matrix(3, 0, 0, 3, 4, 0)" },
+        .{ .js = "try { new DOMMatrix('nonsense(1)'); 'parsed' } catch (e) { e.name }", .want = "SyntaxError" },
+        .{ .js = "WebKitCSSMatrix === DOMMatrix && new DOMMatrix() instanceof DOMMatrixReadOnly", .want = "true" },
+    });
+}

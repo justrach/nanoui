@@ -40,7 +40,6 @@ pub const Hooks = struct {
     unhandled: Value = Value.undefined,
     makeRemote: Value = Value.undefined,
     remoteOp: Value = Value.undefined,
-    crossWindow: Value = Value.undefined,
     deliverMessage: Value = Value.undefined,
     workerMessage: Value = Value.undefined,
     portMessage: Value = Value.undefined,

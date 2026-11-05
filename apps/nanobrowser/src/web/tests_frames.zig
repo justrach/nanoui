@@ -173,3 +173,31 @@ test "navigator says what the user agent claims" {
         .{ .js = "typeof window.chrome", .want = "object" },
     });
 }
+
+test "a window held across a navigation is the same window, and one whose frame went answers with nothing" {
+    var r: Run = undefined;
+    try r.start();
+    defer r.stop();
+    try r.html(
+        \\<!doctype html><body><iframe id=f></iframe><script>
+        \\var held = f.contentWindow, got = [];
+        \\addEventListener("message", e => got.push(e.data + ":" + (e.source === held) + ":" + (e.source === f.contentWindow)));
+        \\</script>
+    );
+    try r.expectJs("typeof held.document", "object");
+    // To another origin: the same object, which now only takes messages.
+    _ = try r.eval("f.src = \"data:text/html,<script>parent.postMessage('hi', '*'); addEventListener('message', e => e.source.postMessage('back ' + e.data, '*'))</script>\"; 0");
+    try r.waitJs("got.length === 1");
+    try r.expectJs("got[0]", "hi:true:true");
+    try r.expectJs("held === f.contentWindow", "true");
+    try r.expectJs("try { held.document; 'read' } catch (e) { e.name }", "SecurityError");
+    _ = try r.eval("held.postMessage('x', '*'); 0");
+    try r.waitJs("got.length === 2");
+    try r.expectJs("got[1]", "back x:true:true");
+    // Gone: no errors, as in other browsers.
+    _ = try r.eval("f.remove(); 0");
+    r.spin(0.02);
+    try r.expectJs("held.closed", "true");
+    try r.expectJs("typeof held.document + held.postMessage('x', '*') + Object.keys(held).length", "undefinedundefined0");
+    try r.expectNoErrors();
+}

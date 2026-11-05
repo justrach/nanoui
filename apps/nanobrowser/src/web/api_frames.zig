@@ -3,7 +3,9 @@
 //! crosses to the VM that owns the object and carries its answer back: strings are
 //! copied, numbers and the like are themselves, objects become proxies in turn (and
 //! a proxy going home becomes what it stood for). A window of another origin is a
-//! small object in `prelude_window.js` that can post messages and be navigated.
+//! small object in `prelude_frames.js` that can post messages and be navigated.
+//! A frame's window keeps its number while pages come and go in the frame, as scripts
+//! hold on to `contentWindow` across a navigation; an object in a page goes with it.
 const std = @import("std");
 const js = @import("../js/js.zig");
 const dom = @import("../dom.zig");
@@ -20,6 +22,8 @@ const World = bind.World;
 var pages: std.AutoHashMapUnmanaged(u32, *Page) = .empty;
 var pages_gpa: ?std.mem.Allocator = null;
 var next_id: u32 = 1;
+/// The frames whose window scripts have named, by a number from the same run.
+var windows: std.AutoHashMapUnmanaged(u32, *frames.Frame) = .empty;
 
 fn idOf(p: *Page) u32 {
     if (p.id == 0) {
@@ -35,21 +39,48 @@ fn idOf(p: *Page) u32 {
 pub fn forget(p: *Page) void {
     if (p.id == 0) return;
     _ = pages.remove(p.id);
-    if (pages.count() == 0) if (pages_gpa) |a| {
-        pages.deinit(a);
-        pages = .empty;
-    };
+    tidy();
+}
+
+/// A frame is going, and its window with it.
+pub fn forgetFrame(f: *frames.Frame) void {
+    if (f.window_id == 0) return;
+    _ = windows.remove(f.window_id);
+    tidy();
+}
+
+fn tidy() void {
+    if (pages.count() != 0 or windows.count() != 0) return;
+    const a = pages_gpa orelse return;
+    pages.deinit(a);
+    pages = .empty;
+    windows.deinit(a);
+    windows = .empty;
+}
+
+/// The number of the window a page is in: its frame's, or for a tab's page its own.
+fn windowIdOf(p: *Page) u32 {
+    const f = p.frame orelse return idOf(p);
+    if (f.window_id == 0) {
+        f.window_id = next_id;
+        next_id +%= 1;
+        pages_gpa = p.gpa;
+        windows.put(p.gpa, f.window_id, f) catch {};
+    }
+    return f.window_id;
 }
 
 /// An object one world holds that another's proxy stands for.
 pub const Remote = struct { peer: u32, id: u32 };
+/// A remote's `id` when it stands for the window itself.
+const window_export = 0;
 
 fn exported(from: *World, obj: *js.Object) Error!u32 {
     const got = try from.export_ids.getOrPut(from.gpa, obj);
     if (got.found_existing) return got.value_ptr.*;
+    try from.exports.append(from.gpa, obj.value());
     const id: u32 = @intCast(from.exports.items.len);
     got.value_ptr.* = id;
-    try from.exports.append(from.gpa, obj.value());
     return id;
 }
 
@@ -60,37 +91,57 @@ pub fn carry(from: *World, to: *World, v: Value) Error!Value {
     if (!v.isObject()) return v;
     const obj = v.asObject();
     // A proxy going home.
-    if (from.imports.get(obj)) |r| if (r.peer == idOf(to.page)) return to.exports.items[r.id];
-    const id = try exported(from, obj);
-    const peer = idOf(from.page);
-    const proxy = try to.vm.call(to.h.makeRemote, Value.undefined, &.{ Value.fromUsize(peer), Value.fromUsize(id), Value.fromBool(v.isCallable()) });
+    if (from.imports.get(obj)) |r| {
+        if (r.id == window_export and r.peer == windowIdOf(to.page)) return to.vm.global().value();
+        if (r.id != window_export and r.peer == idOf(to.page)) return to.exports.items[r.id - 1];
+    }
+    if (obj == from.vm.global()) return windowProxy(to, from.page);
+    return makeProxy(to, idOf(from.page), try exported(from, obj), v.isCallable());
+}
+
+fn makeProxy(to: *World, peer: u32, id: u32, callable: bool) Error!Value {
+    const proxy = try to.vm.call(to.h.makeRemote, Value.undefined, &.{ Value.fromUsize(peer), Value.fromUsize(id), Value.fromBool(callable) });
     if (proxy.isObject()) try to.imports.put(to.gpa, proxy.asObject(), .{ .peer = peer, .id = id });
     return proxy;
+}
+
+fn windowProxy(to: *World, target: *Page) Error!Value {
+    return makeProxy(to, windowIdOf(target), window_export, false);
 }
 
 /// `target`'s window, as the world of `w` may see it.
 fn windowValue(w: *World, target: *Page) Error!Value {
     if (target == w.page) return w.vm.global().value();
-    if (frames.sameOrigin(w.page, target)) if (web.ensureWorld(target)) |twin| {
-        return carry(twin, w, twin.vm.global().value());
-    };
-    return w.vm.call(w.h.crossWindow, Value.undefined, &.{Value.fromUsize(idOf(target))});
+    return windowProxy(w, target);
 }
 
 fn pageArg(args: []const Value, i: usize) ?*Page {
     const v = bind.arg(args, i);
     if (!v.isInt()) return null;
-    return pages.get(@intCast(@max(0, v.asInt())));
+    const id: u32 = @intCast(@max(0, v.asInt()));
+    if (pages.get(id)) |p| return p;
+    if (windows.get(id)) |f| return f.page;
+    return null;
+}
+
+/// `$.peerState(id)`: 0 nothing there, 1 this origin's, 2 another's.
+fn peerState(vm: *Vm, _: Value, args: []const Value) Error!Value {
+    const p = pageArg(args, 0) orelse return Value.fromInt(0);
+    if (p.dead) return Value.fromInt(0);
+    return Value.fromInt(if (frames.sameOrigin(bind.world(vm).page, p)) 1 else 2);
 }
 
 /// `$.remote(op, peer, id, a, b)`: the proxies' every operation.
 fn remote(vm: *Vm, _: Value, args: []const Value) Error!Value {
     const me = bind.world(vm);
-    const owner = pageArg(args, 1) orelse return vm.throwError(.TypeError, "That frame has gone.");
-    if (owner.dead or !frames.sameOrigin(me.page, owner)) return bind.throwDom(vm, "SecurityError", "Blocked a frame from accessing another origin's.");
-    const o = owner.js orelse return vm.throwError(.TypeError, "That frame has gone.");
+    // A frame that has gone answers as a browser's does: with nothing, not an error.
+    const owner = pageArg(args, 1) orelse return Value.undefined;
+    if (owner.dead) return Value.undefined;
+    if (!frames.sameOrigin(me.page, owner)) return bind.throwDom(vm, "SecurityError", "Blocked a frame from accessing another origin's.");
+    const o = web.ensureWorld(owner) orelse return Value.undefined;
     const id: usize = @intCast(@max(0, bind.arg(args, 2).asInt()));
-    if (id >= o.exports.items.len) return Value.undefined;
+    if (id > o.exports.items.len) return Value.undefined;
+    const object = if (id == window_export) o.vm.global().value() else o.exports.items[id - 1];
     const a = try carry(me, o, bind.arg(args, 3));
     const b = try carry(me, o, bind.arg(args, 4));
     const was = o.caller;
@@ -98,7 +149,7 @@ fn remote(vm: *Vm, _: Value, args: []const Value) Error!Value {
     defer o.caller = was;
     o.enter();
     defer o.leave();
-    const out = o.vm.call(o.h.remoteOp, Value.undefined, &.{ bind.arg(args, 0), o.exports.items[id], a, b }) catch |e| switch (e) {
+    const out = o.vm.call(o.h.remoteOp, Value.undefined, &.{ bind.arg(args, 0), object, a, b }) catch |e| switch (e) {
         error.Thrown => {
             const text = o.vm.exceptionString();
             const copy = try vm.newString(text);
@@ -225,7 +276,7 @@ fn postTo(vm: *Vm, _: Value, args: []const Value) Error!Value {
     if (!tw.h.deliverMessage.isCallable()) return Value.undefined;
     const data = try tw.vm.newString(try bind.str(vm, args, 1));
     const origin = try tw.vm.newString(frames.originOf(a, w.page));
-    _ = try tw.timers.add(tw, tw.h.deliverMessage, 0, &.{ data, origin, Value.fromUsize(idOf(w.page)) }, false);
+    _ = try tw.timers.add(tw, tw.h.deliverMessage, 0, &.{ data, origin, Value.fromUsize(windowIdOf(w.page)) }, false);
     return Value.undefined;
 }
 
@@ -276,6 +327,7 @@ fn popoverOpen(vm: *Vm, _: Value, args: []const Value) Error!Value {
 
 pub const internals = [_]bind.Method{
     .{ .name = "remote", .arity = 5, .f = remote },
+    .{ .name = "peerState", .arity = 1, .f = peerState },
     .{ .name = "frameWindow", .arity = 1, .f = frameWindow },
     .{ .name = "frameShared", .arity = 1, .f = frameShared },
     .{ .name = "isFramed", .arity = 0, .f = isFramed },

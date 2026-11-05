@@ -125,14 +125,13 @@ pub fn faceFamily(d: *const sheet.Declarations) ?[]const u8 {
 }
 
 
-/// A family name: a string or one ident. An `@font-face` rule's rarely has words.
+/// A family name: a string or one ident; the parser made a string of several words.
 fn oneName(t: []const tk.Token) ?[]const u8 {
     var i: usize = 0;
     while (i < t.len and t[i].kind == .whitespace) i += 1;
     if (i >= t.len) return null;
     if (t[i].kind == .string) return t[i].text;
     if (t[i].kind != .ident) return null;
-    // Several idents: their text joined would need somewhere to live.
     for (t[i + 1 ..]) |k| if (k.kind != .whitespace) return null;
     return t[i].text;
 }

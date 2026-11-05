@@ -145,13 +145,20 @@ fn send(p: *Page, url_in: []const u8, method: []const u8, body: []const u8, kind
     const r = p.gpa.create(Req) catch return;
     r.* = .{ .page = p, .gpa = p.gpa, .kind = kind };
     p.pending += 1;
-    var with_cookie: [headers.len + 1]http.Header = undefined;
-    @memcpy(with_cookie[0..headers.len], &headers);
-    var list: []const http.Header = &headers;
+    var with_more: [headers.len + 2]http.Header = undefined;
+    @memcpy(with_more[0..headers.len], &headers);
+    var used: usize = headers.len;
     if (net.cookieLine(p.arena(), url)) |line| {
-        with_cookie[headers.len] = .{ .name = "Cookie", .value = line };
-        list = &with_cookie;
+        with_more[used] = .{ .name = "Cookie", .value = line };
+        used += 1;
     }
+    // A tab's own document was asked for by no page; a frame's by the one holding it.
+    const asker: ?*const Page = if (!is_document) p else if (p.frame) |f| f.owner else null;
+    if (asker) |at| if (net.referrer(p.arena(), net.addressOf(at), url) catch null) |ref| {
+        with_more[used] = .{ .name = "Referer", .value = ref };
+        used += 1;
+    };
+    const list: []const http.Header = with_more[0..used];
     http.fetch(p.gpa, .{ .url = url, .method = method, .body = body, .headers = list, .timeout = 30 }, r, answered);
 }
 

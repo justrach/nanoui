@@ -44,6 +44,8 @@ pub const Frame = struct {
     loading: bool = false,
     /// A hop in `<a target>` or `location` asked for this instead of `wanted`.
     navigated: bool = false,
+    /// The number scripts know this frame's window by, once they have one (`api_frames.zig`).
+    window_id: u32 = 0,
     sandbox: Sandbox = .{},
 };
 
@@ -171,6 +173,7 @@ fn detach(f: *Frame) void {
 /// Takes the frame's page down and forgets it.
 fn drop(p: *Page, f: *Frame) void {
     detach(f);
+    @import("web/api_frames.zig").forgetFrame(f);
     for (p.frames.list.items, 0..) |x, i| if (x == f) {
         _ = p.frames.list.orderedRemove(i);
         break;

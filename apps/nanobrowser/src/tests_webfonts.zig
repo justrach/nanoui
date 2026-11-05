@@ -306,3 +306,16 @@ test "a page's fonts go when it does" {
     r.t.frame();
     try testing.expect(!r.t.text.hasFamily(family));
 }
+
+test "a family name of bare words is one name, and is asked for" {
+    const a = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const parser = @import("css/parser.zig");
+    const family = @import("css/font_family.zig");
+    const s = try parser.parseSheet(arena.allocator(), "@font-face{font-family:Optimistic   Display;src:url(a.woff2)}@font-face{font-family:Solo;src:url(b.woff2)}@font-face{font-family:\"Quoted Name\";src:url(c.woff2)}@font-face{font-family:a 1;src:url(d.woff2)}", "https://x.test/");
+    try std.testing.expectEqualStrings("Optimistic Display", family.faceFamily(s.font_faces[0].decls).?);
+    try std.testing.expectEqualStrings("Solo", family.faceFamily(s.font_faces[1].decls).?);
+    try std.testing.expectEqualStrings("Quoted Name", family.faceFamily(s.font_faces[2].decls).?);
+    try std.testing.expect(family.faceFamily(s.font_faces[3].decls) == null);
+}
