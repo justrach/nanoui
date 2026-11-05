@@ -10,11 +10,25 @@ pub const MessageKind = dialog_types.MessageKind;
 pub const MessageOptions = dialog_types.MessageOptions;
 pub const MessageResult = dialog_types.MessageResult;
 pub const freePaths = dialog_types.freePaths;
+pub const Filter = dialog_types.Filter;
+
+/// The panel's file type list (`lpstrFilter`): the named groups, or the
+/// plain extensions as one; null for every file.
+fn filterList(buf: []u16, filters: []const Filter, extensions: []const []const u8) ?[*:0]const u16 {
+    var one: [1]Filter = undefined;
+    const list = dialog_types.groups(filters, extensions, &one);
+    if (list.len == 0) return null;
+    const got = dialog_types.windowsFilter(buf, list) orelse return null;
+    return @ptrCast(got.ptr);
+}
 
 pub fn open(gpa: std.mem.Allocator, opts: OpenOptions) !?[][]u8 {
     var file: [4096]u16 = @splat(0);
     var title: [256]u16 = undefined;
+    var types: [2048]u16 = undefined;
     var ofn: w.OPENFILENAMEW = .{ .lpstrFile = &file, .nMaxFile = file.len, .lpstrTitle = if (opts.title.len > 0) w.wide(&title, opts.title) else null, .Flags = w.OFN_EXPLORER | w.OFN_FILEMUSTEXIST | w.OFN_NOCHANGEDIR };
+    ofn.lpstrFilter = filterList(&types, opts.filters, opts.extensions);
+    if (ofn.lpstrFilter != null) ofn.nFilterIndex = 1;
     if (w.GetOpenFileNameW(&ofn) == 0) return null;
     const out = try gpa.alloc([]u8, 1);
     errdefer gpa.free(out);
@@ -26,7 +40,10 @@ pub fn save(gpa: std.mem.Allocator, opts: SaveOptions) !?[]u8 {
     var file: [4096]u16 = @splat(0);
     _ = w.wide(&file, opts.name);
     var title: [256]u16 = undefined;
+    var types: [2048]u16 = undefined;
     var ofn: w.OPENFILENAMEW = .{ .lpstrFile = &file, .nMaxFile = file.len, .lpstrTitle = if (opts.title.len > 0) w.wide(&title, opts.title) else null, .Flags = w.OFN_EXPLORER | w.OFN_OVERWRITEPROMPT | w.OFN_NOCHANGEDIR };
+    ofn.lpstrFilter = filterList(&types, opts.filters, opts.extensions);
+    if (ofn.lpstrFilter != null) ofn.nFilterIndex = 1;
     if (w.GetSaveFileNameW(&ofn) == 0) return null;
     return try std.unicode.utf16LeToUtf8Alloc(gpa, std.mem.sliceTo(&file, 0));
 }
@@ -53,4 +70,13 @@ pub fn message(opts: MessageOptions) MessageResult {
         else => 0,
     };
     return .{ .button = button };
+}
+
+test "the file type list: named groups, else the extensions" {
+    var buf: [256]u16 = undefined;
+    const groups = [_]Filter{ .{ .name = "Audio", .extensions = &.{"wav"} }, .{ .name = "Images", .extensions = &.{ "png", "jpg" } } };
+    const got = filterList(&buf, &groups, &.{}).?;
+    try std.testing.expectEqualSlices(u16, std.unicode.utf8ToUtf16LeStringLiteral("Audio"), std.mem.span(got));
+    try std.testing.expect(filterList(&buf, &.{}, &.{}) == null);
+    try std.testing.expect(filterList(&buf, &.{}, &.{"mov"}) != null);
 }

@@ -10,6 +10,8 @@ pub const MessageKind = dialog_types.MessageKind;
 pub const MessageOptions = dialog_types.MessageOptions;
 pub const MessageResult = dialog_types.MessageResult;
 pub const freePaths = dialog_types.freePaths;
+pub const Filter = dialog_types.Filter;
+const filters = @import("dialog_filters.zig");
 
 /// The paths the user chose, or null if they canceled. Free with
 /// `freePaths`.
@@ -20,7 +22,11 @@ pub fn open(gpa: std.mem.Allocator, opts: OpenOptions) !?[][]u8 {
     objc.msg(void, panel, "setCanChooseFiles:", .{opts.files});
     objc.msg(void, panel, "setCanChooseDirectories:", .{opts.directories});
     objc.msg(void, panel, "setAllowsMultipleSelection:", .{opts.multiple});
-    configure(panel, opts.title, opts.button, opts.message, opts.directory, opts.extensions, opts.show_hidden);
+    configure(panel, opts.title, opts.button, opts.message, opts.directory, opts.show_hidden);
+    var one: [1]Filter = undefined;
+    var acc: filters.Accessory = .{ .panel = panel, .groups = dialog_types.groups(opts.filters, opts.extensions, &one) };
+    acc.attach();
+    defer acc.deinit();
     if (objc.msg(objc.NSInteger, panel, "runModal", .{}) != 1) return null;
     const urls = objc.msg(objc.Object, panel, "URLs", .{});
     const n = objc.msg(objc.NSUInteger, urls, "count", .{});
@@ -42,13 +48,17 @@ pub fn save(gpa: std.mem.Allocator, opts: SaveOptions) !?[]u8 {
     const panel = objc.msg(objc.Object, objc.class("NSSavePanel"), "savePanel", .{});
     objc.msg(void, panel, "setCanCreateDirectories:", .{opts.create_directories});
     if (opts.name.len > 0) objc.msg(void, panel, "setNameFieldStringValue:", .{objc.nsString(opts.name)});
-    configure(panel, opts.title, opts.button, opts.message, opts.directory, opts.extensions, opts.show_hidden);
+    configure(panel, opts.title, opts.button, opts.message, opts.directory, opts.show_hidden);
+    var one: [1]Filter = undefined;
+    var acc: filters.Accessory = .{ .panel = panel, .groups = dialog_types.groups(opts.filters, opts.extensions, &one) };
+    acc.attach();
+    defer acc.deinit();
     if (objc.msg(objc.NSInteger, panel, "runModal", .{}) != 1) return null;
     const url = objc.msg(?objc.Object, panel, "URL", .{}) orelse return null;
     return try gpa.dupe(u8, objc.fromNSString(objc.msg(?objc.Object, url, "path", .{})));
 }
 
-fn configure(panel: objc.Object, title: []const u8, button: []const u8, text: []const u8, directory: []const u8, extensions: []const []const u8, show_hidden: bool) void {
+fn configure(panel: objc.Object, title: []const u8, button: []const u8, text: []const u8, directory: []const u8, show_hidden: bool) void {
     if (title.len > 0) objc.msg(void, panel, "setTitle:", .{objc.nsString(title)});
     if (button.len > 0) objc.msg(void, panel, "setPrompt:", .{objc.nsString(button)});
     if (text.len > 0) objc.msg(void, panel, "setMessage:", .{objc.nsString(text)});
@@ -56,14 +66,6 @@ fn configure(panel: objc.Object, title: []const u8, button: []const u8, text: []
     if (directory.len > 0) {
         const url = objc.msg(objc.Object, objc.class("NSURL"), "fileURLWithPath:isDirectory:", .{ objc.nsString(directory), objc.YES });
         objc.msg(void, panel, "setDirectoryURL:", .{url});
-    }
-    if (extensions.len > 0) {
-        const types = objc.msg(objc.Object, objc.class("NSMutableArray"), "array", .{});
-        for (extensions) |ext| {
-            const ut = objc.msg(?objc.Object, objc.class("UTType"), "typeWithFilenameExtension:", .{objc.nsString(ext)}) orelse continue;
-            objc.msg(void, types, "addObject:", .{ut});
-        }
-        objc.msg(void, panel, "setAllowedContentTypes:", .{types});
     }
 }
 
@@ -95,4 +97,8 @@ pub fn message(opts: MessageOptions) MessageResult {
     }
     // NSAlertFirstButtonReturn is 1000.
     return .{ .button = @intCast(@max(0, response - 1000)), .checked = checked };
+}
+
+test {
+    _ = filters;
 }
