@@ -164,6 +164,22 @@ test "a font arriving in WOFF and in WOFF2 draws" {
     try testing.expectEqual(@as(usize, 7), drawn);
 }
 
+test "an OpenType font with CFF outlines draws" {
+    var s: Blank = .{};
+    var t = try tester(&s);
+    defer t.deinit();
+    defer ui.unregisterFontFamilies("family-otf");
+    const gpa = testing.allocator;
+    const bytes = try testfont.build(gpa, .{ .family = "OtfTest", .advance = 700, .cff = true });
+    defer gpa.free(bytes);
+    try ui.registerFontFace(gpa, .{ .family = "family-otf", .bytes = bytes });
+    t.text.syncFonts();
+    const style: ui.TextStyle = .{ .size = 20, .family = "family-otf" };
+    const lay = t.text.layout("ab", style);
+    try testing.expectApproxEqAbs(@as(f32, 28), lay.width, 0.01);
+    try testing.expect(t.text.glyph(lay.glyphs[0], 0, 0) != null);
+}
+
 test "zoom scales a family's text, and rich text carries families" {
     var s: Blank = .{};
     var t = try tester(&s);

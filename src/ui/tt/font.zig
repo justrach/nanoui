@@ -1,9 +1,10 @@
 //! TrueType fonts read directly: the tables a text system needs from a
 //! `.ttf` file or one face of a `.ttc` collection — metrics, the character
 //! map, advances, kerning, the family's name and style, and glyph outlines
-//! (simple and composite) — so text needs no system library on Linux or
-//! Windows. Fonts with CFF outlines (most `.otf`) are not read.
+//! (simple and composite, or CFF's in `cff.zig`) — so text needs no system
+//! library on Linux or Windows.
 const std = @import("std");
+const cff = @import("cff.zig");
 
 pub const Error = error{ NotAFont, Unsupported, Truncated };
 
@@ -55,12 +56,13 @@ pub const Tables = struct {
     name: u32 = 0,
     os2: u32 = 0,
     name_len: u32 = 0,
+    cff: u32 = 0,
+    cff_len: u32 = 0,
 
     pub fn read(data: []const u8, index: usize) Error!Tables {
         const at = try faceOffset(data, index);
         const version = be32(data, at);
-        if (version == tag("OTTO")) return error.Unsupported;
-        if (version != 0x00010000 and version != tag("true")) return error.NotAFont;
+        if (version != 0x00010000 and version != tag("true") and version != tag("OTTO")) return error.NotAFont;
         const n = be16(data, at + 4);
         var t: Tables = .{};
         for (0..n) |i| {
@@ -77,6 +79,10 @@ pub const Tables = struct {
                 tag("glyf") => t.glyf = off,
                 tag("kern") => t.kern = off,
                 tag("OS/2") => t.os2 = off,
+                tag("CFF ") => {
+                    t.cff = off;
+                    t.cff_len = be32(data, rec + 12);
+                },
                 tag("name") => {
                     t.name = off;
                     t.name_len = be32(data, rec + 12);
@@ -85,7 +91,7 @@ pub const Tables = struct {
             }
         }
         if (t.head == 0 or t.hhea == 0 or t.hmtx == 0 or t.maxp == 0 or t.cmap == 0) return error.NotAFont;
-        if (t.glyf == 0 or t.loca == 0) return error.Unsupported;
+        if ((t.glyf == 0 or t.loca == 0) and t.cff == 0) return error.Unsupported;
         return t;
     }
 };
@@ -185,6 +191,8 @@ pub const Font = struct {
     cmap: u32 = 0,
     cmap_format: u16 = 0,
     style: Style,
+    /// The outlines, when they are CFF's.
+    cff: ?cff.Cff = null,
 
     pub fn init(data: []const u8, index: usize) Error!Font {
         const t = try Tables.read(data, index);
@@ -202,6 +210,10 @@ pub const Font = struct {
         };
         f.pickCmap();
         if (f.cmap == 0) return error.Unsupported;
+        if (t.glyf == 0) {
+            if (t.cff >= data.len or t.cff_len > data.len - t.cff) return error.Truncated;
+            f.cff = cff.Cff.init(data[t.cff..][0..t.cff_len]) orelse return error.Unsupported;
+        }
         return f;
     }
 
@@ -321,6 +333,7 @@ pub const Font = struct {
 
     /// A glyph's bounds in font units: x0, y0, x1, y1 (null when blank).
     pub fn bounds(f: *const Font, g: u16) ?[4]f32 {
+        if (f.cff) |*c| return c.bounds(g);
         const r = f.glyphRange(g) orelse return null;
         const d = f.data;
         return .{ @floatFromInt(bei16(d, r[0] + 2)), @floatFromInt(bei16(d, r[0] + 4)), @floatFromInt(bei16(d, r[0] + 6)), @floatFromInt(bei16(d, r[0] + 8)) };
@@ -329,6 +342,7 @@ pub const Font = struct {
     /// Sends a glyph's outline to `sink`, transformed by `m` (a, b, c, d,
     /// e, f: x' = a x + c y + e, y' = b x + d y + f).
     pub fn outline(f: *const Font, g: u16, m: [6]f32, sink: Sink) void {
+        if (f.cff) |*c| return c.outline(g, m, sink);
         // Components nest and repeat; a font from the web may have them do so
         // without end.
         var budget: u32 = 512;

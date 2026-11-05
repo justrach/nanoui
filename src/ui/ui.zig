@@ -105,6 +105,10 @@ pub const registerFontFace = @import("font_registry.zig").registerFace;
 pub const FontFaceOptions = @import("font_registry.zig").FaceOptions;
 /// Takes away the families `registerFontFace` added whose names start so.
 pub const unregisterFontFamilies = @import("font_registry.zig").unregisterFamilies;
+/// How far a face's description is from a style, as CSS's font matching ranks them.
+pub const fontFaceScore = @import("font_registry.zig").score;
+/// Text shaped by nanoui's own TrueType reader, not the system's.
+pub const portable = @import("text.zig").portable;
 /// A tiny font made on the spot, for tests that need one that isn't installed.
 pub const test_font = @import("tt/testfont.zig");
 pub const SvgOptions = widgets.SvgOptions;

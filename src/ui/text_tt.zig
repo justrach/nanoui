@@ -139,12 +139,28 @@ pub const TextSystem = struct {
         self.db.dropBrought();
     }
 
+    /// Whether every font brought so far is in what this measures with.
+    pub fn fontsCurrent(self: *const TextSystem) bool {
+        return self.fonts_seen == registry.generation;
+    }
+
     /// Whether a name of a family list would find a font: brought, or installed.
     pub fn hasFamily(self: *TextSystem, name: []const u8) bool {
         if (registry.hasFamily(name)) return true;
         const eq = std.ascii.eqlIgnoreCase;
         if (eq(name, "system-ui") or eq(name, "ui-monospace") or eq(name, "ui-rounded")) return true;
         return self.db.family(name, 400, false) != null;
+    }
+
+    /// Whether an installed font goes by this name: families are all this has.
+    pub fn hasLocalFont(self: *TextSystem, name: []const u8) bool {
+        return self.db.family(name, 400, false) != null;
+    }
+
+    /// Whether a family has a font and that font this character.
+    pub fn familyHasChar(self: *TextSystem, name: []const u8, cp: u21) bool {
+        const st = self.stackOf(.{ .size = 16, .family = name }) orelse return false;
+        return st.pick(self.run_fonts.items, cp) != null;
     }
 
     /// The family name of the font a line in `style` takes its metrics from, in `buf`.

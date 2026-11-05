@@ -18,6 +18,8 @@ pub const Options = struct {
     ascent: i16 = 800,
     descent: i16 = 200,
     gap: i16 = 0,
+    /// Outlines in a `CFF ` table, as an OpenType font's, not TrueType's.
+    cff: bool = false,
     /// A `liga` turning this text into one glyph with this advance.
     ligature: ?[]const u8 = null,
     ligature_advance: u16 = 1000,
@@ -162,6 +164,50 @@ fn gsubTable(w: *Buf, o: Options, text: []const u8, lig_glyph: u16) !void {
     for (text[1..]) |c| try w.u16be(glyphOf(o, c));
 }
 
+/// A CFF table of boxes: the same shape as `boxGlyph`, as a Type 2 charstring.
+fn cffTable(w: *Buf, advance: u16, num_glyphs: u16, family: []const u8) !void {
+    const x1: i16 = @intCast(@max(advance, 100) - 50);
+    var code: Buf = .{ .a = w.a };
+    // `28` then a word, each: 50 0 rmoveto, x 0 rlineto, 0 700 rlineto, -x 0 rlineto, endchar.
+    for ([_]i16{ 50, 0 }) |v| {
+        try code.b.append(w.a, 28);
+        try code.i16be(v);
+    }
+    try code.b.append(w.a, 21);
+    for ([_]i16{ x1 - 50, 0, 0, 700, 50 - x1, 0 }) |v| {
+        try code.b.append(w.a, 28);
+        try code.i16be(v);
+    }
+    try code.b.append(w.a, 5);
+    try code.b.append(w.a, 14);
+    const one = code.b.items;
+
+    const index16 = struct {
+        fn write(o: *Buf, count: u16, each: []const u8) !void {
+            try o.u16be(count);
+            if (count == 0) return;
+            try o.b.append(o.a, 2);
+            for (0..count + 1) |i| try o.u16be(@intCast(1 + i * each.len));
+            for (0..count) |_| try o.str(each);
+        }
+    }.write;
+    var head: Buf = .{ .a = w.a };
+    try head.b.appendSlice(w.a, &.{ 1, 0, 4, 2 });
+    try index16(&head, 1, family);
+    // Top DICT: CharStrings at a fixed-width offset, known once the rest is laid out.
+    const top_len: usize = 6;
+    const at = head.b.items.len + 3 + 2 * 2 + top_len + 2 + 2;
+    var top: Buf = .{ .a = w.a };
+    try top.b.append(w.a, 29);
+    try top.u32be(@intCast(at));
+    try top.b.append(w.a, 17);
+    try index16(&head, 1, top.b.items);
+    try head.u16be(0); // strings
+    try head.u16be(0); // global subroutines
+    try index16(&head, num_glyphs, one);
+    try w.b.appendSlice(w.a, head.b.items);
+}
+
 /// The font's sfnt, the caller's.
 pub fn build(gpa: std.mem.Allocator, o: Options) ![]u8 {
     var arena: std.heap.ArenaAllocator = .init(gpa);
@@ -258,11 +304,19 @@ pub fn build(gpa: std.mem.Allocator, o: Options) ![]u8 {
         }
     }.f;
     try add(&tables, a, "cmap", &cmap);
-    try add(&tables, a, "glyf", &glyf);
+    var cff_data: Buf = .{ .a = a };
+    if (o.cff) {
+        try cffTable(&cff_data, o.advance, num_glyphs, o.family);
+        try add(&tables, a, "CFF ", &cff_data);
+        maxp.b.items.len = 6;
+        std.mem.writeInt(u32, maxp.b.items[0..4], 0x00005000, .big);
+    } else {
+        try add(&tables, a, "glyf", &glyf);
+        try add(&tables, a, "loca", &loca);
+    }
     try add(&tables, a, "head", &head);
     try add(&tables, a, "hhea", &hhea);
     try add(&tables, a, "hmtx", &hmtx);
-    try add(&tables, a, "loca", &loca);
     try add(&tables, a, "maxp", &maxp);
     try add(&tables, a, "name", &name);
     try add(&tables, a, "OS/2", &os2);
@@ -272,5 +326,5 @@ pub fn build(gpa: std.mem.Allocator, o: Options) ![]u8 {
         try gsubTable(&gsub, o, text, num_glyphs - 1);
         try add(&tables, a, "GSUB", &gsub);
     }
-    return sfnt.assemble(gpa, 0x00010000, tables.items);
+    return sfnt.assemble(gpa, if (o.cff) sfnt.tag("OTTO") else 0x00010000, tables.items);
 }

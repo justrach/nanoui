@@ -48,6 +48,9 @@ pub const FaceOptions = struct {
     stretch: [2]u16 = .{ 100, 100 },
     /// The characters it serves, inclusive ranges; empty is all of them.
     ranges: []const [2]u21 = &.{},
+    /// Among faces alike in the rest, higher is looked in first. A file can
+    /// arrive long after a rule written later: this says which rule it was.
+    order: u32 = 0,
 };
 
 pub const Face = struct {
@@ -59,7 +62,8 @@ pub const Face = struct {
     italic: bool,
     stretch: [2]u16,
     ranges: []const [2]u21,
-    /// Made in this order, per the registry: later rules win among equals.
+    order: u32 = 0,
+    /// Made in this order, per the registry: the later wins among equal orders.
     serial: u64,
     gpa: std.mem.Allocator,
     /// The text system's handle for it, where it has one (a font descriptor).
@@ -112,6 +116,7 @@ pub fn registerFace(gpa: std.mem.Allocator, o: FaceOptions) RegisterError!void {
         .italic = o.italic,
         .stretch = .{ @min(o.stretch[0], o.stretch[1]), @max(o.stretch[0], o.stretch[1]) },
         .ranges = ranges,
+        .order = o.order,
         .serial = serial,
         .gpa = gpa,
         .native = native,
@@ -185,6 +190,13 @@ fn stretchDistance(have: [2]u16, want: u16) u32 {
     return if (up > 0) up else 1000 + down;
 }
 
+/// How far a face's description is from a style: the lowest is what CSS's font
+/// matching takes, width first, then style, then weight.
+pub fn score(weight: [2]u16, italic: bool, stretch: [2]u16, want_weight: u16, want_italic: bool, want_stretch: u16) u64 {
+    return (@as(u64, stretchDistance(stretch, want_stretch)) << 32) +
+        (@as(u64, @intFromBool(italic != want_italic)) << 31) + weightDistance(weight, want_weight);
+}
+
 /// The faces of `family` CSS would draw this style in: those with the nearest
 /// width, style and weight, whichever file holds the character, latest first.
 /// Fills `out` and says how many.
@@ -193,10 +205,9 @@ pub fn best(family: []const u8, weight: u16, italic: bool, stretch: u16, out: []
     var top_score: u64 = std.math.maxInt(u64);
     for (faces.items) |f| {
         if (!std.ascii.eqlIgnoreCase(f.family, family)) continue;
-        const score = (@as(u64, stretchDistance(f.stretch, stretch)) << 32) +
-            (@as(u64, @intFromBool(f.italic != italic)) << 31) + weightDistance(f.weight, weight);
-        if (score < top_score) {
-            top_score = score;
+        const s = score(f.weight, f.italic, f.stretch, weight, italic, stretch);
+        if (s < top_score) {
+            top_score = s;
             top = f;
         }
     }
@@ -208,7 +219,10 @@ pub fn best(family: []const u8, weight: u16, italic: bool, stretch: u16, out: []
         const f = faces.items[i];
         if (!std.ascii.eqlIgnoreCase(f.family, family)) continue;
         if (f.italic != t.italic or !std.mem.eql(u16, &f.weight, &t.weight) or !std.mem.eql(u16, &f.stretch, &t.stretch)) continue;
-        out[n] = f;
+        // By rule, the later first; faces of one rule by when they came.
+        var at = n;
+        while (at > 0 and out[at - 1].order < f.order) : (at -= 1) out[at] = out[at - 1];
+        out[at] = f;
         n += 1;
     }
     return n;

@@ -227,6 +227,11 @@ pub const TextSystem = struct {
         return all;
     }
 
+    /// Whether every font brought so far is in what this measures with.
+    pub fn fontsCurrent(self: *const TextSystem) bool {
+        return self.fonts_seen == registry.generation;
+    }
+
     /// Whether a name of a family list would find a font: brought, or installed.
     pub fn hasFamily(self: *TextSystem, name: []const u8) bool {
         if (registry.hasFamily(name)) return true;
@@ -236,6 +241,19 @@ pub const TextSystem = struct {
         const f = stacks.byName(name, 12) orelse return false;
         cf.CFRelease(f);
         return true;
+    }
+
+    /// Whether an installed font goes by this full or PostScript name.
+    pub fn hasLocalFont(_: *TextSystem, name: []const u8) bool {
+        const f = stacks.byName(name, 12) orelse return false;
+        cf.CFRelease(f);
+        return true;
+    }
+
+    /// Whether a family has a font and that font this character.
+    pub fn familyHasChar(self: *TextSystem, name: []const u8, cp: u21) bool {
+        const st = self.stackOf(.{ .size = 16, .family = name }) orelse return false;
+        return st.pick(self.gpa, cp) != 0xff;
     }
 
     /// The family name of the font a line in `style` takes its metrics from, in `buf`.
