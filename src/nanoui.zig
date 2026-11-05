@@ -148,6 +148,8 @@ test {
     _ = @import("menu_types.zig");
     _ = @import("update.zig");
     _ = @import("update_auto.zig");
+    // Pure, and tested on every platform: the rest of src/ios only compiles for iOS.
+    _ = @import("ios/key_repeat.zig");
     _ = @import("basics/kv_file.zig");
     _ = @import("http.zig");
     _ = haptics;
