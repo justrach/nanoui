@@ -51,10 +51,15 @@ const slant: Transform = .{ .a = 1, .b = 0, .c = 0.2, .d = 1, .tx = 0, .ty = 0 }
 /// CoreText's weights, as NSFontWeight (and UIFontWeight) values.
 pub fn weightValue(w: types.Weight) f64 {
     return switch (w) {
+        .thin => -0.8,
+        .extralight => -0.6,
+        .light => -0.4,
         .regular => 0,
         .medium => 0.23,
         .semibold => 0.3,
         .bold => 0.4,
+        .extrabold => 0.56,
+        .black => 0.62,
     };
 }
 

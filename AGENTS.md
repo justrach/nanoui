@@ -110,7 +110,10 @@ src/ui/motion/        ui.motion: springs, tweens, presence, keyframes, layout,
 src/ui/tester.zig     views without a window: input, time, PNG snapshots
 src/ui/tests.zig      widget tests through the Tester
 src/ui/text_tt.zig    text where nanoui shapes it itself (Linux, Windows, Android)
-src/ui/tt/            TrueType: font files, the installed fonts, outlines to coverage
+src/ui/tt/            TrueType: font files, the installed fonts, outlines to coverage;
+                      web fonts back to sfnt (`sfnt.zig`, `woff2*.zig`, `brotli*.zig`)
+src/ui/font_registry.zig  fonts an app brings, by family, weight, style and range
+src/ui/text_stack_*.zig   a text's fonts when it names families (`TextStyle.family`)
 src/ui/atlas_tt.zig   the glyph atlas in memory; icons.zig: line icons
 src/ui/raster.zig     the CPU renderer (same pixels as shader.metal)
 src/ui/canvas.zig     a CPU-drawn window's pixels: only what a frame changed is drawn

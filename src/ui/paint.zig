@@ -4,6 +4,7 @@ const std = @import("std");
 const types = @import("types.zig");
 const metal = @import("gpu.zig");
 const glass = @import("glass.zig");
+const xform = @import("paint_xform.zig");
 const text_mod = @import("text.zig");
 const native_windows = @import("dwrite.zig").enabled;
 const rich = text_mod.rich;
@@ -86,7 +87,7 @@ fn partOf(uv: [4]f32, p: [4]f32) [4]f32 {
 }
 
 /// `scrolled`: how far the scrolling boxes it's in have scrolled it up.
-fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip: types.Rect, opacity_in: f32, selectable_in: bool, scrolled: f32) void {
+fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip_in: types.Rect, opacity_in: f32, selectable_in: bool, scrolled: f32) void {
     const n = c.node(index).*;
     const st = n.style;
     // A higher layer is drawn later, over the page.
@@ -94,6 +95,10 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip:
         c.layers.append(c.gpa, index) catch {};
         return;
     }
+    // Transformed, it is worked out where it was and moved after: what shows
+    // of the clip is what comes back to the clip. Flattened, it draws nothing.
+    const clip = if (st.transform) |m| xform.clipBefore(m, clip_in) orelse return else clip_in;
+    const hits_from = c.next_hits.items.len;
     const selectable = (selectable_in or st.selectable) and !st.control;
     const r = n.rect;
     const visible = r.intersect(clip);
@@ -209,7 +214,7 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip:
     var child = n.first_child;
     const inner_scrolled = scrolled + if (st.scroll) c.scroll.get(n.id) orelse 0 else 0;
     while (child != none) : (child = c.node(child).next) paintNode(c, out, child, child_clip, opacity, selectable, inner_scrolled);
-    if ((st.clip or st.scroll or st.scroll_x) and st.radius > 0) roundClip(out.items[first..], r, visible, st.radius);
+    if ((st.clip or st.scroll or st.scroll_x) and st.radius > 0) roundClip(out.items[first..], r, visible, st.radius, st.clip_corners);
 
     if (st.scroll and st.scrollbar == .overlay) {
         paintScrollbar(c, out, n, visible, opacity);
@@ -217,6 +222,7 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip:
         @import("scroll.zig").paintScrollbars(c, out, n, visible, opacity);
     }
     if (st.scale != 1) scaleItems(out.items[start..], r, @max(st.scale, 0), st.scale_anchor, clip4);
+    if (st.transform) |m| xform.apply(out.items[start..], c.next_hits.items[hits_from..], m, clip_in);
     if (st.layout_motion != 0) {
         // Where the layout put it, scrolling aside: a scroll isn't a move.
         var placed = r;
@@ -293,7 +299,7 @@ fn scaleItems(items: []metal.Instance, box: types.Rect, s: f32, anchor: types.Po
         i.radius *= s;
         // A border's width, a shadow's blur, a pane's backdrop blur.
         i.border_width *= s;
-        if (i.kind == metal.Kind.shadow_out) i.uv = .{ i.uv[0] * s, i.uv[1] * s, 0, 0 };
+        if (i.kind == metal.Kind.shadow_out) i.uv = .{ i.uv[0] * s, i.uv[1] * s, i.uv[2] * s, 0 };
         const round = metal.clipCorners(i.clip_round);
         if (round.corners != 0) i.clip_round = metal.clipRound(round.radius * s, round.corners);
     }
@@ -319,12 +325,14 @@ fn paintText(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, n: *c
 
 fn paintShadow(c: *Context, out: *std.ArrayList(metal.Instance), sh: types.Shadow, r: types.Rect, radius: f32, opacity: f32, clip4: [4]f32) void {
     const s = sh.spread;
+    // A square corner stays square; a round one grows and keeps its kind.
+    const round: f32 = if (radius == 0) 0 else @max(0, @abs(radius) + s);
     push(c, out, .{
         .rect = .{ r.x + sh.x - s, r.y + sh.y - s, @max(0, r.w + 2 * s), @max(0, r.h + 2 * s) },
         .color = metal.color4(sh.color.alpha(opacity)),
         // A knocked out shadow is cut by the box, where it is from the shadow.
-        .uv = if (sh.knockout) .{ -sh.x, -sh.y, 0, 0 } else .{ 0, 0, 0, 0 },
-        .radius = @max(0, radius + s),
+        .uv = if (sh.knockout) .{ -sh.x, -sh.y, s, 0 } else .{ 0, 0, 0, 0 },
+        .radius = if (radius < 0) -round else round,
         // CSS's blur radius is twice the Gaussian's standard deviation.
         .border_width = sh.blur / 2,
         .kind = if (sh.knockout) metal.Kind.shadow_out else metal.Kind.shadow,
@@ -491,7 +499,7 @@ fn decorations(c: *Context, out: *std.ArrayList(metal.Instance), t: *const ctx_m
 /// instance it clipped whose clip shares one of the box's corners (one the
 /// box's own clip didn't cut off) has that corner rounded. A clip within
 /// keeps its own rounding.
-fn roundClip(items: []metal.Instance, box: types.Rect, visible: types.Rect, radius: f32) void {
+fn roundClip(items: []metal.Instance, box: types.Rect, visible: types.Rect, radius: f32, allowed: u4) void {
     const near = struct {
         fn f(a: f32, b: f32) bool {
             return @abs(a - b) < 0.01;
@@ -506,6 +514,7 @@ fn roundClip(items: []metal.Instance, box: types.Rect, visible: types.Rect, radi
     if (near(v[2], b[2]) and near(v[1], b[1])) whole |= 2;
     if (near(v[2], b[2]) and near(v[3], b[3])) whole |= 4;
     if (near(v[0], b[0]) and near(v[3], b[3])) whole |= 8;
+    whole &= allowed;
     if (whole == 0) return;
     for (items) |*i| {
         const k = i.clip;

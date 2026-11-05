@@ -41,6 +41,36 @@ pub const Transform = struct {
         return .{ .m = .{ @cos(r), @sin(r), -@sin(r), @cos(r), 0, 0 } };
     }
 
+    /// Pixels back to user space; null when it flattens everything.
+    pub fn inverse(t: Transform) ?Transform {
+        const m = t.m;
+        const det = m[0] * m[3] - m[1] * m[2];
+        if (@abs(det) < 1e-12) return null;
+        const k = 1 / det;
+        return .{ .m = .{
+            m[3] * k,
+            -m[1] * k,
+            -m[2] * k,
+            m[0] * k,
+            (m[2] * m[5] - m[3] * m[4]) * k,
+            (m[1] * m[4] - m[0] * m[5]) * k,
+        } };
+    }
+
+    /// Whether a circle stays a circle: a stroke can then be drawn in pixels.
+    pub fn uniform(t: Transform) bool {
+        const m = t.m;
+        const a = m[0] * m[0] + m[1] * m[1];
+        const b = m[2] * m[2] + m[3] * m[3];
+        const dot = m[0] * m[2] + m[1] * m[3];
+        return @abs(a - b) <= 1e-3 * @max(a, b) and @abs(dot) <= 1e-3 * @max(a, b);
+    }
+
+    /// Whether it keeps a box a box (no rotation or skew).
+    pub fn axisAligned(t: Transform) bool {
+        return @abs(t.m[1]) < 1e-5 and @abs(t.m[2]) < 1e-5;
+    }
+
     /// How much it scales lengths, on average (a stroke's width).
     pub fn lengthScale(t: Transform) f32 {
         return @sqrt(@abs(t.m[0] * t.m[3] - t.m[1] * t.m[2]));
@@ -198,6 +228,16 @@ pub const Flattener = struct {
 
 fn angle(ux: f32, uy: f32, vx: f32, vy: f32) f32 {
     return std.math.atan2(ux * vy - uy * vx, ux * vx + uy * vy);
+}
+
+test "an inverse undoes it, and a flat transform has none" {
+    const t = Transform.rotate(30).then(Transform.scale(2, 3)).then(Transform.translate(5, -7));
+    const p = t.inverse().?.apply(t.apply(.{ 11, 13 }));
+    try std.testing.expectApproxEqAbs(@as(f32, 11), p[0], 1e-3);
+    try std.testing.expectApproxEqAbs(@as(f32, 13), p[1], 1e-3);
+    try std.testing.expect(Transform.scale(0, 1).inverse() == null);
+    try std.testing.expect(Transform.scale(2, 2).uniform());
+    try std.testing.expect(!Transform.scale(2, 3).uniform());
 }
 
 test "transforms compose in order, and arcs end where they're asked" {
