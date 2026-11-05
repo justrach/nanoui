@@ -10,6 +10,7 @@ pub const style = @import("style.zig");
 pub const url = @import("url.zig");
 
 pub const Engine = cascade.Engine;
+pub const Flip = @import("cascade_state.zig").Flip;
 pub const Change = cascade.Change;
 pub const Viewport = cascade.Viewport;
 pub const Sheet = sheet.Sheet;

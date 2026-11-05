@@ -506,12 +506,12 @@ pub const Engine = struct {
     /// The highest ancestor whose style may change when `node`'s hover, active
     /// or focus state flips, sibling combinators included; null if none. Only
     /// that subtree needs restyling.
-    pub fn invalidatedByState(e: *Engine, node: *dom.Node) ?*dom.Node {
+    pub fn invalidatedByState(e: *Engine, node: *dom.Node, flip: state.Flip) ?*dom.Node {
         e.ensureIndex() catch return e.doc.documentElement();
         // Inside a shadow tree the tree's rules say; a whole tree restyles cheaply.
         if (node.tree_scope) |root| return root;
         if (node.shadow_root != null) return node;
-        return state.invalidatedBy(&e.index.?, e.doc, node);
+        return state.invalidatedBy(&e.index.?, e.doc, node, flip);
     }
 
     /// `n`'s style, computed if it has none: an icon sprite's symbols, under

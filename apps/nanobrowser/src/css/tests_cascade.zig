@@ -323,7 +323,7 @@ test "hover sensitivity and invalidation" {
     const none = try Page.make("<!doctype html><body><a id=a>x</a>", "a { color: red }", vp);
     defer none.done();
     try expect(!none.engine.hoverSensitive());
-    try expect(none.engine.invalidatedByState(none.el("a")) == null);
+    try expect(none.engine.invalidatedByState(none.el("a"), .hover) == null);
 
     const p = try Page.make(
         \\<!doctype html><body id=b><nav id=n class=menu><ul id=u><li id=l class=item><a id=a class=lnk href=x><i id=i>x</i></a></li><li id=l2></li></ul></nav><div id=d></div><p id=pp></p><span id=sib class=trig></span><span id=after></span>
@@ -336,12 +336,12 @@ test "hover sensitivity and invalidation" {
     defer p.done();
     try expect(p.engine.hoverSensitive());
     // Hovering inside the menu: the menu's subtree is what can change.
-    try expect(p.engine.invalidatedByState(p.el("i")) == p.el("n"));
-    try expect(p.engine.invalidatedByState(p.el("a")) == p.el("n"));
+    try expect(p.engine.invalidatedByState(p.el("i"), .hover) == p.el("n"));
+    try expect(p.engine.invalidatedByState(p.el("a"), .hover) == p.el("n"));
     // Nothing state-sensitive up this chain.
-    try expect(p.engine.invalidatedByState(p.el("d")) == null);
+    try expect(p.engine.invalidatedByState(p.el("d"), .hover) == null);
     // A sibling combinator reaches past the element: the parent restyles.
-    try expect(p.engine.invalidatedByState(p.el("sib")) == p.el("b"));
+    try expect(p.engine.invalidatedByState(p.el("sib"), .hover) == p.el("b"));
 
     p.doc.hover = p.el("a");
     _ = try p.engine.restyleSubtree(p.el("n"));
@@ -363,15 +363,28 @@ test ":has with a state restyles from the element it sits on" {
         \\.card:has(:hover) { color: red; }
     , vp);
     defer p.done();
-    try expect(p.engine.invalidatedByState(p.el("a")) == p.el("card"));
-    try expect(p.engine.invalidatedByState(p.el("far")) == null);
+    try expect(p.engine.invalidatedByState(p.el("a"), .hover) == p.el("card"));
+    try expect(p.engine.invalidatedByState(p.el("far"), .hover) == null);
     const s = try Page.make(
         \\<!doctype html><body id=b><div id=one class=one></div><a id=a href=x>x</a>
     ,
         \\.one:has(+ :hover) { color: red; }
     , vp);
     defer s.done();
-    try expect(s.engine.invalidatedByState(s.el("a")) == s.doc.documentElement());
+    try expect(s.engine.invalidatedByState(s.el("a"), .hover) == s.doc.documentElement());
+}
+
+test "each state invalidates only what reads it" {
+    const p = try Page.make(
+        \\<!doctype html><body id=b><a id=a href=x>x</a>
+    ,
+        \\html:focus-within { color: red; }
+        \\body:is(:active) { color: blue; }
+    , vp);
+    defer p.done();
+    try expect(p.engine.invalidatedByState(p.el("a"), .hover) == null);
+    try expect(p.engine.invalidatedByState(p.el("a"), .focus) == p.doc.documentElement());
+    try expect(p.engine.invalidatedByState(p.el("a"), .active) == p.el("b"));
 }
 
 test "color-scheme and the dark viewport" {

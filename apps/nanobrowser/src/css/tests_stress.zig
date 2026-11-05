@@ -70,7 +70,7 @@ test "5000 elements under 500 rules, repeatedly" {
     // Hovering costs only what it touches.
     const target = doc.getElementById("i5").?;
     doc.hover = target;
-    const up = engine.invalidatedByState(target);
+    const up = engine.invalidatedByState(target, .hover);
     if (up) |u| _ = try engine.restyleSubtree(u);
     doc.hover = null;
     try std.testing.expect(engine.hoverSensitive());

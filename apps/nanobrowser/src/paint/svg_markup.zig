@@ -22,6 +22,10 @@ const Entry = struct { bytes: []u8, key: []u8, sig: u64 };
 /// point here.
 pub const Cache = struct {
     map: std.AutoHashMapUnmanaged(*Node, Entry) = .empty,
+    /// The outermost `<svg>`s of the document, as of `roots_of`.
+    roots: std.ArrayList(*Node) = .empty,
+    roots_of: u32 = 0,
+    roots_known: bool = false,
 
     pub fn deinit(c: *Cache, gpa: Allocator) void {
         var it = c.map.valueIterator();
@@ -30,19 +34,28 @@ pub const Cache = struct {
             gpa.free(e.key);
         }
         c.map.deinit(gpa);
+        c.roots.deinit(gpa);
     }
 };
 
 /// Brings every `<svg>` that has a box up to date. Style and layout are.
 pub fn refresh(p: *Page) void {
     p.doc.svg_dirty = false;
-    var at = p.doc.node.first_child;
-    while (at) |n| {
-        if (n.kind == .element and n.ns == .svg and n.isTag("svg")) {
-            one(p, n);
-            at = n.nextSkippingChildren(p.doc.node);
-        } else at = n.nextInTree(p.doc.node);
+    // Every rebuild of the list comes here: walk the document only when it changed.
+    const c = &p.svgs;
+    if (!c.roots_known or c.roots_of != p.doc.generation) {
+        c.roots.clearRetainingCapacity();
+        var at = p.doc.node.first_child;
+        while (at) |n| {
+            if (n.kind == .element and n.ns == .svg and n.isTag("svg")) {
+                c.roots.append(p.gpa, n) catch {};
+                at = n.nextSkippingChildren(p.doc.node);
+            } else at = n.nextInTree(p.doc.node);
+        }
+        c.roots_of = p.doc.generation;
+        c.roots_known = true;
     }
+    for (c.roots.items) |n| one(p, n);
 }
 
 fn one(p: *Page, root: *Node) void {

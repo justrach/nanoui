@@ -8,26 +8,46 @@ const rule_index = @import("rule_index.zig");
 
 const Node = dom.Node;
 
+/// Which state changed. A hover says nothing of `:focus-within`: a page with
+/// `html:focus-within` would otherwise restyle whole on every hover.
+pub const Flip = enum { hover, active, focus };
+
+fn pseudoFlips(p: sel.PseudoClass, flip: Flip, is_self: bool) bool {
+    return switch (flip) {
+        .hover => p == .hover,
+        .active => p == .active,
+        .focus => p == .focus_within or (is_self and (p == .focus or p == .focus_visible)),
+    };
+}
+
+fn listFlips(l: []const sel.Selector, flip: Flip) bool {
+    for (l) |*x| {
+        if (!x.uses_state) continue;
+        // Anywhere inside a list, an element other than `node` may be the one tested.
+        for (x.compounds) |*c| if (compoundFlips(c, flip, true)) return true;
+    }
+    return false;
+}
+
 /// Whether a flip at `is_self` (the flipping node, not an ancestor of it)
 /// reaches this compound: `:focus` holds of the node alone, the rest of its
 /// ancestors too.
-fn compoundHasState(c: *const sel.Compound, is_self: bool) bool {
+fn compoundFlips(c: *const sel.Compound, flip: Flip, is_self: bool) bool {
     for (c.simples) |*s| switch (s.*) {
-        .pseudo => |p| switch (p) {
-            .hover, .active, .focus_within => return true,
-            .focus, .focus_visible => if (is_self) return true,
-            else => {},
-        },
-        .not, .is, .has => |l| for (l) |x| if (x.uses_state) return true,
-        .nth => |n| for (n.of) |x| if (x.uses_state) return true,
+        .pseudo => |p| if (pseudoFlips(p, flip, is_self)) return true,
+        .not, .is, .has, .host, .host_context => |l| if (listFlips(l, flip)) return true,
+        .nth => |n| if (listFlips(n.of, flip)) return true,
         else => {},
     };
     return false;
 }
 
-fn hasStateOnSibling(s: *const sel.Selector) bool {
+fn hasStateOnSibling(s: *const sel.Selector, flip: Flip) bool {
     for (s.compounds) |*c| for (c.simples) |*x| switch (x.*) {
-        .has => |l| for (l) |y| if (y.uses_state and (y.leading == .next or y.leading == .later)) return true,
+        .has => |l| for (l) |*y| {
+            if (y.leading != .next and y.leading != .later) continue;
+            if (listFlips(y[0..1], flip)) return true;
+        },
         else => {},
     };
     return false;
@@ -36,14 +56,14 @@ fn hasStateOnSibling(s: *const sel.Selector) bool {
 /// See `Engine.invalidatedByState`. A flip changes the state of `node` and, for
 /// `:hover`, `:active` and `:focus-within`, of each ancestor; any of them may be
 /// the compound a selector's state test sits on.
-pub fn invalidatedBy(ix: *const rule_index.Index, doc: *dom.Document, node: *Node) ?*Node {
+pub fn invalidatedBy(ix: *const rule_index.Index, doc: *dom.Document, node: *Node, flip: Flip) ?*Node {
     if (ix.state_deps.items.len == 0) return null;
     var ctx: match.Ctx = .{ .doc = doc, .loose_state = true };
     var highest: ?*Node = null;
     var at: ?*Node = if (node.kind == .element) node else node.parentElement();
     while (at) |a| : (at = a.parentElement()) {
         for (ix.state_deps.items) |dep| {
-            const hit = affected(dep.sel, a, a == node, &ctx, doc) orelse continue;
+            const hit = affected(dep.sel, a, a == node, flip, &ctx, doc) orelse continue;
             if (highest == null or hit.contains(highest.?)) highest = hit;
         }
     }
@@ -51,12 +71,12 @@ pub fn invalidatedBy(ix: *const rule_index.Index, doc: *dom.Document, node: *Nod
 }
 
 /// The element that must restyle if `a`'s state flip affects this selector.
-fn affected(s: *const sel.Selector, a: *Node, is_self: bool, ctx: *match.Ctx, doc: *dom.Document) ?*Node {
+fn affected(s: *const sel.Selector, a: *Node, is_self: bool, flip: Flip, ctx: *match.Ctx, doc: *dom.Document) ?*Node {
     // `:has(+ :hover)` sits on an element off the pointer's chain: only the root
     // is safe. Other `:has`es sit on an ancestor, which the loop below finds.
-    if (hasStateOnSibling(s)) return doc.documentElement();
+    if (hasStateOnSibling(s, flip)) return doc.documentElement();
     for (s.compounds, 0..) |*c, i| {
-        if (!compoundHasState(c, is_self)) continue;
+        if (!compoundFlips(c, flip, is_self)) continue;
         if (!match.compound(c, a, ctx)) continue;
         // A sibling combinator to its right reaches beyond `a`'s subtree.
         var sibling = false;

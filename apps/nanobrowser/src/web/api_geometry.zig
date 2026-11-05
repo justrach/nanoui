@@ -9,6 +9,7 @@ const bind = @import("bind.zig");
 const layout = @import("../layout/layout.zig");
 const box = @import("../layout/box.zig");
 const view = @import("../page_view.zig");
+const page_loader = @import("../loader.zig");
 const classes = @import("classes.zig");
 const display = @import("../paint/display.zig");
 const css_transform = @import("../css/transform.zig");
@@ -21,6 +22,7 @@ const World = bind.World;
 
 /// Style brought up to date, for `getComputedStyle`.
 pub fn flushStyle(w: *World) void {
+    page_loader.sheetsNow(w.page);
     view.flushStyle(w.page);
 }
 
@@ -28,6 +30,7 @@ pub fn flushStyle(w: *World) void {
 pub fn flushLayout(w: *World) bool {
     const p = w.page;
     if (w.painting) return p.tree != null;
+    page_loader.sheetsNow(p);
     const size = p.host.viewport(p.host.ctx);
     const vw = if (p.viewport_w > 0) p.viewport_w else size[0];
     const vh = if (p.viewport_h > 0) p.viewport_h else size[1];

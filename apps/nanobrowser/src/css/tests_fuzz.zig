@@ -23,7 +23,7 @@ fn exercise(page: []const u8, sheet_text: []const u8) !void {
     while (at) |n| : (at = n.nextInTree(doc.node)) {
         if (n.kind != .element) continue;
         _ = try e.restyleSubtree(n);
-        _ = e.invalidatedByState(n);
+        _ = e.invalidatedByState(n, .hover);
         _ = e.computedValue(n, "color");
         _ = e.computedValue(n, "width");
         _ = e.computedValue(n, "--x");

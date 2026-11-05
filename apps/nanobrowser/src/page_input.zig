@@ -5,6 +5,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const dom = @import("dom.zig");
+const css = @import("css/css.zig");
 const loader = @import("loader.zig");
 const web = @import("web/web.zig");
 const view = @import("page_view.zig");
@@ -75,7 +76,8 @@ fn setState(p: *Page, slot: *?*dom.Node, to: ?*dom.Node) void {
     if (!always and !p.engine.hoverSensitive()) return;
     for ([_]?*dom.Node{ old, to }) |maybe| {
         const n = maybe orelse continue;
-        const top = p.engine.invalidatedByState(n) orelse if (always) n else continue;
+        const flip: css.Flip = if (slot == &p.doc.focus) .focus else if (slot == &p.doc.active) .active else .hover;
+        const top = p.engine.invalidatedByState(n, flip) orelse if (always) n else continue;
         const change = p.engine.restyleSubtree(top) catch continue;
         switch (change) {
             .none => {},

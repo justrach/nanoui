@@ -48,6 +48,12 @@ pub const Sheets = struct {
     /// Sheets parsed from `<style>` text, by the text: a thousand instances of a
     /// custom element say the same thing.
     parsed: std.AutoHashMapUnmanaged(u64, *css.Sheet) = .empty,
+    /// How many are on their way.
+    asked: u32 = 0,
+    /// One has arrived that the engine hasn't been given; see `sheetCame`.
+    held: bool = false,
+    /// When what's held is given to it though others are still coming.
+    due: f64 = 0,
 
     pub fn deinit(s: *Sheets, gpa: Allocator) void {
         s.parsed.deinit(gpa);
@@ -72,6 +78,7 @@ pub const Sheets = struct {
 
     /// Gives the engine what has arrived, in the document's order, each shadow tree's apart.
     fn apply(s: *Sheets, p: *Page) void {
+        s.held = false;
         const gpa = p.gpa;
         s.flat.clearRetainingCapacity();
         var trees: std.AutoArrayHashMapUnmanaged(*dom.Node, std.ArrayList(*const css.Sheet)) = .empty;
@@ -145,6 +152,7 @@ fn send(p: *Page, url_in: []const u8, method: []const u8, body: []const u8, kind
     const r = p.gpa.create(Req) catch return;
     r.* = .{ .page = p, .gpa = p.gpa, .kind = kind };
     p.pending += 1;
+    if (kind == .sheet) p.sheets.asked += 1;
     var with_more: [headers.len + 2]http.Header = undefined;
     @memcpy(with_more[0..headers.len], &headers);
     var used: usize = headers.len;
@@ -185,7 +193,12 @@ fn answered(r: *Req, res: http.Response) void {
     net.storeCookies(res, res.url);
     switch (kind) {
         .document => p.documentArrived(res.status, res.body, res.url, res.header("content-type") orelse "", res.err),
-        .sheet => |slot| sheetArrived(p, slot, res),
+        .sheet => |slot| {
+            p.sheets.asked -|= 1;
+            sheetArrived(p, slot, res);
+            // One that failed may have been all that was holding the others.
+            sheetCame(p);
+        },
         .picture => |u| pictureArrived(p, u, res),
         .icon => |k| iconArrived(p, k, res),
         .font => |f| webfonts.arrived(p, f, res.status, res.body),
@@ -378,8 +391,34 @@ fn sheetArrived(p: *Page, slot: u32, res: http.Response) void {
     sheet.media = p.sheets.slots.items[slot].media;
     p.sheets.slots.items[slot].sheet = sheet;
     askImports(p, slot, sheet);
-    p.sheets.apply(p);
+    p.sheets.held = true;
     // What it names as backgrounds is asked for as it is drawn.
+}
+
+/// How often sheets still coming are given to the engine, in seconds.
+const sheet_pace = 0.3;
+
+/// Sheets come one by one, and each given to the engine restyles the whole page:
+/// GitHub's 37 cost 5 s that way, with the window frozen. So those that come
+/// while others are on their way wait for them, or for `sheet_pace`.
+fn sheetCame(p: *Page) void {
+    const s = &p.sheets;
+    if (!s.held) return;
+    if (s.asked == 0) return s.apply(p);
+    if (s.due <= p.engine.now) s.due = p.engine.now + sheet_pace;
+}
+
+/// A frame gives the engine what's held, once it's time.
+pub fn sheetsDue(p: *Page, c: *nanoui.ui.Context) void {
+    const s = &p.sheets;
+    if (!s.held) return;
+    if (c.time >= s.due) return s.apply(p);
+    c.frameIn(@floatCast(@max(s.due - c.time, 0.001)));
+}
+
+/// A script asking about style sees every sheet that has arrived.
+pub fn sheetsNow(p: *Page) void {
+    if (p.sheets.held) p.sheets.apply(p);
 }
 
 fn askImports(p: *Page, parent: u32, sheet: *css.Sheet) void {

@@ -158,7 +158,7 @@ test "Wikipedia" {
     try near(p.s("bq").margin_left.px, 40);
     // Hovering the link turns its underline on, and costs its own subtree.
     p.doc.hover = p.el("wl");
-    try expect(p.engine.invalidatedByState(p.el("wl")) == p.el("wl"));
+    try expect(p.engine.invalidatedByState(p.el("wl"), .hover) == p.el("wl"));
     try expect((try p.engine.restyleSubtree(p.el("wl"))) == .paint);
     try expect(p.s("wl").underline);
 }
@@ -253,7 +253,7 @@ test "Tailwind" {
 
     p.doc.hover = p.el("btn");
     try expect(p.engine.hoverSensitive());
-    try expect(p.engine.invalidatedByState(p.el("btn")) == p.el("btn"));
+    try expect(p.engine.invalidatedByState(p.el("btn"), .hover) == p.el("btn"));
     try expect((try p.engine.restyleSubtree(p.el("btn"))) == .paint);
     try near(p.s("btn").background.b, 216.0 / 255.0);
     try near(p.s("btn").background.r, 29.0 / 255.0);

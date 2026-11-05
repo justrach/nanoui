@@ -100,6 +100,7 @@ pub fn lineMetrics(c: *ui.Context, style: ui.TextStyle) box.Metrics {
 
 /// Style and layout brought up to date for a viewport of `w` × `h`.
 pub fn prepare(p: *Page, c: *ui.Context, w: f32, h: f32) void {
+    loader.sheetsDue(p, c);
     webfonts.catchUp(p, c);
     p.engine.now = c.time;
     // Pictures on the web are as large as the screen is dense; the budget is
@@ -118,7 +119,6 @@ pub fn prepare(p: *Page, c: *ui.Context, w: f32, h: f32) void {
     } else if (p.list_dirty or p.doc.svg_dirty) {
         // What an SVG's markup comes to is on the list, and its colors may be
         // what a paint-only change changed.
-        svg_markup.refresh(p);
         var fonts: Fonts = .{ .p = p, .c = c };
         makeList(p, p.tree.?, fonts.measurer());
     }
