@@ -105,7 +105,7 @@ src/ui/shader.metal   rounded rects, borders, glyphs, Gaussian shadows
 src/ui/glass.zig      Liquid Glass: the material, backdrop and optics (CPU too)
 src/ui/glass.metal    the glass's backdrop kernels and fragment function
 src/ui/metal_glass.zig  panes of glass in the Metal renderer
-src/ui/surface.zig    the NSView: events, display link, occlusion, resize
+src/ui/surface.zig    the NSView: events, display link, occlusion, resize (surface_pointer: cursor, focus, help)
 src/ui/motion/        ui.motion: springs, tweens, presence, keyframes, layout,
                       drag/snap, scroll-linked values, shared elements, text
 src/ui/tester.zig     views without a window: input, time, PNG snapshots
@@ -119,6 +119,7 @@ src/ui/atlas_tt.zig   the glyph atlas in memory; icons.zig: line icons
 src/ui/raster.zig     the CPU renderer (same pixels as shader.metal)
 src/ui/canvas.zig     a CPU-drawn window's pixels: only what a frame changed is drawn
 src/ui/opengl.zig     the OpenGL 3.3 renderer (Linux), and OpenGL ES 3's (Android); shader.glsl: both Metal shaders in GLSL
+src/ui/d3d11.zig      the Direct3D 11 renderer (Windows), shader.hlsl; d3d11_texture: ui.texture's slots
 src/ui/gl.zig         OpenGL's functions, loaded with dlopen
 src/ui/images.zig     pictures (ui.image): decoded once, packed in a BGRA atlas
 src/ui/png_decode.zig PNG to pixels where ImageIO isn't (Linux, Windows, portable)
@@ -129,7 +130,8 @@ src/linux/            GTK 3 backend: app, window, surface (GL area or CPU), dial
 src/windows/          Win32 backend: app, window, surface (events, frames) +
                       surface_gpu (paint, D3D11 present), d3d (swap chain),
                       ime (IMM32), win32 (the extern layer), desktop, dialog,
-                      fdwatch, loop, tests_*
+                      surface_pace + vblank (frames on the display's beat),
+                      surface_win_keys, fdwatch, loop, tests_*
 src/ios/              UIKit backend: app and scenes, windows as stacked screens,
                       surface (Metal view), touch (pointer, scrolling, flings),
                       keys (hardware keys, software keyboard), desktop, dialogs
