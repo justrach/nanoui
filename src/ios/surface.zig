@@ -270,7 +270,7 @@ pub const Surface = struct {
         pool.pop();
         self.in_frame = false;
         // No hover on a touch screen: what changed under a finger already drew.
-        const more = c.animating or r.hot_changed or self.touch.flinging() or self.foldSettling();
+        const more = c.animating or r.hot_changed or self.touch.flinging() or self.keys.repeating() or self.foldSettling();
         self.setRate(if (more or self.pending) null else c.frame_in);
         self.setPaced(more or c.frame_in != null or self.pending);
         if (!c.animating) self.last_frame_time = 0;
@@ -315,6 +315,7 @@ pub const Surface = struct {
     pub fn activeChanged(self: *Surface, on: bool) void {
         if (!on) {
             self.touch.stop();
+            keys.stopRepeat(&self.keys);
             // What moved goes on moving when the app comes back.
             self.pending = true;
             return self.setPaced(false);
@@ -373,5 +374,6 @@ fn displayLinkFired(obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) 
     const s = Surface.enter(obj) orelse return;
     defer s.leave();
     touch.fling(s);
+    if (!s.dead) keys.repeatStep(s);
     if (!s.dead) s.frame();
 }

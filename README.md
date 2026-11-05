@@ -389,10 +389,11 @@ pointer: it presses and drags, and scrolls what it moves up or down over,
 flinging as iOS's scroll views do. Two fingers pinch: their spread and
 movement come to the view as `input.zoom` and `input.pan` (a trackpad's
 pinch does on the Mac). A hardware keyboard's keys and shortcuts work as on
-the Mac, and a focused text field brings up the software keyboard. Views
-are laid out inside the safe area, clear of the status bar, the home
-indicator and the keyboard; a window made with `.full_bleed = true` spans
-the screen and keeps its content clear itself with `ui.div(c).safeArea()`.
+the Mac, held keys repeat, and a focused text field brings up the software
+keyboard. Views are laid out inside the safe area, clear of the status bar,
+the home indicator and the keyboard; a window made with `.full_bleed = true`
+spans the screen and keeps its content clear itself with
+`ui.div(c).safeArea()`.
 
 ```sh
 zig build $(sh tools/ios/zig-lib.sh) -Dtarget=aarch64-ios-simulator               # zig-out/ios/Counter.app, Gallery.app
@@ -416,8 +417,8 @@ first after `zig build`.
 Devices, signing, app icons, extensions and iOS versions are in
 [docs/ios.md](docs/ios.md).
 
-Not on iOS yet: pages, the selection's handles and loupe, keys repeating
-while held, or iPad multiwindow.
+Not on iOS yet: pages, the selection's handles and loupe, or iPad
+multiwindow.
 
 ### Android
 
