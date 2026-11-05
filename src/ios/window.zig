@@ -12,6 +12,7 @@ const Surface = @import("surface.zig").Surface;
 const window_types = @import("../window_types.zig");
 const ui = @import("../ui/ui.zig");
 const Page = @import("../page_webkit.zig").Page;
+const scenes = @import("scenes.zig");
 
 pub const Asset = window_types.Asset;
 pub const PageOptions = window_types.PageOptions;
@@ -41,6 +42,9 @@ pub const Window = struct {
     page_host: ?objc.Object = null,
     theme: ?ui.Theme = null,
     full_bleed: bool = false,
+    /// In a scene of its own on an iPad, beside the app's stack (`scenes.zig`).
+    own_scene: bool = false,
+    scene_window: ?objc.Object = null,
     /// What a snapshot draws when there is no screen: the size asked for.
     width: f64 = 0,
     height: f64 = 0,
@@ -63,6 +67,7 @@ pub const Window = struct {
             .page_options = if (options.content == .page) options.content.page else null,
             .theme = options.theme,
             .full_bleed = options.full_bleed,
+            .own_scene = options.own_scene,
             .width = options.width,
             .height = options.height,
             .title_bar = options.title_bar,
@@ -152,6 +157,11 @@ pub const Window = struct {
         // (of the window under it, showing again) may close it too.
         self.closed = true;
         self.wanted = false;
+        scenes.closeOwn(self);
+        for (self.app.pending_scenes.items, 0..) |w, i| if (w == self) {
+            _ = self.app.pending_scenes.orderedRemove(i);
+            break;
+        };
         self.app.arrange();
         if (self.on_close) |cb| cb.func(cb.ctx, self);
         if (self.surface) |s| s.destroy();
@@ -173,6 +183,7 @@ pub const Window = struct {
     /// On screen, over the windows shown before it (or as the screen's own,
     /// with none).
     pub fn show(self: *Window) void {
+        if (self.own_scene) return scenes.activate(self);
         if (!self.wanted) {
             self.wanted = true;
             self.order = self.app.nextOrder();
@@ -234,6 +245,7 @@ pub const Window = struct {
     }
 
     pub fn isFocused(self: *Window) bool {
+        if (self.own_scene) return scenes.focused(self);
         if (!self.shown or !self.app.active) return false;
         return self.app.topController() == self.controller;
     }

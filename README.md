@@ -421,7 +421,8 @@ Devices, signing, app icons, extensions and iOS versions are in
 Windows show pages too, in WKWebView, with the same typed IPC as the Mac's.
 WebKit loads with the first page, so an app without one doesn't pay for it.
 
-Not on iOS yet: iPad multiwindow.
+On an iPad, an app built with `.multiple_windows` can have several windows
+beside each other ([docs/ios.md](docs/ios.md#ipad-windows)).
 
 ### Android
 

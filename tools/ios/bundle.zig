@@ -15,6 +15,9 @@ pub const Options = struct {
     /// Why the app asks for the location while in use, shown in iOS's
     /// prompt (NSLocationWhenInUseUsageDescription). Without it, iOS refuses.
     location_usage: ?[]const u8 = null,
+    /// iPad: the person can open several windows of the app, and windows made
+    /// with `.own_scene` get theirs (UIApplicationSupportsMultipleScenes).
+    multiple_windows: bool = false,
     /// More of Info.plist, as plist XML: `<key>…</key><string>…</string>`
     /// (URL schemes, background modes, usage descriptions). A key the
     /// bundle already sets mustn't appear again.
@@ -197,7 +200,7 @@ pub fn infoPlist(b: *std.Build, exe_name: []const u8, target: std.Target, opts: 
         \\  <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
         \\  <key>UILaunchScreen</key><dict/>
         \\  <key>UIApplicationSceneManifest</key>
-        \\  <dict><key>UIApplicationSupportsMultipleScenes</key><false/></dict>
+        \\  <dict><key>UIApplicationSupportsMultipleScenes</key><{s}/></dict>
         \\  <key>UIApplicationSupportsIndirectInputEvents</key><true/>
         \\  <key>CADisableMinimumFrameDurationOnPhone</key><true/>
         \\  <key>UIFileSharingEnabled</key><{s}/>
@@ -221,6 +224,7 @@ pub fn infoPlist(b: *std.Build, exe_name: []const u8, target: std.Target, opts: 
         if (simulator) "iPhoneSimulator" else "iPhoneOS",
         min.major,
         min.minor,
+        if (opts.multiple_windows) "true" else "false",
         if (opts.file_sharing) "true" else "false",
         if (opts.file_sharing) "true" else "false",
         if (opts.location_usage) |why| b.fmt("  <key>NSLocationWhenInUseUsageDescription</key><string>{s}</string>", .{escaped(b, why)}) else "",
