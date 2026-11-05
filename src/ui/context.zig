@@ -229,17 +229,15 @@ pub const Context = struct {
     /// Set while an animated value has not reached its target.
     animating: bool = false,
     /// While a live snapshot is drawn (live_snapshot.zig): what its request
-    /// asked for, for the view to show it in that frame alone (it isn't put
-    /// on screen); empty otherwise.
+    /// asked for, shown in that frame alone (not put on screen); else empty.
     snapshot_request: []const u8 = "",
     /// Lay boxes out on the device's pixels, as GPUI does
     /// (`taffy.rs`): measured text rounded up to a whole device pixel, and
     /// every box's edges rounded to one after layout. Off: whole points up
     /// for text, and boxes where they fall.
     pixel_snap: bool = false,
-    /// With `pixel_snap`, measured text too (as GPUI's taffy.rs rounds a
-    /// measured size up). Off: text keeps the sizes the view gave it, and
-    /// only the edges land on pixels.
+    /// With `pixel_snap`, measured text too (as GPUI's taffy.rs rounds it
+    /// up). Off: text keeps the view's sizes; only the edges land on pixels.
     pixel_snap_text: bool = true,
     /// A frame is being built (`frame.run`): another may not start inside it.
     building: bool = false,
