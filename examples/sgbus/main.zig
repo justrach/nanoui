@@ -18,6 +18,7 @@ const onboarding = @import("onboarding.zig");
 const nav = @import("nav.zig");
 const nextbus = @import("nextbus.zig");
 const nav_view = @import("nav_view.zig");
+const follow = @import("follow.zig");
 
 pub const Tab = enum { nearby, starred, journey, about };
 
@@ -53,6 +54,8 @@ pub const App = struct {
     nav: nav.Nav = .{},
     /// Two panes this frame (a Duo opened, or a wide window).
     two: bool = false,
+    /// The trip as a timeline to follow.
+    follow: follow.Follow = .{},
 
     fn view(s: *App, c: *ui.Context) void {
         s.live.frame(c.time);
@@ -69,10 +72,11 @@ pub const App = struct {
             if (o.answer != .none) s.welcomed(o.answer);
             return;
         }
-        const root = ui.div(c).column().sizeFull().bg(cards.ground);
-        defer root.end();
         const two = c.device.split() != .none or c.size.w >= 600;
         s.two = two;
+        if (s.following()) return s.followView(c, two);
+        const root = ui.div(c).column().sizeFull().bg(cards.ground);
+        defer root.end();
         if (two) {
             const p = ui.panes(c, .{ .ratio = 0.5 });
             s.mapView(c, .{});
@@ -87,6 +91,41 @@ pub const App = struct {
             top.end();
             s.content(c, .{ .left = sa.left, .right = sa.right, .bottom = sa.bottom });
         } else s.content(c, sa);
+    }
+
+    /// A trip of ours chosen or being followed, on the Journey tab: the
+    /// follow timeline (calm, dark, one thing to do now).
+    fn following(s: *App) bool {
+        if (s.route != null or s.tab != .journey) return false;
+        if (s.nav.on) return true;
+        return s.journey.dest != null and s.journey.trip() != null;
+    }
+
+    fn followView(s: *App, c: *ui.Context, two: bool) void {
+        const t = follow.tripOf(s) orelse return;
+        s.follow.update(s, t);
+        const root = ui.div(c).column().sizeFull().bg(follow.ground);
+        defer root.end();
+        if (two) {
+            // Unfolded: map left, timeline right. Half open (stacked):
+            // map and what to do now up top, timeline and Follow below.
+            const stacked = c.device.split() == .stacked;
+            const mode: follow.Mode = if (stacked) .stacked else .side;
+            const p = ui.panes(c, .{ .ratio = 0.5, .gap = 24 });
+            follow.mapPane(s, c, .{}, mode);
+            if (p.second()) follow.listPane(s, c, .{}, mode);
+            p.end();
+            return;
+        }
+        const sa = c.safe_area;
+        const top = ui.div(c).wFull().h(@round(c.size.h * 0.3));
+        follow.mapPane(s, c, sa, .folded);
+        top.end();
+        const rest = ui.div(c).column().wFull().grow();
+        defer rest.end();
+        follow.listPane(s, c, .{ .left = sa.left, .right = sa.right, .bottom = sa.bottom }, .folded);
+        const box = c.rects.get(rest.id()) orelse ui.Rect{ .w = c.size.w, .h = c.size.h };
+        s.tabBar(c, box, sa);
     }
 
     fn showMap(s: *const App) bool {
