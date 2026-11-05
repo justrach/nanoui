@@ -4,6 +4,7 @@
 //! them up to its most lines, then scrolling inside.
 const std = @import("std");
 const types = @import("types.zig");
+const utf8 = @import("utf8.zig");
 const Context = @import("context.zig").Context;
 const EditState = @import("context.zig").EditState;
 
@@ -71,6 +72,25 @@ pub fn vertical(c: *Context, s: []const u8, style: types.TextStyle, lines: []con
 pub fn indexAtPoint(c: *Context, s: []const u8, style: types.TextStyle, lines: []const Line, x: f32, y: f32, lh: f32) usize {
     const row: usize = @intFromFloat(@max(0, @min(@as(f32, @floatFromInt(lines.len - 1)), @floor(y / lh))));
     return indexAt(c, s, style, lines[row], x);
+}
+
+/// The selection's ends, for a field whose lines start at (x, y): the text's
+/// own place on the screen, its scroll taken off.
+pub fn ends(c: *Context, s: []const u8, style: types.TextStyle, lines: []const Line, lo: usize, hi: usize, x: f32, y: f32, lh: f32) [2]types.Rect {
+    var out: [2]types.Rect = undefined;
+    for ([2]usize{ lo, hi }, &out) |at, *r| {
+        const k = lineOf(lines, at);
+        r.* = .{ .x = x + caretX(c, s, style, lines[k], at), .y = y + @as(f32, @floatFromInt(k)) * lh, .w = 0, .h = lh };
+    }
+    return out;
+}
+
+/// The byte of a password's `n`th bullet.
+pub fn byteOfCodepoint(s: []const u8, n: usize) usize {
+    var i: usize = 0;
+    var k: usize = 0;
+    while (i < s.len and k < n) : (k += 1) i += utf8.seqLen(s[i]);
+    return @min(i, s.len);
 }
 
 pub const Drawn = struct {
