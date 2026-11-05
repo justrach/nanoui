@@ -170,11 +170,12 @@ fn Player(comptime App: type) type {
             s.ctx.input.mouse = p.scroll_at;
             // Held as a finger holds: past an end it rubber-bands.
             s.ctx.scroll_holding = true;
-            _ = s.ctx.applyScroll(to - p.scroll_done);
-            s.ctx.input.mouse = away;
+            // A view with no scrolling box takes the wheel itself, as a surface gives it.
+            if (!s.ctx.applyScroll(to - p.scroll_done) and s.ctx.wants_wheel) s.ctx.input.scroll.y += to - p.scroll_done;
             p.scroll_done = to;
             if (dot) |*d| d.at = .{ .x = p.scroll_at.x, .y = p.scroll_at.y + to };
             s.frame();
+            s.ctx.input.mouse = away;
             if (p.scroll_t < 1) return after(1.0 / 60.0, p, scrollStep);
             // Let go: it springs back (and a pull past its threshold refreshes).
             s.ctx.scroll_holding = false;
