@@ -17,9 +17,10 @@ extern "c" fn CTFontCreateWithFontDescriptor(desc: *anyopaque, size: f64, matrix
 extern "c" fn CTFontCreateWithName(name: cf.CFStringRef, size: f64, matrix: ?*const Transform) ?cf.CTFontRef;
 extern "c" fn CTFontCreateCopyWithAttributes(font: cf.CTFontRef, size: f64, matrix: ?*const Transform, attrs: ?*anyopaque) ?cf.CTFontRef;
 extern "c" fn CTFontCopyFontDescriptor(font: cf.CTFontRef) *anyopaque;
-extern "c" fn CTFontCopyPostScriptName(font: cf.CTFontRef) cf.CFStringRef;
-extern "c" fn CTFontCopyFullName(font: cf.CTFontRef) cf.CFStringRef;
-extern "c" fn CTFontCopyFamilyName(font: cf.CTFontRef) cf.CFStringRef;
+// Null for a font whose `name` table lacks the name: web fonts are often stripped.
+extern "c" fn CTFontCopyPostScriptName(font: cf.CTFontRef) ?cf.CFStringRef;
+extern "c" fn CTFontCopyFullName(font: cf.CTFontRef) ?cf.CFStringRef;
+extern "c" fn CTFontCopyFamilyName(font: cf.CTFontRef) ?cf.CFStringRef;
 extern "c" fn CTFontCopyVariationAxes(font: cf.CTFontRef) ?*anyopaque;
 extern "c" fn CTFontGetSymbolicTraits(font: cf.CTFontRef) u32;
 extern "c" fn CTFontGetSize(font: cf.CTFontRef) f64;
@@ -320,10 +321,11 @@ pub fn byName(name: []const u8, size: f64) ?cf.CTFontRef {
     defer cf.CFRelease(s);
     const f = CTFontCreateWithName(s, size, null) orelse return null;
     const ps = CTFontCopyPostScriptName(f);
-    defer cf.CFRelease(ps);
+    defer if (ps) |x| cf.CFRelease(x);
     const full = CTFontCopyFullName(f);
-    defer cf.CFRelease(full);
-    if (CFStringCompare(ps, s, case_insensitive) == 0 or CFStringCompare(full, s, case_insensitive) == 0) return f;
+    defer if (full) |x| cf.CFRelease(x);
+    if (ps) |x| if (CFStringCompare(x, s, case_insensitive) == 0) return f;
+    if (full) |x| if (CFStringCompare(x, s, case_insensitive) == 0) return f;
     cf.CFRelease(f);
     return null;
 }
@@ -521,7 +523,7 @@ fn noLigatures(m: cf.CFAttributedStringRef, total: cf.CFIndex) void {
 
 /// The primary font's family name, in `buf`.
 pub fn familyName(ref: cf.CTFontRef, buf: []u8) []const u8 {
-    const name = CTFontCopyFamilyName(ref);
+    const name = CTFontCopyFamilyName(ref) orelse return "";
     defer cf.CFRelease(name);
     if (!CFStringGetCString(name, buf.ptr, @intCast(buf.len), cf.utf8_encoding)) return "";
     return std.mem.sliceTo(buf, 0);

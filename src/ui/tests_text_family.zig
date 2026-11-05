@@ -81,6 +81,20 @@ test "metrics of a family come from the font that draws it" {
     try testing.expectEqualStrings("Metrics", t.text.familyName(.{ .size = 10, .family = "family-m" }, &buf));
 }
 
+test "a font that gives no family name has an empty one" {
+    var s: Blank = .{};
+    var t = try tester(&s);
+    defer t.deinit();
+    defer ui.unregisterFontFamilies("family-nameless");
+    const gpa = testing.allocator;
+    const bytes = try testfont.build(gpa, .{ .family = "" });
+    defer gpa.free(bytes);
+    try ui.registerFontFace(gpa, .{ .family = "family-nameless", .bytes = bytes });
+    t.text.syncFonts();
+    var buf: [64]u8 = undefined;
+    try testing.expectEqualStrings("", t.text.familyName(.{ .size = 10, .family = "family-nameless" }, &buf));
+}
+
 test "each character goes to the face of its range, per CSS's unicode-range" {
     var s: Blank = .{};
     var t = try tester(&s);
