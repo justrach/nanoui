@@ -79,7 +79,10 @@ pub const Flags = packed struct(u16) {
     derived_ctor: bool = false,
     /// A native constructor made by vm.newClass: `new` makes `this` first.
     host_class: bool = false,
-    _pad: u4 = 0,
+    /// `document.all`: an object that answers `typeof` as undefined, is false in
+    /// a condition and `== null`, as the language keeps it for old pages.
+    html_dda: bool = false,
+    _pad: u3 = 0,
 };
 
 pub const NativeData = struct {

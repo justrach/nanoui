@@ -21,6 +21,13 @@ const Vm = js.Vm;
 const Error = js.Error;
 const World = bind.World;
 
+/// Makes an object `document.all` is: see `Flags.html_dda`.
+fn markAll(_: *Vm, _: Value, args: []const Value) Error!Value {
+    const v = bind.arg(args, 0);
+    if (v.isObject()) v.asObject().flags.html_dda = true;
+    return v;
+}
+
 fn hook(vm: *Vm, _: Value, args: []const Value) Error!Value {
     const w = bind.world(vm);
     const name = try bind.str(vm, args, 0);
@@ -266,6 +273,7 @@ const table = [_]bind.Method{
     .{ .name = "inlineAttr", .arity = 2, .f = inlineAttr },
     .{ .name = "eventParent", .arity = 1, .f = eventParent },
     .{ .name = "isNode", .arity = 1, .f = isNode },
+    .{ .name = "markAll", .arity = 1, .f = markAll },
     .{ .name = "pageUrl", .arity = 0, .f = pageUrl },
     .{ .name = "setUrl", .arity = 1, .f = setUrl },
     .{ .name = "navigate", .arity = 2, .f = navigate },

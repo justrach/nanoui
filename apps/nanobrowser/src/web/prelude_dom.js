@@ -232,6 +232,20 @@ accessor(DP, "scripts", live("script"));
 accessor(DP, "embeds", live("embed"));
 accessor(DP, "plugins", live("embed"));
 accessor(DP, "anchors", live("a[name]"));
+// `document.all`, which old pages test for and new ones compare with (Closure's
+// sanitizer: `value === document.all`). One object a document, walked when read.
+const allOf = new WeakMap();
+accessor(DP, "all", function () {
+  let c = allOf.get(this);
+  if (c) return c;
+  const doc = this;
+  const list = () => doc.querySelectorAll("*");
+  const named = (name) => doc.getElementById(name) || doc.querySelector(`[name="${String(name).replace(/["\\]/g, "\\$&")}"]`);
+  const base = { get length() { return list().length; }, item(i) { return i === undefined ? null : typeof i === "string" && !/^\d+$/.test(i) ? named(i) : list()[i] || null; }, namedItem(n) { return named(n); }, [Symbol.iterator]() { return list()[Symbol.iterator](); } };
+  c = $.markAll(new Proxy(base, { get(t, k) { if (k in t || typeof k === "symbol") return t[k]; return t.item(k) || undefined; } }));
+  allOf.set(this, c);
+  return c;
+});
 accessor(DP, "defaultView", function () { return this === g.document ? g : null; });
 accessor(DP, "referrer", function () { return ""; });
 accessor(DP, "domain", function () { const m = /^[a-z+.-]+:\/\/(?:[^@/]*@)?([^:/?#]*)/i.exec(this.URL); return m ? m[1] : ""; }, function () {});

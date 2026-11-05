@@ -50,7 +50,7 @@ accessor(HP, "popover", function () { return this.getAttribute("popover"); }, fu
 def(HP, "attachInternals", function () { return { setFormValue() {}, setValidity() {}, checkValidity() { return true; }, reportValidity() { return true; }, states: new Set(), shadowRoot: this.shadowRoot, form: null, labels: [] }; });
 def(HP, "showPopover", function () { this.style.display = "block"; });
 def(HP, "hidePopover", function () { this.style.display = "none"; });
-def(HP, "togglePopover", function () { this.style.display = this.style.display === "none" ? "block" : "none"; });
+def(HP, "togglePopover", function () { this.style.display = this.style.display === "block" ? "none" : "block"; });
 accessor(SVGElement.prototype, "ownerSVGElement", function () { let n = this.parentElement; while (n && n.tagName !== "svg") n = n.parentElement; return n; });
 str(SVGElement.prototype, "nonce");
 accessor(SVGElement.prototype, "className", function () { return this.getAttribute("class") || ""; }, function (v) { this.setAttribute("class", v); });
@@ -374,6 +374,11 @@ accessor(IF, "contentWindow", function () { return null; });
 accessor(IF, "contentDocument", function () { return null; });
 
 // Media elements don't play.
+// Bundles name these constants though no media ever plays here.
+class MediaError { constructor(code, message) { this.code = code; this.message = message || ""; } }
+Object.assign(MediaError, { MEDIA_ERR_ABORTED: 1, MEDIA_ERR_NETWORK: 2, MEDIA_ERR_DECODE: 3, MEDIA_ERR_SRC_NOT_SUPPORTED: 4 });
+Object.assign(MediaError.prototype, { MEDIA_ERR_ABORTED: 1, MEDIA_ERR_NETWORK: 2, MEDIA_ERR_DECODE: 3, MEDIA_ERR_SRC_NOT_SUPPORTED: 4 });
+def(g, "MediaError", MediaError);
 const MP = HTMLMediaElement.prototype;
 url(MP, "src");
 str(MP, "crossOrigin", "preload");

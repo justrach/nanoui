@@ -18,7 +18,7 @@ const calls = @import("interp_call.zig");
 pub inline fn truthy(v: Value) bool {
     if (v.isBool()) return v.asBool();
     if (v.isInt()) return v.asInt() != 0;
-    if (v.isObject()) return true;
+    if (v.isObject()) return !v.asObject().flags.html_dda;
     if (v.isNullish()) return false;
     if (v.isDouble()) {
         const d = v.asDouble();
@@ -188,8 +188,12 @@ pub fn strictEquals(vm: *Vm, a: Value, b: Value) Error!bool {
     return false;
 }
 
+fn nullishOrDda(v: Value) bool {
+    return v.isNullish() or (v.isObject() and v.asObject().flags.html_dda);
+}
+
 pub fn looseEquals(vm: *Vm, a: Value, b: Value) Error!bool {
-    if (a.isNullish() or b.isNullish()) return a.isNullish() and b.isNullish();
+    if (a.isNullish() or b.isNullish()) return nullishOrDda(a) and nullishOrDda(b);
     if (a.isNumber() and b.isNumber()) return a.asNumber() == b.asNumber();
     if (a.isString() and b.isString()) return str.eql(vm, a.asString(), b.asString());
     if (a.isObject() and b.isObject()) return a.bits == b.bits;
@@ -231,6 +235,8 @@ pub fn typeOf(vm: *Vm, v: Value) Value {
         k.bigint
     else if (v.isCallable())
         k.function
+    else if (v.isObject() and v.asObject().flags.html_dda)
+        k.undefined
     else
         k.object;
     return Value.fromString(key.atom());

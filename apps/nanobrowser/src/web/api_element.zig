@@ -136,6 +136,15 @@ fn styleOf(vm: *Vm, this: Value, _: []const Value) Error!Value {
     return style.inlineStyle(bind.world(vm), try elementOf(vm, this));
 }
 
+/// `el.style = "…"` sets its text, as `el.style.cssText` does.
+fn setStyleOf(vm: *Vm, this: Value, args: []const Value) Error!Value {
+    const n = try elementOf(vm, this);
+    const text = try bind.strNullEmpty(vm, args, 0);
+    const w = bind.world(vm);
+    if (text.len == 0) try mutate.removeAttr(w, n, "style") else try mutate.setAttr(w, n, "style", text);
+    return Value.undefined;
+}
+
 /// A template's markup is its content's.
 fn contentRoot(w: *World, n: *Node) *Node {
     if (n.isTag("template")) if (collections.templateContent(w, n)) |f| return f;
@@ -419,15 +428,15 @@ pub fn install(w: *World) Error!void {
         .{ .name = "previousElementSibling", .get = previousElementSibling },
     });
     try bind.accessors(vm, w.protos.html, &.{
-        .{ .name = "style", .get = styleOf },
+        .{ .name = "style", .get = styleOf, .set = setStyleOf },
         .{ .name = "dataset", .get = dataset },
     });
     try bind.accessors(vm, w.protos.svg, &.{
-        .{ .name = "style", .get = styleOf },
+        .{ .name = "style", .get = styleOf, .set = setStyleOf },
         .{ .name = "dataset", .get = dataset },
     });
     try bind.accessors(vm, w.protos.mathml, &.{
-        .{ .name = "style", .get = styleOf },
+        .{ .name = "style", .get = styleOf, .set = setStyleOf },
         .{ .name = "dataset", .get = dataset },
     });
     try bind.accessors(vm, classes.proto(w, "HTMLTemplateElement"), &.{.{ .name = "content", .get = templateContentGet }});

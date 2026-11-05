@@ -98,3 +98,14 @@ test "walking the tree, ranges and the selection's little" {
     });
     try r.expectNoErrors();
 }
+
+test "assigning to style sets its text" {
+    var r: util.Run = undefined;
+    try r.start();
+    defer r.stop();
+    try r.html("<!doctype html><div id=a></div><svg id=b></svg>");
+    try r.expectJs("a.style = 'color: red'; a.getAttribute('style')", "color: red");
+    try r.expectJs("a.style.color", "red");
+    try r.expectJs("b.style = 'fill: blue'; b.style.fill", "blue");
+    try r.expectJs("a.style = ''; a.hasAttribute('style')", "false");
+}
