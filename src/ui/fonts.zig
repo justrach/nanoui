@@ -1,7 +1,8 @@
 //! Fonts: the system's (SF Pro, SF Mono) or a family the theme names
 //! (Geist, JetBrains Mono, …), at a weight and in italics. A named family
 //! that is not installed falls back to the system's; a family without
-//! italics is slanted, as browsers synthesize them.
+//! italics is slanted, as browsers synthesize them. A family the app brought
+//! comes before an installed one of that name.
 const std = @import("std");
 const objc = @import("../objc.zig");
 const cf = @import("cf.zig");
@@ -24,6 +25,56 @@ extern "c" fn CGDataProviderCreateWithData(info: ?*anyopaque, data: [*]const u8,
 extern "c" fn CGFontCreateWithDataProvider(provider: *anyopaque) ?*anyopaque;
 extern "c" fn CTFontManagerRegisterGraphicsFont(font: *anyopaque, err: ?*?*anyopaque) bool;
 extern "c" fn CFErrorGetCode(err: *anyopaque) cf.CFIndex;
+extern "c" fn CTFontCreateWithGraphicsFont(font: *anyopaque, size: f64, matrix: ?*const Transform, attrs: ?*anyopaque) ?cf.CTFontRef;
+extern "c" fn CTFontCopyTraits(font: cf.CTFontRef) cf.CFDictionaryRef;
+extern "c" fn CFDictionaryGetValue(dict: cf.CFDictionaryRef, key: ?*const anyopaque) ?*anyopaque;
+extern "c" fn CFNumberGetValue(number: *anyopaque, kind: cf.CFIndex, out: *anyopaque) bool;
+
+/// A file the app brought, found by its family's name before anything
+/// installed: CoreText, asked by name, may answer with an installed cut of
+/// the family, whose glyphs and kerning differ (a variable Geist beside the
+/// app's own static files).
+const Face = struct { font: *anyopaque, family: cf.CFStringRef, weight: f64, italic: bool };
+var faces: [64]Face = undefined;
+var face_count: usize = 0;
+
+fn addFace(font: *anyopaque) void {
+    if (face_count == faces.len) return;
+    const ct = CTFontCreateWithGraphicsFont(font, 12, null, null) orelse return;
+    defer cf.CFRelease(ct);
+    const family = CTFontCopyFamilyName(ct);
+    const traits = CTFontCopyTraits(ct);
+    defer cf.CFRelease(traits);
+    var weight: f64 = 0;
+    if (CFDictionaryGetValue(traits, kCTFontWeightTrait)) |n| _ = CFNumberGetValue(n, kCFNumberFloat64Type, &weight);
+    const italic = CTFontGetSymbolicTraits(ct) & italic_trait != 0;
+    // The same face twice: the first stays, as CoreText's registering does.
+    for (faces[0..face_count]) |f| {
+        if (f.italic == italic and f.weight == weight and CFStringCompare(f.family, family, 0) == 0) {
+            cf.CFRelease(family);
+            return;
+        }
+    }
+    faces[face_count] = .{ .font = @ptrCast(cf.CFRetain(font)), .family = family, .weight = weight, .italic = italic };
+    face_count += 1;
+}
+
+/// Of the family's brought faces, the nearest in weight, in the slant asked
+/// for if it has one.
+fn brought(family: cf.CFStringRef, weight: f64, italic: bool) ?Face {
+    var best: ?Face = null;
+    for (faces[0..face_count]) |f| {
+        if (CFStringCompare(f.family, family, 0) != 0) continue;
+        const b = best orelse {
+            best = f;
+            continue;
+        };
+        const slant_better = f.italic == italic and b.italic != italic;
+        const slant_same = f.italic == b.italic;
+        if (slant_better or (slant_same and @abs(f.weight - weight) < @abs(b.weight - weight))) best = f;
+    }
+    return best;
+}
 
 /// Registers a font file's bytes (kept by the caller) for this process, so
 /// its family is found by name.
@@ -32,6 +83,7 @@ pub fn registerData(bytes: []const u8) bool {
     defer cf.CFRelease(provider);
     const font = CGFontCreateWithDataProvider(provider) orelse return false;
     defer cf.CFRelease(font);
+    addFace(font);
     var err: ?*anyopaque = null;
     if (CTFontManagerRegisterGraphicsFont(font, &err)) return true;
     const e = err orelse return false;
@@ -78,6 +130,12 @@ fn named(name: []const u8, size: f32, weight: types.Weight, italic: bool) ?cf.CT
     const family = cf.string(name);
     defer cf.CFRelease(family);
     const w = weightValue(weight);
+    if (brought(family, w, italic)) |face| {
+        const f = CTFontCreateWithGraphicsFont(face.font, size, null, null) orelse return null;
+        if (!italic or face.italic) return f;
+        defer cf.CFRelease(f);
+        return CTFontCreateCopyWithAttributes(f, size, &slant, null);
+    }
     const wnum = CFNumberCreate(null, kCFNumberFloat64Type, &w) orelse return null;
     defer cf.CFRelease(wnum);
     const sym: i32 = if (italic) @intCast(italic_trait) else 0;

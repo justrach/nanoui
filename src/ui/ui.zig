@@ -155,6 +155,7 @@ test {
     if (!@import("text.zig").portable) {
         _ = @import("shaper.zig");
         _ = @import("tests_wrap.zig");
+        _ = @import("tests_fonts_mac.zig");
     }
     _ = @import("raster.zig");
     _ = @import("tests_raster.zig");
