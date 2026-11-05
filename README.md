@@ -418,7 +418,10 @@ first after `zig build`.
 Devices, signing, app icons, extensions and iOS versions are in
 [docs/ios.md](docs/ios.md).
 
-Not on iOS yet: pages, or iPad multiwindow.
+Windows show pages too, in WKWebView, with the same typed IPC as the Mac's.
+WebKit loads with the first page, so an app without one doesn't pay for it.
+
+Not on iOS yet: iPad multiwindow.
 
 ### Android
 

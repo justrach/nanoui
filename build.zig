@@ -113,8 +113,8 @@ pub fn build(b: *std.Build) void {
 
     for (examples) |name| {
         // Pages (the hello and browser examples) need a webview: WKWebView on
-        // macOS, WebView2 on Windows, WebKitGTK on Linux.
-        const has_pages = os == .macos or os == .windows or (os == .linux and !target.result.abi.isAndroid());
+        // macOS and iOS, WebView2 on Windows, WebKitGTK on Linux.
+        const has_pages = os == .macos or os == .ios or os == .windows or (os == .linux and !target.result.abi.isAndroid());
         if (!has_pages and (std.mem.eql(u8, name, "hello") or std.mem.eql(u8, name, "browser"))) continue;
         if (os == .ios) {
             addIosExample(b, name, target, optimize, nanoui);
