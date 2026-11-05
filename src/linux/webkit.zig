@@ -7,6 +7,14 @@
 const std = @import("std");
 const gtk = @import("gtk.zig");
 
+extern "c" var environ: [*:null]const ?[*:0]const u8;
+extern "c" fn access(path: [*:0]const u8, mode: c_int) c_int;
+extern "c" fn waitpid(pid: c_int, status: *c_int, options: c_int) c_int;
+extern "c" fn posix_spawnp(pid: *c_int, file: [*:0]const u8, actions: ?*const anyopaque, attr: ?*const anyopaque, argv: [*:null]const ?[*:0]const u8, envp: [*:null]const ?[*:0]const u8) c_int;
+extern "c" fn posix_spawn_file_actions_init(actions: *anyopaque) c_int;
+extern "c" fn posix_spawn_file_actions_destroy(actions: *anyopaque) c_int;
+extern "c" fn posix_spawn_file_actions_addopen(actions: *anyopaque, fd: c_int, path: [*:0]const u8, flags: c_int, mode: c_uint) c_int;
+
 const Obj = *anyopaque;
 const Str = [*:0]const u8;
 const OptStr = ?[*:0]const u8;
@@ -61,20 +69,66 @@ pub var v6: Api6 = undefined;
 pub var v4x: Api4x = undefined;
 /// WebKitGTK 6.0 is loaded (else 4.1 or 4.0).
 pub var six = false;
+/// 6.0 is here, and bubblewrap can't run for it (`sandboxFails`).
+pub var blocked = false;
 var state: enum { untried, loaded, missing } = .untried;
+var sandbox_fails: ?bool = null;
 
 const name6 = "libwebkitgtk-6.0.so.4";
 const names4x = [_][*:0]const u8{ "libwebkit2gtk-4.1.so.0", "libwebkit2gtk-4.0.so.37" };
 
 /// Before GTK is chosen, for an app whose first window shows a page: picks
 /// the GTK that has a WebKitGTK. GTK 4 is preferred, as it is for native UI,
-/// but only with 6.0; many machines have GTK 4 and only 4.1.
+/// but only with 6.0 and only where its sandbox can start; many machines have
+/// GTK 4 and only 4.1.
 pub fn prepare() void {
-    if (!gtk.wantsThree() and open(name6) != null) return;
+    const three = gtk.wantsThree();
+    const six_here = !three and open(name6) != null;
+    if (six_here and !sandboxFails()) return;
     for (names4x) |n| if (open(n) != null) {
         gtk.force3 = true;
+        if (six_here) std.log.info("nanoui: bubblewrap can't run here: pages take WebKitGTK 4.x, without WebKit's sandbox", .{});
         return;
     };
+}
+
+/// Whether 6.0's web process can't start here. 6.0 always sandboxes it with
+/// bubblewrap, which can't run where user namespaces are restricted (Ubuntu
+/// 24.04's AppArmor, some containers), and WebKitGTK 2.52 then aborts the
+/// whole app. Only asked when WebKit would use bubblewrap: not when it's told
+/// not to, and not in Flatpak, Snap or a Podman container, where it decides
+/// for itself (its `shouldUseBubblewrap`).
+pub fn sandboxFails() bool {
+    if (sandbox_fails == null) sandbox_fails = !skipsBubblewrap() and refuses("bwrap");
+    return sandbox_fails.?;
+}
+
+fn skipsBubblewrap() bool {
+    const env = std.c.getenv;
+    return env("WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS") != null or
+        access("/.flatpak-info", 0) == 0 or
+        access("/run/.containerenv", 0) == 0 or
+        (env("SNAP") != null and env("SNAP_NAME") != null and env("SNAP_REVISION") != null);
+}
+
+/// Runs what WebKit itself runs to see whether bubblewrap works in a
+/// container. Only a refusal counts: without the program nothing is known
+/// (a WebKitGTK built to need it depends on it).
+pub fn refuses(file: [*:0]const u8) bool {
+    const argv = [_:null]?[*:0]const u8{ file, "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev", "--unshare-all", "true" };
+    // glibc's posix_spawn_file_actions_t is 80 bytes.
+    var actions: [128]u8 align(@alignOf(usize)) = undefined;
+    if (posix_spawn_file_actions_init(&actions) != 0) return false;
+    defer _ = posix_spawn_file_actions_destroy(&actions);
+    const write_only = 1;
+    for ([_]c_int{ 1, 2 }) |fd| _ = posix_spawn_file_actions_addopen(&actions, fd, "/dev/null", write_only, 0);
+    var pid: c_int = 0;
+    if (posix_spawnp(&pid, file, &actions, null, &argv, environ) != 0) return false;
+    var status: c_int = 0;
+    while (waitpid(pid, &status, 0) < 0) {
+        if (std.c.errno(-1) != .INTR) return false;
+    }
+    return status != 0;
 }
 
 fn open(name: [*:0]const u8) ?*anyopaque {
@@ -92,6 +146,11 @@ pub fn load() bool {
     state = .missing;
     if (gtk.v4) {
         const lib = open(name6) orelse return false;
+        if (sandboxFails()) {
+            blocked = true;
+            std.log.warn("nanoui: bubblewrap can't run here, and WebKitGTK 6.0 needs it", .{});
+            return false;
+        }
         if (!table(Api, lib, &api) or !table(Api6, lib, &v6)) return false;
         six = true;
     } else {

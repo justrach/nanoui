@@ -165,7 +165,7 @@ test "a headless run makes a page's window without GTK" {
 
 test "without a WebKitGTK the window says what to install" {
     var t: ui.Tester = undefined;
-    try t.init(testing.allocator, notice.view(), .{ .width = 320, .height = 300 });
+    try t.init(testing.allocator, notice.missingView(), .{ .width = 320, .height = 300 });
     defer t.deinit();
     t.frame();
     try testing.expect(t.hasText("This app needs WebKitGTK"));
@@ -176,4 +176,21 @@ test "without a WebKitGTK the window says what to install" {
     }
     try testing.expect(std.mem.indexOf(u8, notice.package(true), "libwebkitgtk-6.0") != null);
     try testing.expect(std.mem.indexOf(u8, notice.package(false), "libwebkit2gtk-4.1") != null);
+}
+
+test "where 6.0's sandbox can't start the window says so, whole" {
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, notice.sandboxView(), .{ .width = 320, .height = 340 });
+    defer t.deinit();
+    t.frame();
+    for ([_][]const u8{ "This app can't start WebKitGTK", notice.sandbox_explanation, notice.sandbox_fix }) |s| {
+        const r = t.findText(s) orelse return error.NoText;
+        try testing.expect(r.x >= 0 and r.x + r.w <= 320);
+    }
+}
+
+test "bubblewrap's refusal counts, its absence says nothing" {
+    try testing.expect(wk.refuses("false"));
+    try testing.expect(!wk.refuses("true"));
+    try testing.expect(!wk.refuses("nanoui-no-such-program"));
 }

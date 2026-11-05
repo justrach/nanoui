@@ -61,33 +61,27 @@ jobs:
             NANOUI_GTK=$v NANOUI_DEBUG=1 timeout 4 xvfb-run -a zig-out/bin/counter > gtk$v.txt 2>&1 || true
             grep -q "nanoui: GTK $v" gtk$v.txt || { cat gtk$v.txt; exit 1; }
           done
-      # A real page under each: its client served, a call to Zig and back.
-      - name: The hello page under WebKitGTK 6.0 and 4.1
-        env:
-          WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: "1"
+      # A real page, sandbox as the system leaves it: its client served, a call
+      # to Zig and back. In each world 6.0's sandbox can or can't start.
+      - name: The hello page where bubblewrap can and can't run
         run: |
           js='import("/nanoui.js").then(async (m) => { nanoui.log(await m.Greeter.greet("Ada")); nanoui.window.close(); })'
-          for v in 4 3; do
-            NANOUI_GTK=$v NANOUI_DEBUG=1 timeout 90 xvfb-run -a zig-out/bin/hello --nanoui-wait=60 "--nanoui-eval=$js" > page$v.txt 2>&1
-            grep -q "nanoui: GTK $v" page$v.txt && grep -q "page: Hello, Ada!" page$v.txt || { cat page$v.txt; exit 1; }
-          done
-      - name: "Probe: the hello page with WebKitGTK's sandbox as the system leaves it"
-        continue-on-error: true
-        run: |
-          echo "bwrap: $(command -v bwrap || echo none); proxy: $(command -v xdg-dbus-proxy || echo none)"
-          echo "userns restricted: $(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo unknown)"
-          dpkg -s libwebkitgtk-6.0-4 | grep -E '^(Version|Depends|Recommends)' | tr ',' '\n' | grep -E 'Version|bubblewrap|xdg-dbus-proxy' || true
-          ls /etc/apparmor.d 2>/dev/null | grep -iE 'bwrap|webkit' || echo "no bwrap or webkit apparmor profile"
-          probe() {
-            label=$1; shift
-            js='import("/nanoui.js").then(async (m) => { nanoui.log(await m.Greeter.greet("Ada")); nanoui.window.close(); })'
-            rc=0
-            env "$@" timeout 40 xvfb-run -a zig-out/bin/hello --nanoui-wait=30 "--nanoui-eval=$js" > probe.txt 2>&1 || rc=$?
-            echo "== $label rc=$rc"
-            grep -vE "libEGL|dbus|a11y" probe.txt | cut -c1-170 | tail -12 || true
+          page() {
+            NANOUI_DEBUG=1 timeout 90 xvfb-run -a zig-out/bin/hello --nanoui-wait=60 "--nanoui-eval=$js" > page$1.txt 2>&1 || { cat page$1.txt; exit 1; }
+            grep -q "nanoui: GTK $1" page$1.txt && grep -q "page: Hello, Ada!" page$1.txt || { cat page$1.txt; exit 1; }
           }
-          probe "GTK 4, WebKitGTK 6.0" NANOUI_GTK=4
-          probe "GTK 3, WebKitGTK 4.1" NANOUI_GTK=3
+          # Ubuntu's restriction: bwrap refuses, 6.0 would abort, so 4.1 and GTK 3.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=1
+          page 3
+          # Without it: 6.0 and GTK 4, in bubblewrap.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          page 4
+          # Restricted with only 6.0: the app lives and says why.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=1
+          sudo dpkg -r --force-depends libwebkit2gtk-4.1-0
+          timeout 40 xvfb-run -a zig-out/bin/hello --nanoui-wait=5 --nanoui-eval=0 > notice.txt 2>&1 || { cat notice.txt; exit 1; }
+          grep -q "nanoui: bubblewrap can't run here, and WebKitGTK 6.0 needs it" notice.txt || { cat notice.txt; exit 1; }
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-0
       - run: zig build test-nui
       - name: nui makes an app that builds, passes its test and renders
         run: |
