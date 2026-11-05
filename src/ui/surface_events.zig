@@ -447,6 +447,7 @@ fn performDragOperation(obj: objc.Object, _: objc.SEL, info: objc.Object) callco
 fn metalDisplayLinkNeedsUpdate(obj: objc.Object, _: objc.SEL, _: objc.Object, update: objc.Object) callconv(.c) void {
     const s = surfaceOf(obj) orelse return;
     if (s.dead or s.in_frame) return;
+    s.wake.last_tick = cf.CACurrentMediaTime();
     const target = objc.msg(f64, update, "targetPresentationTimestamp", .{});
     const frame_in_due = s.ctx.frame_in != null and target >= s.frame_in_due - 0.001;
     if (!s.full_pending and !frame_in_due and !s.ctx.animating and !s.in_live_resize and !s.geometry_changed and !s.retained_ready and !s.pending_sync and s.ctx.time_driven == .none) {

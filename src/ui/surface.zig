@@ -500,11 +500,10 @@ pub const Surface = struct {
     }
 
     pub fn setPaced(self: *Surface, on: bool) void {
+        if (on) @import("surface_wake.zig").watch(self);
         if (self.paced == on) return;
         self.paced = on;
-        if (!on) if (self.frame_log) |*fl| {
-            fl.last_t = 0;
-        };
+        if (!on) if (self.frame_log) |*fl| fl.last_t = 0;
         if (self.display_link) |link| objc.msg(void, link, "setPaused:", .{!on});
     }
 
