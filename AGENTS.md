@@ -136,7 +136,7 @@ src/android/          NativeActivity backend: the activity and the app's thread 
 src/menu_accel.zig    menus as accelerators (Linux, Windows, iOS, Android)
 src/kit/              nanoui.kit: components after GPUI Kit (buttons, overlays, tabs, forms)
 tools/*.Dockerfile    Linux (GTK, Xvfb) and Windows (Wine) test images
-tools/ios/            app bundles (bundle.zig), the Simulator (sim.sh), Zig's lib fixed (zig-lib.sh)
+tools/ios/            app bundles (bundle.zig, finish.sh, check-bundle.sh), the Simulator (sim.sh), Zig's lib fixed (zig-lib.sh)
 tools/android/        APKs (apk.zig: the SDK, the manifest, aapt2, pack.zig, apksigner), run.sh, emulator.sh
 examples/             hello (webview), counter and gallery (native UI), browser (local and remote pages)
 hillclimb/            headless benchmarks against mygo (its own package)

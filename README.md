@@ -413,24 +413,8 @@ folder again out of links to it, with that one line fixed, and prints the
 `--zig-lib` flag that uses it (nothing, once Zig is fixed), which goes
 first after `zig build`.
 
-`-Dtarget=aarch64-ios` builds for devices: sign the app with your team
-(Xcode, or `codesign` and a provisioning profile) and install it with
-`xcrun devicectl`. Zig compiles a device's program and Apple's linker
-(`xcrun clang`) links it: an iPhone refuses a program Zig 0.17.0 links,
-before it runs and without a crash report. An app bundles itself in its
-own build.zig:
-
-```zig
-const bundle = @import("nanoui").ios.app(b, exe, .{ .name = "Notes", .id = "com.example.notes" });
-```
-
-An app that makes its own bundle takes its program from
-`ios.executable(b, exe)`.
-
-Zig 0.17 makes iOS 18 the lowest an app runs on unless the target names
-one, and the app's Info.plist follows it. nanoui runs on iOS 15 and
-later: `-Dtarget=aarch64-ios.15.0` (or `aarch64-ios.15.0-simulator`)
-reaches those devices.
+Devices, signing, app icons, extensions and iOS versions are in
+[docs/ios.md](docs/ios.md).
 
 Not on iOS yet: pages, the selection's handles and loupe, keys repeating
 while held, or iPad multiwindow.

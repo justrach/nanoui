@@ -229,6 +229,24 @@ fn addIosExample(b: *std.Build, name: []const u8, target: std.Build.ResolvedTarg
         run.addPassthruArgs();
         step.dependOn(&run.step);
     } else step.dependOn(&b.addFail("run-* runs in the Simulator (-Dtarget=aarch64-ios-simulator); install on a device from Xcode or with xcrun devicectl").step);
+    if (std.mem.eql(u8, name, "counter")) {
+        // Every option `ios.app` takes, checked once they've gone through Xcode's tools.
+        const f = "tools/ios/fixture/";
+        const full = ios.app(b, exe, .{
+            .name = "Fixture",
+            .id = "dev.nanoui.fixture",
+            .info = "  <key>CFBundleURLTypes</key><array><dict><key>CFBundleURLSchemes</key><array><string>fixture</string></array></dict></array>",
+            .assets = b.path(f ++ "Assets.xcassets"),
+            .resources = &.{.{ .path = b.path(f ++ "resource.txt"), .name = "resource.txt" }},
+            .extensions = &.{.{ .path = b.path(f ++ "Widgets.appex"), .name = "Widgets.appex" }},
+            .watch = .{ .path = b.path(f ++ "Fixture Watch.app"), .name = "Fixture Watch.app" },
+            .entitlements = b.path(f ++ "fixture.entitlements"),
+        });
+        const check = b.addSystemCommand(&.{"sh"});
+        check.addFileArg(b.path("tools/ios/check-bundle.sh"));
+        check.addDirectoryArg(full);
+        b.step("test-bundle", "Check an iOS bundle with every option (-Dtarget=aarch64-ios-simulator)").dependOn(&check.step);
+    }
 }
 
 /// An example as an Android app: `zig-out/android/<Name>.apk`, and
