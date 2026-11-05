@@ -190,10 +190,27 @@ pub const Notes = struct {
     /// A list item's marker.
     marker_text: []const u8 = "",
     has_marker: bool = false,
+    /// `::marker`'s style, when it has one; the box's otherwise.
+    marker_style: ?*const Style = null,
+    /// `list-style-type: "text"` and `::marker { content }`: nothing between it and the content.
+    marker_no_gap: bool = false,
+    /// A flex or grid container's absolute child's static position: the space it
+    /// is aligned in and how far along it, each 0 to 1. Zero space: it stays at
+    /// where the container put it.
+    static_w: f32 = 0,
+    static_h: f32 = 0,
+    static_fx: f32 = 0,
+    static_fy: f32 = 0,
     /// The right and bottom of positioned boxes for which it is the
     /// containing block, in page coordinates.
     extra_r: f32 = 0,
     extra_b: f32 = 0,
+    /// A subgrid: the tracks it has from the grid around it, -1 for one not sized
+    /// yet, and the gaps between them there.
+    sub_cols: ?[]const f32 = null,
+    sub_rows: ?[]const f32 = null,
+    sub_col_gap: f32 = 0,
+    sub_row_gap: f32 = 0,
     /// A table's analysed grid (`table.zig`).
     table: ?*anyopaque = null,
 };
@@ -282,4 +299,6 @@ pub const Tree = struct {
     doc_h: f32,
     /// The canvas's color: the root's background, else the body's (CSS's propagation).
     canvas: style.Color = .transparent,
+    /// `overflow: hidden` on the root or body: scripts may scroll it, people may not.
+    locked: bool = false,
 };

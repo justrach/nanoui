@@ -6,6 +6,7 @@
 //!   host.picture(url) ?[]const u8         a background's bytes; asks for them the first time
 //!   host.gradient(g) ?[]const u8          a gradient as an encoded picture
 //!   host.control(c, box, x, y, opacity)   draws a form control at (x, y) in the open box
+//!   host.frame(c, node, x, y, r)          draws an `<iframe>`'s page at (x, y) in the open box, `r` in the window
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
@@ -98,7 +99,7 @@ fn draw(c: *ui.Context, it: *const display.Item, x: f32, y: f32, r: Rect, host: 
             s.tracking = t.spacing;
             _ = c.leaf(.{ .absolute = true, .offset = .{ .x = x, .y = y }, .opacity = it.opacity }, .{ .text = .{ .str = t.str, .style = s, .color = color(t.color) } }, null);
         },
-        .image => |im| drawImage(c, im, placed, r),
+        .image => |im| if (im.node.isTag("iframe")) host.frame(c, im.node, x, y, r) else drawImage(c, im, placed, r),
         .background => |bg| if (host.picture(bg.url)) |bytes| drawBackground(c, bg, bytes, placed, r, null),
         .gradient => |g| if (host.gradient(g.g)) |bytes| {
             const key = c.print("gradient:{x}", .{std.hash.Wyhash.hash(0, bytes)});

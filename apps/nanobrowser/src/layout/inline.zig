@@ -55,6 +55,8 @@ pub const Lay = struct {
     indent: f32 = 0,
     first: bool = true,
     strut_h: f32 = 0,
+    /// `text-wrap: balance`: lines break as if the room stopped here.
+    wrap_w: f32 = std.math.inf(f32),
     res: Result = .{},
     first_base: ?f32 = null,
     last_base: ?f32 = null,
@@ -108,6 +110,7 @@ pub fn layout(c: *Ctx, p: *Box, cw: f32, cx: f32, t: f32, floats: *Floats, ch: ?
     l.strut_h = c.lineHeight(p.style);
     l.indent = ctx.len(p.style.text_indent, cw);
 
+    if (p.style.text_balance and !floats.any()) try balance(&l);
     const n: u32 = @intCast(l.pieces.len);
     while (l.at.i < n) {
         const line = try buildLine(&l);
@@ -155,6 +158,39 @@ fn prepare(l: *Lay) Error!void {
     };
 }
 
+/// The most lines `text-wrap: balance` looks at, as in Chromium.
+const balance_lines = 10;
+
+/// How many lines the content takes at the width being tried, past the limit
+/// reported as more than it. Nothing is placed.
+fn countLines(l: *Lay) Error!u32 {
+    const n: u32 = @intCast(l.pieces.len);
+    var lines: u32 = 0;
+    l.at = .{};
+    while (l.at.i < n and lines <= balance_lines) {
+        const line = try buildLine(l);
+        if (line.has) lines += 1;
+    }
+    l.at = .{};
+    return lines;
+}
+
+/// The narrowest width that takes no more lines than the full width does.
+fn balance(l: *Lay) Error!void {
+    for (l.pieces) |*pc| if (pc.tag == .float or pc.tag == .newline) return;
+    const want = try countLines(l);
+    if (want < 2 or want > balance_lines) return;
+    var lo: f32 = 0;
+    var hi: f32 = l.cw;
+    var tries: u8 = 0;
+    while (tries < 12 and hi - lo > 1) : (tries += 1) {
+        const mid = (lo + hi) / 2;
+        l.wrap_w = mid;
+        if (try countLines(l) <= want) hi = mid else lo = mid;
+    }
+    l.wrap_w = hi;
+}
+
 const Brk = struct { at: Cursor, w: f32, content_end: u32 };
 
 fn buildLine(l: *Lay) Error!Line {
@@ -169,7 +205,7 @@ fn buildLine(l: *Lay) Error!Line {
     var brk: ?Brk = null;
     while (i < n) {
         const p = &l.pieces[i];
-        const avail = l.x1 - l.x0;
+        const avail = @min(l.x1 - l.x0, l.wrap_w);
         switch (p.tag) {
             .abs => i += 1,
             .opp => {

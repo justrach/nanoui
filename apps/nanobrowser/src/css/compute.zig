@@ -28,7 +28,16 @@ pub const Result = struct {
     scope: ?*const vars.Scope,
     before: bool = false,
     after: bool = false,
+    marker: bool = false,
+    backdrop: bool = false,
 };
+
+/// A shadow root's stand-in: nothing matches it, and it adds no box.
+pub fn shadowRoot(parent: *const Style, parent_scope: ?*const vars.Scope, out: *Style) Result {
+    out.* = wide.inherit(parent);
+    out.display = .contents;
+    return .{ .scope = parent_scope };
+}
 
 fn entryLess(_: void, a: Entry, b: Entry) bool {
     return a.key < b.key;
@@ -53,14 +62,21 @@ pub fn element(e: *Engine, n: *dom.Node, parent: *const Style, parent_scope: ?*c
     e.matched.clearRetainingCapacity();
     e.pseudo_before.clearRetainingCapacity();
     e.pseudo_after.clearRetainingCapacity();
+    e.pseudo_marker.clearRetainingCapacity();
+    e.pseudo_backdrop.clearRetainingCapacity();
     e.collected.clearRetainingCapacity();
-    try e.index.?.collect(gpa, n, &e.match_ctx, &e.collected);
-    for (e.collected.items) |m| switch (m.sel.pseudo) {
-        .none => try e.matched.append(gpa, m),
-        .before => try e.pseudo_before.append(gpa, m),
-        .after => try e.pseudo_after.append(gpa, m),
-        .other => {},
-    };
+    try e.collectFor(n);
+    for (e.collected.items) |m| {
+        if (m.container) |c| if (!e.containerHolds(c, n)) continue;
+        switch (m.sel.pseudo) {
+            .none, .slotted, .part => try e.matched.append(gpa, m),
+            .before => try e.pseudo_before.append(gpa, m),
+            .after => try e.pseudo_after.append(gpa, m),
+            .marker => try e.pseudo_marker.append(gpa, m),
+            .backdrop => try e.pseudo_backdrop.append(gpa, m),
+            .other => {},
+        }
+    }
     std.mem.sort(Entry, e.matched.items, {}, entryLess);
     const inline_d = if (n.attrs.items.len > 0) try inlineDecls(n) else null;
 
@@ -79,6 +95,8 @@ pub fn element(e: *Engine, n: *dom.Node, parent: *const Style, parent_scope: ?*c
         .scope = scope,
         .before = hasContent(e.pseudo_before.items),
         .after = hasContent(e.pseudo_after.items),
+        .marker = e.pseudo_marker.items.len > 0,
+        .backdrop = e.pseudo_backdrop.items.len > 0,
     };
 }
 
@@ -101,7 +119,9 @@ pub fn pseudo(e: *Engine, n: *dom.Node, list: []Entry, parent: *const Style, par
         .is_element = false,
     };
     const shows = try run.compute(out);
-    return shows and out.display != .none;
+    // `::marker` is there whatever its rules say; `content` only changes its words.
+    const always = list.len > 0 and (list[0].sel.pseudo == .marker or list[0].sel.pseudo == .backdrop);
+    return (shows or always) and out.display != .none;
 }
 
 fn customProperties(e: *Engine, list: []const Entry, inline_d: ?*const Declarations, parent: ?*const vars.Scope) Allocator.Error!?*const vars.Scope {
@@ -307,6 +327,11 @@ const Run = struct {
         const out_of_flow = s.position == .absolute or s.position == .fixed;
         if (out_of_flow) s.float = .none;
         const is_root = r.parent == &r.e.root_parent;
+        s.was_block = !(s.display == .inline_ or s.display == .inline_block or s.display == .inline_flex or s.display == .inline_grid or s.display == .inline_table);
+        if (r.parent.inert or (r.is_element and r.node.hasAttr("inert"))) s.inert = true;
+        if (s.inert) s.pointer_events = false;
+        if (s.container_type == .size) s.contain_size = true;
+        if (s.container_type == .inline_size) s.contain_inline_size = true;
         if (s.float != .none or out_of_flow or is_root or r.flexParent()) s.display = blockified(s.display);
         // `-webkit-center`, `<center>`, `<td align=center>`: block children with
         // no margins of their own are centered too, not only the text.
@@ -327,6 +352,7 @@ const Run = struct {
         // `overflow` on the root, and on the body beside a root that leaves
         // it alone, is the viewport's: the page itself is what scrolls.
         if (is_root or (r.node.isTag("body") and r.parent.overflow_x == .visible and r.parent.overflow_y == .visible)) {
+            s.locks_viewport = s.overflow_y == .hidden or s.overflow_y == .clip;
             s.overflow_x = .visible;
             s.overflow_y = .visible;
         }

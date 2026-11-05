@@ -171,7 +171,12 @@ const elementNS = {
 };
 for (const k in elementNS) def(EP, k, elementNS[k]);
 accessor(EP, "prefix", function () { return null; });
-accessor(EP, "assignedSlot", function () { return null; });
+accessor(EP, "assignedSlot", function () {
+  const root = this.parentNode && this.parentNode.shadowRoot;
+  if (!root) return null;
+  const name = this.getAttribute("slot") || "";
+  return root.querySelector(name ? `slot[name="${CSS.escape(name)}"]` : "slot:not([name])");
+});
 accessor(EP, "part", function () { return this.classList; });
 for (const name of ["role", "ariaLabel", "ariaHidden", "ariaExpanded", "ariaDisabled", "ariaChecked", "ariaSelected", "ariaCurrent", "ariaHasPopup", "ariaControls", "ariaLive", "ariaValueNow", "ariaValueMin", "ariaValueMax", "ariaDescribedByElements"]) {
   const attr = name === "role" ? "role" : "aria-" + name.slice(4).toLowerCase();
@@ -206,8 +211,6 @@ const docProps = {
   },
   createAttribute(name) { return new Attr(null, name); },
   hasFocus() { return true; },
-  open() { return this; },
-  close() {},
   getElementsByName(name) { return this.querySelectorAll(`[name="${CSS.escape(String(name))}"]`); },
   getSelection() { return g.getSelection(); },
   execCommand() { return false; },

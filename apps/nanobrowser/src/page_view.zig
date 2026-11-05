@@ -13,6 +13,7 @@ const replay = @import("paint/replay.zig");
 const controls = @import("paint/controls.zig");
 const loader = @import("loader.zig");
 const input = @import("page_input.zig");
+const frames = @import("frames.zig");
 const web = @import("web/web.zig");
 const Page = @import("page.zig").Page;
 
@@ -114,11 +115,22 @@ pub fn relayout(p: *Page, c: *ui.Context) void {
     var fonts: Fonts = .{ .p = p, .c = c };
     const m = fonts.measurer();
     p.doc.layout_dirty = false;
-    const tree = layout.run(a, p.doc, .{ .width = p.viewport_w, .height = p.viewport_h }, m) catch {
+    var tree = layout.run(a, p.doc, .{ .width = p.viewport_w, .height = p.viewport_h }, m) catch {
         p.tree = null;
         p.list = null;
         return;
     };
+    // A container's size decides its contents' style. Each pass settles a level.
+    var passes: u8 = 0;
+    while (passes < 4 and layout.updateContainers(&p.engine)) : (passes += 1) {
+        _ = p.layout_arena.reset(.retain_capacity);
+        tree = layout.run(a, p.doc, .{ .width = p.viewport_w, .height = p.viewport_h }, m) catch {
+            p.tree = null;
+            p.list = null;
+            return;
+        };
+    }
+    p.doc.layout_dirty = false;
     p.tree = tree;
     p.list = display.build(a, tree, p.doc.node, m, &p.scrolls) catch null;
     if (p.restore_scroll > 0) if (p.list) |*l| {
@@ -141,7 +153,116 @@ const Replay = struct {
     pub fn control(h: Replay, c: *ui.Context, b: *const box.Box, x: f32, y: f32, opacity: f32) void {
         controls.draw(h.p, c, b, x, y, opacity);
     }
+
+    /// An `<iframe>`: what its page came to, drawn in its box.
+    pub fn frame(h: Replay, c: *ui.Context, n: *dom.Node, x: f32, y: f32, r: box.Rect) void {
+        const child = frames.childPage(h.p, n) orelse return;
+        drawFrame(child, c, x, y, r);
+    }
 };
+
+/// Everything a frame's page does before anything is drawn: scripts' turn, style and
+/// layout, then the same for the frames in it. Nothing draws, so what scripts do can't
+/// pull a list out from under its replay.
+fn advanceFrames(p: *Page, c: *ui.Context) void {
+    const l = if (p.list) |*x| x else return;
+    frames.schedule(p);
+    for (l.frames) |it| {
+        const child = frames.childPage(p, it.kind.image.node) orelse continue;
+        const clip = l.clips[it.clip];
+        const r = l.placed(it);
+        const f = child.frame.?;
+        f.rect = r;
+        child.origin = .{ r.x, r.y };
+        if (clip.visible.w <= 0 or clip.visible.h <= 0) continue;
+        if (r.x >= clip.visible.x + clip.visible.w or r.x + r.w <= clip.visible.x or r.y >= clip.visible.y + clip.visible.h or r.y + r.h <= clip.visible.y) continue;
+        if (r.w <= 0 or r.h <= 0) continue;
+        child.busy += 1;
+        web.frameStart(child);
+        if (!child.dead) {
+            prepare(child, c, r.w, r.h);
+            if (child.list != null) child.list.?.resolve(r.x, r.y, r.w, r.h);
+            web.frameLaid(child);
+        }
+        if (!child.dead) {
+            prepare(child, c, r.w, r.h);
+            if (child.list != null) {
+                const cl = &child.list.?;
+                cl.resolve(r.x, r.y, r.w, r.h);
+                clampScrolls(child, cl);
+                cl.resolve(r.x, r.y, r.w, r.h);
+            }
+            advanceFrames(child, c);
+        }
+        child.busy -= 1;
+        child.maybeFree();
+        // A script in it may have changed this page: this frame shows that.
+        if (p.doc.layout_dirty or p.doc.style_dirty) return;
+    }
+}
+
+fn drawFrame(p: *Page, c: *ui.Context, x: f32, y: f32, r: box.Rect) void {
+    if (p.dead) return;
+    const l = if (p.list) |*q| q else return;
+    p.busy += 1;
+    defer {
+        p.busy -= 1;
+        p.maybeFree();
+    }
+    c.next_key_int = @intFromPtr(p);
+    var st: ui.Style = .{ .absolute = true, .offset = .{ .x = x, .y = y }, .width = .{ .px = r.w }, .height = .{ .px = r.h }, .clip = true };
+    if (l.canvas.a > 0) st.background = replay.color(l.canvas);
+    _ = c.open(st, null);
+    defer c.end();
+    web.paintStart(p);
+    replay.replay(c, l, Replay{ .p = p }, r);
+    scrollbar(c, l, r);
+    controls.selectList(p, c, r);
+    web.paintEnd(p);
+    web.frameEnd(p, c);
+}
+
+/// The page under a point, and the element in it, going down through frames.
+const Under = struct { page: *Page, node: ?*dom.Node };
+
+fn underPointer(p: *Page, x: f32, y: f32) Under {
+    const l = if (p.list) |*q| q else return .{ .page = p, .node = null };
+    var hit = l.hit(x, y);
+    // While a modal dialog shows, what's outside it takes no input.
+    if (p.doc.modalDialog()) |d| {
+        if (hit == null or !d.contains(hit.?)) hit = null;
+    }
+    const n = hit orelse return .{ .page = p, .node = null };
+    if (n.isTag("iframe")) if (frames.childPage(p, n)) |child| {
+        if (child.list != null and child.frame.?.rect.contains(x, y)) return underPointer(child, x, y);
+    };
+    return .{ .page = p, .node = n };
+}
+
+/// A wheel over a frame scrolls it while it can, then what holds it.
+fn wheelThrough(p: *Page, x: f32, y: f32, dx: f32, dy: f32) void {
+    const l = if (p.list) |*q| q else return;
+    const n = l.hit(x, y);
+    if (n) |e| if (e.isTag("iframe")) if (frames.childPage(p, e)) |child| {
+        if (child.list != null and child.frame.?.rect.contains(x, y) and canScroll(child, x, y, dx, dy)) return wheelThrough(child, x, y, dx, dy);
+    };
+    wheel(p, l, x, y, dx, dy);
+}
+
+fn canScroll(p: *Page, x: f32, y: f32, dx: f32, dy: f32) bool {
+    const l = if (p.list) |*q| q else return false;
+    const n = l.hit(x, y);
+    if (n) |e| if (e.isTag("iframe")) if (frames.childPage(p, e)) |child| {
+        if (child.list != null and canScroll(child, x, y, dx, dy)) return true;
+    };
+    const i = l.scrollerAt(x, y);
+    const k = l.clips[i];
+    if (i == 1 and !k.scrolls) return false;
+    const m = l.maxScroll(i);
+    if (dy != 0 and ((dy < 0 and k.scroll_y < m[1]) or (dy > 0 and k.scroll_y > 0))) return true;
+    if (dx != 0 and ((dx < 0 and k.scroll_x < m[0]) or (dx > 0 and k.scroll_x > 0))) return true;
+    return false;
+}
 
 /// Draws the page in `rect` (window coordinates) and takes its input.
 pub fn view(p: *Page, c: *ui.Context, rect: box.Rect) void {
@@ -167,6 +288,15 @@ pub fn view(p: *Page, c: *ui.Context, rect: box.Rect) void {
     l.resolve(rect.x, rect.y, rect.w, rect.h);
     clampScrolls(p, l);
     l.resolve(rect.x, rect.y, rect.w, rect.h);
+    if (l.frames.len > 0 or p.frames.list.items.len > 0) {
+        advanceFrames(p, c);
+        if (p.dead) return;
+        if (p.doc.layout_dirty or p.doc.style_dirty) {
+            prepare(p, c, rect.w, rect.h);
+            if (p.list == null) return;
+            p.list.?.resolve(rect.x, rect.y, rect.w, rect.h);
+        }
+    }
 
     const canvas = if (l.canvas.a > 0) replay.color(l.canvas) else if (c.theme.dark and p.state == .failed) c.theme.background else ui.Color.white;
     c.next_key_int = @intFromPtr(p);
@@ -187,9 +317,17 @@ pub fn view(p: *Page, c: *ui.Context, rect: box.Rect) void {
     c.wants_wheel = true;
     const mouse = c.input.mouse;
     const inside = rect.contains(mouse.x, mouse.y);
-    var hovered: ?*dom.Node = null;
-    if (inside) hovered = l.hit(mouse.x, mouse.y);
-    input.pointer(p, c, it, hovered, mouse.x, mouse.y, inside);
+    const under: Under = if (inside) underPointer(p, mouse.x, mouse.y) else .{ .page = p, .node = null };
+    const hovered = if (under.page == p) under.node else null;
+    if (under.page != p) {
+        // Over a frame: its page hears, and this one sees the pointer leave.
+        input.pointer(p, c, it, null, mouse.x, mouse.y, inside and false);
+        input.pointer(under.page, c, it, under.node, mouse.x, mouse.y, inside);
+        if (c.input.pressed and it.hovered) frames.focusChain(under.page);
+    } else {
+        input.pointer(p, c, it, hovered, mouse.x, mouse.y, inside);
+        if (c.input.pressed and it.hovered) frames.focusChain(p);
+    }
     if (p.dead) return;
     if (p.doc.layout_dirty or p.doc.style_dirty) {
         // What the pointer did restyled it, or a script changed it: this
@@ -198,19 +336,26 @@ pub fn view(p: *Page, c: *ui.Context, rect: box.Rect) void {
         if (p.list == null) return;
         p.list.?.resolve(rect.x, rect.y, rect.w, rect.h);
     }
-    web.keys(p, c);
+    const typing = frames.keyboardPage(p);
+    web.keys(typing, c);
+    if (p.dead) return;
+    if (c.input.key == .escape) web.escape(typing);
     if (p.dead) return;
     var wheel_taken = false;
     if (inside and (c.input.scroll.y != 0 or c.input.scroll.x != 0)) {
-        wheel_taken = web.wheel(p, hovered, mouse.x, mouse.y, -c.input.scroll.x, -c.input.scroll.y, .{ .ctrl = c.input.ctrl, .shift = c.input.shift, .alt = c.input.alt, .meta = c.input.cmd });
+        wheel_taken = web.wheel(under.page, under.node, mouse.x, mouse.y, -c.input.scroll.x, -c.input.scroll.y, .{ .ctrl = c.input.ctrl, .shift = c.input.shift, .alt = c.input.alt, .meta = c.input.cmd });
         if (p.dead) return;
     }
     if (p.doc.layout_dirty or p.doc.style_dirty) prepare(p, c, rect.w, rect.h);
     if (p.list == null) return;
     const shown = &p.list.?;
     shown.resolve(rect.x, rect.y, rect.w, rect.h);
-    if (inside and !wheel_taken and (c.input.scroll.y != 0 or c.input.scroll.x != 0)) wheel(p, shown, mouse.x, mouse.y, c.input.scroll.x, c.input.scroll.y);
-    if (inside) keyScroll(p, c, shown, rect.h);
+    if (inside and !wheel_taken and (c.input.scroll.y != 0 or c.input.scroll.x != 0)) wheelThrough(p, mouse.x, mouse.y, c.input.scroll.x, c.input.scroll.y);
+    if (inside) {
+        if (typing == p) {
+            keyScroll(p, c, shown, rect.h);
+        } else if (typing.list) |*tl| keyScroll(typing, c, tl, typing.viewport_h);
+    }
     shown.resolve(rect.x, rect.y, rect.w, rect.h);
     web.paintStart(p);
     replay.replay(c, shown, Replay{ .p = p }, rect);
@@ -222,6 +367,7 @@ pub fn view(p: *Page, c: *ui.Context, rect: box.Rect) void {
 
 fn wheel(p: *Page, l: *display.List, x: f32, y: f32, dx: f32, dy: f32) void {
     const i = l.scrollerAt(x, y);
+    if (i == 1 and !l.clips[1].scrolls) return;
     scrollBy(p, l, i, -dx, -dy);
 }
 
@@ -255,7 +401,7 @@ fn clampScrolls(p: *Page, l: *display.List) void {
 
 /// The keys that move a page when nothing is being typed in.
 fn keyScroll(p: *Page, c: *ui.Context, l: *display.List, h: f32) void {
-    if (c.focus != 0) return;
+    if (c.focus != 0 or !l.clips[1].scrolls) return;
     const step: f32 = 48;
     if (c.input.key) |k| switch (k) {
         .up => scrollBy(p, l, 1, 0, -step),

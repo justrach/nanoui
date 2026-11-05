@@ -19,7 +19,14 @@ pub const Len = struct {
     /// Percent of the reference (50 for 50%).
     pct: f32 = 0,
 
-    pub const Kind = enum { length, auto, none, min_content, max_content, fit_content };
+    /// `min()`, `max()` and `clamp()` over percentages, decided when the reference
+    /// is known. `px` and `pct` then hold what the viewport's width would decide,
+    /// for readers with no reference.
+    math: ?*const Math = null,
+
+    /// `stretch`: fill the containing block, margins taken off. `fit_content` with
+    /// `px` or `pct` set is the function: `fit-content(200px)`.
+    pub const Kind = enum { length, auto, none, min_content, max_content, fit_content, stretch };
     pub const auto: Len = .{ .kind = .auto };
     pub const none: Len = .{ .kind = .none };
     pub const zero: Len = .{};
@@ -34,7 +41,41 @@ pub const Len = struct {
 
     /// Against `ref`; `ifAuto` for anything not a length.
     pub fn resolve(l: Len, ref: f32, if_auto: f32) f32 {
-        return if (l.kind == .length) l.px + l.pct * ref / 100 else if_auto;
+        return if (l.kind == .length) l.at(ref) else if_auto;
+    }
+
+    /// The value against a reference of `ref`.
+    pub fn at(l: Len, ref: f32) f32 {
+        if (l.math) |m| return m.at(ref);
+        return l.px + l.pct * ref / 100;
+    }
+
+    /// Whether the value depends on its reference.
+    pub fn hasPct(l: Len) bool {
+        return l.pct != 0 or l.math != null;
+    }
+};
+
+/// A comparison that a percentage keeps open until layout, or a sum or multiple
+/// of one. `args` may hold more of the same.
+pub const Math = struct {
+    op: Op,
+    args: []const Len,
+    scale: f32 = 1,
+
+    pub const Op = enum { min, max, add };
+
+    pub fn at(m: *const Math, ref: f32) f32 {
+        var v: f32 = if (m.args.len > 0) m.args[0].at(ref) else 0;
+        if (m.args.len > 1) for (m.args[1..]) |x| {
+            const o = x.at(ref);
+            v = switch (m.op) {
+                .min => @min(v, o),
+                .max => @max(v, o),
+                .add => v + o,
+            };
+        };
+        return v * m.scale;
     }
 };
 
@@ -60,6 +101,7 @@ pub const Display = enum {
     table_column,
     table_column_group,
 };
+pub const ContainerType = enum { normal, inline_size, size };
 pub const Position = enum { static, relative, absolute, fixed, sticky };
 pub const Float = enum { none, left, right };
 pub const Clear = enum { none, left, right, both };
@@ -69,7 +111,7 @@ pub const TextAlign = enum { start, end, left, right, center, justify };
 pub const WhiteSpace = enum { normal, nowrap, pre, pre_wrap, pre_line };
 pub const TextTransform = enum { none, uppercase, lowercase, capitalize };
 pub const VerticalAlign = enum { baseline, top, middle, bottom, text_top, text_bottom, sub, super };
-pub const ListStyle = enum { none, disc, circle, square, decimal, lower_alpha, upper_alpha, lower_roman, upper_roman };
+pub const ListStyle = enum { none, disc, circle, square, decimal, decimal_leading_zero, lower_alpha, upper_alpha, lower_roman, upper_roman, lower_greek };
 pub const Visibility = enum { visible, hidden, collapse };
 pub const BorderStyle = enum { none, hidden, solid, dashed, dotted, double, groove, ridge, inset, outset };
 pub const Cursor = enum { auto, default, pointer, text, not_allowed, grab, col_resize, row_resize };
@@ -137,18 +179,27 @@ pub const Track = struct {
     max_pct: f32 = 0,
     /// `minmax`: the least was `auto` or `min-content` rather than a length.
     min_auto: bool = false,
+    /// `fixed`, `minmax`'s least, and `minmax`'s most when they are open comparisons.
+    math: ?*const Math = null,
+    max_math: ?*const Math = null,
+    /// `fit-content(limit)`: as `auto`, its most capped at this (`px`, `pct`).
+    fit: bool = false,
     pub const Kind = enum { auto, fixed, fr, minmax, min_content, max_content };
 };
 
 /// `repeat(auto-fill|auto-fit, track)`: the track fitted as many times as room allows.
 pub const TrackList = struct {
     tracks: []const Track = &.{},
-    /// Index in `tracks` of the repeated track when auto-repeated; -1 for none.
+    /// Index in `tracks` of the repeated group when auto-repeated; -1 for none.
     auto_repeat: i16 = -1,
+    /// How many tracks the auto-repeated group has.
+    repeat_len: u16 = 1,
     /// `auto-fit`: repeated tracks with nothing in them collapse. `auto-fill` otherwise.
     auto_fit: bool = false,
     /// Lines named in brackets (`[content-start] 1fr [content-end]`).
     names: []const LineName = &.{},
+    /// `subgrid`: the tracks are those of the grid around it, where it has one.
+    subgrid: bool = false,
 };
 
 /// A named grid line, 1-based, counting an auto-repeat as one track.
@@ -166,6 +217,22 @@ pub const Transform = struct {
     x: Len = .zero,
     y: Len = .zero,
     scale: f32 = 1,
+};
+
+/// One step of `counter-reset`, `counter-increment` or `counter-set`.
+pub const CounterOp = struct { name: []const u8, value: i32 };
+
+/// A piece of `content`: text, or a counter's value when the box is made.
+pub const ContentPart = union(enum) {
+    text: []const u8,
+    counter: Counter,
+
+    pub const Counter = struct {
+        name: []const u8,
+        kind: ListStyle = .decimal,
+        /// `counters(name, sep)`: every nested value, joined by this.
+        sep: ?[]const u8 = null,
+    };
 };
 
 pub const Style = struct {
@@ -192,6 +259,16 @@ pub const Style = struct {
     max_width: Len = .none,
     max_height: Len = .none,
     aspect_ratio: f32 = 0,
+    /// `aspect-ratio: auto <ratio>`: a picture's own shape wins over it.
+    aspect_auto: bool = false,
+    /// `container-type`, and `container-name`'s names.
+    container_type: ContainerType = .normal,
+    container_names: []const []const u8 = &.{},
+    /// `contain: size` and `inline-size`: what's inside doesn't size the box.
+    contain_size: bool = false,
+    contain_inline_size: bool = false,
+    /// `contain: layout` or `paint`: a formatting context of its own.
+    contain_flow: bool = false,
     margin_top: Len = .zero,
     margin_right: Len = .zero,
     margin_bottom: Len = .zero,
@@ -302,7 +379,8 @@ pub const Style = struct {
     align_self: Align = .auto,
     align_content: Align = .normal,
     row_gap: Len = .zero,
-    column_gap: Len = .zero,
+    /// `auto` is `normal`: nothing in flex and grid, 1em between columns.
+    column_gap: Len = .auto,
     grid_template_columns: TrackList = .{},
     grid_template_rows: TrackList = .{},
     grid_auto_rows: Track = .{},
@@ -311,12 +389,42 @@ pub const Style = struct {
     grid_row: GridPlace = .{},
     /// `grid-auto-flow: column`.
     grid_auto_flow_column: bool = false,
+    /// `grid-auto-flow: dense`.
+    grid_auto_flow_dense: bool = false,
     grid_areas: []const GridArea = &.{},
     /// `mask-image`: the box's background shows through this picture's shape.
     mask_image: []const u8 = "",
 
     /// `::before`/`::after`'s text: its `content` decoded.
     content: []const u8 = "",
+    /// `content` holding counters: what to build the text from, `content` then unused.
+    content_parts: []const ContentPart = &.{},
+    counter_reset: []const CounterOp = &.{},
+    counter_increment: []const CounterOp = &.{},
+    counter_set: []const CounterOp = &.{},
+    /// `list-style-type: "text"`.
+    list_style_text: ?[]const u8 = null,
+    /// `::marker { content: none }` and the like: no marker shows.
+    marker_hidden: bool = false,
+    /// `text-wrap: balance`.
+    text_balance: bool = false,
+    /// `column-count`, 0 for auto; `column-width`, 0 for auto.
+    column_count: u16 = 0,
+    column_width: f32 = 0,
+    /// `column-span: all`.
+    column_span_all: bool = false,
+    /// `column-rule`: drawn by paint between the columns when it can.
+    scroll_margin_top: f32 = 0,
+    scroll_padding_top: f32 = 0,
+    /// `overflow: hidden` here is the viewport's: people can't scroll the page.
+    locks_viewport: bool = false,
+    /// In an `inert` subtree: takes no input and no focus.
+    inert: bool = false,
+    /// `content-visibility: hidden`.
+    content_hidden: bool = false,
+    /// `position: absolute` here was block-level before it was positioned: its
+    /// static position is under the line it's in, not on it.
+    was_block: bool = false,
 
     pub fn isFlex(s: *const Style) bool {
         return s.display == .flex or s.display == .inline_flex;

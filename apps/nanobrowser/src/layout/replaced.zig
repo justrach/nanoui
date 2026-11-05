@@ -53,11 +53,14 @@ fn natural(c: *Ctx, b: *Box) Natural {
         out.ratio = aw.?.px / ah.?.px;
     }
     if (out.ratio == null) out.ratio = viewBoxRatio(n);
+    // `aspect-ratio: 2`, over a picture's own; `auto 2` only where it has none.
+    if (b.style.aspect_ratio > 0 and (!b.style.aspect_auto or out.ratio == null)) out.ratio = ctx.clean(b.style.aspect_ratio);
     if (out.ratio) |r| {
         if (out.w != null and out.h == null) out.h = out.w.? / r;
         if (out.h != null and out.w == null) out.w = out.h.? * r;
     }
     if (out.w == null and out.h == null and !n.isTag("img")) {
+        // A frame or canvas has a default size.
         out.w = 300;
         if (out.ratio) |r| {
             out.h = 300 / r;
@@ -151,7 +154,7 @@ pub fn intrinsic(c: *Ctx, b: *Box) Error!intr.Sizes {
     if (b.node) |n| if (dimAttr(n, "width")) |d| {
         attr_pct = d.pct;
     };
-    const compressible = b.style.width.pct != 0 or b.style.max_width.pct != 0 or attr_pct;
+    const compressible = b.style.width.hasPct() or b.style.max_width.hasPct() or attr_pct;
     return .{ .min = if (compressible) ctx.bpH(b) else whole.w, .max = whole.w };
 }
 
@@ -225,5 +228,5 @@ pub fn controlIntrinsic(c: *Ctx, b: *Box) Error!intr.Sizes {
     const sz = try controlSize(c, b);
     const e = ctx.edgesOf(b.style, 0);
     const w = sz.w + e.border.horizontal() + e.padding.horizontal();
-    return .{ .min = if (b.style.width.pct != 0) e.border.horizontal() + e.padding.horizontal() else w, .max = w };
+    return .{ .min = if (b.style.width.hasPct()) e.border.horizontal() + e.padding.horizontal() else w, .max = w };
 }

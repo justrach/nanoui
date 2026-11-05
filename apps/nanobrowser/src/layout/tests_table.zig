@@ -279,7 +279,7 @@ test "col widths in auto layout" {
     try u.close(50, t.boxOf(a).w, "from col");
 }
 
-test "border-collapse: no spacing, and adjacent borders overlap by half" {
+test "border-collapse: no spacing, and each line's border shared by half" {
     var t = try T.init();
     defer t.deinit();
     var s = table_s;
@@ -293,12 +293,12 @@ test "border-collapse: no spacing, and adjacent borders overlap by half" {
     const a = try td(&t, r, cs);
     const c = try td(&t, r, cs);
     try t.run(800, 600);
-    // Width 50 + borders 2 + 2: column 54 - 2 (half of each side) = 52.
+    // Width 50 and half of each 2px line: 52. The table has half its outer line.
     const ba = t.boxOf(a);
     const bc = t.boxOf(c);
-    try u.close(54, ba.w, "a's border box");
-    try u.close(ba.x + 52, bc.x, "the next cell two to the left of a's right edge");
-    try u.close(-1, ba.x, "half of its left border out");
+    try u.close(52, ba.w, "a's border box");
+    try u.close(ba.x + 52, bc.x, "the next cell up against it");
+    try u.close(1, ba.x - t.boxOf(b).x, "half of the outer line outside it");
 }
 
 test "anonymous parts: cells without rows, rows without tables, text in a table" {

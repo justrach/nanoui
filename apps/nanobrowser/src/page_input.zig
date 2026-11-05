@@ -23,6 +23,8 @@ pub fn pointer(p: *Page, c: *ui.Context, it: ui.Interaction, node: ?*dom.Node, x
     if (it.hovered and c.input.pressed) {
         p.last_press = node;
         setState(p, &p.doc.active, node);
+        web.lightDismiss(p, node);
+        if (p.dead) return;
         if (node) |n| {
             const prevented = web.mouseEvent(p, n, "mousedown", x, y, modifiers(c));
             if (p.dead) return;
@@ -99,6 +101,7 @@ fn focusTarget(n: *dom.Node) ?*dom.Node {
 }
 
 fn isFocusable(n: *const dom.Node) bool {
+    if (n.computed) |st| if (st.inert) return false;
     return n.isTag("a") or n.isTag("button") or n.isTag("input") or n.isTag("select") or n.isTag("textarea") or n.hasAttr("tabindex");
 }
 
@@ -124,6 +127,7 @@ pub fn activate(p: *Page, node: *dom.Node, x: f32, y: f32, m: web.Modifiers, new
         if (n.isTag("button")) return buttonClick(p, n);
         if (n.isTag("summary")) if (n.parentElement()) |d| if (d.isTag("details")) {
             if (d.hasAttr("open")) d.removeAttr("open") else d.setAttr("open", "") catch {};
+            web.detailsToggled(p, d);
             return;
         };
         if (n.isTag("select")) {
@@ -149,8 +153,29 @@ fn follow(p: *Page, new_tab: bool, a: *dom.Node, href: []const u8) void {
         web.hashNavigated(p, to);
         return fragment(p, to[i + 1 ..]);
     };
-    const blank = if (a.attr("target")) |t| std.mem.eql(u8, t, "_blank") else false;
+    const target = a.attr("target") orelse "";
+    const blank = std.mem.eql(u8, target, "_blank");
+    if (!blank and !new_tab and target.len > 0 and followTarget(p, target, to)) return;
     p.navigate(.{ .url = to, .new_tab = blank or new_tab });
+}
+
+/// `target=_top`, `_parent`, or a frame's name: true when it went there.
+fn followTarget(p: *Page, target: []const u8, to: []const u8) bool {
+    const frames = @import("frames.zig");
+    if (std.ascii.eqlIgnoreCase(target, "_self")) return false;
+    if (std.ascii.eqlIgnoreCase(target, "_top")) {
+        const top = frames.topOf(p);
+        top.navigate(.{ .url = to });
+        return true;
+    }
+    if (std.ascii.eqlIgnoreCase(target, "_parent")) {
+        const f = p.frame orelse return false;
+        if (f.owner.frame) |up| frames.navigateTo(up, to, .{}) else f.owner.navigate(.{ .url = to });
+        return true;
+    }
+    const f = frames.named(frames.topOf(p), target) orelse return false;
+    frames.navigateTo(f, to, .{});
+    return true;
 }
 
 fn samePage(a: []const u8, b: []const u8) bool {
@@ -163,8 +188,22 @@ fn samePage(a: []const u8, b: []const u8) bool {
 pub fn fragment(p: *Page, name: []const u8) void {
     if (name.len == 0 or std.mem.eql(u8, name, "top")) return view.scrollPageTo(p, 0);
     const target = p.doc.getElementById(name) orelse named(p, name) orelse return;
+    // A section `hidden=until-found` shows itself to be gone to.
+    var at: ?*dom.Node = target;
+    var revealed = false;
+    while (at) |x| : (at = x.parent) {
+        if (x.attr("hidden")) |v| if (std.ascii.eqlIgnoreCase(v, "until-found")) {
+            web.simpleEvent(p, x, "beforematch");
+            x.removeAttr("hidden");
+            revealed = true;
+        };
+    }
+    if (revealed) web.layoutNow(p);
     const rect = @import("layout/layout.zig").rectOf(target) orelse return;
-    view.scrollPageTo(p, rect.y);
+    // `scroll-margin-top` on it and `scroll-padding-top` on what scrolls.
+    const margin = if (target.computed) |st| st.scroll_margin_top else 0;
+    const padding = if (p.doc.documentElement()) |root| if (root.computed) |st| st.scroll_padding_top else 0 else 0;
+    view.scrollPageTo(p, rect.y - margin - padding);
 }
 
 fn named(p: *Page, name: []const u8) ?*dom.Node {
@@ -231,6 +270,7 @@ pub fn uncheckGroup(root: *dom.Node, n: *dom.Node) void {
 
 fn buttonClick(p: *Page, n: *dom.Node) void {
     if (n.hasAttr("disabled")) return;
+    if ((n.hasAttr("popovertarget") or n.hasAttr("commandfor")) and web.invoke(p, n)) return;
     const kind = n.attr("type") orelse "submit";
     const form = formOf(n) orelse return;
     if (std.ascii.eqlIgnoreCase(kind, "submit")) submit(p, form, n);

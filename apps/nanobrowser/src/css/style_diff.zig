@@ -34,11 +34,18 @@ fn same(comptime T: type, a: T, b: T) bool {
             }
             return true;
         },
+        .@"union" => {
+            if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
+            return switch (a) {
+                inline else => |v, tag| same(@TypeOf(v), v, @field(b, @tagName(tag))),
+            };
+        },
         .optional => |o| {
             if (a == null or b == null) return a == null and b == null;
             return same(o.child, a.?, b.?);
         },
         .pointer => |p| {
+            if (p.size == .one) return a == b or same(p.child, a.*, b.*);
             if (p.size != .slice) @compileError("no such field in Style");
             if (a.len != b.len) return false;
             if (a.ptr == b.ptr) return true;

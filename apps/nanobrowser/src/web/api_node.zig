@@ -56,7 +56,7 @@ fn setNodeValue(vm: *Vm, this: Value, args: []const Value) Error!Value {
     return Value.undefined;
 }
 
-/// What scripts see of the text within: a host's shadow stand-in isn't in it.
+/// What scripts see of the text within.
 fn textContent(vm: *Vm, this: Value, _: []const Value) Error!Value {
     const n = try nodeOf(vm, this);
     if (n.kind == .document or n.kind == .doctype) return Value.null;
@@ -211,18 +211,10 @@ pub fn clone(w: *bind.World, n: *Node, deep: bool, doc: *dom.Document) Error!*No
         var k = bind.firstChild(n);
         const templ = if (n.isTag("template")) collections.templateContent(w, n) else null;
         if (templ) |t| {
-            const content = try clone(w, t, true, doc);
-            if (w.cached.get(.{ .node = copy, .kind = .content }) == null) {
-                const o = try bind.wrap(w.vm, content);
-                try w.cached.put(w.gpa, .{ .node = copy, .kind = .content }, o.asObject());
-            }
+            copy.template_content = try clone(w, t, true, doc);
         }
         while (true) {
             if (k) |child| {
-                if (child.is_shadow) {
-                    k = child.next;
-                    continue;
-                }
                 const c2 = try a.create(Node);
                 c2.* = .{ .kind = child.kind, .doc = doc, .tag = child.tag, .ns = child.ns, .data = child.data };
                 try c2.attrs.ensureTotalCapacity(a, child.attrs.items.len);
@@ -234,11 +226,7 @@ pub fn clone(w: *bind.World, n: *Node, deep: bool, doc: *dom.Document) Error!*No
                 c2.image_key = child.image_key;
                 to.appendChild(c2);
                 if (child.isTag("template")) {
-                    if (collections.templateContent(w, child)) |t| {
-                        const content = try clone(w, t, true, doc);
-                        const o = try bind.wrap(w.vm, content);
-                        try w.cached.put(w.gpa, .{ .node = c2, .kind = .content }, o.asObject());
-                    }
+                    if (collections.templateContent(w, child)) |t| c2.template_content = try clone(w, t, true, doc);
                 }
                 if (child.first_child != null) {
                     from = child;

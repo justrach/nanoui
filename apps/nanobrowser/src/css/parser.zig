@@ -22,6 +22,7 @@ const Scope = struct {
     selectors: ?[]const Selector = null,
     cond: ?*const Cond = null,
     layer: []const u8 = "",
+    container: ?*const sheet.ContainerCond = null,
 };
 
 const max_depth = 64;
@@ -127,7 +128,7 @@ const P = struct {
         var sp: selectors.Parser = .{ .arena = p.arena, .parent = scope.selectors };
         const list = try sp.parseList(trim(p.temp.items[mark..]));
         if (list == null or p.depth > max_depth) return p.skipBlock();
-        try p.blockContents(.{ .selectors = list, .cond = scope.cond, .layer = scope.layer });
+        try p.blockContents(.{ .selectors = list, .cond = scope.cond, .layer = scope.layer, .container = scope.container });
     }
 
     /// A style rule's block: declarations, nested rules and nested at-rules.
@@ -160,7 +161,7 @@ const P = struct {
                                 try p.skipBlock();
                             } else {
                                 p.temp.items.len = mark;
-                                try p.blockContents(.{ .selectors = list, .cond = scope.cond, .layer = scope.layer });
+                                try p.blockContents(.{ .selectors = list, .cond = scope.cond, .layer = scope.layer, .container = scope.container });
                             }
                         },
                         else => if (try parseDeclaration(p.arena, p.base, p.temp.items[mark..])) |d| {
@@ -218,7 +219,7 @@ const P = struct {
         };
         const decls = try makeDeclarations(p.arena, pending.items);
         pending.* = .empty;
-        try p.rules.append(p.arena, .{ .selectors = list, .decls = decls, .cond = scope.cond, .layer = scope.layer });
+        try p.rules.append(p.arena, .{ .selectors = list, .decls = decls, .cond = scope.cond, .layer = scope.layer, .container = scope.container });
     }
 
     fn atRule(p: *P, at_tok: Token, scope: Scope) Allocator.Error!void {
@@ -250,17 +251,22 @@ const P = struct {
             const cond = try p.arena.create(Cond);
             cond.* = .{ .media = list, .parent = scope.cond };
             try p.conds.append(p.arena, cond);
-            return p.group(.{ .selectors = scope.selectors, .cond = cond, .layer = scope.layer });
+            return p.group(.{ .selectors = scope.selectors, .cond = cond, .layer = scope.layer, .container = scope.container });
         }
         if (is(name, "supports")) {
             if (!supports.evaluate(p.arena, pre)) return p.skipBlock();
             return p.group(scope);
         }
-        // Size queries have no container sizes to test: treated as matching.
-        if (is(name, "container") or is(name, "scope") or is(name, "starting-style")) {
-            if (is(name, "starting-style")) return p.skipBlock();
-            return p.group(scope);
+        if (is(name, "container")) {
+            const q = try p.arena.create(sheet.ContainerCond);
+            q.* = try media.parseContainer(p.arena, pre);
+            q.parent = scope.container;
+            var inner = scope;
+            inner.container = q;
+            return p.group(inner);
         }
+        if (is(name, "scope")) return p.group(scope);
+        if (is(name, "starting-style")) return p.skipBlock();
         if (is(name, "font-face")) {
             const decls = try p.declarationBlock();
             try p.font_faces.append(p.arena, .{ .decls = decls });
@@ -363,7 +369,7 @@ const P = struct {
                 name = try p.layerName(pre, scope);
             }
             try p.layers.append(p.arena, name);
-            return p.group(.{ .selectors = scope.selectors, .cond = scope.cond, .layer = name });
+            return p.group(.{ .selectors = scope.selectors, .cond = scope.cond, .layer = name, .container = scope.container });
         }
         // A statement: the names, for their order.
         var i: usize = 0;

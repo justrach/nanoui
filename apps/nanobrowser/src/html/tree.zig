@@ -344,7 +344,7 @@ pub const Builder = struct {
 
     // Insertion.
 
-    fn newElement(b: *Builder, name: []const u8, ns: dom.Ns, attrs: []dom.Attr) Error!*dom.Node {
+    pub fn newElement(b: *Builder, name: []const u8, ns: dom.Ns, attrs: []dom.Attr) Error!*dom.Node {
         const n = try b.arena.create(dom.Node);
         n.* = .{ .kind = .element, .doc = b.doc, .tag = name, .ns = ns };
         if (attrs.len > 0) n.attrs = .fromOwnedSlice(attrs);
@@ -359,13 +359,13 @@ pub const Builder = struct {
 
     /// Where a node goes: the "appropriate place for inserting a node".
     pub fn placeFor(b: *Builder, over: ?*dom.Node) Place {
-        const target = over orelse if (b.current()) |c| c.node else b.root;
+        const target = contentOf(over orelse if (b.current()) |c| c.node else b.root);
         if (b.foster and fosterTarget(target)) {
             var i = b.open.items.len;
             while (i > 0) {
                 i -= 1;
                 const e = b.open.items[i];
-                if (e.id == .template) return .{ .parent = e.node, .before = null };
+                if (e.id == .template) return .{ .parent = contentOf(e.node), .before = null };
                 if (e.id == .table) {
                     if (e.node.parent) |p| return .{ .parent = p, .before = e.node };
                     return .{ .parent = b.open.items[i - 1].node, .before = null };
@@ -380,6 +380,12 @@ pub const Builder = struct {
         if (n.ns != .html) return false;
         const id = tags.htmlId(n.tag);
         return id == .table or tags.isTableSection(id) or id == .tr;
+    }
+
+    /// Where what goes in a node goes: a template's content rather than the template.
+    fn contentOf(n: *dom.Node) *dom.Node {
+        if (n.ns == .html and n.isTag("template")) if (n.template_content) |f| return f;
+        return n;
     }
 
     /// Creates an element and places it, without entering it on the stack.
@@ -436,7 +442,7 @@ pub const Builder = struct {
     pub fn insertComment(b: *Builder, s: []const u8, into: ?*dom.Node) Error!void {
         const n = try b.arena.create(dom.Node);
         n.* = .{ .kind = .comment, .doc = b.doc, .data = s };
-        const parent = into orelse if (b.current()) |c| c.node else b.root;
+        const parent = into orelse contentOf(if (b.current()) |c| c.node else b.root);
         parent.appendChild(n);
     }
 

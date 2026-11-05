@@ -12,7 +12,7 @@ const Ctx = ctx.Ctx;
 const Error = ctx.Error;
 const Grid = table.Grid;
 
-/// What a cell asks, its collapsed borders' overlap taken away.
+/// What a cell asks.
 const Asks = struct { min: f32, max: f32, fixed: f32, pct: f32 };
 
 fn asksOf(c: *Ctx, x: *Box) Error!Asks {
@@ -31,12 +31,6 @@ fn asksOf(c: *Ctx, x: *Box) Error!Asks {
             out.fixed = @max(out.fixed, min);
             out.max = out.fixed;
         }
-    }
-    if (s.border_collapse) {
-        const overlap = (e.border.left + e.border.right) / 2;
-        out.min = @max(0, out.min - overlap);
-        out.max = @max(0, out.max - overlap);
-        if (out.fixed > 0) out.fixed = @max(0, out.fixed - overlap);
     }
     return out;
 }
@@ -234,7 +228,7 @@ fn fixedLayout(g: *const Grid, widths: []f32, room: f32) void {
             const e = ctx.edgesOf(s, room);
             const bp = e.border.horizontal() + e.padding.horizontal();
             const raw = @max(0, ctx.len(s.width, room));
-            const whole = if (s.box_sizing == .border_box or s.width.pct != 0) raw else raw + bp;
+            const whole = if (s.box_sizing == .border_box or s.width.hasPct()) raw else raw + bp;
             const each = whole / @as(f32, @floatFromInt(cell.cols));
             for (widths[cell.col .. cell.col + cell.cols]) |*w| {
                 if (w.* < 0) w.* = each;

@@ -13,6 +13,7 @@ const list = @import("list.zig");
 const text = @import("text.zig");
 const replaced = @import("replaced.zig");
 const gen_table = @import("gen_table.zig");
+const counters = @import("counters.zig");
 const Box = box.Box;
 const Entry = box.Entry;
 const Ctx = ctx.Ctx;
@@ -29,9 +30,13 @@ pub const Gen = struct {
     /// The next list item's number, and which way it goes.
     counter: i64 = 1,
     counter_step: i64 = 1,
+    /// The style a top-layer element is laid out with, and that element.
+    top_style: ?*const Style = null,
+    in_top: ?*dom.Node = null,
     /// `align` and `nowrap` on the way down.
     text_align: ?css.TextAlign = null,
     nowrap: bool = false,
+    counters: counters.Counters = .{},
 };
 
 /// Builds the tree under a fresh initial containing block.
@@ -43,6 +48,8 @@ pub fn build(c: *Ctx, doc: *dom.Document) Error!*Box {
     var g: Gen = .{ .c = c };
     var k = doc.node.first_child;
     while (k) |n| : (k = n.next) if (n.kind == .element) try element(&g, n);
+    // The top layer: above everything, sized against the viewport, whatever holds it.
+    for (doc.top_layer.items) |n| try topLayer(&g, n);
     const entries = try c.arena.dupe(Entry, g.stack.items);
     g.stack.clearRetainingCapacity();
     try container(&g, root, entries);
@@ -53,6 +60,39 @@ pub fn newBox(c: *Ctx, kind: box.Kind, node: ?*dom.Node, s: *const Style) Error!
     const b = try c.arena.create(Box);
     b.* = .{ .kind = kind, .node = node, .style = s, .positioned = s.isOutOfFlow() };
     return b;
+}
+
+/// An element of the top layer, its `::backdrop` under it, as if it were the root's
+/// child.
+fn topLayer(g: *Gen, n: *dom.Node) Error!void {
+    const s0 = n.computed orelse return;
+    if (s0.display == .none) return;
+    const c = g.c;
+    const backdrop = try c.arena.create(Style);
+    backdrop.* = if (n.backdrop) |b| b.* else .{ .background = .{ .r = 0, .g = 0, .b = 0, .a = 0.1 } };
+    backdrop.display = .block;
+    backdrop.position = .fixed;
+    backdrop.top = css.Len.zero;
+    backdrop.left = css.Len.zero;
+    backdrop.right = css.Len.zero;
+    backdrop.bottom = css.Len.zero;
+    backdrop.z_index = std.math.maxInt(i32);
+    if (n.isTag("dialog")) {
+        const b = try newBox(c, .block, n, backdrop);
+        b.pseudo = true;
+        b.lay.inline_root = true;
+        try push(g, .{ .tag = .box, .box = b, .style = backdrop });
+    }
+    const on_top = try c.arena.create(Style);
+    on_top.* = s0.*;
+    on_top.z_index = std.math.maxInt(i32);
+    // The rule makes it so; a page's own `position` on a popover stands.
+    if (on_top.position == .static or on_top.position == .relative) on_top.position = .absolute;
+    on_top.display = @import("../css/compute.zig").blockified(on_top.display);
+    g.top_style = on_top;
+    g.in_top = n;
+    defer g.in_top = null;
+    try element(g, n);
 }
 
 fn kindFor(s: *const Style) box.Kind {
@@ -112,8 +152,14 @@ fn push(g: *Gen, e: Entry) Error!void {
 
 fn element(g: *Gen, n: *dom.Node) Error!void {
     if (g.depth >= max_depth) return;
-    const s0 = n.computed orelse return;
-    if (s0.display == .none) return;
+    const s_in = n.computed orelse return;
+    if (s_in.display == .none) return;
+    // In the top layer it shows there and not here.
+    var s0 = s_in;
+    if (n.in_top_layer) {
+        if (g.in_top != n) return;
+        s0 = g.top_style.?;
+    }
     if (n.ns == .html) {
         if (n.isTag("br")) return push(g, .{ .tag = .br, .style = s0 });
         if (n.isTag("wbr")) return push(g, .{ .tag = .wbr });
@@ -122,6 +168,8 @@ fn element(g: *Gen, n: *dom.Node) Error!void {
     if (s0.display == .table_column or s0.display == .table_column_group) return;
     g.depth += 1;
     defer g.depth -= 1;
+    try g.counters.apply(g.c.arena, s0, g.depth);
+    defer g.counters.leave(g.depth);
     if (s0.display == .contents) {
         try pseudo(g, n, n.before);
         try children(g, n, s0);
@@ -159,6 +207,11 @@ fn element(g: *Gen, n: *dom.Node) Error!void {
     const st = if (is_button) try atomStyle(g.c, s) else s;
     const b = try newBox(g.c, kindFor(st), n, st);
     n.box = b;
+    if (hints.isContentHidden(n, st)) {
+        // `content-visibility: hidden`, `hidden=until-found`: a box with nothing shown.
+        try finish(g, b, g.stack.items.len);
+        return;
+    }
     if (is_button) {
         b.lay.shrink = true;
         b.lay.center_v = true;
@@ -206,10 +259,29 @@ fn marker(g: *Gen, b: *Box, n: *dom.Node, s: *const Style) Error!void {
         g.counter = std.fmt.parseInt(i64, v, 10) catch g.counter;
     }
     const value = g.counter;
+    const a = g.c.arena;
+    // `counter(list-item)` reads what the item's number is.
+    try g.counters.set(a, "list-item", @intCast(std.math.clamp(value, -1000000000, 1000000000)), g.depth);
     // The list's counter is what the item changes: it survives the item.
-    const text_str = try list.counterText(g.c.arena, s.list_style, value);
+    var text_str = try list.counterText(a, s.list_style, value);
     g.counter += g.counter_step;
-    if (s.list_style == .none) return;
+    const ms = n.marker;
+    if (ms) |m| {
+        if (m.marker_hidden) return;
+        if (m.content_parts.len > 0) {
+            text_str = try g.counters.contentText(a, m.content_parts);
+            b.lay.marker_no_gap = true;
+        } else if (m.content.len > 0) {
+            text_str = m.content;
+            b.lay.marker_no_gap = true;
+        }
+        b.lay.marker_style = m;
+    }
+    if (s.list_style_text) |t| if (!b.lay.marker_no_gap) {
+        text_str = t;
+        b.lay.marker_no_gap = true;
+    };
+    if (s.list_style == .none and !b.lay.marker_no_gap) return;
     if (s.list_inside) {
         if (text_str) |t| {
             const with_space = try std.fmt.allocPrint(g.c.arena, "{s} ", .{t});
@@ -223,7 +295,8 @@ fn marker(g: *Gen, b: *Box, n: *dom.Node, s: *const Style) Error!void {
 
 fn children(g: *Gen, n: *dom.Node, s: *const Style) Error!void {
     // A shadow host renders its shadow tree; its own children go by its slots.
-    if (n.first_child) |first| if (first.is_shadow) return element(g, first);
+    if (n.shadow_root) |root| return element(g, root);
+    if (n.ns == .html and n.isTag("details") and !n.hasAttr("open")) return closedDetails(g, n, s);
     if (!n.is_shadow and n.isTag("slot")) if (shadowHostOf(n)) |host| {
         if (try slotted(g, n, host, s)) return;
     };
@@ -239,6 +312,14 @@ fn child(g: *Gen, x: *dom.Node, s: *const Style) Error!void {
     }
 }
 
+/// A closed `<details>` shows its first `<summary>` and nothing else, whatever
+/// `display` the rest has.
+fn closedDetails(g: *Gen, n: *dom.Node, s: *const Style) Error!void {
+    var k = n.first_child;
+    while (k) |x| : (k = x.next) if (x.isTag("summary")) return element(g, x);
+    _ = s;
+}
+
 fn shadowHostOf(n: *const dom.Node) ?*dom.Node {
     var at = n.parent;
     while (at) |a| : (at = a.parent) if (a.is_shadow) return a.parent;
@@ -251,7 +332,6 @@ fn slotted(g: *Gen, slot: *dom.Node, host: *dom.Node, s: *const Style) Error!boo
     var any = false;
     var k = host.first_child;
     while (k) |x| : (k = x.next) {
-        if (x.is_shadow) continue;
         const wants = if (x.kind == .element) x.attr("slot") orelse "" else "";
         if (!std.mem.eql(u8, wants, name)) continue;
         any = true;
@@ -267,7 +347,9 @@ fn pseudo(g: *Gen, n: *dom.Node, sp: ?*const Style) Error!void {
     const b = try newBox(g.c, kindFor(s), n, s);
     b.pseudo = true;
     const base = g.stack.items.len;
-    if (s.content.len > 0) try push(g, .{ .tag = .generated, .text = s.content, .style = s });
+    try g.counters.apply(g.c.arena, s, g.depth + 1);
+    const words = if (s.content_parts.len > 0) try g.counters.contentText(g.c.arena, s.content_parts) else s.content;
+    if (words.len > 0) try push(g, .{ .tag = .generated, .text = words, .style = s });
     try finish(g, b, base);
 }
 
@@ -352,7 +434,16 @@ fn inlineBox(g: *Gen, b: *Box, entries: []const Entry) Error!void {
     _ = try flush.run(g, part, entries[from..]);
     if (b.node) |n| if (!b.pseudo) {
         n.box = first_of_node;
+        try partsOf(g, n, entries);
     };
+}
+
+/// What a split inline's rect is the union of: the blocks in it, as the line
+/// boxes they stand in fill their containers.
+fn partsOf(g: *Gen, n: *dom.Node, entries: []const Entry) Error!void {
+    var parts: std.ArrayList(*anyopaque) = .empty;
+    for (entries) |e| if (isBlockLevel(e)) try parts.append(g.c.arena, e.box.?);
+    n.box_parts = parts.items;
 }
 
 /// A block container: either all lines, or all blocks with anonymous blocks

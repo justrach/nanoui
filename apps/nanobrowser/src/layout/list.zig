@@ -13,6 +13,14 @@ pub fn counterText(a: std.mem.Allocator, kind: css.ListStyle, value: i64) Error!
     switch (kind) {
         .none, .disc, .circle, .square => return null,
         .decimal => return try std.fmt.allocPrint(a, "{d}.", .{value}),
+        .decimal_leading_zero => return try std.fmt.allocPrint(a, "{s}{d}.", .{ if (value >= 0 and value < 10) "0" else "", value }),
+        .lower_greek => {
+            if (value <= 0 or value > 24) return try std.fmt.allocPrint(a, "{d}.", .{value});
+            var buf: [4]u8 = undefined;
+            const cp: u21 = @intCast(0x3B1 + value - 1 + @as(i64, if (value >= 18) 1 else 0));
+            const n = std.unicode.utf8Encode(cp, &buf) catch 0;
+            return try std.fmt.allocPrint(a, "{s}.", .{buf[0..n]});
+        },
         .lower_alpha, .upper_alpha => {
             if (value <= 0) return try std.fmt.allocPrint(a, "{d}.", .{value});
             return try alpha(a, value, kind == .upper_alpha);
@@ -22,6 +30,19 @@ pub fn counterText(a: std.mem.Allocator, kind: css.ListStyle, value: i64) Error!
             return try roman(a, value, kind == .upper_roman);
         },
     }
+}
+
+/// What `counter()` shows: as a list's, without the period.
+pub fn valueText(a: std.mem.Allocator, kind: css.ListStyle, value: i64) Error![]const u8 {
+    switch (kind) {
+        .none => return "",
+        .disc => return "\u{2022}",
+        .circle => return "\u{25E6}",
+        .square => return "\u{25AA}",
+        else => {},
+    }
+    const t = (try counterText(a, kind, value)) orelse return "";
+    return t[0 .. t.len - 1];
 }
 
 fn alpha(a: std.mem.Allocator, value: i64, upper: bool) Error![]const u8 {
@@ -65,17 +86,19 @@ fn gapOf(s: *const css.Style) f32 {
 
 /// Places an outside marker. Runs and rects are relative to the item's border box.
 pub fn place(c: *Ctx, b: *Box) Error!void {
-    const s = b.style;
+    const owner = b.style;
+    const s = b.lay.marker_style orelse owner;
     const font = box.fontOf(s);
     const m = c.metrics(font);
     const left = ctx.bpLeft(b);
     const half = (c.lineHeight(s) - m.ascent - m.descent) / 2;
     const base = b.lay.first_baseline orelse ctx.bpTop(b) + half + m.ascent;
+    const gap: f32 = if (b.lay.marker_no_gap) 0 else gapOf(owner);
     if (b.lay.marker_text.len > 0) {
         const w = c.width(b.lay.marker_text, font);
         const run: box.TextRun = .{
             .text = b.lay.marker_text,
-            .x = left - w - gapOf(s),
+            .x = left - w - gap,
             .baseline = base,
             .w = w,
             .font = font,
@@ -89,6 +112,6 @@ pub fn place(c: *Ctx, b: *Box) Error!void {
         b.runs = out;
     } else {
         const size = bulletSize(s);
-        b.marker = .{ .x = left - size - gapOf(s), .y = base - m.ascent * 0.5 - size / 2, .w = size, .h = size };
+        b.marker = .{ .x = left - size - gap, .y = base - m.ascent * 0.5 - size / 2, .w = size, .h = size };
     }
 }

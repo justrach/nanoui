@@ -100,7 +100,7 @@ pub fn hasScripts(doc: *dom.Document) bool {
 pub fn begin(w: *World) void {
     const root = w.page.doc.node;
     var at = root.first_child;
-    while (at) |n| : (at = if (n.isTag("template")) n.nextSkippingChildren(root) else n.nextInTree(root)) {
+    while (at) |n| : (at = n.nextDeep(root)) {
         if (n.kind != .element) continue;
         for (n.attrs.items) |a| if (a.name.len > 2 and a.name[0] == 'o' and a.name[1] == 'n') w.listen(a.name[2..]);
         if (n.isTag("script")) parserScript(w, n, null) catch {};

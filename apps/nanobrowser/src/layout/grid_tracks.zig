@@ -57,6 +57,18 @@ fn intrinsicMax(t: *const Track) bool {
     };
 }
 
+/// A fixed track's size, or `minmax`'s least, against `ref`.
+pub fn least(s: css.Track, ref: f32) f32 {
+    if (s.math) |m| return ctx.clean(m.at(ref));
+    return ctx.clean(s.px) + ctx.clean(s.pct) * ref / 100;
+}
+
+/// `minmax`'s most, or `fit-content`'s limit, against `ref`.
+fn most(s: css.Track, ref: f32) f32 {
+    if (s.max_math) |m| return ctx.clean(m.at(ref));
+    return ctx.clean(s.max_px) + ctx.clean(s.max_pct) * ref / 100;
+}
+
 /// The starting base sizes and growth limits. Percentages of an unknown size act as auto.
 fn start(list: []Track, avail: ?f32) void {
     for (list) |*t| {
@@ -68,13 +80,13 @@ fn start(list: []Track, avail: ?f32) void {
                 if (s.pct != 0 and avail == null) {
                     t.spec.kind = .auto;
                 } else {
-                    t.base = @max(0, ctx.clean(s.px) + ctx.clean(s.pct) * (avail orelse 0) / 100);
+                    t.base = @max(0, least(s, avail orelse 0));
                     t.limit = t.base;
                 }
             },
             .minmax => {
-                if (!s.min_auto) t.base = @max(0, ctx.clean(s.px) + ctx.clean(s.pct) * (avail orelse 0) / 100);
-                if (s.max_px >= 0) t.limit = @max(t.base, ctx.clean(s.max_px) + ctx.clean(s.max_pct) * (avail orelse 0) / 100);
+                if (!s.min_auto) t.base = @max(0, least(s, avail orelse 0));
+                if (s.max_px >= 0) t.limit = @max(t.base, most(s, avail orelse 0));
             },
             else => {},
         }
@@ -91,7 +103,7 @@ fn spanRange(list: []Track, s: i32, e: i32) []Track {
     return if (a < b) list[a..b] else list[0..0];
 }
 
-const Contribution = struct { lo: f32, hi: f32, from: i32, to: i32 };
+pub const Contribution = struct { lo: f32, hi: f32, from: i32, to: i32 };
 
 fn gapsIn(part: []const Track, gap: f32) f32 {
     var n: f32 = 0;
@@ -250,6 +262,7 @@ fn stretchAuto(list: []Track, free: f32) void {
 }
 
 fn isAutoMax(t: *const Track) bool {
+    if (t.spec.fit) return false;
     return t.spec.kind == .auto or (t.spec.kind == .minmax and t.spec.fr == 0 and t.spec.max_px < 0);
 }
 
@@ -259,9 +272,19 @@ pub fn total(list: []const Track, gap: f32) f32 {
     return sum;
 }
 
+/// `fit-content(limit)`: the track's most stops at its limit, but no lower than its least.
+fn capFitContent(list: []Track, avail: ?f32) void {
+    for (list) |*t| {
+        if (!t.spec.fit) continue;
+        const cap = @max(t.base, most(t.spec, avail orelse 0));
+        t.limit = if (t.limit == inf) cap else @min(t.limit, cap);
+    }
+}
+
 fn sizeAxis(list: []Track, cons: []Contribution, avail: ?f32, gap: f32, stretch: bool) void {
     start(list, avail);
     resolveIntrinsics(list, cons, gap);
+    capFitContent(list, avail);
     if (avail) |room| {
         maximize(list, room - total(list, gap));
         const gaps = gapsIn(list, gap);
@@ -288,14 +311,22 @@ fn sizeAxis(list: []Track, cons: []Contribution, avail: ?f32, gap: f32, stretch:
 }
 
 fn columnContributions(c: *Ctx, items: []const Placed, only_min: bool) Error![]Contribution {
-    const cons = try c.arena.alloc(Contribution, items.len);
-    for (items, 0..) |*it, i| {
+    var cons: std.ArrayList(Contribution) = .empty;
+    for (items) |*it| {
+        // A subgrid asks through what's in it, track by track.
+        if (it.b.kind == .grid and it.b.style.grid_template_columns.subgrid) {
+            for (try grid.subPlacement(c, it.b)) |*sub| {
+                const o = try intrinsic_mod.outer(c, sub.b);
+                try cons.append(c.arena, .{ .lo = o.min, .hi = if (only_min) o.min else o.max, .from = it.c0 + sub.c0, .to = it.c0 + sub.c1 });
+            }
+            continue;
+        }
         const o = try intrinsic_mod.outer(c, it.b);
         const lo = if (it.b.style.clips() and it.b.style.min_width.kind == .auto) @min(o.min, ctx.edgesOf(it.b.style, 0).margin.horizontal() + borderPad(it.b)) else o.min;
         const hi = if (only_min) o.min else o.max;
-        cons[i] = .{ .lo = lo, .hi = hi, .from = it.c0, .to = it.c1 };
+        try cons.append(c.arena, .{ .lo = lo, .hi = hi, .from = it.c0, .to = it.c1 });
     }
-    return cons;
+    return cons.items;
 }
 
 fn borderPad(b: anytype) f32 {
@@ -308,9 +339,10 @@ pub fn sizeColumns(c: *Ctx, list: []Track, items: []const Placed, avail: f32, ga
     sizeAxis(list, cons, avail, gap, stretch);
 }
 
-pub fn sizeRows(a: Allocator, list: []Track, items: []const Placed, heights: []const f32, avail: ?f32, gap: f32, stretch: bool) Error!void {
-    const cons = try a.alloc(Contribution, items.len);
+pub fn sizeRows(a: Allocator, list: []Track, items: []const Placed, heights: []const f32, extra: []const Contribution, avail: ?f32, gap: f32, stretch: bool) Error!void {
+    const cons = try a.alloc(Contribution, items.len + extra.len);
     for (items, heights, 0..) |*it, h, i| cons[i] = .{ .lo = h, .hi = h, .from = it.r0, .to = it.r1 };
+    @memcpy(cons[items.len..], extra);
     sizeAxis(list, cons, avail, gap, stretch);
 }
 

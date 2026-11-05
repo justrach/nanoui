@@ -58,10 +58,19 @@ pub const Cond = struct {
     }
 };
 
+/// `@container name (size query)`: which container, and what it's asked. Nested
+/// `@container` rules go by `parent`.
+pub const ContainerCond = struct {
+    name: []const u8 = "",
+    query: ?*const media.Cond = null,
+    parent: ?*const ContainerCond = null,
+};
+
 pub const Rule = struct {
     selectors: []const sel.Selector,
     decls: *const Declarations,
     cond: ?*const Cond = null,
+    container: ?*const ContainerCond = null,
     /// The dotted cascade layer; "" when unlayered.
     layer: []const u8 = "",
 };

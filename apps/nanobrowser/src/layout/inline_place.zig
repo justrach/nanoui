@@ -236,7 +236,7 @@ pub fn placeLine(l: *inl.Lay, line: inl.Line) Error!void {
             },
             .close => if (l.stack.items.len > 1) {
                 const f = l.stack.pop().?;
-                try frag(l, &f, pen + p.box.border.right + p.box.padding.right, base);
+                try frag(l, &f, pen + p.box.border.right + p.box.padding.right, base, line.has);
                 pen += p.w;
             },
             .word => {
@@ -291,14 +291,20 @@ pub fn placeLine(l: *inl.Lay, line: inl.Line) Error!void {
                 seen = true;
             },
             .abs => {
-                p.box.x = pen;
-                p.box.y = line_top;
+                // A box that was block-level would start a line of its own.
+                if (p.box.style.was_block and seen) {
+                    p.box.x = l.x0 + l.bl;
+                    p.box.y = line_top + h;
+                } else {
+                    p.box.x = pen;
+                    p.box.y = line_top;
+                }
             },
             .float, .opp => {},
         }
     }
     try w.flush();
-    for (l.stack.items[1..]) |*f| try frag(l, f, pen, base);
+    for (l.stack.items[1..]) |*f| try frag(l, f, pen, base, line.has);
 
     if (line.has) {
         l.res.lines += 1;
@@ -318,8 +324,13 @@ fn raiseFor(f: *const Frame, parent: *const Frame, e: Extent, h: f32) f32 {
     };
 }
 
-fn frag(l: *inl.Lay, f: *const Frame, right: f32, base: f32) Error!void {
+fn frag(l: *inl.Lay, f: *const Frame, right: f32, base: f32, has_line: bool) Error!void {
     const b = f.box;
+    // On a line with nothing on it, it has no height either.
+    if (!has_line and right <= f.left) {
+        try l.frags.append(l.c.arena, .{ .box = b, .rect = .{ .x = f.left, .y = base, .w = 0, .h = 0 } });
+        return;
+    }
     const top = base - f.raise - f.asc - b.border.top - b.padding.top;
     const h = f.asc + f.desc + ctx.bpV(b);
     try l.frags.append(l.c.arena, .{ .box = b, .rect = .{ .x = f.left, .y = top, .w = @max(0, right - f.left), .h = h } });

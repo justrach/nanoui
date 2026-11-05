@@ -185,10 +185,14 @@ pub fn unitPx(ctx: *const Ctx, unit: []const u8) ?f32 {
     if (eql(u8, u, "px")) return 1;
     if (eql(u8, u, "em")) return ctx.em();
     if (eql(u8, u, "rem")) return ctx.root_font;
-    if (eql(u8, u, "vw") or eql(u8, u, "dvw") or eql(u8, u, "svw") or eql(u8, u, "lvw") or eql(u8, u, "vi") or eql(u8, u, "cqw") or eql(u8, u, "cqi")) return ctx.vw / 100;
-    if (eql(u8, u, "vh") or eql(u8, u, "dvh") or eql(u8, u, "svh") or eql(u8, u, "lvh") or eql(u8, u, "vb") or eql(u8, u, "cqh") or eql(u8, u, "cqb")) return ctx.vh / 100;
-    if (eql(u8, u, "vmin") or eql(u8, u, "dvmin") or eql(u8, u, "svmin") or eql(u8, u, "lvmin") or eql(u8, u, "cqmin")) return @min(ctx.vw, ctx.vh) / 100;
-    if (eql(u8, u, "vmax") or eql(u8, u, "dvmax") or eql(u8, u, "svmax") or eql(u8, u, "lvmax") or eql(u8, u, "cqmax")) return @max(ctx.vw, ctx.vh) / 100;
+    if (eql(u8, u, "vw") or eql(u8, u, "dvw") or eql(u8, u, "svw") or eql(u8, u, "lvw") or eql(u8, u, "vi")) return ctx.vw / 100;
+    if (eql(u8, u, "vh") or eql(u8, u, "dvh") or eql(u8, u, "svh") or eql(u8, u, "lvh") or eql(u8, u, "vb")) return ctx.vh / 100;
+    if (eql(u8, u, "vmin") or eql(u8, u, "dvmin") or eql(u8, u, "svmin") or eql(u8, u, "lvmin")) return @min(ctx.vw, ctx.vh) / 100;
+    if (eql(u8, u, "vmax") or eql(u8, u, "dvmax") or eql(u8, u, "svmax") or eql(u8, u, "lvmax")) return @max(ctx.vw, ctx.vh) / 100;
+    if (eql(u8, u, "cqw") or eql(u8, u, "cqi")) return cqSize(ctx, true) / 100;
+    if (eql(u8, u, "cqh") or eql(u8, u, "cqb")) return cqSize(ctx, false) / 100;
+    if (eql(u8, u, "cqmin")) return @min(cqSize(ctx, true), cqSize(ctx, false)) / 100;
+    if (eql(u8, u, "cqmax")) return @max(cqSize(ctx, true), cqSize(ctx, false)) / 100;
     if (eql(u8, u, "ch")) return ctx.em() * (if (ctx.style.mono) @as(f32, 0.6) else 0.5);
     if (eql(u8, u, "ex")) return ctx.em() * 0.5;
     if (eql(u8, u, "cap")) return ctx.em() * 0.7;
@@ -205,6 +209,21 @@ pub fn unitPx(ctx: *const Ctx, unit: []const u8) ?f32 {
     if (eql(u8, u, "mm")) return 96.0 / 25.4;
     if (eql(u8, u, "q")) return 96.0 / 101.6;
     return null;
+}
+
+/// A container's content box on one axis, for cq units: the nearest that contains
+/// that axis, and the viewport when there's none, or none laid out yet.
+fn cqSize(ctx: *const Ctx, inline_axis: bool) f32 {
+    const viewport = if (inline_axis) ctx.vw else ctx.vh;
+    var at = if (ctx.node) |n| n.parent else null;
+    while (at) |a| : (at = a.parent) {
+        const st = a.computed orelse continue;
+        if (st.container_type == .size or (st.container_type == .inline_size and inline_axis)) {
+            const v = if (inline_axis) a.container_w else a.container_h;
+            return if (v >= 0) v else viewport;
+        }
+    }
+    return viewport;
 }
 
 /// One length or percentage token or math function at the cursor.
@@ -240,7 +259,7 @@ pub fn lengthAt(ctx: *const Ctx, c: *Cur) ?Len {
                 }
                 return Len.of(0);
             }
-            return .{ .px = bounded(v.px), .pct = bounded(v.pct) };
+            return .{ .px = bounded(v.px), .pct = bounded(v.pct), .math = v.math };
         },
         else => return null,
     }
@@ -300,7 +319,8 @@ pub fn sizeAt(ctx: *const Ctx, c: *Cur) ?Len {
     const t = c.peek() orelse return null;
     if (t.kind == .ident) {
         const kind: Len.Kind = keyword(Len.Kind, t.text) orelse blk: {
-            if (t.isIdent("-webkit-fit-content") or t.isIdent("-moz-fit-content") or t.isIdent("stretch") or t.isIdent("-webkit-fill-available")) break :blk .fit_content;
+            if (t.isIdent("-webkit-fit-content") or t.isIdent("-moz-fit-content")) break :blk .fit_content;
+            if (t.isIdent("-webkit-fill-available") or t.isIdent("-moz-available")) break :blk .stretch;
             if (t.isIdent("-moz-max-content") or t.isIdent("-webkit-max-content")) break :blk .max_content;
             if (t.isIdent("-moz-min-content") or t.isIdent("-webkit-min-content")) break :blk .min_content;
             return null;
@@ -308,11 +328,6 @@ pub fn sizeAt(ctx: *const Ctx, c: *Cur) ?Len {
         if (kind == .length) return null;
         c.i += 1;
         return .{ .kind = kind };
-    }
-    if (t.isFunction("fit-content")) {
-        c.i += 1;
-        _ = c.body();
-        return .{ .kind = .fit_content };
     }
     return lengthAt(ctx, c);
 }

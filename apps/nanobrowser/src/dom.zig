@@ -47,9 +47,35 @@ pub const Node = struct {
     class_src: [*]const u8 = "".ptr,
     class_src_len: usize = 0,
 
-    /// A shadow root's stand-in: an element that is its host's first child, not
-    /// seen as a child by scripts. What is in it is what the host renders.
+    /// A shadow root's stand-in: an element whose parent is its host, though it
+    /// is none of the host's children, so walks of the host's tree stay out of it.
+    /// What is in it is what the host renders.
     is_shadow: bool = false,
+    /// On a shadow root: scripts don't get to it through its host. Made by the parser.
+    shadow_closed: bool = false,
+    shadow_declarative: bool = false,
+    /// On a host: its shadow root.
+    shadow_root: ?*Node = null,
+    /// The shadow root of the tree the element is in, null in the document's: which
+    /// rules can match it. Kept by the cascade.
+    tree_scope: ?*Node = null,
+    /// A `<template>`'s content: a fragment that is outside the document.
+    template_content: ?*Node = null,
+    /// A container's content box from the last layout, for `@container` and cq
+    /// units; negative until it has had one.
+    container_w: f32 = -1,
+    container_h: f32 = -1,
+    /// `::marker`'s and `::backdrop`'s styles.
+    marker: ?*const style.Style = null,
+    backdrop: ?*const style.Style = null,
+    /// `showModal()` or `showPopover()` has it above everything (`Document.top_layer`).
+    in_top_layer: bool = false,
+    /// Showing as a popover: `:popover-open`.
+    popover_open: bool = false,
+    /// Showing by `showModal()`: `:modal`.
+    modal: bool = false,
+    /// An inline split around blocks: its boxes, whose union its rect is.
+    box_parts: []const *anyopaque = &.{},
 
     /// The node's JS object (`web/`), its listeners, its layout box.
     js_object: ?*anyopaque = null,
@@ -88,6 +114,7 @@ pub const Node = struct {
         const gpa = n.doc.arena;
         const v = try gpa.dupe(u8, value);
         n.doc.touchAttr(n, name);
+        if (changesBoxes(n, name)) n.doc.touchLayout();
         for (n.attrs.items) |*a| if (std.mem.eql(u8, a.name, name)) {
             a.value = v;
             return;
@@ -99,8 +126,14 @@ pub const Node = struct {
         for (n.attrs.items, 0..) |a, i| if (std.mem.eql(u8, a.name, name)) {
             _ = n.attrs.orderedRemove(i);
             n.doc.touchAttr(n, name);
+            if (changesBoxes(n, name)) n.doc.touchLayout();
             return;
         };
+    }
+
+    /// An attribute that decides what boxes there are, with no style changing.
+    fn changesBoxes(n: *const Node, name: []const u8) bool {
+        return n.isTag("details") and std.mem.eql(u8, name, "open");
     }
 
     fn classBit(name: []const u8) u64 {
@@ -216,6 +249,43 @@ pub const Node = struct {
         return null;
     }
 
+    /// The next node in the tree with shadow trees in it: a host's shadow tree
+    /// comes before its children. Stays inside `root`.
+    pub fn nextDeep(n: *Node, root: *const Node) ?*Node {
+        if (n.shadow_root) |r| return r;
+        if (n.first_child) |c| return c;
+        return n.nextDeepSkipping(root);
+    }
+
+    /// As `nextDeep`, past what is in this node.
+    pub fn nextDeepSkipping(n: *Node, root: *const Node) ?*Node {
+        var at: *Node = n;
+        while (at != root) {
+            if (at.is_shadow) {
+                // A shadow tree is over: its host's own children are next.
+                const host = at.parent orelse return null;
+                if (host.first_child) |c| return c;
+                at = host;
+                continue;
+            }
+            if (at.next) |s| return s;
+            at = at.parent orelse return null;
+        }
+        return null;
+    }
+
+    /// Gives the element a shadow root.
+    pub fn attachShadow(n: *Node, closed: bool, declarative: bool) Allocator.Error!*Node {
+        const root = try n.doc.createElement("slot");
+        root.is_shadow = true;
+        root.shadow_closed = closed;
+        root.shadow_declarative = declarative;
+        root.parent = n;
+        n.shadow_root = root;
+        n.doc.touchTree(n);
+        return root;
+    }
+
     /// Appends the text of the node and everything in it to `out`.
     pub fn collectText(n: *Node, gpa: Allocator, out: *std.ArrayList(u8)) Allocator.Error!void {
         if (n.kind == .text) return out.appendSlice(gpa, n.data);
@@ -269,6 +339,8 @@ pub const Document = struct {
     /// What a restyle has to look at: everything, or under just these.
     dirty_all: bool = true,
     dirty_nodes: std.ArrayList(*Node) = .empty,
+    /// What `showModal()` and `showPopover()` have raised, the oldest first.
+    top_layer: std.ArrayList(*Node) = .empty,
 
     pub fn create(arena: Allocator) Allocator.Error!*Document {
         const d = try arena.create(Document);
@@ -319,6 +391,29 @@ pub const Document = struct {
         if (!d.inDocument(n)) return;
         d.layout_dirty = true;
         d.touchUnder(n);
+    }
+
+    /// The top modal dialog: what's outside it takes no input.
+    pub fn modalDialog(d: *const Document) ?*Node {
+        var i = d.top_layer.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (d.top_layer.items[i].modal) return d.top_layer.items[i];
+        }
+        return null;
+    }
+
+    /// Raises `n`, or lowers it when `up` is false.
+    pub fn setTopLayer(d: *Document, n: *Node, up: bool) void {
+        for (d.top_layer.items, 0..) |x, i| if (x == n) {
+            _ = d.top_layer.orderedRemove(i);
+            break;
+        };
+        n.in_top_layer = up;
+        if (up) d.top_layer.append(d.arena, n) catch {
+            n.in_top_layer = false;
+        };
+        d.touchStyle();
     }
 
     pub fn touchLayout(d: *Document) void {

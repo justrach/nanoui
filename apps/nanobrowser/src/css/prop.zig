@@ -278,6 +278,21 @@ pub const Prop = enum(u16) {
     user_select,
     will_change,
     writing_mode,
+    // Read by `properties_flow.zig`, whatever they do.
+    column_span,
+    column_fill,
+    column_rule,
+    counter_reset,
+    counter_increment,
+    counter_set,
+    content_visibility,
+    contain_intrinsic_size,
+    scroll_margin_top,
+    scroll_margin_block_start,
+    scroll_padding_top,
+    scroll_padding_block_start,
+    scroll_padding_block,
+    scroll_margin_block,
 };
 
 const table = blk: {
@@ -344,7 +359,7 @@ pub fn phase(p: Prop) u2 {
 /// Whether the property inherits, for `unset`.
 pub fn isInherited(p: Prop) bool {
     return switch (p) {
-        .color_scheme, .direction, .font, .font_size, .font_family, .font_weight, .font_style, .font_variant, .font_stretch, .line_height, .color, .visibility, .cursor, .pointer_events, .letter_spacing, .word_spacing, .text_align, .text_indent, .white_space, .white_space_collapse, .text_wrap, .text_wrap_mode, .text_transform, .list_style, .list_style_type, .list_style_position, .list_style_image, .border_collapse, .border_spacing, .caption_side, .word_break, .overflow_wrap, .word_wrap, .tab_size => true,
+        .color_scheme, .direction, .font, .font_size, .font_family, .font_weight, .font_style, .font_variant, .font_stretch, .line_height, .color, .visibility, .cursor, .pointer_events, .letter_spacing, .word_spacing, .text_align, .text_indent, .white_space, .white_space_collapse, .text_wrap, .text_wrap_mode, .text_transform, .list_style, .list_style_type, .list_style_position, .list_style_image, .quotes, .border_collapse, .border_spacing, .caption_side, .word_break, .overflow_wrap, .word_wrap, .tab_size => true,
         else => false,
     };
 }

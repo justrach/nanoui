@@ -207,8 +207,10 @@ fn writeText(vm: *Vm, this: Value, args: []const Value, newline: bool) Error!Val
     const d = try docOf(vm, this);
     if (d != w.page.doc) return Value.undefined;
     const r = &w.runner;
-    const cur = r.current orelse return Value.undefined;
+    if (w.doc_open or (w.page.frame != null and (r.phase != .loading or r.current == null))) return writeToOpen(vm, w, d, args, newline);
+    // A write once a tab's page has loaded would wipe it: nobody wants that of a late script.
     if (r.phase != .loading) return Value.undefined;
+    const cur = r.current orelse return Value.undefined;
     const parent = cur.parent orelse return Value.undefined;
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(w.gpa);
@@ -217,6 +219,44 @@ fn writeText(vm: *Vm, this: Value, args: []const Value, newline: bool) Error!Val
     const f = try html.parseFragment(d, if (parent.kind == .element) parent else d.body() orelse return Value.undefined, out.items);
     try scripts.adoptWritten(w, f);
     try mutate.insert(w, parent, f, r.write_anchor);
+    return Value.undefined;
+}
+
+/// `document.open()` began a new document, or a write after loading has: what's
+/// written is the whole of it, parsed as it comes; its scripts run at `close()`.
+fn writeToOpen(vm: *Vm, w: *World, d: *dom.Document, args: []const Value, newline: bool) Error!Value {
+    w.doc_open = true;
+    for (args) |a| try w.doc_written.appendSlice(w.gpa, try vm.toStringSlice(a));
+    if (newline) try w.doc_written.append(w.gpa, '\n');
+    try reparse(w, d);
+    return Value.undefined;
+}
+
+fn reparse(w: *World, d: *dom.Document) Error!void {
+    d.node.removeChildren();
+    const copy = try w.page.arena().dupe(u8, w.doc_written.items);
+    try html.parseDocument(d, copy);
+    w.page.title_stale = true;
+    d.touchStyle();
+    w.changed();
+}
+
+fn open(vm: *Vm, this: Value, _: []const Value) Error!Value {
+    const w = bind.world(vm);
+    const d = try docOf(vm, this);
+    if (d != w.page.doc or (w.runner.phase == .loading and w.runner.current != null)) return this;
+    w.doc_open = true;
+    w.doc_written.clearRetainingCapacity();
+    try reparse(w, d);
+    return this;
+}
+
+fn close(vm: *Vm, this: Value, _: []const Value) Error!Value {
+    const w = bind.world(vm);
+    const d = try docOf(vm, this);
+    if (d != w.page.doc or !w.doc_open) return Value.undefined;
+    w.doc_open = false;
+    if (d.documentElement()) |root| try mutate.arrived(w, root);
     return Value.undefined;
 }
 
@@ -267,6 +307,8 @@ pub fn install(w: *World) Error!void {
         .{ .name = "importNode", .arity = 1, .f = importNode },
         .{ .name = "write", .arity = 0, .f = write },
         .{ .name = "writeln", .arity = 0, .f = writeln },
+        .{ .name = "open", .arity = 0, .f = open },
+        .{ .name = "close", .arity = 0, .f = close },
     });
     try classes.proto(w, "DocumentFragment").defineMethod(vm, "getElementById", 1, getElementById);
 }

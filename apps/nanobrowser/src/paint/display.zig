@@ -90,6 +90,8 @@ pub const List = struct {
     doc_w: f32,
     doc_h: f32,
     canvas: css.Color,
+    /// The `<iframe>`s' content boxes among `items`.
+    frames: []const *const Item = &.{},
 
     /// Works out this frame's offsets and visible parts, for a viewport of
     /// `w` × `h` at (`x`, `y`) in the window.
@@ -398,7 +400,7 @@ const Builder = struct {
             try b.add(list, .{ .kind = .{ .image = .{ .node = n, .fit = st.object_fit, .radius = cornerRadius(st, x.w) } }, .rect = cr, .clip = at.clip, .opacity = at.opacity, .node = node });
         };
         if (x.kind == .control) try b.add(list, .{ .kind = .{ .control = x }, .rect = .{ .x = x.x + at.tx, .y = x.y + at.ty, .w = x.w, .h = x.h }, .clip = at.clip, .opacity = at.opacity, .node = node });
-        if (x.marker) |m| try b.add(list, .{ .kind = .{ .bullet = .{ .shape = st.list_style, .color = st.color } }, .rect = .{ .x = m.x + at.tx, .y = m.y + at.ty, .w = m.w, .h = m.h }, .clip = at.clip, .opacity = at.opacity });
+        if (x.marker) |m| try b.add(list, .{ .kind = .{ .bullet = .{ .shape = st.list_style, .color = (x.lay.marker_style orelse st).color } }, .rect = .{ .x = m.x + at.tx, .y = m.y + at.ty, .w = m.w, .h = m.h }, .clip = at.clip, .opacity = at.opacity });
         if (st.outline.width > 0 and st.outline.style != .none and st.outline.color.a > 0) {
             const w = st.outline.width;
             const r: Rect = .{ .x = x.x + at.tx - w, .y = x.y + at.ty - w, .w = x.w + 2 * w, .h = x.h + 2 * w };
@@ -477,7 +479,9 @@ pub fn build(arena: Allocator, tree: box.Tree, doc: *dom.Node, m: box.Measurer, 
     var b: Builder = .{ .arena = arena, .m = m, .scrolls = scrolls };
     try b.clips.append(arena, .{});
     const doc_scroll = scrolls.get(doc) orelse .{ 0, 0 };
-    try b.clips.append(arena, .{ .parent = 0, .scrolls = true, .content_w = tree.doc_w, .content_h = tree.doc_h, .scroll_x = doc_scroll[0], .scroll_y = doc_scroll[1] });
+    try b.clips.append(arena, .{ .parent = 0, .scrolls = !tree.locked, .content_w = tree.doc_w, .content_h = tree.doc_h, .scroll_x = doc_scroll[0], .scroll_y = doc_scroll[1] });
     const items = try b.atomic(tree.root, .{ .clip = 1, .abs_clip = 1 });
-    return .{ .items = items, .clips = b.clips.items, .doc_w = tree.doc_w, .doc_h = tree.doc_h, .canvas = tree.canvas };
+    var frames: std.ArrayList(*const Item) = .empty;
+    for (items) |*it| if (it.kind == .image and it.kind.image.node.isTag("iframe")) try frames.append(arena, it);
+    return .{ .items = items, .clips = b.clips.items, .doc_w = tree.doc_w, .doc_h = tree.doc_h, .canvas = tree.canvas, .frames = frames.items };
 }

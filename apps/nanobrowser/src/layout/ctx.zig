@@ -92,6 +92,8 @@ fn inheritFrom(p: *const Style) Style {
     s.overflow_wrap_anywhere = p.overflow_wrap_anywhere;
     s.caption_bottom = p.caption_bottom;
     s.tab_size = p.tab_size;
+    s.text_balance = p.text_balance;
+    s.list_style_text = p.list_style_text;
     s.dark_scheme = p.dark_scheme;
     s.underline = p.underline;
     s.line_through = p.line_through;
@@ -111,6 +113,7 @@ pub fn clean(v: f32) f32 {
 /// A length against `ref`; zero for what is not a length.
 pub fn len(l: Len, ref: f32) f32 {
     if (l.kind != .length) return 0;
+    if (l.math != null) return clean(l.at(ref));
     return clean(clean(l.px) + clean(l.pct) * ref / 100);
 }
 
@@ -145,8 +148,7 @@ pub fn edgesOf(s: *const Style, cw: f32) EdgeSet {
     };
 }
 
-/// Fills in a box's edges. In collapsed tables, cells keep their border
-/// widths: paint draws those, and `table.zig` overlaps the rectangles.
+/// Fills in a box's edges.
 pub fn setEdges(b: *Box, cw: f32) void {
     const e = edgesOf(b.style, cw);
     b.margin = e.margin;
@@ -176,7 +178,7 @@ pub fn specW(c: *Ctx, b: *Box, l: Len, cw: ?f32, bp: f32) Error!?f32 {
     switch (l.kind) {
         .auto, .none => return null,
         .length => {
-            if (l.pct != 0 and cw == null) return null;
+            if (l.hasPct() and cw == null) return null;
             const v = @max(0, len(l, cw orelse 0));
             return if (b.style.box_sizing == .border_box) @max(v, bp) else v + bp;
         },
@@ -184,16 +186,26 @@ pub fn specW(c: *Ctx, b: *Box, l: Len, cw: ?f32, bp: f32) Error!?f32 {
         .max_content => return (try intrinsic.of(c, b)).max,
         .fit_content => {
             const i = try intrinsic.of(c, b);
-            return @min(i.max, @max(i.min, cw orelse i.max));
+            const room = if (cw) |w| w - b.margin.horizontal() else i.max;
+            return @min(i.max, @max(i.min, room));
+        },
+        .stretch => {
+            const w = cw orelse return null;
+            return @max(bp, w - b.margin.horizontal());
         },
     }
 }
 
 /// The border-box height `l` asks for; null for auto and for a percentage of
-/// an indefinite height. The content keywords act as auto.
+/// an indefinite height. The content keywords act as auto; `stretch` fills a
+/// definite height.
 pub fn specH(b: *const Box, l: Len, ch: ?f32, bp: f32) ?f32 {
+    if (l.kind == .stretch) {
+        const h = ch orelse return null;
+        return @max(bp, h - b.margin.vertical());
+    }
     if (l.kind != .length) return null;
-    if (l.pct != 0 and ch == null) return null;
+    if (l.hasPct() and ch == null) return null;
     const v = @max(0, len(l, ch orelse 0));
     return if (b.style.box_sizing == .border_box) @max(v, bp) else v + bp;
 }
@@ -212,12 +224,33 @@ pub fn clampH(b: *const Box, h: f32, ch: ?f32, bp: f32) f32 {
     return @max(out, bp);
 }
 
+/// The border-box height `aspect-ratio` gives a box of border-box width `w`.
+pub fn aspectH(b: *const Box, w: f32) f32 {
+    const ratio = clean(b.style.aspect_ratio);
+    if (b.style.box_sizing == .border_box) return @max(w / ratio, bpV(b));
+    return @max(0, w - bpH(b)) / ratio + bpV(b);
+}
+
+/// The border-box width `aspect-ratio` gives a box of border-box height `h`.
+pub fn aspectW(b: *const Box, h: f32) f32 {
+    const ratio = clean(b.style.aspect_ratio);
+    if (b.style.box_sizing == .border_box) return @max(h * ratio, bpH(b));
+    return @max(0, h - bpV(b)) * ratio + bpH(b);
+}
+
+/// Whether `aspect-ratio`'s height gives way to what's inside (§ automatic minimum).
+pub fn aspectGrows(b: *const Box) bool {
+    return !b.style.clips() and b.style.min_height.kind == .auto;
+}
+
 /// Whether the box's content is a formatting context of its own, so floats
 /// and margins stay on one side of its edge. Buttons are, as `center_v` marks them.
 pub fn isBfcRoot(b: *const Box) bool {
     if (b.kind != .block) return true;
     const s = b.style;
     if (s.float != .none or s.isOutOfFlow() or s.flow_root or b.lay.center_v) return true;
+    if (s.container_type != .normal or s.contain_flow or s.contain_size or s.contain_inline_size) return true;
+    if (s.column_count > 0 or s.column_width > 0) return true;
     if (s.overflow_x != .visible or s.overflow_y != .visible) return true;
     if (s.display == .inline_block) return true;
     if (b.parent) |p| {

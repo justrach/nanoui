@@ -16,6 +16,7 @@ const max_pictures = 6;
 /// The most one response may hold; more is treated as failed by what it was for.
 const net = @import("web/net.zig");
 const web = @import("web/web.zig");
+const frames = @import("frames.zig");
 
 const headers = [_]http.Header{
     .{ .name = "User-Agent", .value = page_mod.user_agent },
@@ -31,6 +32,8 @@ pub const Slot = struct {
     media: ?*const css.MediaList = null,
     /// A top-level sheet, not one reached by `@import`.
     top: bool = true,
+    /// The shadow root of the tree it applies to; null for the document.
+    scope: ?*dom.Node = null,
 };
 
 pub const Sheets = struct {
@@ -40,8 +43,12 @@ pub const Sheets = struct {
     /// Where each of those elements' sheet goes.
     slot_of: std.AutoHashMapUnmanaged(*dom.Node, u32) = .empty,
     flat: std.ArrayList(*const css.Sheet) = .empty,
+    /// Sheets parsed from `<style>` text, by the text: a thousand instances of a
+    /// custom element say the same thing.
+    parsed: std.AutoHashMapUnmanaged(u64, *css.Sheet) = .empty,
 
     pub fn deinit(s: *Sheets, gpa: Allocator) void {
+        s.parsed.deinit(gpa);
         for (s.slots.items) |*x| x.imports.deinit(gpa);
         s.slots.deinit(gpa);
         s.seen.deinit(gpa);
@@ -54,18 +61,34 @@ pub const Sheets = struct {
         return @intCast(s.slots.items.len - 1);
     }
 
-    fn flatten(s: *Sheets, gpa: Allocator, slot: u32, depth: u8) void {
+    fn flatten(s: *Sheets, gpa: Allocator, slot: u32, depth: u8, out: *std.ArrayList(*const css.Sheet)) void {
         if (depth > 16) return;
         const x = &s.slots.items[slot];
-        for (x.imports.items) |i| s.flatten(gpa, i, depth + 1);
-        if (x.sheet) |sh| s.flat.append(gpa, sh) catch {};
+        for (x.imports.items) |i| s.flatten(gpa, i, depth + 1, out);
+        if (x.sheet) |sh| out.append(gpa, sh) catch {};
     }
 
-    /// Gives the engine what has arrived, in the document's order.
+    /// Gives the engine what has arrived, in the document's order, each shadow tree's apart.
     fn apply(s: *Sheets, p: *Page) void {
+        const gpa = p.gpa;
         s.flat.clearRetainingCapacity();
-        for (s.slots.items, 0..) |x, i| if (x.top) s.flatten(p.gpa, @intCast(i), 0);
+        var trees: std.AutoArrayHashMapUnmanaged(*dom.Node, std.ArrayList(*const css.Sheet)) = .empty;
+        defer {
+            for (trees.values()) |*l| l.deinit(gpa);
+            trees.deinit(gpa);
+        }
+        for (s.slots.items, 0..) |x, i| if (x.top) {
+            if (x.scope) |root| {
+                const got = trees.getOrPut(gpa, root) catch continue;
+                if (!got.found_existing) got.value_ptr.* = .empty;
+                s.flatten(gpa, @intCast(i), 0, got.value_ptr);
+            } else s.flatten(gpa, @intCast(i), 0, &s.flat);
+        };
         p.engine.setSheets(s.flat.items);
+        var lists: std.ArrayList([]const *const css.Sheet) = .empty;
+        defer lists.deinit(gpa);
+        for (trees.values()) |l| lists.append(gpa, l.items) catch {};
+        p.engine.setScopedSheets(trees.keys()[0..lists.items.len], lists.items);
         p.doc.touchStyle();
     }
 };
@@ -173,11 +196,18 @@ fn resolve(p: *Page, ref: []const u8) ?[]const u8 {
 
 /// `<base href>` when there is one.
 fn baseOf(p: *Page) []const u8 {
-    const head = p.doc.head() orelse return p.final_url;
+    const own = addressOf(p);
+    const head = p.doc.head() orelse return own;
     var c = head.first_child;
     while (c) |k| : (c = k.next) if (k.isTag("base")) if (k.attr("href")) |h| {
-        return http.resolve(p.arena(), p.final_url, h) catch p.final_url;
+        return http.resolve(p.arena(), own, h) catch own;
     };
+    return own;
+}
+
+/// What its relative addresses go from: a frame with no address has its owner's.
+fn addressOf(p: *Page) []const u8 {
+    if (std.mem.startsWith(u8, p.final_url, "about:")) if (p.frame) |f| return baseOf(f.owner);
     return p.final_url;
 }
 
@@ -190,12 +220,14 @@ pub fn linkFrom(p: *Page, ref: []const u8) ?[]const u8 {
 pub fn scan(p: *Page) void {
     var changed = false;
     var at = p.doc.node.first_child;
-    while (at) |n| : (at = n.nextInTree(p.doc.node)) {
+    while (at) |n| : (at = n.nextDeep(p.doc.node)) {
         if (n.kind != .element) continue;
         if (n.isTag("style")) {
             changed = styleElement(p, n) or changed;
         } else if (n.isTag("link")) {
             linkElement(p, n, &changed);
+        } else if (n.isTag("iframe")) {
+            frames.note(p, n);
         } else if (n.isTag("img") or n.isTag("source")) {
             imageElement(p, n);
         } else if (n.isTag("svg") and n.ns == .svg and n.image.len == 0) {
@@ -204,6 +236,7 @@ pub fn scan(p: *Page) void {
     }
     if (dropGone(p)) changed = true;
     if (changed) p.sheets.apply(p);
+    frames.sweep(p);
     if (!p.icon_asked and p.state != .failed and !std.mem.startsWith(u8, p.final_url, "file:")) {
         p.icon_asked = true;
         if (resolve(p, "/favicon.ico")) |u| send(p, u, "GET", "", .{ .icon = u });
@@ -228,17 +261,31 @@ fn styleElement(p: *Page, n: *dom.Node) bool {
     const gop = p.sheets.seen.getOrPut(p.gpa, n) catch return false;
     if (gop.found_existing and gop.value_ptr.* == h) return false;
     gop.value_ptr.* = h;
-    const text = n.textContent(p.arena()) catch return false;
     const media = n.attr("media");
-    const sheet = css.parseSheetMedia(p.arena(), text, baseOf(p), media) catch return false;
+    const key = std.hash.Wyhash.hash(h, media orelse "\x00");
+    const known = p.sheets.parsed.get(key);
+    const sheet = known orelse blk: {
+        const text = n.textContent(p.arena()) catch return false;
+        const made = css.parseSheetMedia(p.arena(), text, baseOf(p), media) catch return false;
+        p.sheets.parsed.put(p.gpa, key, made) catch {};
+        break :blk made;
+    };
     // A `<style>` whose text changed keeps its place.
     const slot_gop = p.sheets.slot_of.getOrPut(p.gpa, n) catch return false;
     if (!slot_gop.found_existing) slot_gop.value_ptr.* = p.sheets.add(p.gpa, true) catch return false;
     const slot = slot_gop.value_ptr.*;
     p.sheets.slots.items[slot].sheet = sheet;
+    p.sheets.slots.items[slot].scope = shadowOf(n);
     p.sheets.slots.items[slot].imports.clearRetainingCapacity();
     askImports(p, slot, sheet);
     return true;
+}
+
+/// The shadow root of the tree the element is in.
+fn shadowOf(n: *const dom.Node) ?*dom.Node {
+    var at = n.parent;
+    while (at) |x| : (at = x.parent) if (x.is_shadow) return x;
+    return null;
 }
 
 fn connected(n: *const dom.Node) bool {
@@ -290,6 +337,7 @@ fn linkElement(p: *Page, n: *dom.Node, changed: *bool) void {
     const u = resolve(p, href) orelse return;
     const slot_gop = p.sheets.slot_of.getOrPut(p.gpa, n) catch return;
     if (!slot_gop.found_existing) slot_gop.value_ptr.* = p.sheets.add(p.gpa, true) catch return;
+    p.sheets.slots.items[slot_gop.value_ptr.*].scope = shadowOf(n);
     send(p, u, "GET", "", .{ .sheet = slot_gop.value_ptr.* });
     _ = changed;
 }

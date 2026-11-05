@@ -74,6 +74,8 @@ pub fn fixTable(g: *Gen, b: *Box, entries: []const Entry) Error!void {
         from = i + 1;
     }
     try groupRun(g, b, entries[from..]);
+    // Collapsed borders are the boxes' own from here on.
+    if (b.style.border_collapse) _ = try @import("table.zig").analyse(g.c, b);
 }
 
 fn groupRun(g: *Gen, b: *Box, run: []const Entry) Error!void {

@@ -10,6 +10,7 @@ const box = @import("properties_box.zig");
 const text = @import("properties_text.zig");
 const paint = @import("properties_paint.zig");
 const layout = @import("properties_layout.zig");
+const flow = @import("properties_flow.zig");
 
 const Prop = prop.Prop;
 const Ctx = values.Ctx;
@@ -30,6 +31,7 @@ pub fn apply(ctx: *Ctx, p: Prop, t: []const Token) bool {
     if (text.apply(ctx, p, t)) |r| return r;
     if (paint.apply(ctx, p, t)) |r| return r;
     if (layout.apply(ctx, p, t)) |r| return r;
+    if (flow.apply(ctx, p, t)) |r| return r;
     return switch (p) {
         .custom, .all => false,
         .display => display(s, t),
@@ -216,6 +218,7 @@ fn aspectRatio(ctx: *Ctx, t: []const Token) bool {
         ratio = a / b;
     }
     if (c.takeIdent("auto")) auto_seen = true;
+    ctx.style.aspect_auto = auto_seen;
     if (!c.atEnd()) return false;
     ctx.style.aspect_ratio = ratio;
     return true;

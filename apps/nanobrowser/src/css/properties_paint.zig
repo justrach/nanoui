@@ -483,10 +483,13 @@ fn content(ctx: *Ctx, t: []const Token) bool {
         if (std.ascii.eqlIgnoreCase(w, "none") or std.ascii.eqlIgnoreCase(w, "normal")) {
             ctx.has_content = false;
             ctx.style.content = "";
+            ctx.style.content_parts = &.{};
+            ctx.style.marker_hidden = std.ascii.eqlIgnoreCase(w, "none");
             return true;
         }
     }
     var out: std.ArrayList(u8) = .empty;
+    var parts: std.ArrayList(style.ContentPart) = .empty;
     var c = Cur.of(t);
     while (c.next()) |k| {
         switch (k.kind) {
@@ -505,7 +508,15 @@ fn content(ctx: *Ctx, t: []const Token) bool {
                     if (ctx.node) |node| if (node.attr(n.text)) |v| {
                         out.appendSlice(ctx.arena, v) catch return false;
                     };
-                } else if (!std.ascii.eqlIgnoreCase(name, "counter") and !std.ascii.eqlIgnoreCase(name, "counters") and std.ascii.findIgnoreCase(name, "gradient") == null and !std.ascii.eqlIgnoreCase(name, "image-set")) {
+                } else if (std.ascii.eqlIgnoreCase(name, "counter") or std.ascii.eqlIgnoreCase(name, "counters")) {
+                    // What came before is one part, the counter the next.
+                    if (out.items.len > 0) {
+                        parts.append(ctx.arena, .{ .text = out.items }) catch return false;
+                        out = .empty;
+                    }
+                    const part = counterPart(&a, std.ascii.eqlIgnoreCase(name, "counters")) orelse return false;
+                    parts.append(ctx.arena, .{ .counter = part }) catch return false;
+                } else if (std.ascii.findIgnoreCase(name, "gradient") == null and !std.ascii.eqlIgnoreCase(name, "image-set")) {
                     return false;
                 }
             },
@@ -521,7 +532,32 @@ fn content(ctx: *Ctx, t: []const Token) bool {
             else => return false,
         }
     }
-    ctx.style.content = out.items;
+    if (parts.items.len > 0 and out.items.len > 0) parts.append(ctx.arena, .{ .text = out.items }) catch return false;
+    ctx.style.content = if (parts.items.len > 0) "" else out.items;
+    ctx.style.content_parts = parts.items;
     ctx.has_content = true;
     return true;
+}
+
+/// `counter(name, style)` or `counters(name, "sep", style)`, at its arguments.
+fn counterPart(a: *Cur, nested: bool) ?style.ContentPart.Counter {
+    const n = a.next() orelse return null;
+    if (n.kind != .ident) return null;
+    var out: style.ContentPart.Counter = .{ .name = n.text };
+    if (nested) {
+        if (!a.takeComma()) return null;
+        const sep = a.next() orelse return null;
+        if (sep.kind != .string) return null;
+        out.sep = sep.text;
+    }
+    if (a.takeComma()) {
+        const k = a.next() orelse return null;
+        if (k.kind != .ident) return null;
+        if (k.isIdent("lower-latin")) {
+            out.kind = .lower_alpha;
+        } else if (k.isIdent("upper-latin")) {
+            out.kind = .upper_alpha;
+        } else out.kind = values.keyword(style.ListStyle, k.text) orelse .decimal;
+    }
+    return out;
 }

@@ -107,14 +107,14 @@ fn fillItem(s: *const Setup, k: *Box) Error!Item {
     // The flex base size.
     var base: ?f32 = null;
     const fb = st.flex_basis;
-    if (fb.kind == .length and (fb.pct == 0 or s.main != null)) {
+    if (fb.kind == .length and (!fb.hasPct() or s.main != null)) {
         const v = @max(0, ctx.len(fb, s.main orelse 0));
         base = if (st.box_sizing == .border_box) @max(v, bp) else v + bp;
     } else if (fb.kind == .auto or fb.kind == .length) {
         base = if (s.row) try ctx.specW(c, k, st.width, s.cw, bph) else ctx.specH(k, st.height, s.ch, bpv);
     }
     if (base == null and st.aspect_ratio > 0 and s.row) {
-        if (ctx.specH(k, st.height, s.ch, bpv)) |h| base = (h - bpv) * ctx.clean(st.aspect_ratio) + bph;
+        if (ctx.specH(k, st.height, s.ch, bpv)) |h| base = ctx.aspectW(k, h);
     }
     if (base == null and k.kind == .replaced and s.row) {
         base = (try @import("replaced.zig").size(c, k, s.cw, s.ch)).w;

@@ -113,9 +113,15 @@ pub fn serialize(gpa: Allocator, node: *dom.Node, include_self: bool) Allocator.
     errdefer out.deinit(gpa);
     if (include_self) try open(gpa, &out, node);
     if (!isLeaf(node)) {
-        var at: ?*dom.Node = node.first_child;
+        var at: ?*dom.Node = (node.template_content orelse node).first_child;
         while (at) |n| {
             try open(gpa, &out, n);
+            // A template's markup is its content's, which has a tree of its own.
+            if (n.template_content) |f| {
+                const inner = try serialize(gpa, f, false);
+                defer gpa.free(inner);
+                try out.appendSlice(gpa, inner);
+            }
             if (n.first_child != null and !isLeaf(n)) {
                 at = n.first_child;
                 continue;

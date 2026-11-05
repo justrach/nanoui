@@ -25,6 +25,7 @@ while (args.length) {
   const a = args.shift();
   if (a === '--out') out = args.shift();
   else if (a === '--wait') wait = Number(args.shift());
+  else if (a === '--tolerance') tolerance = Number(args.shift());
   else urls.push(a);
 }
 mkdirSync(out, { recursive: true });

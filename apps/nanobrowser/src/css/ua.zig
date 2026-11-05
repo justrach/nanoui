@@ -10,6 +10,9 @@ pub const sheet =
     \\area, base, basefont, datalist, head, link, meta, noembed, noframes, param, rp, script,
     \\style, template, title, noscript { display: none; }
     \\[hidden], dialog:not([open]) { display: none; }
+    \\[hidden=until-found i] { display: block; content-visibility: hidden; }
+    \\[popover]:not(:popover-open) { display: none; }
+    \\[popover] { position: fixed; inset: 0; width: fit-content; height: fit-content; margin: auto; border: solid; padding: 0.25em; overflow: auto; color: CanvasText; background-color: Canvas; }
     \\embed[hidden] { display: inline-block; height: 0; width: 0; }
     \\input[type=hidden i] { display: none !important; }
     \\slot { display: contents; }
@@ -68,7 +71,8 @@ pub const sheet =
     \\ol ol, ol ul ol { list-style-type: decimal; }
     \\li { display: list-item; text-align: match-parent; }
     \\summary { display: list-item; cursor: pointer; }
-    \\details:not([open]) > :not(summary) { display: none; }
+    \\summary { list-style: disclosure-closed inside; }
+    \\details[open] > summary:first-of-type { list-style-type: disclosure-open; }
     \\
     \\table { display: table; box-sizing: border-box; border-spacing: 2px; border-collapse: separate; text-indent: 0; }
     \\caption { display: table-caption; text-align: center; }
@@ -107,6 +111,7 @@ pub const sheet =
     \\svg:not(:root) { overflow: hidden; }
     \\marquee { display: inline-block; }
     \\dialog { position: absolute; left: 0; right: 0; width: fit-content; height: fit-content; margin: auto; border: solid; padding: 1em; background-color: Canvas; color: CanvasText; }
+    \\dialog:modal { position: fixed; overflow: auto; top: 0; bottom: 0; max-width: calc(100% - 6px - 2em); max-height: calc(100% - 6px - 2em); }
     \\frameset { display: block; }
     \\frame { display: block; }
     \\
