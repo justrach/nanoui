@@ -1,6 +1,6 @@
 //! The fonts of a text that names families (`TextStyle.family`), on CoreText: each
 //! name to its face at this style (a font the app brought, else an installed
-//! family, chosen as Chromium chooses on the Mac), and a text cut where its
+//! family, chosen as Chromium chooses them), and a text cut where its
 //! characters' fonts change. A character no family has is left to CoreText's
 //! own cascade.
 const std = @import("std");
@@ -153,23 +153,6 @@ fn strokeFor(size: f32) f32 {
     return size * k;
 }
 
-/// AppKit's numbering of weights, which Chromium chooses faces by.
-fn appKitWeight(w: u16) i32 {
-    const table = [_]i32{ 2, 3, 4, 5, 6, 8, 9, 10, 12 };
-    return table[@min(@max(w, 100) / 100 - 1, 8)];
-}
-
-fn cssWeightOf(trait: f64) u16 {
-    const steps = [_]f64{ -0.8, -0.6, -0.4, 0, 0.23, 0.3, 0.4, 0.56, 0.62 };
-    var best: usize = 0;
-    var d: f64 = 9;
-    for (steps, 0..) |v, i| if (@abs(trait - v) < d) {
-        d = @abs(trait - v);
-        best = i;
-    };
-    return @intCast((best + 1) * 100);
-}
-
 fn numberIn(dict: *anyopaque, key: cf.CFStringRef) f64 {
     const n = CFDictionaryGetValue(dict, key) orelse return 0;
     var v: f64 = 0;
@@ -177,14 +160,14 @@ fn numberIn(dict: *anyopaque, key: cf.CFStringRef) f64 {
     return v;
 }
 
-const Traits = struct { weight: u16, width: f64, italic: bool };
+const Traits = struct { weight: f64, width: f64, italic: bool };
 
 fn traitsOf(desc: *anyopaque) Traits {
-    const t = CTFontDescriptorCopyAttribute(desc, kCTFontTraitsAttribute) orelse return .{ .weight = 400, .width = 0, .italic = false };
+    const t = CTFontDescriptorCopyAttribute(desc, kCTFontTraitsAttribute) orelse return .{ .weight = 0, .width = 0, .italic = false };
     defer cf.CFRelease(t);
     var sym: i64 = 0;
     if (CFDictionaryGetValue(t, kCTFontSymbolicTrait)) |n| _ = cf.CFNumberGetValue(n, number_u32_as_i64, &sym);
-    return .{ .weight = cssWeightOf(numberIn(t, kCTFontWeightTrait)), .width = numberIn(t, kCTFontWidthTrait), .italic = sym & italic_trait != 0 };
+    return .{ .weight = numberIn(t, kCTFontWeightTrait), .width = numberIn(t, kCTFontWidthTrait), .italic = sym & italic_trait != 0 };
 }
 
 /// An installed family's faces: a retained array of descriptors, null when
@@ -209,30 +192,115 @@ pub fn familyFaces(name: []const u8) ?*anyopaque {
     return null;
 }
 
-/// As Chromium's `BetterChoice`: style, then width, then the nearest weight,
-/// the one further from medium when two are as near.
+/// Installed families by name, looked up once (null: not installed).
+pub const Installed = struct {
+    gpa: std.mem.Allocator,
+    faces: std.StringHashMapUnmanaged(?*anyopaque) = .empty,
+
+    pub fn facesOf(i: *Installed, name: []const u8) ?*anyopaque {
+        if (i.faces.get(name)) |all| return all;
+        const all = familyFaces(name);
+        const owned = i.gpa.dupe(u8, name) catch return all;
+        i.faces.put(i.gpa, owned, all) catch i.gpa.free(owned);
+        return all;
+    }
+
+    /// Whether a name finds a font, as a family or a font's own name.
+    pub fn has(i: *Installed, name: []const u8) bool {
+        if (i.facesOf(name) != null) return true;
+        const f = byName(name, 12) orelse return false;
+        cf.CFRelease(f);
+        return true;
+    }
+
+    pub fn clear(i: *Installed) void {
+        var it = i.faces.iterator();
+        while (it.next()) |e| {
+            i.gpa.free(e.key_ptr.*);
+            if (e.value_ptr.*) |all| cf.CFRelease(all);
+        }
+        i.faces.clearRetainingCapacity();
+    }
+
+    pub fn deinit(i: *Installed) void {
+        i.clear();
+        i.faces.deinit(i.gpa);
+    }
+};
+
+/// What a face is on Skia's scale: width 1 to 9, weight 1 to 1000.
+const Css = struct { width: i32, italic: bool, weight: i32 };
+
+/// `from` to `to` piecewise, between what's given.
+fn interpolate(v: f64, comptime from: anytype, comptime to: anytype) f64 {
+    if (v <= from[0]) return to[0];
+    for (1..from.len) |i| if (v <= from[i]) {
+        return to[i - 1] + (to[i] - to[i - 1]) * (v - from[i - 1]) / (from[i] - from[i - 1]);
+    };
+    return to[to.len - 1];
+}
+
+fn cssOf(t: Traits) Css {
+    const weights = [_]f64{ -1, -0.8, -0.6, -0.4, 0, 0.23, 0.3, 0.4, 0.56, 0.62, 1 };
+    const css_w = [_]f64{ 1, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000 };
+    const widths = [_]f64{ -0.5, -0.4, -0.3, -0.2, 0, 0.2, 0.4, 0.6, 0.8 };
+    const steps = [_]f64{ 1, 2, 3, 4, 5, 6, 7, 8, 9 };
+    return .{
+        .width = @intFromFloat(@round(interpolate(t.width, widths, steps))),
+        .italic = t.italic,
+        .weight = @intFromFloat(@round(interpolate(t.weight, weights, css_w))),
+    };
+}
+
+/// A `font-stretch` percentage on the scale of 1 to 9.
+fn widthStep(percent: u16) i32 {
+    const bounds = [_]u16{ 56, 68, 81, 93, 106, 118, 137, 175 };
+    for (bounds, 0..) |b, i| if (percent < b) return @intCast(i + 1);
+    return 9;
+}
+
+/// How well a face fits a style, as Skia's `matchStyleCSS3`, which is how
+/// Chromium picks among a family's faces: width over style, style over weight.
+fn styleScore(want: Css, have: Css) i32 {
+    var score: i32 = 0;
+    if (want.width <= 5) {
+        score += if (have.width <= want.width) 10 - want.width + have.width else 10 - have.width;
+    } else {
+        score += if (have.width > want.width) 10 + want.width - have.width else have.width;
+    }
+    score <<= 8;
+    score += if (have.italic == want.italic) 3 else 1;
+    score <<= 8;
+    const w = want.weight;
+    const h = have.weight;
+    if (w == h) {
+        score += 1000;
+    } else if (w < 400) {
+        score += if (h <= w) 1000 - w + h else 1000 - h;
+    } else if (w <= 500) {
+        if (h >= w and h <= 500) {
+            score += 1000 + w - h;
+        } else if (h <= w) {
+            score += 500 + h;
+        } else {
+            score += 1000 - h;
+        }
+    } else {
+        score += if (h > w) 1000 + w - h else h;
+    }
+    return score;
+}
+
 fn pickFace(all: *anyopaque, weight: u16, italic: bool, stretch: u16) ?*anyopaque {
-    const want = appKitWeight(weight);
-    const narrow = stretch < 100;
-    const wide = stretch > 100;
+    const want: Css = .{ .width = widthStep(stretch), .italic = italic, .weight = weight };
     var best: ?*anyopaque = null;
-    var best_score: i64 = std.math.maxInt(i64);
+    var best_score: i32 = 0;
     var i: cf.CFIndex = 0;
     const n = CFArrayGetCount(all);
     while (i < n) : (i += 1) {
         const d = CFArrayGetValueAtIndex(all, i);
-        const t = traitsOf(d);
-        const w = appKitWeight(t.weight);
-        const has_narrow = t.width < -0.05;
-        const has_wide = t.width > 0.05;
-        var score: i64 = 0;
-        if (t.italic != italic) score += 1 << 40;
-        if (has_narrow != narrow) score += 1 << 32;
-        if (has_wide != wide) score += 1 << 32;
-        score += @as(i64, @abs(w - want)) << 8;
-        // Further from medium wins a tie.
-        score += 16 - @as(i64, @abs(w - 6));
-        if (score < best_score) {
+        const score = styleScore(want, cssOf(traitsOf(d)));
+        if (score > best_score) {
             best_score = score;
             best = d;
         }
@@ -262,8 +330,8 @@ pub fn byName(name: []const u8, size: f64) ?cf.CTFontRef {
 
 /// `base`, released, with variations set where it has those axes: its weight
 /// and width clamped to the face's, and its optical size following the text's,
-/// as CSS's `font-optical-sizing: auto`.
-fn varied(base: cf.CTFontRef, size: f64, weight: f64, stretch: f64) cf.CTFontRef {
+/// as CSS's `font-optical-sizing: auto` (the system font sizes itself optically).
+fn varied(base: cf.CTFontRef, size: f64, weight: f64, stretch: f64, optical: bool) cf.CTFontRef {
     const axes = CTFontCopyVariationAxes(base) orelse return base;
     defer cf.CFRelease(axes);
     var desc: *anyopaque = CTFontCopyFontDescriptor(base);
@@ -276,7 +344,7 @@ fn varied(base: cf.CTFontRef, size: f64, weight: f64, stretch: f64) cf.CTFontRef
         const id_num = CFDictionaryGetValue(ax, kCTFontVariationAxisIdentifierKey) orelse continue;
         var id: i64 = 0;
         _ = cf.CFNumberGetValue(id_num, number_u32_as_i64, &id);
-        const value: f64 = if (id == axis("wght")) weight else if (id == axis("wdth")) stretch else if (id == axis("opsz")) size else continue;
+        const value: f64 = if (id == axis("wght")) weight else if (id == axis("wdth")) stretch else if (id == axis("opsz") and optical) size else continue;
         const lo = numberIn(ax, kCTFontVariationAxisMinimumValueKey);
         const hi = numberIn(ax, kCTFontVariationAxisMaximumValueKey);
         const next = CTFontDescriptorCreateCopyWithVariation(desc, id_num, std.math.clamp(value, lo, @max(lo, hi))) orelse continue;
@@ -341,7 +409,7 @@ fn brought(gpa: std.mem.Allocator, face: *const registry.Face, style: types.Text
     var ref: cf.CTFontRef = undefined;
     if (face.native) |d| {
         ref = CTFontCreateWithFontDescriptor(d, size, null) orelse return null;
-        ref = varied(ref, size, @floatFromInt(std.math.clamp(weight, face.weight[0], face.weight[1])), @floatFromInt(std.math.clamp(style.stretch, face.stretch[0], face.stretch[1])));
+        ref = varied(ref, size, @floatFromInt(std.math.clamp(weight, face.weight[0], face.weight[1])), @floatFromInt(std.math.clamp(style.stretch, face.stretch[0], face.stretch[1])), true);
     } else {
         ref = byName(face.local orelse return null, size) orelse return null;
     }
@@ -361,10 +429,16 @@ fn system(name: []const u8, style: types.TextStyle, zoom: f32) ?Entry {
     const serif = eq(name, "ui-serif");
     const round = eq(name, "ui-rounded");
     if (!mono and !serif and !round and !eq(name, "system-ui")) return null;
-    var ref = fonts.create(null, style.size * zoom, types.Weight.of(style.weightValue()), style.italic, mono);
-    if (serif) ref = fonts.serif(ref);
-    if (round) ref = fonts.rounded(ref);
-    return .{ .ref = ref };
+    if (mono or serif or round) {
+        var ref = fonts.create(null, style.size * zoom, types.Weight.of(style.weightValue()), style.italic, mono);
+        if (serif) ref = fonts.serif(ref);
+        if (round) ref = fonts.rounded(ref);
+        return .{ .ref = ref };
+    }
+    // As Chromium: the system font's own axes, by CSS's numbers.
+    const ref = fonts.create(null, style.size * zoom, .regular, style.italic, false);
+    if (style.weightValue() == 400 and style.stretch == 100) return .{ .ref = ref };
+    return .{ .ref = varied(ref, style.size * zoom, @floatFromInt(style.weightValue()), @floatFromInt(style.stretch), false) };
 }
 
 fn named(name: []const u8, style: types.TextStyle, size: f64, weight: u16, installed: anytype) ?Entry {
@@ -374,7 +448,7 @@ fn named(name: []const u8, style: types.TextStyle, size: f64, weight: u16, insta
     if (installed.facesOf(name)) |all| {
         const d = pickFace(all, weight, style.italic, style.stretch) orelse return null;
         const t = traitsOf(d);
-        has_weight = t.weight;
+        has_weight = @intCast(cssOf(t).weight);
         has_italic = t.italic;
         ref = CTFontCreateWithFontDescriptor(d, size, null) orelse return null;
     } else {
@@ -382,10 +456,10 @@ fn named(name: []const u8, style: types.TextStyle, size: f64, weight: u16, insta
         has_italic = CTFontGetSymbolicTraits(ref) & italic_trait != 0;
         const own = CTFontCopyFontDescriptor(ref);
         defer cf.CFRelease(own);
-        has_weight = traitsOf(own).weight;
+        has_weight = @intCast(cssOf(traitsOf(own)).weight);
     }
     if (style.italic and !has_italic) ref = slanted(ref, size);
-    return .{ .ref = ref, .stroke = if (appKitWeight(weight) >= 7 and appKitWeight(has_weight) < 7) strokeFor(@floatCast(size)) else 0 };
+    return .{ .ref = ref, .stroke = if (weight >= 600 and has_weight < 600) strokeFor(@floatCast(size)) else 0 };
 }
 
 fn joins(cp: u21) bool {

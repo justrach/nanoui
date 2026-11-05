@@ -144,7 +144,7 @@ fn text(a: Allocator, s: *const Style, p: prop.Prop) Allocator.Error!?[]const u8
         .font_size => try pxText(a, s.font_size),
         .font_weight => try P(a, "{d}", .{s.font_weight}),
         .font_style => boolWord(s.italic, "italic", "normal"),
-        .font_family => if (s.mono) "monospace" else if (s.serif) "serif" else "sans-serif",
+        .font_family => try @import("font_family.zig").shown(a, s.font_family),
         .line_height => if (s.line_height > 0) try pxText(a, s.line_height) else "normal",
         .letter_spacing => if (s.letter_spacing != 0) try pxText(a, s.letter_spacing) else "normal",
         .word_spacing => try pxText(a, s.word_spacing),

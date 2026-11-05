@@ -2,6 +2,7 @@
 //! pointer and wheel, and the drawing. Called from the window's view, on the
 //! main thread. Nothing here polls: frames come from input and from `redraw`.
 const std = @import("std");
+const builtin = @import("builtin");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const dom = @import("dom.zig");
@@ -14,6 +15,7 @@ const controls = @import("paint/controls.zig");
 const loader = @import("loader.zig");
 const input = @import("page_input.zig");
 const web = @import("web/web.zig");
+const webfonts = @import("webfonts.zig");
 const Page = @import("page.zig").Page;
 
 /// What layout measures with during a frame.
@@ -25,21 +27,34 @@ const Fonts = struct {
         const f: *Fonts = @ptrCast(@alignCast(ctx));
         // CoreText reads size 0 as its default: `font-size: 0` takes no room.
         if (font.size <= 0) return 0;
-        var h = std.hash.Wyhash.init(@intFromBool(font.italic) + 2 * @as(u64, @intFromBool(font.mono)) + 4 * @as(u64, @intFromBool(font.serif)) + 8 * @as(u64, font.weight));
-        h.update(std.mem.asBytes(&font.size));
+        var h = fontHash(font);
         h.update(text);
         const k = h.final();
         if (f.p.widths.get(k)) |w| return w;
+        webfonts.need(f.p, f.c, font, text);
         const w = f.c.text.width(text, replay.textStyle(font));
-        f.p.widths.put(f.p.gpa, k, w) catch {};
+        // A font that came just now isn't in this measure.
+        if (!f.p.faces.changed) f.p.widths.put(f.p.gpa, k, w) catch {};
         return w;
     }
 
     fn metrics(ctx: *anyopaque, font: box.Font) box.Metrics {
         const f: *Fonts = @ptrCast(@alignCast(ctx));
         if (font.size <= 0) return .{ .ascent = 0, .descent = 0, .gap = 0 };
-        const m = f.c.text.font(replay.textStyle(font));
-        return .{ .ascent = m.ascent, .descent = m.descent, .gap = m.leading };
+        var h = fontHash(font);
+        const k = h.final();
+        if (f.p.font_metrics.get(k)) |m| return m;
+        webfonts.need(f.p, f.c, font, "");
+        const m = lineMetrics(f.c, replay.textStyle(font));
+        if (!f.p.faces.changed) f.p.font_metrics.put(f.p.gpa, k, m) catch {};
+        return m;
+    }
+
+    fn fontHash(font: box.Font) std.hash.Wyhash {
+        var h = std.hash.Wyhash.init(@intFromBool(font.italic) + 2 * @as(u64, @intFromBool(font.mono)) + 4 * @as(u64, @intFromBool(font.serif)) + 8 * @as(u64, font.weight) + (@as(u64, font.stretch) << 16) + (@as(u64, @intFromBool(font.tabular)) << 32) + (@as(u64, @intFromBool(font.ligatures)) << 33));
+        h.update(std.mem.asBytes(&font.size));
+        h.update(font.family);
+        return h;
     }
 
     fn image(ctx: *anyopaque, node: *dom.Node) ?box.Size {
@@ -58,8 +73,26 @@ const Fonts = struct {
     }
 };
 
+/// A font's line metrics as Chromium has them: each rounded to whole pixels, and on
+/// the Mac the ascent of the three classic faces raised to match their Windows
+/// counterparts (`FontMetrics::AscentDescentWithHacks`).
+pub fn lineMetrics(c: *ui.Context, style: ui.TextStyle) box.Metrics {
+    const m = c.text.font(style);
+    var ascent = @round(m.ascent);
+    const descent = @round(m.descent);
+    if (builtin.os.tag == .macos) {
+        var buf: [64]u8 = undefined;
+        const name = c.text.familyName(style, &buf);
+        if (std.mem.eql(u8, name, "Times") or std.mem.eql(u8, name, "Helvetica") or std.mem.eql(u8, name, "Courier")) {
+            ascent += @floor((ascent + descent) * 0.15 + 0.5);
+        }
+    }
+    return .{ .ascent = ascent, .descent = descent, .gap = @round(m.leading), .x_height = m.x_height };
+}
+
 /// Style and layout brought up to date for a viewport of `w` × `h`.
 pub fn prepare(p: *Page, c: *ui.Context, w: f32, h: f32) void {
+    webfonts.catchUp(p, c);
     if (w != p.viewport_w or h != p.viewport_h or c.theme.dark != p.dark) {
         p.viewport_w = w;
         p.viewport_h = h;

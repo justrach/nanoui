@@ -67,6 +67,8 @@ pub const Engine = struct {
     root_parent: Style = .{},
     /// `<meta name=color-scheme>` asks for dark.
     meta_dark: bool = false,
+    /// Family lists, the sheets' `@font-face` names, and real font measures.
+    fonts: @import("font_family.zig").Names = .{},
 
     // Scratch, reused between elements.
     collected: std.ArrayList(rule_index.Entry) = .empty,
@@ -94,6 +96,7 @@ pub const Engine = struct {
         e.pseudo_before.deinit(e.gpa);
         e.pseudo_after.deinit(e.gpa);
         e.custom_builder.deinit(e.gpa);
+        e.fonts.deinit(e.gpa);
         e.gpa.free(e.sheets);
     }
 
@@ -108,6 +111,7 @@ pub const Engine = struct {
         const copy = e.gpa.dupe(*const Sheet, sheets) catch return;
         e.gpa.free(e.sheets);
         e.sheets = copy;
+        _ = e.fonts.declare(e.gpa, copy);
         e.index_dirty = true;
         e.doc.touchStyle();
     }
@@ -192,6 +196,8 @@ pub const Engine = struct {
         var old = e.generation_arena;
         e.generation_arena = std.heap.ArenaAllocator.init(e.gpa);
         defer old.deinit();
+        // What it holds lives in the old generation.
+        e.fonts.interned.clearRetainingCapacity();
         e.generation +%= 1;
         if (e.generation == 0) e.generation = 1;
         e.root_font = 16;

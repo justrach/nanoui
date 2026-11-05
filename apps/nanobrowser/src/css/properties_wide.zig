@@ -19,9 +19,11 @@ pub fn copy(p: Prop, d: *Style, s: *const Style) void {
         .custom, .all => {},
         .color_scheme => d.dark_scheme = s.dark_scheme,
         .direction => d.rtl = s.rtl,
-        .font => sides(d, s, &.{ "font_size", "font_weight", "italic", "mono", "serif", "mono_generic", "line_height", "line_height_factor" }),
-        .font_size => d.font_size = s.font_size,
-        .font_family => sides(d, s, &.{ "mono", "serif", "mono_generic" }),
+        .font => sides(d, s, &.{ "font_size", "font_weight", "italic", "mono", "serif", "mono_generic", "font_family", "font_stretch", "font_size_abs", "line_height", "line_height_factor" }),
+        .font_size => sides(d, s, &.{ "font_size", "font_size_abs" }),
+        .font_family => sides(d, s, &.{ "mono", "serif", "mono_generic", "font_family" }),
+        .font_stretch => d.font_stretch = s.font_stretch,
+        .font_variant_numeric => d.tabular = s.tabular,
         .font_weight => d.font_weight = s.font_weight,
         .font_style => d.italic = s.italic,
         .line_height => sides(d, s, &.{ "line_height", "line_height_factor" }),
@@ -181,7 +183,8 @@ pub fn inherit(p: *const Style) Style {
     sides(&s, p, &.{
         "visibility",      "cursor",           "pointer_events",       "color",
         "font_size",       "font_weight",      "italic",               "mono",
-        "serif",           "mono_generic",     "line_height",          "line_height_factor",
+        "serif",           "mono_generic",     "font_family",          "font_stretch",
+        "tabular",         "font_size_abs",    "line_height",          "line_height_factor",
         "letter_spacing",  "word_spacing",     "text_align",           "text_indent",
         "center_children", "white_space",      "text_transform",       "list_style",
         "list_inside",     "rtl",              "inherited_visibility", "border_collapse",
@@ -194,7 +197,7 @@ pub fn inherit(p: *const Style) Style {
 /// `all`, as one pass of the cascade sees it: only the fields that pass
 /// governs, so that later declarations of earlier passes survive it.
 pub fn copyAll(d: *Style, s: *const Style, phase: u2) void {
-    const font_fields = [_][]const u8{ "font_size", "font_weight", "italic", "mono", "serif", "mono_generic" };
+    const font_fields = [_][]const u8{ "font_size", "font_weight", "italic", "mono", "serif", "mono_generic", "font_family", "font_stretch", "font_size_abs" };
     const text_fields = [_][]const u8{ "line_height", "line_height_factor", "color" };
     switch (phase) {
         0 => sides(d, s, &font_fields),

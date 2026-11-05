@@ -344,7 +344,7 @@ pub fn phase(p: Prop) u2 {
 /// Whether the property inherits, for `unset`.
 pub fn isInherited(p: Prop) bool {
     return switch (p) {
-        .color_scheme, .direction, .font, .font_size, .font_family, .font_weight, .font_style, .font_variant, .font_stretch, .line_height, .color, .visibility, .cursor, .pointer_events, .letter_spacing, .word_spacing, .text_align, .text_indent, .white_space, .white_space_collapse, .text_wrap, .text_wrap_mode, .text_transform, .list_style, .list_style_type, .list_style_position, .list_style_image, .border_collapse, .border_spacing, .caption_side, .word_break, .overflow_wrap, .word_wrap, .tab_size => true,
+        .color_scheme, .direction, .font, .font_size, .font_family, .font_weight, .font_style, .font_variant, .font_variant_numeric, .font_stretch, .line_height, .color, .visibility, .cursor, .pointer_events, .letter_spacing, .word_spacing, .text_align, .text_indent, .white_space, .white_space_collapse, .text_wrap, .text_wrap_mode, .text_transform, .list_style, .list_style_type, .list_style_position, .list_style_image, .border_collapse, .border_spacing, .caption_side, .word_break, .overflow_wrap, .word_wrap, .tab_size => true,
         else => false,
     };
 }

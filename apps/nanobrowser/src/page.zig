@@ -60,6 +60,10 @@ pub const Page = struct {
     restore_scroll: f32 = 0,
     /// Text widths already measured, by text and font.
     widths: std.AutoHashMapUnmanaged(u64, f32) = .empty,
+    /// Fonts' line metrics, by font.
+    font_metrics: std.AutoHashMapUnmanaged(u64, box.Metrics) = .empty,
+    /// Its `@font-face` rules and what came of them (`webfonts.zig`).
+    faces: @import("webfonts.zig").Faces = .{},
     gradients: gradient.Cache,
     /// Controls' editors (`paint/controls.zig`), freed with the page.
     editors: std.ArrayList(*nanoui.ui.TextBuffer) = .empty,
@@ -127,6 +131,7 @@ pub const Page = struct {
         errdefer p.doc_arena.deinit();
         p.doc = try dom.Document.create(p.doc_arena.allocator());
         p.engine = css.Engine.init(gpa, p.doc);
+        @import("webfonts.zig").begin(p);
         return p;
     }
 
@@ -146,6 +151,8 @@ pub const Page = struct {
         p.layout_arena.deinit();
         p.scrolls.deinit(gpa);
         p.widths.deinit(gpa);
+        p.font_metrics.deinit(gpa);
+        p.faces.deinit(gpa);
         p.gradients.deinit();
         for (p.editors.items) |e| gpa.destroy(e);
         p.editors.deinit(gpa);

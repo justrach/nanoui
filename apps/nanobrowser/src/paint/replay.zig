@@ -18,12 +18,20 @@ pub fn color(k: css.Color) ui.Color {
     return .{ .r = k.r, .g = k.g, .b = k.b, .a = k.a };
 }
 
-pub fn weight(w: u16) ui.Weight {
-    return if (w < 450) .regular else if (w < 550) .medium else if (w < 650) .semibold else .bold;
-}
-
 pub fn textStyle(f: box.Font) ui.TextStyle {
-    return .{ .size = f.size, .weight = weight(f.weight), .italic = f.italic, .mono = f.mono, .serif = f.serif, .mono_scale = 1 };
+    return .{
+        .size = f.size,
+        .weight = ui.Weight.of(f.weight),
+        .css_weight = @max(f.weight, 1),
+        .italic = f.italic,
+        .mono = f.mono,
+        .serif = f.serif,
+        .mono_scale = 1,
+        .family = if (f.family.len > 0) f.family else null,
+        .stretch = f.stretch,
+        .tabular = f.tabular,
+        .ligatures = f.ligatures,
+    };
 }
 
 fn overlaps(a: Rect, b: Rect) bool {
@@ -96,7 +104,11 @@ fn draw(c: *ui.Context, it: *const display.Item, x: f32, y: f32, r: Rect, host: 
         .text => |t| {
             var s = textStyle(t.font);
             s.tracking = t.spacing;
-            _ = c.leaf(.{ .absolute = true, .offset = .{ .x = x, .y = y }, .opacity = it.opacity }, .{ .text = .{ .str = t.str, .style = s, .color = color(t.color) } }, null);
+            // nanoui puts the baseline by its own measure of the font: this
+            // lands it on the one layout worked out.
+            const f = c.text.font(s);
+            const top = y + (t.baseline - it.rect.y) - (f.ascent + f.leading / 2);
+            _ = c.leaf(.{ .absolute = true, .offset = .{ .x = x, .y = top }, .opacity = it.opacity }, .{ .text = .{ .str = t.str, .style = s, .color = color(t.color) } }, null);
         },
         .image => |im| drawImage(c, im, placed, r),
         .background => |bg| if (host.picture(bg.url)) |bytes| drawBackground(c, bg, bytes, placed, r, null),

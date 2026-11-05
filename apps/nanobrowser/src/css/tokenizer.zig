@@ -45,6 +45,8 @@ pub const Token = struct {
     is_id: bool = false,
     /// A number written with an explicit sign.
     signed: bool = false,
+    /// A number's source characters (`U+0025`'s digits are not a number).
+    raw: []const u8 = "",
 
     pub fn isIdent(t: Token, name: []const u8) bool {
         return t.kind == .ident and std.ascii.eqlIgnoreCase(t.text, name);
@@ -283,14 +285,15 @@ pub const Tokenizer = struct {
         }
         // Overflow reads as the largest finite value, so math stays defined.
         const num = std.math.clamp(std.fmt.parseFloat(f32, t.src[start..t.pos]) catch 0, -1e30, 1e30);
+        const raw = t.src[start..t.pos];
         if (t.startsIdent(t.pos)) {
-            return .{ .kind = .dimension, .num = num, .text = try t.name(), .is_int = is_int, .signed = signed };
+            return .{ .kind = .dimension, .num = num, .text = try t.name(), .is_int = is_int, .signed = signed, .raw = raw };
         }
         if (t.at(t.pos) == '%') {
             t.pos += 1;
-            return .{ .kind = .percentage, .num = num, .signed = signed };
+            return .{ .kind = .percentage, .num = num, .signed = signed, .raw = raw };
         }
-        return .{ .kind = .number, .num = num, .is_int = is_int, .signed = signed };
+        return .{ .kind = .number, .num = num, .is_int = is_int, .signed = signed, .raw = raw };
     }
 
     fn identLike(t: *Tokenizer) Allocator.Error!Token {

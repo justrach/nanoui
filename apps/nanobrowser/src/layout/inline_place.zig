@@ -23,6 +23,7 @@ pub const Frame = struct {
     d: f32,
     asc: f32,
     desc: f32,
+    x_height: f32,
     /// The left of its fragment on this line.
     left: f32 = 0,
     opened: bool = false,
@@ -31,8 +32,9 @@ pub const Frame = struct {
 pub fn frameOf(c: *Ctx, b: *Box, s: *const css.Style, parent: ?*const Frame) Frame {
     const m = c.metrics(box.fontOf(s));
     const lh = c.lineHeight(s);
-    const half = (lh - m.ascent - m.descent) / 2;
-    var f: Frame = .{ .box = b, .style = s, .a = m.ascent + half, .d = lh - m.ascent - half, .asc = m.ascent, .desc = m.descent };
+    // Whole pixels above the text, as Chromium's half-leading, the rest below.
+    const half = @floor((lh - m.ascent - m.descent) / 2 + 0.001);
+    var f: Frame = .{ .box = b, .style = s, .a = m.ascent + half, .d = lh - m.ascent - half, .asc = m.ascent, .desc = m.descent, .x_height = if (m.x_height > 0) m.x_height else ctx.clean(s.font_size) * 0.5 };
     if (parent) |q| f.raise = raiseOf(s.vertical_align, q, f.a, f.d);
     return f;
 }
@@ -41,9 +43,10 @@ fn raiseOf(v: css.VerticalAlign, q: *const Frame, a: f32, d: f32) f32 {
     const size = ctx.clean(q.style.font_size);
     return switch (v) {
         .baseline, .top, .bottom => q.raise,
-        .sub => q.raise - size / 5,
-        .super => q.raise + size / 3,
-        .middle => q.raise + size * 0.25 - (a - d) / 2,
+        // Blink's: a fifth or a third of the size, and a pixel.
+        .sub => q.raise - (size / 5 + 1),
+        .super => q.raise + size / 3 + 1,
+        .middle => q.raise + q.x_height / 2 - (a - d) / 2,
         .text_top => q.raise + q.asc - a,
         .text_bottom => q.raise - q.desc + d,
     };

@@ -48,6 +48,9 @@ pub const FaceOptions = struct {
     stretch: [2]u16 = .{ 100, 100 },
     /// The characters it serves, inclusive ranges; empty is all of them.
     ranges: []const [2]u21 = &.{},
+    /// Nothing to draw with yet: the face counts when one is chosen, as CSS has it,
+    /// and text goes to the next family until `fillFace` gives it its file.
+    pending: bool = false,
     /// Among faces alike in the rest, higher is looked in first. A file can
     /// arrive long after a rule written later: this says which rule it was.
     order: u32 = 0,
@@ -101,7 +104,7 @@ pub fn registerFace(gpa: std.mem.Allocator, o: FaceOptions) RegisterError!void {
     errdefer gpa.free(ranges);
     const local = if (o.local) |l| try gpa.dupe(u8, l) else null;
     errdefer if (local) |l| gpa.free(l);
-    const bytes: []const u8 = if (o.bytes.len > 0) try sfnt.decode(gpa, o.bytes) else if (local != null) "" else return error.NotAFont;
+    const bytes: []const u8 = if (o.bytes.len > 0) try sfnt.decode(gpa, o.bytes) else if (local != null or o.pending) "" else return error.NotAFont;
     errdefer if (bytes.len > 0) gpa.free(bytes);
     var native: ?*anyopaque = null;
     if (!portable and bytes.len > 0) {
@@ -128,6 +131,25 @@ pub fn registerFace(gpa: std.mem.Allocator, o: FaceOptions) RegisterError!void {
         return e;
     };
     generation += 1;
+}
+
+/// Gives a pending face of `family`, the one registered with `order`, its file or
+/// the installed font it is.
+pub fn fillFace(family: []const u8, order: u32, bytes: []const u8, local: ?[]const u8) RegisterError!void {
+    for (faces.items) |f| {
+        if (f.order != order or f.bytes.len > 0 or f.local != null or !std.ascii.eqlIgnoreCase(f.family, family)) continue;
+        if (local) |l| {
+            f.local = try f.gpa.dupe(u8, l);
+        } else {
+            const decoded = try sfnt.decode(f.gpa, bytes);
+            errdefer f.gpa.free(decoded);
+            if (!portable) f.native = @import("text_stack_mac.zig").describe(decoded) orelse return error.Unsupported;
+            f.bytes = decoded;
+        }
+        generation += 1;
+        return;
+    }
+    return error.NotAFont;
 }
 
 fn release(f: *Face) void {
@@ -226,6 +248,24 @@ pub fn best(family: []const u8, weight: u16, italic: bool, stretch: u16, out: []
         n += 1;
     }
     return n;
+}
+
+test "a pending face is chosen by its description, and draws once it has a file" {
+    const gpa = std.testing.allocator;
+    const tf = @import("tt/testfont.zig");
+    const bytes = try tf.build(gpa, .{ .family = "Pending" });
+    defer gpa.free(bytes);
+    defer unregisterFamilies("regpend-");
+    try registerFace(gpa, .{ .family = "regpend-a", .bytes = bytes, .weight = .{ 700, 700 }, .order = 0 });
+    try registerFace(gpa, .{ .family = "regpend-a", .pending = true, .weight = .{ 400, 400 }, .order = 1 });
+    var out: [8]*const Face = undefined;
+    try std.testing.expectEqual(@as(usize, 1), best("regpend-a", 400, false, 100, &out));
+    try std.testing.expectEqual(@as(usize, 0), out[0].bytes.len);
+    try fillFace("regpend-a", 1, bytes, null);
+    _ = best("regpend-a", 400, false, 100, &out);
+    try std.testing.expect(out[0].bytes.len > 0);
+    try std.testing.expectError(error.NotAFont, fillFace("regpend-a", 1, bytes, null));
+    try std.testing.expectError(error.NotAFont, fillFace("regpend-b", 0, bytes, null));
 }
 
 test "css's font matching picks the nearest weights and keeps a split family together" {

@@ -256,10 +256,10 @@ test "vertical-align table for an inline box of half the font" {
     const Case = struct { v: css.VerticalAlign, raise: f32, h: f32 };
     for ([_]Case{
         .{ .v = .baseline, .raise = 0, .h = 16 },
-        // A fifth of the parent's size down: 3.2; 1.6 + 3.2 = 4.8 is under 3.2.
-        .{ .v = .sub, .raise = -3.2, .h = 12.8 + 4.8 },
-        // A third of it up: 5.33; 6.4 + 5.33 = 11.73, under 12.8.
-        .{ .v = .super, .raise = 16.0 / 3.0, .h = 16 },
+        // A fifth of the parent's size and a pixel down: 4.2; 1.6 + 4.2 = 5.8 is under 3.2.
+        .{ .v = .sub, .raise = -4.2, .h = 12.8 + 5.8 },
+        // A third of it and a pixel up: 6.33; 6.4 + 6.33 = 12.73, under 12.8.
+        .{ .v = .super, .raise = 16.0 / 3.0 + 1, .h = 16 },
         // Its top at the parent's: raise = 12.8 - 6.4.
         .{ .v = .text_top, .raise = 6.4, .h = 16 },
         // Its bottom at the parent's: raise = -3.2 + 1.6.

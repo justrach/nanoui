@@ -16,6 +16,7 @@ const max_pictures = 6;
 /// The most one response may hold; more is treated as failed by what it was for.
 const net = @import("web/net.zig");
 const web = @import("web/web.zig");
+const webfonts = @import("webfonts.zig");
 
 const headers = [_]http.Header{
     .{ .name = "User-Agent", .value = page_mod.user_agent },
@@ -66,6 +67,7 @@ pub const Sheets = struct {
         s.flat.clearRetainingCapacity();
         for (s.slots.items, 0..) |x, i| if (x.top) s.flatten(p.gpa, @intCast(i), 0);
         p.engine.setSheets(s.flat.items);
+        webfonts.sync(p, s.flat.items);
         p.doc.touchStyle();
     }
 };
@@ -106,6 +108,7 @@ const Req = struct {
         sheet: u32,
         picture: []const u8,
         icon: []const u8,
+        font: *webfonts.Face,
     },
 };
 
@@ -125,6 +128,11 @@ fn send(p: *Page, url_in: []const u8, method: []const u8, body: []const u8, kind
         list = &with_cookie;
     }
     http.fetch(p.gpa, .{ .url = url, .method = method, .body = body, .headers = list, .timeout = 30 }, r, answered);
+}
+
+/// A font's file, wherever it is: fonts cross origins.
+pub fn sendFont(p: *Page, url: []const u8, face: *webfonts.Face) void {
+    send(p, url, "GET", "", .{ .font = face });
 }
 
 pub fn fetchDocument(p: *Page, url: []const u8, req: Page.Load) void {
@@ -148,6 +156,7 @@ fn answered(r: *Req, res: http.Response) void {
         .sheet => |slot| sheetArrived(p, slot, res),
         .picture => |u| pictureArrived(p, u, res),
         .icon => |k| iconArrived(p, k, res),
+        .font => |f| webfonts.arrived(p, f, res.status, res.body),
     }
     if (p.dead) return;
     p.finishLoadCheck();

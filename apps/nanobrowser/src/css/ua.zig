@@ -81,7 +81,7 @@ pub const sheet =
     \\td, th { display: table-cell; padding: 1px; vertical-align: inherit; }
     \\th { font-weight: bold; text-align: -webkit-center; }
     \\
-    \\input, select, button, textarea { display: inline-block; box-sizing: border-box; color: FieldText; font-size: 13.333px; font-family: sans-serif; font-weight: normal; line-height: normal; letter-spacing: normal; word-spacing: normal; text-transform: none; text-indent: 0; text-align: start; cursor: text; }
+    \\input, select, button, textarea { display: inline-block; box-sizing: border-box; color: FieldText; font-size: 13.333px; font-family: Arial, sans-serif; font-weight: normal; line-height: normal; letter-spacing: normal; word-spacing: normal; text-transform: none; text-indent: 0; text-align: start; cursor: text; }
     \\input, textarea { background-color: Field; border: 2px inset ButtonBorder; padding: 1px 2px; }
     \\select { background-color: Field; border: 1px solid ButtonBorder; border-radius: 5px; padding: 0 2px; cursor: default; white-space: pre; }
     \\select[multiple], select[size] { height: auto; }

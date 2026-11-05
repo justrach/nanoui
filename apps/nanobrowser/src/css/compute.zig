@@ -166,10 +166,12 @@ const Run = struct {
             .viewport_dark = e.viewport.dark,
             .node = r.node,
             .arena = e.genArena(),
+            .fonts = &e.fonts,
+            .gpa = e.gpa,
         };
 
         try r.pass(0);
-        fontQuirk(out, r.parent, r.ctx.font_size_set);
+        fontQuirk(out, r.parent, r.ctx.font_size_set, r.ctx.font_size_keyword);
         if (out.line_height_factor > 0) out.line_height = out.line_height_factor * out.font_size;
 
         try r.pass(1);
@@ -381,8 +383,12 @@ fn wideOf(t: []const sheet.Token) sheet.Wide {
 
 /// The bare generic `monospace` shows at 13px where sans shows at 16, unless
 /// the page set a size.
-fn fontQuirk(s: *Style, parent: *const Style, size_set: bool) void {
-    if (size_set or s.mono_generic == parent.mono_generic) return;
+fn fontQuirk(s: *Style, parent: *const Style, size_set: bool, keyword: bool) void {
+    if (size_set and keyword) {
+        if (s.mono_generic) s.font_size *= 13.0 / 16.0;
+        return;
+    }
+    if (size_set or s.font_size_abs or s.mono_generic == parent.mono_generic) return;
     if (s.mono_generic) {
         s.font_size = parent.font_size * 13 / 16;
     } else {

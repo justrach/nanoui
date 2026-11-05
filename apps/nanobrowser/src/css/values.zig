@@ -28,10 +28,15 @@ pub const Ctx = struct {
     /// Set by `content` when it gives a pseudo-element something to be.
     has_content: bool = false,
     font_size_set: bool = false,
+    /// It was set by a keyword (`small`), which the bare `monospace` has its own sizes of.
+    font_size_keyword: bool = false,
     /// `font-size` is being read: `em` means the parent's size.
     in_font_size: bool = false,
     /// `line-height: 2em` in a font shorthand, whose size is already known.
     em_override: f32 = 0,
+    /// The engine's knowledge of fonts; null outside one.
+    fonts: ?*@import("font_family.zig").Names = null,
+    gpa: ?Allocator = null,
 
     pub fn em(c: *const Ctx) f32 {
         if (c.em_override > 0) return c.em_override;
@@ -176,6 +181,16 @@ pub fn keywordOf(comptime T: type, t: []const Token) ?T {
     return keyword(T, ident(t) orelse return null);
 }
 
+/// What the font's own measures give `ex`, `ch` and `cap`, when there's a font
+/// system to ask.
+fn fontUnits(ctx: *const Ctx) ?@import("font_family.zig").Units {
+    const n = ctx.fonts orelse return null;
+    const probe = n.probe orelse return null;
+    const m = probe(n.ctx orelse return null, ctx.style.font_family, ctx.em(), ctx.style.font_weight, ctx.style.italic) orelse return null;
+    if (m.ch <= 0 or m.ex <= 0) return null;
+    return m;
+}
+
 /// CSS pixels per unit, against the context; null for an unknown unit.
 pub fn unitPx(ctx: *const Ctx, unit: []const u8) ?f32 {
     var buf: [8]u8 = undefined;
@@ -189,9 +204,9 @@ pub fn unitPx(ctx: *const Ctx, unit: []const u8) ?f32 {
     if (eql(u8, u, "vh") or eql(u8, u, "dvh") or eql(u8, u, "svh") or eql(u8, u, "lvh") or eql(u8, u, "vb") or eql(u8, u, "cqh") or eql(u8, u, "cqb")) return ctx.vh / 100;
     if (eql(u8, u, "vmin") or eql(u8, u, "dvmin") or eql(u8, u, "svmin") or eql(u8, u, "lvmin") or eql(u8, u, "cqmin")) return @min(ctx.vw, ctx.vh) / 100;
     if (eql(u8, u, "vmax") or eql(u8, u, "dvmax") or eql(u8, u, "svmax") or eql(u8, u, "lvmax") or eql(u8, u, "cqmax")) return @max(ctx.vw, ctx.vh) / 100;
-    if (eql(u8, u, "ch")) return ctx.em() * (if (ctx.style.mono) @as(f32, 0.6) else 0.5);
-    if (eql(u8, u, "ex")) return ctx.em() * 0.5;
-    if (eql(u8, u, "cap")) return ctx.em() * 0.7;
+    if (eql(u8, u, "ch")) return if (fontUnits(ctx)) |m| m.ch else ctx.em() * (if (ctx.style.mono) @as(f32, 0.6) else 0.5);
+    if (eql(u8, u, "ex")) return if (fontUnits(ctx)) |m| m.ex else ctx.em() * 0.5;
+    if (eql(u8, u, "cap")) return if (fontUnits(ctx)) |m| m.cap else ctx.em() * 0.7;
     if (eql(u8, u, "ic")) return ctx.em();
     if (eql(u8, u, "lh")) {
         const lh = ctx.style.line_height;

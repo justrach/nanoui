@@ -180,7 +180,36 @@ fn addWord(b: *Builder, data: []const u8, from: usize, node: ?*@import("../dom.z
     return i;
 }
 
+/// A word follows a space of its own font: the space's advance takes in the kerning
+/// with the letters on each side, as one shaped run has it, so words summed come to
+/// what is painted (`Ta To` is narrower in many fonts than `Ta` and `To` set apart).
+fn kernSpace(b: *Builder, text: []const u8, font: box.Font) Error!void {
+    const n = b.out.items.len;
+    if (n < 2) return;
+    const sp = &b.out.items[n - 1];
+    const before = b.out.items[n - 2];
+    if (sp.tag != .space or before.tag != .word or before.text.len == 0 or !sameFont(sp.font, font) or !sameFont(before.font, font)) return;
+    var buf: [10]u8 = undefined;
+    const first = seqLen(text, 0);
+    var last = before.text.len - 1;
+    while (last > 0 and before.text[last] & 0xC0 == 0x80) last -= 1;
+    const tail = before.text[last..];
+    if (tail.len + first + 1 > buf.len) return;
+    @memcpy(buf[0..tail.len], tail);
+    buf[tail.len] = ' ';
+    @memcpy(buf[tail.len + 1 ..][0..first], text[0..first]);
+    const pair = b.c.width(buf[0 .. tail.len + 1 + first], font);
+    const alone = b.c.width(tail, font) + b.c.width(text[0..first], font) + b.c.width(" ", font);
+    // Letter and word spacing are in `w` and stay.
+    sp.w += pair - alone;
+}
+
+fn sameFont(a: box.Font, f: box.Font) bool {
+    return a.size == f.size and a.weight == f.weight and a.italic == f.italic and a.stretch == f.stretch and a.tabular == f.tabular and a.ligatures == f.ligatures and (a.family.ptr == f.family.ptr or std.mem.eql(u8, a.family, f.family));
+}
+
 fn wordPiece(b: *Builder, text: []const u8, start: usize, node: ?*@import("../dom.zig").Node, s: *const css.Style, owner: *Box, font: box.Font, plain: bool, extra: f32, brk: bool) Error!void {
+    try kernSpace(b, text, font);
     try b.out.append(b.c.arena, .{
         .tag = .word,
         .text = text,

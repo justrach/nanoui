@@ -10,6 +10,9 @@ test {
     _ = @import("page_view.zig");
     _ = @import("page_input.zig");
     _ = @import("loader.zig");
+    _ = @import("webfonts.zig");
+    _ = @import("tests_webfonts.zig");
+    _ = @import("css/font_family.zig");
     _ = @import("find.zig");
     _ = @import("shell/browser.zig");
     _ = @import("shell/address.zig");

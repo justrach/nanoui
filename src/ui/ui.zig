@@ -103,6 +103,8 @@ pub const registerFont = @import("font_registry.zig").register;
 /// font), under a family `TextStyle.family` finds it by.
 pub const registerFontFace = @import("font_registry.zig").registerFace;
 pub const FontFaceOptions = @import("font_registry.zig").FaceOptions;
+/// Gives a face registered as `pending` its file, or the installed font it is.
+pub const fillFontFace = @import("font_registry.zig").fillFace;
 /// Takes away the families `registerFontFace` added whose names start so.
 pub const unregisterFontFamilies = @import("font_registry.zig").unregisterFamilies;
 /// How far a face's description is from a style, as CSS's font matching ranks them.

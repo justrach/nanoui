@@ -32,7 +32,7 @@ pub const Ctx = struct {
         if (std.meta.eql(font, c.last_font)) return c.last_metrics;
         const m = c.m.metrics(c.m.ctx, font);
         c.last_font = font;
-        c.last_metrics = .{ .ascent = clean(m.ascent), .descent = clean(m.descent), .gap = clean(m.gap) };
+        c.last_metrics = .{ .ascent = clean(m.ascent), .descent = clean(m.descent), .gap = clean(m.gap), .x_height = clean(m.x_height) };
         return c.last_metrics;
     }
 
@@ -72,6 +72,10 @@ fn inheritFrom(p: *const Style) Style {
     s.mono = p.mono;
     s.serif = p.serif;
     s.mono_generic = p.mono_generic;
+    s.font_family = p.font_family;
+    s.font_size_abs = p.font_size_abs;
+    s.font_stretch = p.font_stretch;
+    s.tabular = p.tabular;
     s.line_height = p.line_height;
     s.line_height_factor = p.line_height_factor;
     s.letter_spacing = p.letter_spacing;

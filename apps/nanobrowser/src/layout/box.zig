@@ -41,9 +41,22 @@ pub const Font = struct {
     italic: bool = false,
     mono: bool = false,
     serif: bool = false,
+    /// The family list: comma separated, generics resolved.
+    family: []const u8 = "",
+    /// `font-stretch`, in percent.
+    stretch: u16 = 100,
+    tabular: bool = false,
+    /// CSS turns off standard ligatures when letters are spaced.
+    ligatures: bool = true,
 };
 
-pub const Metrics = struct { ascent: f32 = 12.8, descent: f32 = 3.2, gap: f32 = 0 };
+pub const Metrics = struct {
+    ascent: f32 = 12.8,
+    descent: f32 = 3.2,
+    gap: f32 = 0,
+    /// The height of its lowercase; 0 when it's not known, half an em being near.
+    x_height: f32 = 0,
+};
 
 /// The host's fonts and pictures. `width` is called a great deal: the caller
 /// keeps it cheap (a cache by text and font).
@@ -270,7 +283,7 @@ pub const Box = struct {
 };
 
 pub fn fontOf(s: *const Style) Font {
-    return .{ .size = s.font_size, .weight = s.font_weight, .italic = s.italic, .mono = s.mono, .serif = @hasField(Style, "serif") and s.serif };
+    return .{ .size = s.font_size, .weight = s.font_weight, .italic = s.italic, .mono = s.mono, .serif = s.serif, .family = s.font_family, .stretch = s.font_stretch, .tabular = s.tabular, .ligatures = s.letter_spacing == 0 };
 }
 
 /// The result of a layout.

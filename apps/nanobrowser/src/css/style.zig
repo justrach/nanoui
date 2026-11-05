@@ -246,6 +246,16 @@ pub const Style = struct {
     serif: bool = false,
     /// `font-family` was the bare generic `monospace`: the 13px default applies.
     mono_generic: bool = false,
+    /// The size came from an absolute length, not a keyword or the default's
+    /// proportion: changing to or from `monospace` then leaves it alone.
+    font_size_abs: bool = false,
+    /// The family list text draws from: comma separated, generics resolved
+    /// (`font_family.zig`). What Chromium calls the standard font until set.
+    font_family: []const u8 = @import("font_family.zig").standard,
+    /// `font-stretch`, in percent.
+    font_stretch: u16 = 100,
+    /// `font-variant-numeric: tabular-nums`.
+    tabular: bool = false,
     /// `normal` when 0; else the used line height, in pixels.
     line_height: f32 = 0,
     /// The multiplier when `line-height` was a number: children recompute

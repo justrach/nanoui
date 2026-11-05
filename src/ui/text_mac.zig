@@ -95,8 +95,8 @@ pub const TextSystem = struct {
     run_strokes: std.ArrayList(f32) = .empty,
     /// The fonts of each style that names families (`TextStyle.family`).
     stacks: std.AutoHashMapUnmanaged(FontKey, ?*stacks.Stack) = .empty,
-    /// Installed families' faces by name, looked up once (null: not installed).
-    installed: std.StringHashMapUnmanaged(?*anyopaque) = .empty,
+    /// Installed families by name.
+    installed: stacks.Installed,
     /// The stack the line being read was shaped with.
     shaping: ?*stacks.Stack = null,
     /// `font_registry.generation` when the caches were last good.
@@ -117,7 +117,7 @@ pub const TextSystem = struct {
     zoom: f32 = 1,
 
     pub fn init(gpa: std.mem.Allocator, device: objc.Object) TextSystem {
-        return .{ .gpa = gpa, .atlas = .init(gpa, device), .images = .{ .gpa = gpa } };
+        return .{ .gpa = gpa, .atlas = .init(gpa, device), .images = .{ .gpa = gpa }, .installed = .{ .gpa = gpa } };
     }
 
     pub fn deinit(self: *TextSystem) void {
@@ -136,8 +136,7 @@ pub const TextSystem = struct {
         self.run_strokes.deinit(self.gpa);
         self.dropStacks();
         self.stacks.deinit(self.gpa);
-        self.dropInstalled();
-        self.installed.deinit(self.gpa);
+        self.installed.deinit();
         freeLayouts(self.gpa, &self.layouts);
         freeLayouts(self.gpa, &self.previous);
         self.layouts.deinit(self.gpa);
@@ -189,7 +188,7 @@ pub const TextSystem = struct {
         self.run_fonts.clearRetainingCapacity();
         self.run_strokes.clearRetainingCapacity();
         self.dropStacks();
-        self.dropInstalled();
+        self.installed.clear();
         freeLayouts(self.gpa, &self.layouts);
         freeLayouts(self.gpa, &self.previous);
         self.wraps.clear(self.gpa);
@@ -202,29 +201,11 @@ pub const TextSystem = struct {
         self.stacks.clearRetainingCapacity();
     }
 
-    fn dropInstalled(self: *TextSystem) void {
-        var it = self.installed.iterator();
-        while (it.next()) |e| {
-            self.gpa.free(e.key_ptr.*);
-            if (e.value_ptr.*) |all| cf.CFRelease(all);
-        }
-        self.installed.clearRetainingCapacity();
-    }
-
     /// Fonts came or went (`ui.registerFontFace`): what was shaped goes.
     pub fn syncFonts(self: *TextSystem) void {
         if (self.fonts_seen == registry.generation) return;
         self.fonts_seen = registry.generation;
         self.dropCaches();
-    }
-
-    /// An installed family's faces, looked up once.
-    pub fn facesOf(self: *TextSystem, name: []const u8) ?*anyopaque {
-        if (self.installed.get(name)) |all| return all;
-        const all = stacks.familyFaces(name);
-        const owned = self.gpa.dupe(u8, name) catch return all;
-        self.installed.put(self.gpa, owned, all) catch self.gpa.free(owned);
-        return all;
     }
 
     /// Whether every font brought so far is in what this measures with.
@@ -237,10 +218,7 @@ pub const TextSystem = struct {
         if (registry.hasFamily(name)) return true;
         const eq = std.ascii.eqlIgnoreCase;
         if (eq(name, "system-ui") or eq(name, "ui-monospace") or eq(name, "ui-serif") or eq(name, "ui-rounded")) return true;
-        if (self.facesOf(name) != null) return true;
-        const f = stacks.byName(name, 12) orelse return false;
-        cf.CFRelease(f);
-        return true;
+        return self.installed.has(name);
     }
 
     /// Whether an installed font goes by this full or PostScript name.
@@ -266,7 +244,7 @@ pub const TextSystem = struct {
         const list = style.family orelse return null;
         const fk = fontKey(style);
         if (self.stacks.get(fk)) |st| return st;
-        const st = stacks.build(self.gpa, list, style, self.zoom, self);
+        const st = stacks.build(self.gpa, list, style, self.zoom, &self.installed);
         self.stacks.put(self.gpa, fk, st) catch {};
         return st;
     }

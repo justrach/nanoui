@@ -106,8 +106,20 @@ pub fn early(node: *Node, ctx: *values.Ctx, phase: u2) void {
                 ctx.font_size_set = true;
             };
             if (node.attr("face")) |face| {
-                const tok = [_]values.Token{.{ .kind = .string, .text = face }};
-                _ = properties.apply(ctx, .font_family, &tok);
+                // The attribute is a list as `font-family` is, in plain text.
+                var tok: [32]values.Token = undefined;
+                var n: usize = 0;
+                var names = std.mem.splitScalar(u8, face, ',');
+                while (names.next()) |name| {
+                    if (n + 2 > tok.len) break;
+                    if (n > 0) {
+                        tok[n] = .{ .kind = .comma };
+                        n += 1;
+                    }
+                    tok[n] = .{ .kind = .string, .text = std.mem.trim(u8, name, " \t\r\n") };
+                    n += 1;
+                }
+                _ = properties.apply(ctx, .font_family, tok[0..n]);
             }
         }
     } else if (phase == 1) {
