@@ -241,6 +241,8 @@ pub const Context = struct {
     /// measured size up). Off: text keeps the sizes the view gave it, and
     /// only the edges land on pixels.
     pixel_snap_text: bool = true,
+    /// A frame is being built (`frame.run`): another may not start inside it.
+    building: bool = false,
     stats: FrameStats = .{},
     /// Set when the pointer is over something clickable.
     cursor_hand: bool = false,

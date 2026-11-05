@@ -50,6 +50,9 @@ pub const Surface = struct {
     committed: std.ArrayList(u8) = .empty,
     /// The press that started a double or triple click was already sent.
     pressed: bool = false,
+    /// A frame is being built, and another was asked for meanwhile.
+    in_frame: bool = false,
+    pending: bool = false,
 
     pub fn create(window: *Window, view: ui.View, theme_override: ?Theme) !*Surface {
         const gpa = window.app.gpa;
@@ -128,12 +131,23 @@ pub const Surface = struct {
     /// Builds, lays out and paints a frame; what it changed is drawn when
     /// GTK draws.
     pub fn frame(self: *Surface) void {
+        // Asked for while a frame is being built (a dialog run from the
+        // view runs an event loop inside it, which draws): building again
+        // would reuse what the frame is laying out. It waits for that
+        // frame, which asks for it as it ends.
+        if (self.in_frame) {
+            self.pending = true;
+            return;
+        }
         if (self.size.w <= 0 or self.size.h <= 0) return;
+        self.pending = false;
         const c = &self.ctx;
         const now = clock.now();
         const dt: f32 = if (self.last_frame_time > 0) @floatCast(@min(now - self.last_frame_time, 0.1)) else 1.0 / 60.0;
         self.last_frame_time = now;
+        self.in_frame = true;
         const r = frame_mod.run(c, self.view, &self.text, &self.instances, self.size, self.scale, self.theme(), dt, now - self.start_time);
+        self.in_frame = false;
         if (self.gl) {
             glarea.api.gtk_gl_area_queue_render(self.area);
         } else if (self.pixels.damage(self.shown())) |d| {
@@ -153,6 +167,7 @@ pub const Surface = struct {
             // Something changes now and then: one frame, that much later.
             self.later = gtk.api.g_timeout_add(@intFromFloat(@max(1, s * 1000)), onLater, self);
         };
+        if (self.pending) self.requestFrame();
         if (!c.animating) self.last_frame_time = 0;
     }
 

@@ -22,6 +22,9 @@ pub fn start(nsview: objc.Object) ?objc.Object {
 pub fn tick(s: *Surface) void {
     const path = std.mem.span(std.c.getenv("NANOUI_LIVE_SNAPSHOT") orelse return);
     var buf: [1024]u8 = undefined;
+    // A dialog run from the view keeps this timer firing inside its frame:
+    // the request waits for the build to end, as the frames do.
+    if (s.in_frame) return;
     const request = std.fmt.bufPrintSentinel(&buf, "{s}.request", .{path}, 0) catch return;
     if (std.c.access(request, 0) != 0) return;
     // What it asks for, if anything: the view shows that in the frame drawn

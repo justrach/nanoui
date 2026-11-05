@@ -43,8 +43,10 @@ pub const Surface = struct {
     live_timer: ?objc.Object = null,
     /// The pace asked of the link: 0 is the display's; -1 none asked yet.
     link_fps: f32 = -1,
-    /// A frame was wanted while the window was hidden: run it once visible.
+    /// A frame was wanted while the window was hidden: run it once visible;
+    /// or while one was being built: run it after.
     pending: bool = false,
+    in_frame: bool = false,
     dead: bool = false,
     /// The window is being resized: only its size changes draw (each when
     /// the layer is displayed); the link waits, and what else asks for a
@@ -186,6 +188,15 @@ pub const Surface = struct {
     }
 
     pub fn frame(self: *Surface) void {
+        // Asked for while a frame is being built (a dialog run from the
+        // view runs an event loop inside it, which draws): building again
+        // would reuse what the frame is laying out. It waits for that
+        // frame, which asks for it as it ends.
+        if (self.in_frame) {
+            self.pending = true;
+            self.setPaced(false);
+            return;
+        }
         // Nothing to show while hidden (another Space, covered, minimized):
         // the frame runs once the window is visible again. The first frame
         // runs at once, so the window opens with its content drawn.
@@ -207,7 +218,9 @@ pub const Surface = struct {
         // What scrolling gathered since the last frame, applied at once.
         const dy = self.scroll.take();
         if (dy != 0 and !c.applyScroll(dy) and c.wants_wheel) c.input.scroll.y = dy;
+        self.in_frame = true;
         const r = frame_mod.run(c, self.view, &self.text, &self.instances, self.size, self.scale, self.theme(), dt, now - self.start_time);
+        self.in_frame = false;
         @import("../play.zig").paint(self.gpa, &self.instances);
         self.renderer.syncImages(&self.text.images);
         self.renderer.textures = c.textures.items;
@@ -225,6 +238,7 @@ pub const Surface = struct {
             @import("surface_pacing.zig").setRate(self, if (more) null else c.frame_in);
             self.setPaced(more or c.frame_in != null);
         } else if (more or c.frame_in != null) self.scheduleTick();
+        if (self.pending) self.scheduleTick();
         if (!c.animating) self.last_frame_time = 0;
     }
 
