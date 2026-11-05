@@ -93,6 +93,7 @@ fn inheritFrom(p: *const Style) Style {
     s.border_spacing = p.border_spacing;
     s.border_spacing_y = p.border_spacing_y;
     s.word_break_all = p.word_break_all;
+    s.line_break_anywhere = p.line_break_anywhere;
     s.overflow_wrap_anywhere = p.overflow_wrap_anywhere;
     s.caption_bottom = p.caption_bottom;
     s.tab_size = p.tab_size;

@@ -317,13 +317,20 @@ fn hrHints(node: *Node, ctx: *values.Ctx) void {
         s.border_bottom.color = c;
         s.border_left.color = c;
     };
-    if (node.hasAttr("noshade")) {
-        s.border_top.style = .solid;
-        s.border_right.style = .solid;
-        s.border_bottom.style = .solid;
-        s.border_left.style = .solid;
+    if (node.hasAttr("noshade") and !node.hasAttr("color")) {
+        const gray: style.Color = .{ .r = 169.0 / 255.0, .g = 169.0 / 255.0, .b = 169.0 / 255.0 };
+        for ([_]*style.Border{ &s.border_top, &s.border_right, &s.border_bottom, &s.border_left }) |e| {
+            e.style = .solid;
+            e.color = gray;
+        }
+        s.background = gray;
     }
-    if (node.attr("size")) |v| if (dimension(v)) |d| {
-        s.height = d;
+    // `size` counts its borders; at 1 only the top one is left.
+    if (node.attr("size")) |v| if (dimension(v)) |d| if (d.pct == 0) {
+        if (d.px <= 1) {
+            s.border_bottom.width = 0;
+        } else {
+            s.height = .{ .kind = .length, .px = d.px - 2 };
+        }
     };
 }

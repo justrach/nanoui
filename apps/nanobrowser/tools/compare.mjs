@@ -86,7 +86,7 @@ function diff(nano, chrome) {
   const nanoBy = new Map(nano.map((r) => [r.path, r]));
   // Inside an <svg>: it's drawn as one picture here, with no boxes for its parts.
   const inSvg = (p) => /\/svg\[\d+\]\//.test(p);
-  const isHead = (p) => /^html\[1\]\/head/.test(p) || /\/(script|style|link|meta|title|noscript|template)\[/.test(p);
+  const isHead = (p) => /^html\[1\]\/head/.test(p) || /\/(script|style|link|meta|title|noscript|template)\[/.test(p) || /\/br\[\d+\]$/.test(p);
   const lines = { missing: [], extra: [], box: [], color: [], font: [], hidden: [], shown: [] };
   let matched = 0, boxOk = 0, sizeOk = 0;
   const offBy = (r) => {

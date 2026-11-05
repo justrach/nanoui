@@ -286,7 +286,7 @@ fn buildLine(l: *Lay) Error!Line {
                 const pw = if (off > 0) restWidth(c, p, off) else p.w;
                 if (w + tail + pw > avail + 0.001) {
                     if (!line.has and moveDown(l, avail)) continue;
-                    const breaks_anywhere = s.word_break_all or (s.overflow_wrap_anywhere and brk == null);
+                    const breaks_anywhere = s.word_break_all or s.line_break_anywhere or (s.overflow_wrap_anywhere and brk == null);
                     if (breaks_anywhere and s.white_space != .nowrap and s.white_space != .pre) {
                         const room = avail - w - tail;
                         const cut = cutWord(c, p, off, room);

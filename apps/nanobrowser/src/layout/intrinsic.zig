@@ -142,7 +142,7 @@ fn inlineSizes(c: *Ctx, b: *Box) Error!Sizes {
         .word => {
             t.line += t.tail + p.w;
             t.tail = 0;
-            if (p.style.word_break_all or p.style.overflow_wrap_anywhere) {
+            if (p.style.word_break_all or p.style.line_break_anywhere or p.style.overflow_wrap_anywhere) {
                 const chars = @import("text.zig").charCount(p.text);
                 t.endWord();
                 t.out.min = @max(t.out.min, p.w / @max(1, chars));

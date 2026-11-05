@@ -85,6 +85,7 @@ pub fn apply(ctx: *Ctx, p: Prop, t: []const Token) ?bool {
             return true;
         },
         .word_break => wordBreak(s, t),
+        .line_break => lineBreak(s, t),
         .overflow_wrap, .word_wrap => overflowWrap(s, t),
         .tab_size => tabSize(ctx, t),
         else => null,
@@ -360,6 +361,13 @@ fn wordBreak(s: *Style, t: []const Token) bool {
         s.word_break_all = false;
         s.overflow_wrap_anywhere = true;
     } else return false;
+    return true;
+}
+
+/// Only `anywhere` changes where text here breaks; the others are about CJK rules.
+fn lineBreak(s: *Style, t: []const Token) bool {
+    const w = values.ident(t) orelse return false;
+    s.line_break_anywhere = std.ascii.eqlIgnoreCase(w, "anywhere");
     return true;
 }
 

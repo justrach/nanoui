@@ -443,3 +443,23 @@ test "computedValue serializes" {
     try expect(p.engine.computedValue(a, "nonsense") == null);
 }
 
+test "what a browser makes of an old <hr>, and line-break's reach" {
+    const p = try Page.make("<hr id=a noshade size=1><hr id=b size=6><hr id=c size=1 noshade color=red><div style='line-break:anywhere'><span id=d>x</span></div>", "", vp);
+    defer p.done();
+    try near(p.s("a").border_bottom.width, 0);
+    try near(p.s("a").border_top.width, 1);
+    try std.testing.expect(p.s("a").border_top.style == .solid);
+    try near(p.s("a").background.r * 255, 169);
+    try near(p.s("b").height.px, 4);
+    try near(p.s("c").background.g, 0);
+    try std.testing.expect(p.s("d").line_break_anywhere);
+}
+
+test "a form has a bottom margin in quirks mode only" {
+    const q = try Page.make("<form id=f></form>", "", vp);
+    defer q.done();
+    try near(q.s("f").margin_bottom.px, 16);
+    const std_mode = try Page.make("<!doctype html><form id=f></form>", "", vp);
+    defer std_mode.done();
+    try near(std_mode.s("f").margin_bottom.px, 0);
+}

@@ -128,6 +128,18 @@ test "tabs go to the next stop" {
     try u.close(32, b.runs[1].x, "4 characters of 8");
 }
 
+test "line-break: anywhere breaks a long word, and doesn't wait for one that fits a line" {
+    var t = try T.init();
+    defer t.deinit();
+    const a = try t.div(t.body, .{ .line_break_anywhere = true, .width = px(40) });
+    _ = try t.text(a, "xx aaaaaaaaaaaa");
+    try t.run(800, 600);
+    const ra = t.boxOf(a).runs;
+    try eq("xx aa", ra[0].text);
+    try eq("aaaaa", ra[1].text);
+    try eq("aaaaa", ra[2].text);
+}
+
 test "long words break when asked" {
     var t = try T.init();
     defer t.deinit();

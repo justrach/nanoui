@@ -122,5 +122,6 @@ pub const sheet =
 /// behaviour many old pages depend on.
 pub const quirks =
     \\table { font-weight: initial; font-style: initial; font-size: initial; font-family: inherit; color: initial; white-space: initial; line-height: initial; text-align: initial; }
+    \\form { margin-block-end: 1em; }
     \\
 ;

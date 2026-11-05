@@ -447,6 +447,8 @@ pub const Style = struct {
     border_spacing_y: f32 = 0,
     /// `word-break: break-all`.
     word_break_all: bool = false,
+    /// `line-break: anywhere`.
+    line_break_anywhere: bool = false,
     /// `overflow-wrap: anywhere|break-word`, `word-break: break-word`.
     overflow_wrap_anywhere: bool = false,
     /// `caption-side: bottom`.
