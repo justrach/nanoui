@@ -97,24 +97,42 @@ pub fn copy(p: Prop, d: *Style, s: *const Style) void {
         .border_left, .border_left_width, .border_left_style, .border_left_color => d.border_left = s.border_left,
         .border_inline, .border_inline_start, .border_inline_end, .border_inline_width, .border_inline_color, .border_inline_style => sides(d, s, &.{ "border_left", "border_right" }),
         .border_block, .border_block_width, .border_block_color, .border_block_style => sides(d, s, &.{ "border_top", "border_bottom" }),
-        .border_radius => sides(d, s, &.{ "radius", "radius_pct" }),
+        .border_radius => sides(d, s, &.{ "radius", "radius_pct", "radius_y", "radius_y_pct" }),
         .border_top_left_radius, .border_start_start_radius => corner(d, s, 0),
         .border_top_right_radius, .border_start_end_radius => corner(d, s, 1),
         .border_bottom_right_radius, .border_end_end_radius => corner(d, s, 2),
         .border_bottom_left_radius, .border_end_start_radius => corner(d, s, 3),
         .outline, .outline_width, .outline_style, .outline_color => d.outline = s.outline,
-        .background => sides(d, s, &.{ "background", "background_image", "background_gradient", "background_more", "background_clip", "background_size", "background_size_x", "background_size_y", "background_repeat", "background_x", "background_y", "background_x_px", "background_y_px" }),
+        .outline_offset => d.outline_offset = s.outline_offset,
+        .background => sides(d, s, &.{ "background", "background_image", "background_gradient", "background_more", "background_clip", "background_size", "background_size_x", "background_size_y", "background_repeat", "background_x", "background_y", "background_x_px", "background_y_px", "background_origin", "background_fixed", "bg_sizes", "bg_positions", "bg_repeats", "bg_clips", "bg_origins", "bg_fixed" }),
         .background_color => d.background = s.background,
         .background_image => sides(d, s, &.{ "background_image", "background_gradient", "background_more" }),
-        .background_clip => d.background_clip = s.background_clip,
-        .background_size => sides(d, s, &.{ "background_size", "background_size_x", "background_size_y" }),
-        .background_repeat => d.background_repeat = s.background_repeat,
-        .background_position => sides(d, s, &.{ "background_x", "background_y", "background_x_px", "background_y_px" }),
+        .background_clip => sides(d, s, &.{ "background_clip", "bg_clips" }),
+        .background_origin => sides(d, s, &.{ "background_origin", "bg_origins" }),
+        .background_attachment => sides(d, s, &.{ "background_fixed", "bg_fixed" }),
+        .background_size => sides(d, s, &.{ "background_size", "background_size_x", "background_size_y", "bg_sizes" }),
+        .background_repeat => sides(d, s, &.{ "background_repeat", "bg_repeats" }),
+        .background_position => sides(d, s, &.{ "background_x", "background_y", "background_x_px", "background_y_px", "bg_positions" }),
         .background_position_x => sides(d, s, &.{ "background_x", "background_x_px" }),
         .background_position_y => sides(d, s, &.{ "background_y", "background_y_px" }),
-        .box_shadow => d.shadow = s.shadow,
+        .box_shadow => sides(d, s, &.{ "shadow", "shadows" }),
+        .text_shadow => d.text_shadows = s.text_shadows,
+        .text_fill_color => d.text_fill = s.text_fill,
+        .accent_color => d.accent = s.accent,
+        .appearance => d.appearance_none = s.appearance_none,
+        .isolation, .mix_blend_mode, .will_change, .contain => d.makes_context = s.makes_context,
+        .clip => d.clip_rect = s.clip_rect,
+        .clip_path => d.clip_path = s.clip_path,
+        .filter => d.filters = s.filters,
+        .backdrop_filter => d.backdrop_blur = s.backdrop_blur,
+        .rotate => d.rotate = s.rotate,
+        .transform_origin => sides(d, s, &.{ "transform_origin_x", "transform_origin_y" }),
+        .animation, .animation_name, .animation_duration, .animation_delay, .animation_timing_function, .animation_iteration_count, .animation_direction, .animation_fill_mode, .animation_play_state => d.anim_raw = s.anim_raw,
+        .transition, .transition_delay, .transition_duration, .transition_property, .transition_timing_function => d.trans_raw = s.trans_raw,
         .object_fit => d.object_fit = s.object_fit,
-        .transform, .translate, .scale => d.transform = s.transform,
+        .transform => d.transform = s.transform,
+        .translate => sides(d, s, &.{ "translate_x", "translate_y" }),
+        .scale => sides(d, s, &.{ "scale_x", "scale_y" }),
         .letter_spacing => d.letter_spacing = s.letter_spacing,
         .word_spacing => d.word_spacing = s.word_spacing,
         .text_align => sides(d, s, &.{ "text_align", "center_children" }),
@@ -175,6 +193,8 @@ pub fn copy(p: Prop, d: *Style, s: *const Style) void {
 fn corner(d: *Style, s: *const Style, i: usize) void {
     d.radius[i] = s.radius[i];
     d.radius_pct[i] = s.radius_pct[i];
+    d.radius_y[i] = s.radius_y[i];
+    d.radius_y_pct[i] = s.radius_y_pct[i];
 }
 
 /// A new element's start: initial values, with the inherited ones from `p`.
@@ -189,7 +209,8 @@ pub fn inherit(p: *const Style) Style {
         "center_children", "white_space",      "text_transform",       "list_style",
         "list_inside",     "rtl",              "inherited_visibility", "border_collapse",
         "border_spacing",  "border_spacing_y", "word_break_all",       "overflow_wrap_anywhere",
-        "caption_bottom",  "tab_size",         "dark_scheme",
+        "caption_bottom",  "tab_size",         "dark_scheme",          "text_fill",
+        "text_shadows",    "accent",
     });
     return s;
 }

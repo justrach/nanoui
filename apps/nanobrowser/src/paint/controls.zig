@@ -11,6 +11,17 @@ const replay = @import("replay.zig");
 const input = @import("../page_input.zig");
 const web = @import("../web/web.zig");
 const Page = @import("../page.zig").Page;
+const replay_box = @import("replay_box.zig");
+
+/// What a control's checked part is, unless `accent-color` says.
+const default_accent = ui.Color.hex(0x0075ff);
+const edge = ui.Color.hex(0x767676);
+const track_ground = ui.Color.hex(0xefefef);
+const track_edge = ui.Color.hex(0xb2b2b2);
+
+fn accent(st: *const box.Style) ui.Color {
+    return if (st.accent) |k| replay.color(k) else default_accent;
+}
 
 fn ink(st: *const box.Style) ui.Color {
     return replay.color(st.color);
@@ -24,11 +35,13 @@ pub fn draw(p: *Page, c: *ui.Context, b: *const box.Box, x: f32, y: f32, opacity
     const n = b.node orelse return;
     if (n.isTag("textarea")) return field(p, c, b, x, y, opacity, true);
     if (n.isTag("select")) return select(c, b, x, y, opacity);
-    if (n.isTag("progress") or n.isTag("meter")) return bar(c, b, x, y, opacity);
+    // `appearance: none`: what the author's CSS drew is all there is, its text aside.
+    const own = b.style.appearance_none;
+    if (n.isTag("progress") or n.isTag("meter")) return if (own) {} else bar(c, b, x, y, opacity);
     if (n.isTag("input")) {
-        if (is(n, "checkbox")) return check(c, b, x, y, opacity, false);
-        if (is(n, "radio")) return check(c, b, x, y, opacity, true);
-        if (is(n, "range")) return range(c, b, x, y, opacity);
+        if (is(n, "checkbox")) return if (own) {} else check(c, b, x, y, opacity, false);
+        if (is(n, "radio")) return if (own) {} else check(c, b, x, y, opacity, true);
+        if (is(n, "range")) return if (own) {} else range(c, b, x, y, opacity);
         return field(p, c, b, x, y, opacity, false);
     }
 }
@@ -87,7 +100,7 @@ fn field(p: *Page, c: *ui.Context, b: *const box.Box, x: f32, y: f32, opacity: f
         .multiline = multi,
         .max_lines = @intFromFloat(@min(lines, 1000)),
         .color = ink(st),
-        .placeholder_color = ink(st).alpha(0.45),
+        .placeholder_color = if (st.placeholder) |k| replay.color(k) else ui.Color.hex(0x757575),
     });
     if (r.focused and p.field_focus != n) {
         p.field_focus = n;
@@ -116,28 +129,33 @@ fn field(p: *Page, c: *ui.Context, b: *const box.Box, x: f32, y: f32, opacity: f
 fn check(c: *ui.Context, b: *const box.Box, x: f32, y: f32, opacity: f32, round: bool) void {
     const n = b.node.?;
     const on = input.isChecked(n);
-    const blue = ui.Color.hex(0x0a84ff);
+    const blue = accent(b.style);
     const w = @min(b.w, b.h);
-    const i = c.open(.{
+    const line = @max(1, w * 0.08);
+    const face: ui.Style = .{
         .absolute = true,
         .offset = .{ .x = x, .y = y },
         .width = .{ .px = w },
         .height = .{ .px = w },
         .opacity = opacity,
-        .radius = if (round) w / 2 else 3,
+        .radius = if (round) w / 2 else w * 0.2,
         .corner_circular = true,
-        .border = if (on) blue else ui.Color.hex(0x8c8c8c),
-        .background = if (on) blue else ui.Color.white,
-        .align_items = .center,
-        .justify = .center,
-    }, null);
-    defer c.end();
-    _ = i;
+        .border = if (on) blue else edge,
+        .border_width = line,
+        // A checked box is all its accent; a radio keeps white between ring and dot.
+        .background = if (on and !round) blue else ui.Color.white,
+    };
+    _ = c.leaf(face, .none, null);
     if (!on) return;
     if (round) {
-        const d = w * 0.4;
-        _ = c.leaf(.{ .width = .{ .px = d }, .height = .{ .px = d }, .radius = d / 2, .corner_circular = true, .background = ui.Color.white }, .none, null);
-    } else ui.icon(c, "checkmark", .{ .size = w * 0.72, .weight = .bold, .color = ui.Color.white });
+        const d = w * 0.5;
+        _ = c.leaf(.{ .absolute = true, .offset = .{ .x = x + (w - d) / 2, .y = y + (w - d) / 2 }, .width = .{ .px = d }, .height = .{ .px = d }, .radius = d / 2, .corner_circular = true, .background = blue, .opacity = opacity }, .none, null);
+        return;
+    }
+    const cv = replay_box.newCanvas(c, .{ .absolute = true, .offset = .{ .x = x, .y = y }, .width = .{ .px = w }, .height = .{ .px = w }, .opacity = opacity });
+    const stroke: ui.Stroke = .{ .width = @max(1.2, w * 0.14), .color = ui.Color.white };
+    const pts = c.alloc().dupe(ui.Point, &.{ .{ .x = w * 0.22, .y = w * 0.52 }, .{ .x = w * 0.42, .y = w * 0.72 }, .{ .x = w * 0.78, .y = w * 0.28 } }) catch return;
+    cv.polyline(pts, stroke);
 }
 
 fn select(c: *ui.Context, b: *const box.Box, x: f32, y: f32, opacity: f32) void {
@@ -152,13 +170,18 @@ fn select(c: *ui.Context, b: *const box.Box, x: f32, y: f32, opacity: f32) void 
         .opacity = opacity,
         .direction = .row,
         .align_items = .center,
-        .padding = .{ .left = b.padding.left + b.border.left + 2, .right = 6 },
+        .padding = .{ .left = b.padding.left + b.border.left + 2, .right = b.padding.right + b.border.right },
         .gap = 4,
         .control = true,
     }, null);
     defer c.end();
     _ = c.leaf(.{ .grow = 1, .clip = true }, .{ .text = .{ .str = shown, .style = replay.textStyle(box.fontOf(st)), .color = ink(st) } }, null);
-    ui.icon(c, "chevron.up.chevron.down", .{ .size = @max(9, st.font_size * 0.7), .color = ink(st).alpha(0.6) });
+    if (st.appearance_none) return;
+    // The little chevron Chromium's menu lists end in.
+    const side: f32 = 16;
+    const cv = replay_box.newCanvas(c, .{ .width = .{ .px = side }, .height = .{ .px = side } });
+    const pts = c.alloc().dupe(ui.Point, &.{ .{ .x = 4, .y = 6.5 }, .{ .x = 8, .y = 10.5 }, .{ .x = 12, .y = 6.5 } }) catch return;
+    cv.polyline(pts, .{ .width = 1.5, .color = ink(st) });
 }
 
 fn optionText(c: *ui.Context, o: *dom.Node) []const u8 {
@@ -221,7 +244,8 @@ fn bar(c: *ui.Context, b: *const box.Box, x: f32, y: f32, opacity: f32) void {
     const hi = attrNumber(n, "max", 1);
     const v = attrNumber(n, "value", if (n.isTag("progress")) 0 else lo);
     const t = std.math.clamp((v - lo) / @max(hi - lo, 0.0001), 0, 1);
-    track(c, x, y, b.w, b.h, opacity, t);
+    const fill = if (n.isTag("meter")) ui.Color.hex(0x107c10) else accent(b.style);
+    track(c, x, y, b.w, b.h, opacity, t, fill);
 }
 
 fn range(c: *ui.Context, b: *const box.Box, x: f32, y: f32, opacity: f32) void {
@@ -230,13 +254,15 @@ fn range(c: *ui.Context, b: *const box.Box, x: f32, y: f32, opacity: f32) void {
     const hi = attrNumber(n, "max", 100);
     const v = if (n.value) |s| std.fmt.parseFloat(f32, s) catch lo else attrNumber(n, "value", (lo + hi) / 2);
     const t = std.math.clamp((v - lo) / @max(hi - lo, 0.0001), 0, 1);
-    const h: f32 = 4;
-    track(c, x, y + (b.h - h) / 2, b.w, h, opacity, t);
+    const h: f32 = 8;
+    const blue = accent(b.style);
+    track(c, x, y + (b.h - h) / 2, b.w, h, opacity, t, blue);
     const d: f32 = @min(b.h, 16);
-    _ = c.leaf(.{ .absolute = true, .offset = .{ .x = x + (b.w - d) * t, .y = y + (b.h - d) / 2 }, .width = .{ .px = d }, .height = .{ .px = d }, .radius = d / 2, .corner_circular = true, .background = ui.Color.white, .border = ui.Color.hex(0x8c8c8c), .opacity = opacity }, .none, null);
+    _ = c.leaf(.{ .absolute = true, .offset = .{ .x = x + (b.w - d) * t, .y = y + (b.h - d) / 2 }, .width = .{ .px = d }, .height = .{ .px = d }, .radius = d / 2, .corner_circular = true, .background = blue, .opacity = opacity }, .none, null);
 }
 
-fn track(c: *ui.Context, x: f32, y: f32, w: f32, h: f32, opacity: f32, t: f32) void {
-    _ = c.leaf(.{ .absolute = true, .offset = .{ .x = x, .y = y }, .width = .{ .px = w }, .height = .{ .px = h }, .radius = h / 2, .corner_circular = true, .background = ui.Color.hex(0xe0e0e0), .opacity = opacity }, .none, null);
-    if (t > 0) _ = c.leaf(.{ .absolute = true, .offset = .{ .x = x, .y = y }, .width = .{ .px = w * t }, .height = .{ .px = h }, .radius = h / 2, .corner_circular = true, .background = ui.Color.hex(0x0a84ff), .opacity = opacity }, .none, null);
+fn track(c: *ui.Context, x: f32, y: f32, w: f32, h: f32, opacity: f32, t: f32, fill: ui.Color) void {
+    const round = @min(h / 2, 8);
+    _ = c.leaf(.{ .absolute = true, .offset = .{ .x = x, .y = y }, .width = .{ .px = w }, .height = .{ .px = h }, .radius = round, .corner_circular = true, .background = track_ground, .border = track_edge, .opacity = opacity }, .none, null);
+    if (t > 0) _ = c.leaf(.{ .absolute = true, .offset = .{ .x = x, .y = y }, .width = .{ .px = @max(w * t, 2 * round) }, .height = .{ .px = h }, .radius = round, .corner_circular = true, .background = fill, .opacity = opacity }, .none, null);
 }

@@ -1,6 +1,5 @@
-//! What is painted rather than laid out: backgrounds and gradients, shadows,
-//! transforms, and generated content. One background layer is kept (the first
-//! with an image, and the color); one shadow (the first that shows).
+//! Backgrounds and generated content: what is painted rather than laid out.
+//! Shadows, transforms and filters are in `properties_effects.zig`.
 const std = @import("std");
 const style = @import("style.zig");
 const prop = @import("prop.zig");
@@ -25,15 +24,13 @@ pub fn apply(ctx: *Ctx, p: Prop, t: []const Token) ?bool {
         .background_image => backgroundImage(ctx, t),
         .mask, .mask_image => mask(ctx, t),
         .background_clip => backgroundClip(ctx, t),
+        .background_origin => backgroundOrigin(ctx, t),
+        .background_attachment => backgroundAttachment(ctx, t),
         .background_size => backgroundSize(ctx, t),
-        .background_repeat => backgroundRepeat(s, t),
+        .background_repeat => backgroundRepeat(ctx, t),
         .background_position => backgroundPosition(ctx, t),
         .background_position_x => positionAxis(ctx, t, true),
         .background_position_y => positionAxis(ctx, t, false),
-        .box_shadow => boxShadow(ctx, t),
-        .transform => transform(ctx, t),
-        .translate => translateProp(ctx, t),
-        .scale => scaleProp(ctx, t),
         .content => content(ctx, t),
         else => null,
     };
@@ -121,9 +118,52 @@ fn clipWord(c: *Cur) ?style.BackgroundClip {
 
 fn backgroundClip(ctx: *Ctx, t: []const Token) bool {
     var c = Cur.of(t);
-    var part = Cur.of(c.untilComma());
-    ctx.style.background_clip = clipWord(&part) orelse return false;
-    return part.atEnd();
+    var out: std.ArrayList(style.BackgroundClip) = .empty;
+    while (!c.atEnd()) {
+        var part = Cur.of(c.untilComma());
+        out.append(ctx.arena, clipWord(&part) orelse return false) catch return false;
+        if (!part.atEnd()) return false;
+    }
+    if (out.items.len == 0) return false;
+    ctx.style.background_clip = out.items[0];
+    ctx.style.bg_clips = if (out.items.len > 1) out.items else &.{};
+    return true;
+}
+
+fn originWord(c: *Cur) ?style.BackgroundOrigin {
+    if (c.takeIdent("border-box")) return .border_box;
+    if (c.takeIdent("padding-box")) return .padding_box;
+    if (c.takeIdent("content-box")) return .content_box;
+    return null;
+}
+
+fn backgroundOrigin(ctx: *Ctx, t: []const Token) bool {
+    var c = Cur.of(t);
+    var out: std.ArrayList(style.BackgroundOrigin) = .empty;
+    while (!c.atEnd()) {
+        var part = Cur.of(c.untilComma());
+        out.append(ctx.arena, originWord(&part) orelse return false) catch return false;
+        if (!part.atEnd()) return false;
+    }
+    if (out.items.len == 0) return false;
+    ctx.style.background_origin = out.items[0];
+    ctx.style.bg_origins = if (out.items.len > 1) out.items else &.{};
+    return true;
+}
+
+fn backgroundAttachment(ctx: *Ctx, t: []const Token) bool {
+    var c = Cur.of(t);
+    var out: std.ArrayList(bool) = .empty;
+    while (!c.atEnd()) {
+        var part = Cur.of(c.untilComma());
+        const fixed = part.takeIdent("fixed");
+        if (!fixed and !part.takeIdent("scroll") and !part.takeIdent("local")) return false;
+        out.append(ctx.arena, fixed) catch return false;
+    }
+    if (out.items.len == 0) return false;
+    ctx.style.background_fixed = out.items[0];
+    ctx.style.bg_fixed = if (out.items.len > 1) out.items else &.{};
+    return true;
 }
 
 fn sizeWord(ctx: *Ctx, c: *Cur) ?Size {
@@ -148,10 +188,17 @@ fn setSize(s: *style.Style, z: Size) void {
 
 fn backgroundSize(ctx: *Ctx, t: []const Token) bool {
     var c = Cur.of(t);
-    var part = Cur.of(c.untilComma());
-    const z = sizeWord(ctx, &part) orelse return false;
-    if (!part.atEnd()) return false;
-    setSize(ctx.style, z);
+    var out: std.ArrayList(style.BgSize) = .empty;
+    while (!c.atEnd()) {
+        var part = Cur.of(c.untilComma());
+        const z = sizeWord(ctx, &part) orelse return false;
+        if (!part.atEnd()) return false;
+        out.append(ctx.arena, .{ .kind = z.kind, .x = z.x, .y = z.y }) catch return false;
+    }
+    if (out.items.len == 0) return false;
+    const f = out.items[0];
+    setSize(ctx.style, .{ .kind = f.kind, .x = f.x, .y = f.y });
+    ctx.style.bg_sizes = if (out.items.len > 1) out.items else &.{};
     return true;
 }
 
@@ -173,11 +220,18 @@ fn repeatWord(c: *Cur) ?style.BackgroundRepeat {
     return .no_repeat;
 }
 
-fn backgroundRepeat(s: *style.Style, t: []const Token) bool {
+fn backgroundRepeat(ctx: *Ctx, t: []const Token) bool {
     var c = Cur.of(t);
-    var part = Cur.of(c.untilComma());
-    s.background_repeat = repeatWord(&part) orelse return false;
-    return part.atEnd();
+    var out: std.ArrayList(style.BackgroundRepeat) = .empty;
+    while (!c.atEnd()) {
+        var part = Cur.of(c.untilComma());
+        out.append(ctx.arena, repeatWord(&part) orelse return false) catch return false;
+        if (!part.atEnd()) return false;
+    }
+    if (out.items.len == 0) return false;
+    ctx.style.background_repeat = out.items[0];
+    ctx.style.bg_repeats = if (out.items.len > 1) out.items else &.{};
+    return true;
 }
 
 const PosItem = union(enum) { kw: u8, len: Len };
@@ -277,10 +331,17 @@ fn setPos(s: *style.Style, p: Pos) void {
 
 fn backgroundPosition(ctx: *Ctx, t: []const Token) bool {
     var c = Cur.of(t);
-    var part = Cur.of(c.untilComma());
-    const p = positionAt(ctx, &part) orelse return false;
-    if (!part.atEnd()) return false;
-    setPos(ctx.style, p);
+    var out: std.ArrayList(style.BgPos) = .empty;
+    while (!c.atEnd()) {
+        var part = Cur.of(c.untilComma());
+        const p = positionAt(ctx, &part) orelse return false;
+        if (!part.atEnd()) return false;
+        out.append(ctx.arena, .{ .x_pct = p.x_pct, .x_px = p.x_px, .y_pct = p.y_pct, .y_px = p.y_px }) catch return false;
+    }
+    if (out.items.len == 0) return false;
+    const f = out.items[0];
+    setPos(ctx.style, .{ .x_pct = f.x_pct, .x_px = f.x_px, .y_pct = f.y_pct, .y_px = f.y_px });
+    ctx.style.bg_positions = if (out.items.len > 1) out.items else &.{};
     return true;
 }
 
@@ -313,12 +374,15 @@ fn background(ctx: *Ctx, t: []const Token) bool {
     var image: Image = .{};
     var have_image = false;
     var color: style.Color = style.Color.transparent;
-    var size: Size = .{};
-    var repeat: style.BackgroundRepeat = .repeat;
-    var pos: Pos = .{};
-    var first = true;
-    var clip: style.BackgroundClip = .border_box;
     var more: std.ArrayList(style.BackgroundLayer) = .empty;
+    var sizes: std.ArrayList(style.BgSize) = .empty;
+    var positions: std.ArrayList(style.BgPos) = .empty;
+    var repeats: std.ArrayList(style.BackgroundRepeat) = .empty;
+    var clips: std.ArrayList(style.BackgroundClip) = .empty;
+    var origins: std.ArrayList(style.BackgroundOrigin) = .empty;
+    var fixeds: std.ArrayList(bool) = .empty;
+    var first = true;
+    const a = ctx.arena;
     while (!outer.atEnd()) {
         var c = Cur.of(outer.untilComma());
         var l_image: ?Image = null;
@@ -326,11 +390,24 @@ fn background(ctx: *Ctx, t: []const Token) bool {
         var l_repeat: ?style.BackgroundRepeat = null;
         var l_pos: ?Pos = null;
         var l_clip: style.BackgroundClip = .border_box;
+        var l_origin: style.BackgroundOrigin = .padding_box;
+        var boxes: u8 = 0;
+        var l_fixed = false;
         while (!c.atEnd()) {
-            if (c.takeIdent("fixed") or c.takeIdent("scroll") or c.takeIdent("local")) continue;
+            if (c.takeIdent("fixed")) {
+                l_fixed = true;
+                continue;
+            }
+            if (c.takeIdent("scroll") or c.takeIdent("local")) continue;
+            const save = c.i;
             if (clipWord(&c)) |w| {
-                // Two boxes name the origin, then the clip: the last counts.
+                // Two boxes name the origin, then the clip; one is both.
+                if (boxes == 0 and w != .text) {
+                    var again = Cur.of(c.t[save..]);
+                    if (originWord(&again)) |o| l_origin = o;
+                }
                 l_clip = w;
+                boxes += 1;
                 continue;
             }
             if (l_image == null) if (imageAt(ctx, &c)) |img| {
@@ -352,129 +429,47 @@ fn background(ctx: *Ctx, t: []const Token) bool {
             }
             return false;
         }
-        // The kept layer is the first with an image, else the first.
-        var keep = first;
-        if (l_image) |img| if (!img.none) {
-            if (!have_image) {
-                image = img;
-                have_image = true;
-                keep = true;
-            } else more.append(ctx.arena, .{ .url = img.url, .gradient = img.gradient, .clip = l_clip }) catch return false;
-        };
+        // What has an image is a layer; with none at all, the first counts.
+        const has_image = if (l_image) |img| !img.none else false;
+        const keep = has_image or (first and outer.atEnd());
         if (keep) {
-            size = l_size orelse .{};
-            repeat = l_repeat orelse .repeat;
-            pos = l_pos orelse .{};
-            clip = l_clip;
+            const z = l_size orelse Size{};
+            const p = l_pos orelse Pos{};
+            sizes.append(a, .{ .kind = z.kind, .x = z.x, .y = z.y }) catch return false;
+            positions.append(a, .{ .x_pct = p.x_pct, .x_px = p.x_px, .y_pct = p.y_pct, .y_px = p.y_px }) catch return false;
+            repeats.append(a, l_repeat orelse .repeat) catch return false;
+            clips.append(a, l_clip) catch return false;
+            origins.append(a, l_origin) catch return false;
+            fixeds.append(a, l_fixed) catch return false;
+            if (has_image) {
+                const img = l_image.?;
+                if (!have_image) {
+                    image = img;
+                    have_image = true;
+                } else more.append(a, .{ .url = img.url, .gradient = img.gradient, .clip = l_clip }) catch return false;
+            }
         }
         first = false;
     }
     const s = ctx.style;
     s.background = color;
-    s.background_clip = clip;
     s.background_more = more.items;
     setImage(ctx, image);
-    setSize(s, size);
-    s.background_repeat = repeat;
-    setPos(s, pos);
-    return true;
-}
-
-fn boxShadow(ctx: *Ctx, t: []const Token) bool {
-    if (values.ident(t)) |w| {
-        if (!std.ascii.eqlIgnoreCase(w, "none")) return false;
-        ctx.style.shadow = null;
-        return true;
-    }
-    var outer = Cur.of(t);
-    var chosen: ?style.Shadow = null;
-    while (!outer.atEnd()) {
-        var c = Cur.of(outer.untilComma());
-        var nums: [4]f32 = .{ 0, 0, 0, 0 };
-        var n: usize = 0;
-        var inset = false;
-        var color: ?style.Color = null;
-        while (!c.atEnd()) {
-            if (c.takeIdent("inset")) {
-                inset = true;
-                continue;
-            }
-            if (n < 4) if (values.pxAt(ctx, &c)) |v| {
-                nums[n] = v;
-                n += 1;
-                continue;
-            };
-            if (color == null) if (colors.at(ctx, &c)) |v| {
-                color = v;
-                continue;
-            };
-            return false;
-        }
-        if (n < 2) return false;
-        const col = color orelse ctx.style.color;
-        if (chosen == null and !inset and col.a > 0) {
-            chosen = .{ .x = nums[0], .y = nums[1], .blur = nums[2], .spread = nums[3], .color = col };
-        }
-    }
-    ctx.style.shadow = chosen;
-    return true;
-}
-
-fn transform(ctx: *Ctx, t: []const Token) bool {
-    if (values.ident(t)) |w| {
-        if (!std.ascii.eqlIgnoreCase(w, "none")) return false;
-        ctx.style.transform = null;
-        return true;
-    }
-    var c = Cur.of(t);
-    var out: style.Transform = .{};
-    var any = false;
-    while (c.next()) |f| {
-        if (f.kind != .function) return false;
-        any = true;
-        var a = Cur.of(c.body());
-        const eq = std.ascii.eqlIgnoreCase;
-        if (eq(f.text, "translate") or eq(f.text, "translate3d")) {
-            const x = values.lengthAt(ctx, &a) orelse return false;
-            var y = Len.zero;
-            if (a.takeComma()) y = values.lengthAt(ctx, &a) orelse return false;
-            addLen(&out.x, x);
-            addLen(&out.y, y);
-        } else if (eq(f.text, "translateX")) {
-            addLen(&out.x, values.lengthAt(ctx, &a) orelse return false);
-        } else if (eq(f.text, "translateY")) {
-            addLen(&out.y, values.lengthAt(ctx, &a) orelse return false);
-        } else if (eq(f.text, "scale") or eq(f.text, "scale3d") or eq(f.text, "scaleX")) {
-            out.scale *= values.numberAt(ctx, &a) orelse return false;
-        }
-        // scaleY alone, rotate, skew and matrix are not drawn.
-    }
-    if (!any) return false;
-    ctx.style.transform = out;
-    return true;
-}
-
-fn addLen(a: *Len, b: Len) void {
-    a.px += b.px;
-    a.pct += b.pct;
-}
-
-fn translateProp(ctx: *Ctx, t: []const Token) bool {
-    if (values.ident(t)) |w| return std.ascii.eqlIgnoreCase(w, "none");
-    var c = Cur.of(t);
-    var out = ctx.style.transform orelse style.Transform{};
-    out.x = values.lengthAt(ctx, &c) orelse return false;
-    out.y = values.lengthAt(ctx, &c) orelse Len.zero;
-    ctx.style.transform = out;
-    return true;
-}
-
-fn scaleProp(ctx: *Ctx, t: []const Token) bool {
-    if (values.ident(t)) |w| return std.ascii.eqlIgnoreCase(w, "none");
-    var c = Cur.of(t);
-    var out = ctx.style.transform orelse style.Transform{};
-    out.scale = values.numberAt(ctx, &c) orelse return false;
-    ctx.style.transform = out;
+    const layers = more.items.len + 1;
+    const z0: style.BgSize = if (sizes.items.len > 0) sizes.items[0] else .{};
+    const p0: style.BgPos = if (positions.items.len > 0) positions.items[0] else .{};
+    setSize(s, .{ .kind = z0.kind, .x = z0.x, .y = z0.y });
+    setPos(s, .{ .x_pct = p0.x_pct, .x_px = p0.x_px, .y_pct = p0.y_pct, .y_px = p0.y_px });
+    s.background_repeat = if (repeats.items.len > 0) repeats.items[0] else .repeat;
+    s.background_clip = if (clips.items.len > 0) clips.items[0] else .border_box;
+    s.background_origin = if (origins.items.len > 0) origins.items[0] else .padding_box;
+    s.background_fixed = fixeds.items.len > 0 and fixeds.items[0];
+    s.bg_sizes = if (layers > 1) sizes.items else &.{};
+    s.bg_positions = if (layers > 1) positions.items else &.{};
+    s.bg_repeats = if (layers > 1) repeats.items else &.{};
+    s.bg_clips = if (layers > 1) clips.items else &.{};
+    s.bg_origins = if (layers > 1) origins.items else &.{};
+    s.bg_fixed = if (layers > 1) fixeds.items else &.{};
     return true;
 }
 

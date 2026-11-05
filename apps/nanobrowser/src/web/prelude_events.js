@@ -371,6 +371,14 @@ $.hook("fire", (target, type, bubbles, cancelable) => {
   return dispatch(target, e);
 });
 
+$.hook("fireAnimation", (target, type, name, elapsed, pseudo) => {
+  const e = type.startsWith("transition")
+    ? new TransitionEvent(type, { bubbles: true, propertyName: name, elapsedTime: elapsed, pseudoElement: pseudo })
+    : new AnimationEvent(type, { bubbles: true, animationName: name, elapsedTime: elapsed, pseudoElement: pseudo });
+  e.isTrusted = true;
+  return dispatch(target, e);
+});
+
 const trusted = (e) => { e.isTrusted = true; return e; };
 let buttonsDown = 0;
 const fireMouse = (target, type, x, y, ctrlKey, shiftKey, altKey, metaKey, related) => {

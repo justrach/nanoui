@@ -16,6 +16,14 @@ const paint_only = std.StaticStringMap(void).initComptime(.{
     .{"shadow"},          .{"object_fit"},           .{"transform"},         .{"color"},
     .{"underline"},       .{"line_through"},         .{"overline"},          .{"text_decoration_color"},
     .{"dark_scheme"},     .{"background_more"},      .{"background_clip"},   .{"mask_image"},
+    .{"radius_y"},        .{"radius_y_pct"},         .{"outline_offset"},    .{"background_origin"},
+    .{"background_fixed"},.{"bg_sizes"},             .{"bg_positions"},      .{"bg_repeats"},
+    .{"bg_clips"},        .{"bg_origins"},           .{"bg_fixed"},          .{"shadows"},
+    .{"translate_x"},     .{"translate_y"},          .{"rotate"},            .{"scale_x"},
+    .{"scale_y"},         .{"transform_origin_x"},   .{"transform_origin_y"},.{"clip_rect"},
+    .{"clip_path"},       .{"filters"},              .{"backdrop_blur"},     .{"appearance_none"},
+    .{"animations"},      .{"transitions"},          .{"text_fill"},         
+    .{"text_shadows"},    .{"accent"},               .{"placeholder"},       .{"makes_context"},
 });
 
 fn borderDiff(a: style.Border, b: style.Border) Change {
@@ -25,9 +33,15 @@ fn borderDiff(a: style.Border, b: style.Border) Change {
 }
 
 /// Whether two values of a style field are equal, looking inside slices.
-fn same(comptime T: type, a: T, b: T) bool {
+pub fn same(comptime T: type, a: T, b: T) bool {
     const info = @typeInfo(T);
     switch (info) {
+        .@"union" => {
+            if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
+            switch (a) {
+                inline else => |x, tag| return same(@TypeOf(x), x, @field(b, @tagName(tag))),
+            }
+        },
         .@"struct" => |st| {
             inline for (st.field_names) |n| {
                 if (!same(@TypeOf(@field(a, n)), @field(a, n), @field(b, n))) return false;
@@ -39,7 +53,7 @@ fn same(comptime T: type, a: T, b: T) bool {
             return same(o.child, a.?, b.?);
         },
         .pointer => |p| {
-            if (p.size != .slice) @compileError("no such field in Style");
+            if (p.size != .slice) return a == b;
             if (a.len != b.len) return false;
             if (a.ptr == b.ptr) return true;
             for (a, b) |x, y| if (!same(p.child, x, y)) return false;
@@ -56,8 +70,12 @@ fn same(comptime T: type, a: T, b: T) bool {
 /// What changed from `a` to `b`.
 pub fn compare(a: *const Style, b: *const Style) Change {
     var change: Change = .none;
+    // A transform is a containing block for what's in it, whatever it does.
+    if (a.hasTransform() != b.hasTransform()) return .layout;
     const names = @typeInfo(Style).@"struct".field_names;
     inline for (names) |n| {
+        // What they come to is compared instead.
+        if (comptime std.mem.eql(u8, n, "anim_raw") or std.mem.eql(u8, n, "trans_raw")) continue;
         const x = @field(a, n);
         const y = @field(b, n);
         if (@TypeOf(x) == style.Border and !comptime std.mem.eql(u8, n, "outline")) {

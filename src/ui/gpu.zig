@@ -25,9 +25,19 @@ pub const Instance = extern struct {
     /// A turn about the vertical axis (`Style.turn`): the angle (radians),
     /// the eye's distance (points, 0 flat), and the pivot's x, y.
     turn: [4]f32 = .{ 0, 0, 0, 0 },
+    /// A plane transform of where everything else puts it (`Style.transform`):
+    /// x' = m0 x + m2 y + mt0, y' = m1 x + m3 y + mt1. Its clip is where it
+    /// lands; shapes are worked out before it, so a rounded corner stays one.
+    m: [4]f32 = .{ 1, 0, 0, 1 },
+    mt: [4]f32 = .{ 0, 0, 0, 0 },
 };
 comptime {
-    std.debug.assert(@sizeOf(Instance) == 160);
+    std.debug.assert(@sizeOf(Instance) == 192);
+}
+
+/// Whether `i` carries a transform other than none.
+pub fn hasMatrix(i: *const Instance) bool {
+    return i.m[0] != 1 or i.m[1] != 0 or i.m[2] != 0 or i.m[3] != 1 or i.mt[0] != 0 or i.mt[1] != 0;
 }
 
 /// The clip rectangle's corners rounded by `radius`: those in `corners`

@@ -55,6 +55,7 @@ pub const Point = types.Point;
 pub const Face = types.Face;
 pub const Fade = types.Fade;
 pub const Size = types.Size;
+pub const Affine = types.Affine;
 pub const Rect = types.Rect;
 pub const Color = types.Color;
 pub const Edges = types.Edges;
@@ -190,6 +191,7 @@ test {
     _ = @import("tests_text_style.zig");
     _ = @import("tests_text_extras.zig");
     _ = @import("tests_turn.zig");
+    _ = @import("tests_transform.zig");
     _ = @import("tests_settle.zig");
     _ = types;
     _ = device;

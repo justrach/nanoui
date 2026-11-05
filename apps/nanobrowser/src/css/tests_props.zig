@@ -460,10 +460,12 @@ test "transform and shadow" {
     defer p.done();
     const s = p.s("x");
     const t = s.transform.?;
-    try near(t.x.px, 3);
-    try near(t.y.px, 3);
-    try near(t.y.pct, 50);
-    try near(t.scale, 2);
+    try expect(t.ops.len == 5);
+    try near(t.ops[0].translate.y.pct, 50);
+    try near(t.ops[1].translate.x.px, 2);
+    try near(t.ops[3].rotate, 45);
+    try near(t.ops[4].scale[1], 2);
+    try expect(s.shadows.len == 2);
     const sh = s.shadow.?;
     try near(sh.x, 1);
     try near(sh.y, 2);
@@ -519,8 +521,8 @@ test "background layers, clips and gradient shapes" {
     try near(k.s("x").background_gradient.?.angle, 90);
     const text = try with("background: linear-gradient(red, blue); -webkit-background-clip: text; color: transparent");
     defer text.done();
-    try expect(text.s("x").background_gradient == null);
-    try expect(text.s("x").color.a > 0);
+    try expect(text.s("x").background_gradient != null);
+    try expect(text.s("x").background_clip == .text);
     const many = try with("background-image: url(a.png), url(b.png), url(c.png)");
     defer many.done();
     try eqc(@as(usize, 2), many.s("x").background_more.len);

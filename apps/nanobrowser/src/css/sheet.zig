@@ -82,14 +82,37 @@ pub const FontFace = struct {
     decls: *const Declarations,
 };
 
+/// One `from`, `to` or percentage of `@keyframes`.
+pub const Keyframe = struct {
+    /// 0 to 1.
+    at: f32,
+    decls: *const Declarations,
+};
+
+pub const Keyframes = struct {
+    name: []const u8,
+    /// In order of `at`.
+    frames: []const Keyframe = &.{},
+    cond: ?*const Cond = null,
+};
+
+/// `@property`: what a custom property starts as, and whether it inherits.
+pub const PropertyRule = struct {
+    name: []const u8,
+    /// Null: it starts invalid (`syntax: "*"` with no `initial-value`).
+    initial: ?[]const Token = null,
+    inherits: bool = true,
+};
+
 pub const Sheet = struct {
     rules: []const Rule = &.{},
     /// The `@import`s, in order: the host fetches them and passes the results
     /// to `Engine.setSheets` before this sheet.
     imports: []const Import = &.{},
     font_faces: []const FontFace = &.{},
-    /// Names of `@keyframes`, recorded and otherwise unused.
-    keyframes: []const []const u8 = &.{},
+    /// `@keyframes`, by name; the last of a name wins (`Engine.keyframes`).
+    keyframes: []const Keyframes = &.{},
+    properties: []const PropertyRule = &.{},
     /// Layer names in the order first mentioned.
     layers: []const []const u8 = &.{},
     /// Every condition, for telling when a viewport change matters.

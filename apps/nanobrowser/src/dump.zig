@@ -45,6 +45,18 @@ fn path(out: *std.ArrayList(u8), a: std.mem.Allocator, n: *const dom.Node) std.m
     try out.print(a, "{s}[{d}]", .{ n.tag, nthOfTag(n) });
 }
 
+/// `NANOBROWSER_EVAL`: a script's answer about the finished page, on stderr.
+pub fn eval(p: *Page, source: []const u8) void {
+    const w = p.js orelse return;
+    w.enter();
+    defer w.leave();
+    const v = w.vm.eval(source, "NANOBROWSER_EVAL") catch {
+        std.debug.print("eval threw: {s}\n", .{w.vm.exceptionString()});
+        return;
+    };
+    std.debug.print("eval: {s}\n", .{w.vm.toStringSlice(v) catch "?"});
+}
+
 /// The whole document, one line an element.
 pub fn write(gpa: std.mem.Allocator, p: *Page, file: []const u8) !void {
     var arena = std.heap.ArenaAllocator.init(gpa);
@@ -68,6 +80,9 @@ pub fn write(gpa: std.mem.Allocator, p: *Page, file: []const u8) !void {
             try out.print(a, ",\"display\":\"{s}\",\"position\":\"{s}\",\"fontSize\":{d:.2},\"fontWeight\":{d},\"color\":[{d},{d},{d},{d}],\"bg\":[{d},{d},{d},{d}]", .{
                 @tagName(s.display), @tagName(s.position), s.font_size, s.font_weight, fg[0], fg[1], fg[2], fg[3], bg[0], bg[1], bg[2], bg[3],
             });
+        }
+        if (n.computed) |s| {
+            try out.print(a, ",\"opacity\":{d:.3},\"visibility\":\"{s}\",\"z\":{d},\"transform\":{},\"filters\":{d},\"blur\":{d:.1},\"anims\":{d},\"clipPath\":{},\"radius\":[{d},{d},{d},{d}],\"radiusPct\":[{d},{d}],\"radiusY\":[{d},{d}]", .{ s.opacity, @tagName(s.visibility), s.z_index orelse 0, s.hasTransform(), s.filters.len, s.backdrop_blur, s.animations.len, s.clip_path != null, s.radius[0], s.radius[1], s.radius[2], s.radius[3], s.radius_pct[0], s.radius_pct[1], s.radius_y[0], s.radius_y[1] });
         }
         try out.appendSlice(a, "}\n");
     }

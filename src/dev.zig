@@ -61,10 +61,14 @@ pub fn snapshot(app: anytype, path: []const u8) !void {
         // visible window, and the view is drawn as it goes, so what it asks
         // for as it draws (a picture, a map's tiles) is asked for and answered.
         var waited: f64 = 0;
+        const dt = t.dt;
+        // Its clock goes as the event loop's does: what animates arrives on time.
+        t.dt = 0.05;
         while (waited < app.flags.wait) : (waited += 0.05) {
             runFor(0.05);
             t.frame();
         }
+        t.dt = dt;
         t.settle(2);
         try t.runScript(app.flags.script);
         try t.screenshot(path);

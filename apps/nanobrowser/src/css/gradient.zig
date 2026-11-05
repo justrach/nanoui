@@ -9,7 +9,7 @@ const Ctx = values.Ctx;
 const Cur = values.Cur;
 const Token = values.Token;
 
-fn sideAngle(c: *Cur, legacy: bool) ?f32 {
+fn sideAngle(c: *Cur, legacy: bool, g: *style.Gradient) ?f32 {
     var dx: f32 = 0;
     var dy: f32 = 0;
     var any = false;
@@ -31,6 +31,11 @@ fn sideAngle(c: *Cur, legacy: bool) ?f32 {
         dx = -dx;
         dy = -dy;
     }
+    // A corner: its angle depends on the box's shape.
+    if (dx != 0 and dy != 0) {
+        g.to_x = @intFromFloat(dx);
+        g.to_y = @intFromFloat(dy);
+    }
     const rad = std.math.atan2(dx, -dy);
     return std.math.radiansToDegrees(rad);
 }
@@ -41,15 +46,17 @@ pub fn parse(ctx: *Ctx, name: []const u8, args: []const Token) ?style.Gradient {
     var g: style.Gradient = .{};
     const is_linear = std.ascii.findIgnoreCase(name, "linear") != null;
     const legacy = std.ascii.startsWithIgnoreCase(name, "-webkit-") or std.ascii.startsWithIgnoreCase(name, "-moz-");
+    g.repeating = std.ascii.findIgnoreCase(name, "repeating") != null;
     if (is_linear) {
         if (values.angleAt(&c)) |a| {
-            g.angle = a;
+            // The prefixed syntax counts from the right, against the clock.
+            g.angle = if (legacy) 90 - a else a;
             _ = c.takeComma();
         } else if (c.takeIdent("to")) {
-            g.angle = sideAngle(&c, false) orelse return null;
+            g.angle = sideAngle(&c, false, &g) orelse return null;
             _ = c.takeComma();
         } else if (legacy) {
-            if (sideAngle(&c, true)) |a| {
+            if (sideAngle(&c, true, &g)) |a| {
                 g.angle = a;
                 _ = c.takeComma();
             }
@@ -69,7 +76,15 @@ pub fn parse(ctx: *Ctx, name: []const u8, args: []const Token) ?style.Gradient {
     }
     if (stops.items.len < 1) return null;
     const out = ctx.arena.alloc(style.GradientStop, stops.items.len) catch return null;
-    spreadStops(stops.items, out);
+    var pixels = false;
+    for (stops.items) |r| {
+        if (r.px != 0) pixels = true;
+    }
+    if (pixels) {
+        // Only the box can say where its stops without a place fall.
+        g.has_px = true;
+        for (stops.items, out) |r, *o| o.* = .{ .color = r.color, .at = r.at orelse 0, .px = r.px, .known = r.at != null };
+    } else spreadStops(stops.items, out);
     g.stops = out;
     return g;
 }
@@ -82,22 +97,33 @@ fn prelude(ctx: *Ctx, g: *style.Gradient, part: []const Token) void {
     var size: [2]?f32 = .{ null, null };
     var sizes: usize = 0;
     while (!c.atEnd()) {
-        if (c.takeIdent("circle") or c.takeIdent("ellipse")) continue;
+        if (c.takeIdent("circle")) {
+            g.circle = true;
+            continue;
+        }
+        if (c.takeIdent("ellipse")) continue;
         if (c.takeIdent("closest-side")) {
             closest = true;
             corner = false;
+            g.extent = .closest_side;
         } else if (c.takeIdent("closest-corner")) {
             closest = true;
+            g.extent = .closest_corner;
         } else if (c.takeIdent("farthest-side")) {
             corner = false;
+            g.extent = .farthest_side;
         } else if (c.takeIdent("farthest-corner")) {
-            // The default.
+            g.extent = .farthest_corner;
         } else if (c.takeIdent("from")) {
             if (values.angleAt(&c)) |a| g.angle = a;
         } else if (c.takeIdent("at")) {
             center(ctx, g, &c);
         } else if (values.lengthAt(ctx, &c)) |l| {
-            // A size in pixels waits on the box, which isn't known here.
+            if (sizes == 0) {
+                g.size_x = l;
+                g.size_y = l;
+            }
+            if (sizes == 1) g.size_y = l;
             if (sizes < 2 and l.px == 0) size[sizes] = l.pct / 100;
             sizes += 1;
         } else c.i += 1;
@@ -126,7 +152,13 @@ fn center(ctx: *Ctx, g: *style.Gradient, c: *Cur) void {
         } else if (c.takeIdent("center")) {
             // The default.
         } else if (values.lengthAt(ctx, c)) |l| {
-            if (n == 0) g.cx = l.pct / 100 else g.cy = l.pct / 100;
+            if (n == 0) {
+                g.cx = l.pct / 100;
+                g.cx_px = l.px;
+            } else {
+                g.cy = l.pct / 100;
+                g.cy_px = l.px;
+            }
         } else return;
     }
 }
@@ -141,12 +173,13 @@ fn firstIsStop(ctx: *Ctx, part: []const Token) bool {
     return false;
 }
 
-const RawStop = struct { color: style.Color, at: ?f32 };
+const RawStop = struct { color: style.Color, at: ?f32, px: f32 = 0 };
 
 fn readStop(ctx: *Ctx, part: []const Token, out: *std.ArrayList(RawStop)) error{Bad}!void {
     var c = Cur.of(part);
     var color: ?style.Color = null;
     var at: [2]?f32 = .{ null, null };
+    var px: [2]f32 = .{ 0, 0 };
     var n_at: usize = 0;
     while (!c.atEnd()) {
         if (color == null) if (colors.at(ctx, &c)) |v| {
@@ -154,9 +187,8 @@ fn readStop(ctx: *Ctx, part: []const Token, out: *std.ArrayList(RawStop)) error{
             continue;
         };
         if (n_at < 2) if (values.lengthAt(ctx, &c)) |l| {
-            // Pixels have no meaning until the box is sized: the stop is then
-            // spread evenly, as if no position were written.
-            at[n_at] = if (l.px == 0) l.pct / 100 else null;
+            at[n_at] = l.pct / 100;
+            px[n_at] = l.px;
             n_at += 1;
             continue;
         };
@@ -169,8 +201,8 @@ fn readStop(ctx: *Ctx, part: []const Token, out: *std.ArrayList(RawStop)) error{
     }
     // A bare position is a midpoint hint: it has no color to show.
     const col = color orelse return;
-    out.append(ctx.arena, .{ .color = col, .at = at[0] }) catch return error.Bad;
-    if (at[1]) |second| out.append(ctx.arena, .{ .color = col, .at = second }) catch return error.Bad;
+    out.append(ctx.arena, .{ .color = col, .at = at[0], .px = px[0] }) catch return error.Bad;
+    if (at[1]) |second| out.append(ctx.arena, .{ .color = col, .at = second, .px = px[1] }) catch return error.Bad;
 }
 
 /// The spec's fix-up: ends default to 0 and 1, gaps fill evenly, and positions

@@ -10,6 +10,8 @@ const box = @import("properties_box.zig");
 const text = @import("properties_text.zig");
 const paint = @import("properties_paint.zig");
 const layout = @import("properties_layout.zig");
+const effects = @import("properties_effects.zig");
+const motion = @import("properties_motion.zig");
 
 const Prop = prop.Prop;
 const Ctx = values.Ctx;
@@ -29,6 +31,8 @@ pub fn apply(ctx: *Ctx, p: Prop, t: []const Token) bool {
     if (box.apply(ctx, p, t)) |r| return r;
     if (text.apply(ctx, p, t)) |r| return r;
     if (paint.apply(ctx, p, t)) |r| return r;
+    if (effects.apply(ctx, p, t)) |r| return r;
+    if (motion.apply(ctx, p, t)) |r| return r;
     if (layout.apply(ctx, p, t)) |r| return r;
     return switch (p) {
         .custom, .all => false,

@@ -276,35 +276,58 @@ fn color1(ctx: *Ctx, b: *Border, t: []const Token) bool {
 }
 
 fn radiusAll(ctx: *Ctx, t: []const Token) bool {
-    // Only the horizontal radii, before any `/`.
+    // The horizontal radii, then after any `/` the vertical ones.
     var c = Cur.of(t);
     var v: [4]Len = undefined;
     var n: usize = 0;
     while (n < 4 and !c.atEnd()) {
-        if (c.takeDelim('/')) break;
+        if (c.peek().?.isDelim('/')) break;
         v[n] = values.lengthAt(ctx, &c) orelse return false;
         n += 1;
     }
     if (n == 0) return false;
-    const s = ctx.style;
-    const put = struct {
-        fn at(st: *Style, i: usize, l: Len) void {
-            st.radius[i] = l.px;
-            st.radius_pct[i] = l.pct;
+    var h: [4]Len = v;
+    var m = n;
+    if (c.takeDelim('/')) {
+        m = 0;
+        while (m < 4 and !c.atEnd()) {
+            h[m] = values.lengthAt(ctx, &c) orelse return false;
+            m += 1;
         }
-    };
-    put.at(s, 0, v[0]);
-    put.at(s, 1, if (n > 1) v[1] else v[0]);
-    put.at(s, 2, if (n > 2) v[2] else v[0]);
-    put.at(s, 3, if (n > 3) v[3] else (if (n > 1) v[1] else v[0]));
+        if (m == 0) return false;
+    }
+    if (!c.atEnd()) return false;
+    const pick = struct {
+        fn at(l: *const [4]Len, count: usize, i: usize) Len {
+            return switch (i) {
+                0 => l[0],
+                1 => if (count > 1) l[1] else l[0],
+                2 => if (count > 2) l[2] else l[0],
+                else => if (count > 3) l[3] else if (count > 1) l[1] else l[0],
+            };
+        }
+    }.at;
+    const s = ctx.style;
+    for (0..4) |i| {
+        const x = pick(&v, n, i);
+        const y = pick(&h, m, i);
+        s.radius[i] = x.px;
+        s.radius_pct[i] = x.pct;
+        s.radius_y[i] = y.px;
+        s.radius_y_pct[i] = y.pct;
+    }
     return true;
 }
 
 fn radius1(ctx: *Ctx, i: usize, t: []const Token) bool {
     var c = Cur.of(t);
-    const l = values.lengthAt(ctx, &c) orelse return false;
-    ctx.style.radius[i] = l.px;
-    ctx.style.radius_pct[i] = l.pct;
+    const x = values.lengthAt(ctx, &c) orelse return false;
+    const y = if (c.atEnd()) x else values.lengthAt(ctx, &c) orelse return false;
+    const s = ctx.style;
+    s.radius[i] = x.px;
+    s.radius_pct[i] = x.pct;
+    s.radius_y[i] = y.px;
+    s.radius_y_pct[i] = y.pct;
     return true;
 }
 

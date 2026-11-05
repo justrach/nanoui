@@ -93,6 +93,7 @@ pub fn lineMetrics(c: *ui.Context, style: ui.TextStyle) box.Metrics {
 /// Style and layout brought up to date for a viewport of `w` × `h`.
 pub fn prepare(p: *Page, c: *ui.Context, w: f32, h: f32) void {
     webfonts.catchUp(p, c);
+    p.engine.now = c.time;
     if (w != p.viewport_w or h != p.viewport_h or c.theme.dark != p.dark) {
         p.viewport_w = w;
         p.viewport_h = h;
@@ -101,7 +102,29 @@ pub fn prepare(p: *Page, c: *ui.Context, w: f32, h: f32) void {
         p.doc.touchStyle();
     }
     flushStyle(p);
-    if (p.doc.layout_dirty or p.list == null) relayout(p, c);
+    if (p.doc.layout_dirty or p.list == null) {
+        relayout(p, c);
+    } else if (p.list_dirty) {
+        var fonts: Fonts = .{ .p = p, .c = c };
+        makeList(p, p.tree.?, fonts.measurer());
+    }
+}
+
+/// What the page wants of frames from what runs on it, and the changes they made.
+fn runAnimations(p: *Page, c: *ui.Context) void {
+    p.engine.now = c.time;
+    const plan = p.engine.anim.tick(&p.engine, c.time);
+    if (plan.layout) p.doc.layout_dirty = true;
+    if (plan.paint) p.list_dirty = true;
+    web.animationEvents(p);
+}
+
+fn wantFrames(p: *Page, c: *ui.Context) void {
+    if (p.dead) return;
+    const plan = p.engine.anim.plan(c.time);
+    if (plan.frames) {
+        c.animationFrame();
+    } else if (plan.wake_in) |seconds| c.frameIn(@max(seconds, 0.001));
 }
 
 /// Style brought up to date, as far as what changed reaches. Layout follows
@@ -135,7 +158,12 @@ pub fn flushStyle(p: *Page) void {
         if (covered or !connected) continue;
         const target = if (n.kind == .document) d.documentElement() orelse continue else n;
         const change = p.engine.restyleChanged(target) catch .layout;
-        if (change != .none) d.layout_dirty = true;
+        switch (change) {
+            .none => {},
+            // Boxes hold the very styles that changed.
+            .paint => p.list_dirty = true,
+            .layout => d.layout_dirty = true,
+        }
     }
     d.dirty_nodes.clearRetainingCapacity();
     d.style_dirty = false;
@@ -153,7 +181,13 @@ pub fn relayout(p: *Page, c: *ui.Context) void {
         return;
     };
     p.tree = tree;
-    p.list = display.build(a, tree, p.doc.node, m, &p.scrolls) catch null;
+    makeList(p, tree, m);
+}
+
+fn makeList(p: *Page, tree: box.Tree, m: box.Measurer) void {
+    p.list_dirty = false;
+    _ = p.list_arena.reset(.retain_capacity);
+    p.list = display.build(p.list_arena.allocator(), tree, p.doc.node, m, &p.scrolls) catch null;
     if (p.restore_scroll > 0) if (p.list) |*l| {
         l.clips[1].scroll_y = p.restore_scroll;
     };
@@ -167,8 +201,8 @@ const Replay = struct {
         return loader.background(h.p, url);
     }
 
-    pub fn gradient(h: Replay, g: @import("css/style.zig").Gradient) ?[]const u8 {
-        return h.p.gradients.get(g);
+    pub fn gradient(h: Replay, g: @import("css/style.zig").Gradient, w: f32, tile_h: f32, nx: u32, ny: u32, scale: f32) ?[]const u8 {
+        return h.p.gradients.get(g, w, tile_h, nx, ny, scale);
     }
 
     pub fn control(h: Replay, c: *ui.Context, b: *const box.Box, x: f32, y: f32, opacity: f32) void {
@@ -184,8 +218,12 @@ pub fn view(p: *Page, c: *ui.Context, rect: box.Rect) void {
         p.maybeFree();
     }
     p.origin = .{ rect.x, rect.y };
+    p.gradients.beginFrame();
+    runAnimations(p, c);
+    if (p.dead) return;
     web.frameStart(p);
     defer web.frameEnd(p, c);
+    defer wantFrames(p, c);
     if (p.dead) return;
     prepare(p, c, rect.w, rect.h);
     if (p.list != null) p.list.?.resolve(rect.x, rect.y, rect.w, rect.h);

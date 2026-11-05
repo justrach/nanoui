@@ -9,7 +9,7 @@ pub const maxSpecificity = parser.maxSpecificity;
 
 pub const Combinator = enum(u8) { descendant, child, next, later };
 pub const AttrOp = enum(u8) { exists, equals, includes, dash, prefix, suffix, substring };
-pub const PseudoElement = enum(u8) { none, before, after, other };
+pub const PseudoElement = enum(u8) { none, before, after, placeholder, other };
 
 pub const PseudoClass = enum(u8) {
     root,

@@ -22,6 +22,7 @@ pub const Hooks = struct {
     domException: Value = Value.undefined,
     reportError: Value = Value.undefined,
     fire: Value = Value.undefined,
+    fireAnimation: Value = Value.undefined,
     fireClick: Value = Value.undefined,
     firePointerMove: Value = Value.undefined,
     fireMouse: Value = Value.undefined,

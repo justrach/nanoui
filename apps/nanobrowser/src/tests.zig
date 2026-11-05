@@ -6,6 +6,14 @@ test {
     _ = @import("paint/display.zig");
     _ = @import("paint/replay.zig");
     _ = @import("paint/gradient.zig");
+    _ = @import("paint/corners.zig");
+    _ = @import("paint/backgrounds.zig");
+    _ = @import("paint/replay_box.zig");
+    _ = @import("paint/filters.zig");
+    _ = @import("paint/tests.zig");
+    _ = @import("css/effects.zig");
+    _ = @import("css/transform.zig");
+    _ = @import("css/animate.zig");
     _ = @import("page.zig");
     _ = @import("page_view.zig");
     _ = @import("page_input.zig");

@@ -56,6 +56,37 @@ pub fn scrolled(p: *Page, n: *dom.Node) void {
     w.changed();
 }
 
+/// What animations and transitions have to say, to anyone listening.
+pub fn animationEvents(p: *Page) void {
+    const anim = &p.engine.anim;
+    if (anim.events.items.len == 0) return;
+    const w = p.js orelse {
+        anim.events.clearRetainingCapacity();
+        return;
+    };
+    const list = anim.gpa.dupe(@TypeOf(anim.events.items[0]), anim.events.items) catch return;
+    defer anim.gpa.free(list);
+    anim.events.clearRetainingCapacity();
+    if (!w.h.fireAnimation.isCallable()) return;
+    const vm = w.vm;
+    for (list) |e| {
+        if (p.dead) return;
+        const name = @tagName(e.kind);
+        if (!w.hears(name)) continue;
+        w.enter();
+        defer w.leave();
+        const target = bind.wrap(vm, e.node) catch continue;
+        const kind = vm.newString(name) catch continue;
+        const what = vm.newString(e.name) catch continue;
+        const pseudo = vm.newString(switch (e.pseudo) {
+            .none => "",
+            .before => "::before",
+            .after => "::after",
+        }) catch continue;
+        _ = w.callReported(w.h.fireAnimation, Value.undefined, &.{ target, kind, what, bind.num(e.elapsed), pseudo });
+    }
+}
+
 /// Runs what waits for a frame, before it lays out.
 pub fn frameStart(p: *Page) void {
     const w = p.js orelse return;

@@ -19,6 +19,7 @@ const diff = @import("style_diff.zig");
 const ua = @import("ua.zig");
 const state = @import("cascade_state.zig");
 const computed_value = @import("computed_value.zig");
+const animate = @import("animate.zig");
 
 const Style = style.Style;
 
@@ -75,8 +76,17 @@ pub const Engine = struct {
     matched: std.ArrayList(rule_index.Entry) = .empty,
     pseudo_before: std.ArrayList(rule_index.Entry) = .empty,
     pseudo_after: std.ArrayList(rule_index.Entry) = .empty,
+    pseudo_placeholder: std.ArrayList(rule_index.Entry) = .empty,
     custom_builder: vars.Builder = .{},
     match_ctx: match.Ctx,
+    /// What runs: `@keyframes` and transitions (`animate.zig`), and the time
+    /// each frame gives them.
+    anim: animate.Animator,
+    now: f64 = 0,
+    keyframes: std.StringHashMapUnmanaged(*const sheet_mod.Keyframes) = .empty,
+    /// `@property`'s, and the scope above the root holding what each starts as.
+    registered: vars.Registered = .empty,
+    registered_scope: ?*const vars.Scope = null,
 
     pub fn init(gpa: Allocator, doc: *dom.Document) Engine {
         return .{
@@ -84,6 +94,7 @@ pub const Engine = struct {
             .doc = doc,
             .generation_arena = std.heap.ArenaAllocator.init(gpa),
             .match_ctx = .{ .doc = doc },
+            .anim = .init(gpa),
         };
     }
 
@@ -95,6 +106,10 @@ pub const Engine = struct {
         e.matched.deinit(e.gpa);
         e.pseudo_before.deinit(e.gpa);
         e.pseudo_after.deinit(e.gpa);
+        e.pseudo_placeholder.deinit(e.gpa);
+        e.anim.deinit();
+        e.keyframes.deinit(e.gpa);
+        e.registered.deinit(e.gpa);
         e.custom_builder.deinit(e.gpa);
         e.fonts.deinit(e.gpa);
         e.gpa.free(e.sheets);
@@ -161,6 +176,27 @@ pub const Engine = struct {
         try ix.addSheet(e.ua_sheet.?, e.viewport, true, &ranks, &order);
         if (e.doc.quirks) try ix.addSheet(e.ua_quirks.?, e.viewport, true, &ranks, &order);
         for (e.sheets) |s| try ix.addSheet(s, e.viewport, false, &ranks, &order);
+        e.keyframes.clearRetainingCapacity();
+        e.registered.clearRetainingCapacity();
+        var starts: std.ArrayList(vars.Entry) = .empty;
+        for (e.sheets) |s| for (s.properties) |r| {
+            if (e.registered.contains(r.name)) continue;
+            try e.registered.put(e.gpa, r.name, r);
+            try starts.append(a, .{ .hash = std.hash.Fnv1a_32.hash(r.name), .name = r.name, .value = r.initial });
+        };
+        e.registered_scope = null;
+        if (starts.items.len > 0) {
+            const root_scope = try a.create(vars.Scope);
+            root_scope.* = .{ .entries = starts.items };
+            e.registered_scope = root_scope;
+        }
+        for (e.sheets) |s| {
+            if (!s.active(e.viewport)) continue;
+            for (s.keyframes) |*k| {
+                if (k.cond) |c| if (!c.matches(e.viewport)) continue;
+                try e.keyframes.put(e.gpa, k.name, k);
+            }
+        }
         e.media_signature = e.signature();
         e.index_dirty = false;
     }
@@ -209,6 +245,7 @@ pub const Engine = struct {
             at = try e.styleOne(n, doc_node, null);
         }
         e.doc.style_dirty = false;
+        e.anim.endGeneration(e.generation);
     }
 
     /// Restyles `node` and what is in it, after a hover, class or attribute
@@ -275,6 +312,8 @@ pub const Engine = struct {
         const old = e.current(n);
         const old_before = if (n.style_generation == e.generation) n.before else null;
         const old_after = if (n.style_generation == e.generation) n.after else null;
+        const prev_before = e.previous(n, .before);
+        const prev_after = e.previous(n, .after);
         if (n.kind != .element) {
             const parent_style: ?*const Style = if (parent_is_element) e.current(parent.?) else null;
             const visible = parent_style != null and parent_style.?.display != .none;
@@ -283,7 +322,7 @@ pub const Engine = struct {
             return n.nextInTree(root);
         }
         var parent_style: *const Style = &e.root_parent;
-        var parent_scope: ?*const vars.Scope = null;
+        var parent_scope: ?*const vars.Scope = e.registered_scope;
         if (parent_is_element) {
             const p = parent.?;
             parent_style = e.current(p) orelse {
@@ -295,15 +334,26 @@ pub const Engine = struct {
                 e.clearSubtree(n, change, old != null);
                 return n.nextSkippingChildren(root);
             }
+            parent_scope = null;
             if (p.css_vars) |raw| parent_scope = @ptrCast(@alignCast(raw));
         }
         var fresh: Style = undefined;
         const r = try compute.element(e, n, parent_style, parent_scope, &fresh);
+        try e.anim.styled(e, n, .none, parent_style, r.scope, e.previous(n, .none), &fresh);
+        var compared: Change = .layout;
         if (old) |o| {
-            if (change) |c| c.* = c.max(diff.compare(o, &fresh));
+            compared = diff.compare(o, &fresh);
+            if (change) |c| c.* = c.max(compared);
         } else if (change) |c| c.* = .layout;
         const stored: *const Style = blk: {
-            if (old) |o| if (diff.compare(o, &fresh) == .none) break :blk o;
+            if (old) |o| {
+                if (compared == .none) break :blk o;
+                // Boxes hold this one: only paint read it, and it stays theirs.
+                if (compared == .paint) {
+                    @constCast(o).* = fresh;
+                    break :blk o;
+                }
+            }
             const s = try e.genArena().create(Style);
             s.* = fresh;
             break :blk s;
@@ -322,16 +372,38 @@ pub const Engine = struct {
             while (k) |x| : (k = x.next) e.clearSubtree(x, change, false);
             return n.nextSkippingChildren(root);
         }
-        n.before = try e.pseudoStyle(n, e.pseudo_before.items, r.before, stored, r.scope, old_before, change);
-        n.after = try e.pseudoStyle(n, e.pseudo_after.items, r.after, stored, r.scope, old_after, change);
+        n.before = try e.pseudoStyle(n, .before, e.pseudo_before.items, r.before, stored, r.scope, old_before, prev_before, change);
+        n.after = try e.pseudoStyle(n, .after, e.pseudo_after.items, r.after, stored, r.scope, old_after, prev_after, change);
         return n.nextInTree(root);
     }
 
-    fn pseudoStyle(e: *Engine, n: *dom.Node, list: []rule_index.Entry, wanted: bool, parent: *const Style, scope: ?*const vars.Scope, old: ?*const Style, change: ?*Change) Allocator.Error!?*const Style {
+    /// The style `n` (or its pseudo-element) had before this restyle, for what
+    /// transitions from it. In a new generation the last one's is alive until
+    /// the pass is over; anything older isn't.
+    fn previous(e: *const Engine, n: *const dom.Node, which: animate.Pseudo) ?*const Style {
+        if (n.style_generation != e.generation and n.style_generation +% 1 != e.generation) return null;
+        return switch (which) {
+            .none => n.computed,
+            .before => n.before,
+            .after => n.after,
+        };
+    }
+
+    fn pseudoStyle(e: *Engine, n: *dom.Node, which: animate.Pseudo, list: []rule_index.Entry, wanted: bool, parent: *const Style, scope: ?*const vars.Scope, old: ?*const Style, prev: ?*const Style, change: ?*Change) Allocator.Error!?*const Style {
         var made: ?*const Style = null;
         if (wanted) {
             var fresh: Style = undefined;
             if (try compute.pseudo(e, n, list, parent, scope, &fresh)) {
+                try e.anim.styled(e, n, which, parent, scope, prev, &fresh);
+                // Boxes hold the one they have: only paint read it, and it stays theirs.
+                if (old) |o| {
+                    const compared = diff.compare(o, &fresh);
+                    if (compared != .layout) {
+                        if (change) |c| c.* = c.max(compared);
+                        if (compared == .paint) @constCast(o).* = fresh;
+                        return o;
+                    }
+                }
                 const s = try e.genArena().create(Style);
                 s.* = fresh;
                 made = s;
@@ -339,7 +411,7 @@ pub const Engine = struct {
         }
         if (change) |c| {
             if (old != null and made != null) {
-                c.* = c.max(diff.compare(old.?, made.?));
+                c.* = c.max(.layout);
             } else if ((old == null) != (made == null)) {
                 c.* = c.max(.layout);
             }

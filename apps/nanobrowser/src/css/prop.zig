@@ -204,11 +204,20 @@ pub const Prop = enum(u16) {
     overflow_wrap,
     word_wrap,
     tab_size,
-    // Known with no effect here.
+    // Known with no effect here, or read by name of `properties_*`.
     accent_color,
     animation,
+    animation_name,
+    animation_duration,
+    animation_delay,
+    animation_timing_function,
+    animation_iteration_count,
+    animation_direction,
+    animation_fill_mode,
+    animation_play_state,
     appearance,
     backdrop_filter,
+    backface_visibility,
     background_attachment,
     background_blend_mode,
     background_clip,
@@ -262,6 +271,7 @@ pub const Prop = enum(u16) {
     stroke,
     stroke_width,
     text_rendering,
+    text_fill_color,
     text_shadow,
     text_size_adjust,
     text_underline_offset,
@@ -274,6 +284,8 @@ pub const Prop = enum(u16) {
     transition_duration,
     transition_property,
     transition_timing_function,
+    transition_behavior,
+    tap_highlight_color,
     unicode_bidi,
     user_select,
     will_change,
@@ -320,13 +332,22 @@ pub fn lookup(name: []const u8) ?Prop {
         .{ "-webkit-font-smoothing", .font_smoothing },            .{ "-moz-osx-font-smoothing", .font_smoothing },
         .{ "-webkit-text-size-adjust", .text_size_adjust },        .{ "-ms-text-size-adjust", .text_size_adjust },
         .{ "-webkit-user-select", .user_select },                  .{ "-moz-user-select", .user_select },
-        .{ "-ms-user-select", .user_select },                      .{ "-webkit-tap-highlight-color", .accent_color },
+        .{ "-ms-user-select", .user_select },                      .{ "-webkit-tap-highlight-color", .tap_highlight_color },
         .{ "-webkit-margin-start", .margin_inline_start },         .{ "-webkit-margin-end", .margin_inline_end },
         .{ "-webkit-margin-before", .margin_block_start },         .{ "-webkit-margin-after", .margin_block_end },
         .{ "-webkit-padding-start", .padding_inline_start },       .{ "-webkit-padding-end", .padding_inline_end },
         .{ "-webkit-padding-before", .padding_block_start },       .{ "-webkit-padding-after", .padding_block_end },
         .{ "-webkit-border-horizontal-spacing", .border_spacing }, .{ "grid-column-gap", .column_gap },
-        .{ "grid-row-gap", .row_gap },
+        .{ "grid-row-gap", .row_gap },                             .{ "-webkit-text-fill-color", .text_fill_color },
+        .{ "-webkit-animation-name", .animation_name },            .{ "-webkit-animation-duration", .animation_duration },
+        .{ "-webkit-animation-delay", .animation_delay },          .{ "-webkit-animation-timing-function", .animation_timing_function },
+        .{ "-webkit-animation-iteration-count", .animation_iteration_count }, .{ "-webkit-animation-direction", .animation_direction },
+        .{ "-webkit-animation-fill-mode", .animation_fill_mode },  .{ "-webkit-animation-play-state", .animation_play_state },
+        .{ "-webkit-transition-property", .transition_property },  .{ "-webkit-transition-duration", .transition_duration },
+        .{ "-webkit-transition-delay", .transition_delay },        .{ "-webkit-transition-timing-function", .transition_timing_function },
+        .{ "-webkit-transform-origin", .transform_origin },        .{ "-webkit-clip-path", .clip_path },
+        .{ "-webkit-backdrop-filter", .backdrop_filter },          .{ "-webkit-background-origin", .background_origin },
+        .{ "-webkit-backface-visibility", .backface_visibility },
     });
     return aliases.get(name);
 }
@@ -344,7 +365,7 @@ pub fn phase(p: Prop) u2 {
 /// Whether the property inherits, for `unset`.
 pub fn isInherited(p: Prop) bool {
     return switch (p) {
-        .color_scheme, .direction, .font, .font_size, .font_family, .font_weight, .font_style, .font_variant, .font_variant_numeric, .font_stretch, .line_height, .color, .visibility, .cursor, .pointer_events, .letter_spacing, .word_spacing, .text_align, .text_indent, .white_space, .white_space_collapse, .text_wrap, .text_wrap_mode, .text_transform, .list_style, .list_style_type, .list_style_position, .list_style_image, .border_collapse, .border_spacing, .caption_side, .word_break, .overflow_wrap, .word_wrap, .tab_size => true,
+        .color_scheme, .direction, .font, .font_size, .font_family, .font_weight, .font_style, .font_variant, .font_variant_numeric, .font_stretch, .line_height, .color, .text_fill_color, .text_shadow, .accent_color, .visibility, .cursor, .pointer_events, .letter_spacing, .word_spacing, .text_align, .text_indent, .white_space, .white_space_collapse, .text_wrap, .text_wrap_mode, .text_transform, .list_style, .list_style_type, .list_style_position, .list_style_image, .border_collapse, .border_spacing, .caption_side, .word_break, .overflow_wrap, .word_wrap, .tab_size => true,
         else => false,
     };
 }

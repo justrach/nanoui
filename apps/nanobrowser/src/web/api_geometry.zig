@@ -10,6 +10,9 @@ const layout = @import("../layout/layout.zig");
 const box = @import("../layout/box.zig");
 const view = @import("../page_view.zig");
 const classes = @import("classes.zig");
+const display = @import("../paint/display.zig");
+const css_transform = @import("../css/transform.zig");
+const css_style = @import("../css/style.zig");
 const Node = dom.Node;
 const Value = js.Value;
 const Vm = js.Vm;
@@ -28,7 +31,7 @@ pub fn flushLayout(w: *World) bool {
     const size = p.host.viewport(p.host.ctx);
     const vw = if (p.viewport_w > 0) p.viewport_w else size[0];
     const vh = if (p.viewport_h > 0) p.viewport_h else size[1];
-    if (!p.doc.style_dirty and !p.doc.layout_dirty and p.list != null and vw == p.viewport_w and vh == p.viewport_h) return true;
+    if (!p.doc.style_dirty and !p.doc.layout_dirty and !p.list_dirty and p.list != null and vw == p.viewport_w and vh == p.viewport_h) return true;
     const c = p.host.uiContext(p.host.ctx) orelse return false;
     view.prepare(p, c, vw, vh);
     if (p.list) |*l| l.resolve(p.origin[0], p.origin[1], p.viewport_w, p.viewport_h);
@@ -79,10 +82,27 @@ pub fn docScroll(p: anytype) [2]f32 {
 fn clientRect(w: *World, n: *Node) ?box.Rect {
     if (!flushLayout(w)) return null;
     const b = layout.boxOfNode(n) orelse return null;
-    var r = b.borderRect();
+    var r = transformedRect(n, b.borderRect());
     const o = scrollOffset(w.page, n);
     r.x -= o[0];
     r.y -= o[1];
+    return r;
+}
+
+/// A rect of `n` where the transforms on it and around it put it.
+fn transformedRect(n: *Node, r_in: box.Rect) box.Rect {
+    var r = r_in;
+    var at: ?*Node = n;
+    while (at) |a| : (at = a.parent) {
+        if (a.kind != .element) continue;
+        const s = a.computed orelse continue;
+        if (!s.hasTransform()) continue;
+        const b = layout.boxOfNode(a) orelse continue;
+        if (b.kind == .inline_box) continue;
+        const m = css_transform.of(s, b.w, b.h) orelse continue;
+        const whole = css_style.fx.Mat.translate(b.x, b.y).times(m).times(css_style.fx.Mat.translate(-b.x, -b.y));
+        r = display.boundsOf(whole, r);
+    }
     return r;
 }
 
