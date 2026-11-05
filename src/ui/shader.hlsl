@@ -134,10 +134,14 @@ Varyings quad_vs(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     // A box turned about its pivot (`xf`: the angle, the pivot's x, y), as
     // shader.metal turns it; the spin (`xf.y`) is the CPU's, as raster.zig
     // reads only the angle. The box's own coordinates stay unturned.
-    if (a.xf.x != 0.0 && a.kind != 6.0 && a.kind != 7.0) {
+    bool mapped = a.kind == 8.0 && any(a.border_color != float4(0.0, 0.0, 0.0, 0.0));
+    if ((a.xf.x != 0.0 || mapped) && a.kind != 6.0 && a.kind != 7.0) {
         float2 d = p - a.xf.zw;
         float ca = cos(a.xf.x), sa = sin(a.xf.x);
-        p = a.xf.zw + float2(ca * d.x - sa * d.y, sa * d.x + ca * d.y);
+        d = float2(ca * d.x - sa * d.y, sa * d.x + ca * d.y);
+        // A texture's linear map (`gpu.affine`), after its turn.
+        if (mapped) d = float2(a.border_color.x * d.x + a.border_color.y * d.y, a.border_color.z * d.x + a.border_color.w * d.y);
+        p = a.xf.zw + d;
     }
     // A turn about the vertical axis through the pivot, in perspective.
     float2 landed = float2(a.m.x * p.x + a.m.z * p.y + a.mt.x, a.m.y * p.x + a.m.w * p.y + a.mt.y);

@@ -29,6 +29,25 @@ pub fn metalDevice() ?*anyopaque {
     return @import("metal_app.zig").metalDevice();
 }
 
+/// The Direct3D 11 device (an ID3D11Device) every window draws and
+/// presents with; null where there's no Direct3D 11. A Media Foundation
+/// decoder is bound to it (`IMFDXGIDeviceManager::ResetDevice`) so its
+/// frames draw as `Texture.d3d11_texture` without leaving the GPU. It is
+/// multithread protected. Made the first time it is asked for, on the main
+/// thread; if the GPU is reset another is made and `d3d11DeviceGeneration`
+/// moves on: bind the decoder again then.
+pub fn d3d11Device() ?*anyopaque {
+    if (comptime builtin.os.tag != .windows) return null;
+    const pair = @import("d3d11_device.zig").shared() orelse return null;
+    return @ptrCast(pair.device);
+}
+
+/// Moves on each time `d3d11Device` is a new device (0 before the first).
+pub fn d3d11DeviceGeneration() u64 {
+    if (comptime builtin.os.tag != .windows) return 0;
+    return @import("d3d11_device.zig").generation();
+}
+
 /// A cursor made from pixels (an NSCursor on macOS): `rgba` straight
 /// alpha, `w` × `h`, shown at one point a pixel with its hot spot at
 /// (`hot_x`, `hot_y`) from its top left. Show it with `setCursor`; free it

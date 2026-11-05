@@ -1,32 +1,61 @@
-//! The frame's textures on Direct3D 11 (`ui.texture`, a video's frames): one
-//! dynamic BGRA texture and its shader resource view per slot, written each
-//! frame by mapping it (`Map` with WRITE_DISCARD: the driver hands over a
-//! fresh buffer, so a texture still being read by the last frame is never
-//! waited on). A texture whose pixels are not display BGRA (Y'CbCr planes,
-//! half floats, a LUT) is first made BGRA on the CPU by the colour stage
-//! the CPU renderer uses (`texture_cpu.zig`), so both renderers sample the
-//! same texels. A slot's texture is remade only when its size changes.
+//! The frame's textures on Direct3D 11 (`ui.texture`, a video's frames).
+//!
+//! Pixels the app holds in memory go into one dynamic BGRA texture per slot,
+//! written each frame by mapping it (`Map` with WRITE_DISCARD: the driver
+//! hands over a fresh buffer, so a texture still being read by the last
+//! frame is never waited on). A texture whose pixels are not display BGRA
+//! (Y'CbCr planes, half floats, a LUT) is first made BGRA on the CPU by the
+//! colour stage the CPU renderer uses (`texture_cpu.zig`), so both
+//! renderers sample the same texels. A slot's texture is remade only when
+//! its size changes.
+//!
+//! An app's own ID3D11Texture2D (`Texture.d3d11_texture`, a decoder's
+//! surface on `ui.d3d11Device()`) never leaves the GPU: BGRA is copied into
+//! the slot's target, anything else is copied out of the decoder's array
+//! into a texture the colour stage can sample and converted into the
+//! target by `texture_post.hlsl` (`d3d11_video.zig`). Each is held (AddRef)
+//! until the frame after it is prepared, which is after this one was
+//! presented. Where the colour stage can't be compiled (Wine), or the
+//! texture is another device's, it is read back and uploaded as above.
 const std = @import("std");
 const gpu = @import("gpu.zig");
 const texture_cpu = @import("texture_cpu.zig");
 const api = @import("d3d11_glue.zig");
+const video = @import("d3d11_video.zig");
+const d3d11_device = @import("d3d11_device.zig");
 
 const Com = api.Com;
 const HRESULT = api.HRESULT;
 
-/// One slot's GPU texture: its view, and the size it was made at.
+/// One slot's GPU textures: the dynamic one the CPU writes and its view,
+/// the size it was made at, and for an app's D3D11 texture the target the
+/// GPU copies or converts it into (with the copy the colour stage reads).
 const Entry = struct {
     texture: ?*Com = null,
     srv: ?*Com = null,
     w: u32 = 0,
     h: u32 = 0,
+    target: api.Target = .{},
+    source: video.Source = .{},
 
     fn release(e: *Entry) void {
+        e.releaseDynamic();
+        e.target.deinit();
+        e.source.deinit();
+    }
+
+    fn releaseDynamic(e: *Entry) void {
         if (e.srv) |v| v.release();
         if (e.texture) |t| t.release();
-        e.* = .{};
+        e.texture = null;
+        e.srv = null;
+        e.w = 0;
+        e.h = 0;
     }
 };
+
+/// How the slots drew their textures last frame (for the tests).
+pub const Path = enum { none, cpu, gpu_copy, gpu_post };
 
 pub const Slots = struct {
     gpa: std.mem.Allocator = std.heap.page_allocator,
@@ -34,19 +63,44 @@ pub const Slots = struct {
     /// What each slot samples this frame (`prepare`): null when its pixels
     /// could not be read or uploaded, and the instance then draws nothing.
     ready: std.ArrayList(?*Com) = .empty,
+    paths: std.ArrayList(Path) = .empty,
+    /// The app's textures this frame drew, each with a reference of ours
+    /// until the next frame is prepared.
+    held: std.ArrayList(*Com) = .empty,
+    /// The colour stage, made the first time a texture needs it; `post_failed`
+    /// once it could not be (the CPU converts from then on).
+    post: ?video.Post = null,
+    post_failed: bool = false,
 
     pub fn deinit(s: *Slots) void {
         for (s.entries.items) |*e| e.release();
         s.entries.deinit(s.gpa);
         s.ready.deinit(s.gpa);
+        s.paths.deinit(s.gpa);
+        s.releaseHeld();
+        s.held.deinit(s.gpa);
+        if (s.post) |*p| p.deinit();
+        s.post = null;
     }
 
-    /// Uploads every texture of the frame into its slot's texture.
+    fn releaseHeld(s: *Slots) void {
+        for (s.held.items) |t| t.release();
+        s.held.clearRetainingCapacity();
+    }
+
+    /// Uploads every texture of the frame into its slot's texture. The views
+    /// and render targets this binds are the renderer's to set again after.
     pub fn prepare(s: *Slots, device: *Com, context: *Com, textures: []const gpu.Texture) void {
+        // The last frame was presented before this one is prepared: what it
+        // drew from the app may go back to the app.
+        s.releaseHeld();
         s.ready.clearRetainingCapacity();
+        s.paths.clearRetainingCapacity();
         for (textures, 0..) |t, slot| {
-            const v = s.upload(device, context, t, slot);
+            var path: Path = .none;
+            const v = s.upload(device, context, t, slot, &path);
             s.ready.append(s.gpa, v) catch return;
+            s.paths.append(s.gpa, if (v == null) .none else path) catch return;
         }
     }
 
@@ -55,17 +109,70 @@ pub const Slots = struct {
         return if (slot < s.ready.items.len) s.ready.items[slot] else null;
     }
 
-    fn upload(s: *Slots, device: *Com, context: *Com, t: gpu.Texture, slot: usize) ?*Com {
+    fn entry(s: *Slots, slot: usize) ?*Entry {
+        while (s.entries.items.len <= slot) s.entries.append(s.gpa, .{}) catch return null;
+        return &s.entries.items[slot];
+    }
+
+    fn upload(s: *Slots, device: *Com, context: *Com, t: gpu.Texture, slot: usize, path: *Path) ?*Com {
+        if (t.d3d11_texture) |raw| {
+            const tex: *Com = @ptrCast(@alignCast(raw));
+            if (d3d11_device.deviceOf(tex) == device) {
+                if (s.uploadGpu(device, context, t, tex, slot, path)) |v| return v;
+            }
+        }
+        path.* = .cpu;
+        return s.uploadCpu(device, context, t, slot);
+    }
+
+    /// An app's texture on this device: copied, or through the colour stage,
+    /// into the slot's target. Null to fall back on the CPU.
+    fn uploadGpu(s: *Slots, device: *Com, context: *Com, t: gpu.Texture, tex: *Com, slot: usize, path: *Path) ?*Com {
+        const d = video.describe(tex);
+        if (!video.usable(t, d)) return null;
+        const e = video.effective(t, d);
+        const en = s.entry(slot) orelse return null;
+        en.releaseDynamic();
+        en.target.reserve(device, e.width, e.height, true);
+        const rtv = en.target.rtv orelse return null;
+        if (d.format == api.bgra8 and !e.needsPost()) {
+            s.hold(tex);
+            video.copyBgra(context, en.target.texture.?, tex, t.subresource, .{ .right = e.width, .bottom = e.height });
+            path.* = .gpu_copy;
+            return en.target.srv;
+        }
+        if (s.post == null and !s.post_failed) {
+            s.post = video.Post.init(device) catch |err| blk: {
+                s.post_failed = true;
+                std.log.warn("nanoui: the Direct3D 11 colour stage could not be made ({t}): video frames are converted on the CPU", .{err});
+                break :blk null;
+            };
+        }
+        const p = if (s.post) |*p| p else return null;
+        if (!en.source.take(device, context, tex, t.subresource, d.format, video.boxOf(e, d))) return null;
+        s.hold(tex);
+        p.run(device, context, e, &en.source, rtv, e.width, e.height);
+        path.* = .gpu_post;
+        return en.target.srv;
+    }
+
+    fn hold(s: *Slots, tex: *Com) void {
+        s.held.append(s.gpa, d3d11_device.addRef(tex)) catch {};
+    }
+
+    /// Pixels in memory (or read back from a texture) into the slot's
+    /// dynamic texture.
+    fn uploadCpu(s: *Slots, device: *Com, context: *Com, t: gpu.Texture, slot: usize) ?*Com {
         var held = texture_cpu.resolve(s.gpa, t) orelse return null;
         defer held.deinit(s.gpa);
         const b = held.bgra;
         if (b.width == 0 or b.height == 0) return null;
-        while (s.entries.items.len <= slot) s.entries.append(s.gpa, .{}) catch return null;
-        const e = &s.entries.items[slot];
+        const e = s.entry(slot) orelse return null;
+        e.target.deinit();
         const w: u32 = @intCast(b.width);
         const h: u32 = @intCast(b.height);
         if (e.texture == null or e.w != w or e.h != h) {
-            e.release();
+            e.releaseDynamic();
             const desc: api.Texture2DDesc = .{ .width = w, .height = h, .usage = api.usage_dynamic, .bind = api.bind_shader_resource, .cpu = api.cpu_write };
             var tex: ?*Com = null;
             api.must(device.slot(*const fn (*Com, *const api.Texture2DDesc, ?*const anyopaque, *?*Com) callconv(.winapi) HRESULT, api.CreateTexture2D)(device, &desc, null, &tex), "CreateTexture2D(frame texture)") catch return null;
@@ -74,7 +181,7 @@ pub const Slots = struct {
             e.w = w;
             e.h = h;
             if (e.srv == null) {
-                e.release();
+                e.releaseDynamic();
                 return null;
             }
         }

@@ -59,7 +59,10 @@ pub fn picture(out: gpu.Pixels, i: *const gpu.Instance, p: Source, scale: f32, b
     const hh = i.rect[3] * 0.5;
     const r_abs = @min(@abs(i.radius), @min(hw, hh));
     const r: f32 = if (i.radius < 0) -r_abs else r_abs;
-    const rot = i.xf[0] != 0 or gpu.hasMatrix(i);
+    // Turned, mapped (`gpu.affine`) or under a plane transform
+    // (`Instance.m`): the box's own coordinates decide
+    // what is inside it, not the pixel's.
+    const rot = i.xf[0] != 0 or gpu.affine(i) != null or gpu.hasMatrix(i);
     for (b[1]..b[3]) |y| {
         const wy = (@as(f32, @floatFromInt(y)) + 0.5) * inv;
         const row = y * out.width * 4;
@@ -75,7 +78,8 @@ pub fn picture(out: gpu.Pixels, i: *const gpu.Instance, p: Source, scale: f32, b
             const k = (1 - raster.smoothstep(-aa, aa, sd[0])) * i.color[3] * raster.clipCover(i, wx, wy, inv);
             if (k <= 0) continue;
             const t = samplePicture(p, i.uv[0] + (i.uv[2] - i.uv[0]) * tx, v);
-            if (i.border_color[3] > 0) {
+            // A picture's tint; a texture's border colour is its map (`gpu.affine`).
+            if (i.kind != gpu.Kind.texture and i.border_color[3] > 0) {
                 const a = t[3] * i.border_color[3] * k;
                 raster.blend(out.bytes, row + x * 4, i.border_color[0] * a, i.border_color[1] * a, i.border_color[2] * a, a);
                 continue;

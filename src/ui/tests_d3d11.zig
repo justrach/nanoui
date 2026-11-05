@@ -27,7 +27,9 @@ const d3d11 = @import("d3d11.zig");
 const Limits = struct { mean: f64, worst: u8, off_in: usize };
 
 /// A renderer for a parity test, or `null` when this machine has no Direct3D 11
-/// at all.
+/// at all, or no compiler for its shaders: `d3dcompiler_47` missing, or
+/// Wine's, which compiles too little HLSL for them (`error.ShaderCompilerUnavailable`
+/// only under Wine; on Windows a shader that will not compile still fails).
 ///
 /// The distinction is the point: `error.NoDevice` means there is no device to
 /// test with, and a skip is honest. Every other error — a shader that will not
@@ -36,8 +38,8 @@ const Limits = struct { mean: f64, worst: u8, off_in: usize };
 /// broken shader look like a machine without a GPU.
 pub fn renderer() !?d3d11.Renderer {
     return d3d11.Renderer.init() catch |e| {
-        if (e == error.NoDevice) {
-            std.debug.print("no Direct3D 11 here: {t} ", .{e});
+        if (e == error.NoDevice or e == error.ShaderCompilerMissing or e == error.ShaderCompilerUnavailable) {
+            std.debug.print("no Direct3D 11 renderer here: {t} ", .{e});
             return null;
         }
         std.debug.print("[d3d11] Renderer.init failed: {t}\n", .{e});

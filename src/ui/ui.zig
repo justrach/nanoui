@@ -96,6 +96,7 @@ pub const imageLimits = widgets.imageLimits;
 pub const imageTypeDecodes = widgets.imageTypeDecodes;
 pub const ImageLimits = @import("images.zig").Limits;
 pub const texture = widgets.texture;
+pub const textureAffine = widgets.textureAffine;
 pub const hole = widgets.hole;
 /// A box to draw lines, triangles, polygons and circles in (draw.zig).
 pub const canvas = @import("draw.zig").canvas;
@@ -117,6 +118,8 @@ pub const pixelBufferTexture = @import("pixel_buffer.zig").texture;
 /// The app's own GPU passes before each frame's (`Surface.before_encode`).
 pub const BeforeEncode = @import("gpu.zig").BeforeEncode;
 pub const metalDevice = @import("ui_gpu.zig").metalDevice;
+pub const d3d11Device = @import("ui_gpu.zig").d3d11Device;
+pub const d3d11DeviceGeneration = @import("ui_gpu.zig").d3d11DeviceGeneration;
 /// Cursors from the app's pixels (`Cursor.custom`).
 pub const makeCursor = @import("ui_gpu.zig").makeCursor;
 pub const setCursor = @import("ui_gpu.zig").setCursor;
@@ -250,6 +253,7 @@ test {
     _ = @import("tests_multiline.zig");
     _ = @import("tests_handles.zig");
     _ = @import("tests_texture.zig");
+    _ = @import("tests_texture_affine.zig");
     _ = @import("tests_texture_color.zig");
     _ = @import("tests_lut.zig");
     _ = @import("tests_gpu_hook.zig");
@@ -299,8 +303,13 @@ test {
     if (@import("dwrite.zig").enabled) _ = @import("tests_dwrite.zig");
     if (@import("builtin").os.tag == .windows) _ = @import("tests_d3d11.zig");
     if (@import("builtin").os.tag == .windows) _ = @import("tests_d3d11_texture.zig");
+    // An app's D3D11 textures: the shared device, the colour stage, the slots.
+    if (@import("builtin").os.tag == .windows) _ = @import("tests_d3d11_video.zig");
+    if (@import("builtin").os.tag == .windows) _ = @import("d3d11_device.zig");
+    if (@import("builtin").os.tag == .windows) _ = @import("d3d11_video.zig");
     if (@import("builtin").os.tag == .windows) _ = @import("d3d11_texture.zig");
     _ = @import("icons.zig");
+    _ = @import("frame_pace.zig");
     _ = keys;
     _ = @import("tests_textedit.zig");
     _ = @import("tests_input.zig");

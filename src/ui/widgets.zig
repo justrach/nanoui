@@ -224,6 +224,20 @@ pub fn texture(c: *Context, style: types.Style, source: @import("gpu.zig").Textu
     _ = c.leaf(style, .{ .texture = .{ .slot = slot, .uv = uv, .opacity = opacity } }, null);
 }
 
+/// `texture`, its box mapped by `m`, a 2×2 matrix (row major: x' = m[0]·x
+/// + m[1]·y, y' = m[2]·x + m[3]·y) about the style's rotation anchor (its
+/// middle unless the style says), after the style's rotation: a shear, a
+/// non-uniform scale or a mirror on top of a turn — a compositor's layer
+/// transform, drawn by the GPU as any texture is (and by the CPU renderer
+/// the same). Its rounded corners and its uv go with it; the clip does not.
+pub fn textureAffine(c: *Context, style: types.Style, source: @import("gpu.zig").Texture, uv: [4]f32, opacity: f32, m: [4]f32) void {
+    const slot: u32 = @intCast(c.textures.items.len);
+    c.textures.append(c.gpa, source) catch return;
+    // The identity is no map at all: zero says so to the shaders.
+    const none = m[0] == 1 and m[1] == 0 and m[2] == 0 and m[3] == 1;
+    _ = c.leaf(style, .{ .texture = .{ .slot = slot, .uv = uv, .opacity = opacity, .affine = if (none) .{ 0, 0, 0, 0 } else m } }, null);
+}
+
 /// A see-through box filling its parent, its corners rounded by `radius`:
 /// what's under the frame (a native view: `nanoui.map`) shows there, and
 /// takes the touches that land on it. Returns its id.

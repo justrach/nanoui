@@ -12,6 +12,7 @@ const raster = @import("../ui/raster.zig");
 const types = @import("../ui/types.zig");
 const surface = @import("surface.zig");
 const Surface = surface.Surface;
+const clock = @import("../ui/clock.zig");
 
 /// Whether this frame may go through D3D at all: the window is opaque and no
 /// device failure is known. A layered window's alpha (`opacity` below 1) is
@@ -34,6 +35,8 @@ pub fn paintGpu(self: *Surface, h: w.HWND) bool {
             nameCpu(self);
             return false;
         };
+        // The beat is this swap chain's monitor's from now on.
+        @import("surface_pace.zig").updateOutput(self);
     }
     const p = &self.presenter.?;
     // The drag state is set before the size is given to the swap chain: a drag
@@ -70,7 +73,9 @@ pub fn paintGpu(self: *Surface, h: w.HWND) bool {
     // The frame's textures (`ui.texture`): uploaded into their slots and
     // sampled by the texture instances, as the CPU path draws them.
     g.textures = self.ctx.textures.items;
+    const t_draw = clock.now();
     g.draw(self.instances.items, draw_size, self.scale, bg, @ptrCast(back));
+    const t_present = clock.now();
     // The view asks for the present mode; it can change between frames.
     p.vsync = self.ctx.vsync;
     if (self.dump_enabled and self.dumps == 0) {
@@ -80,11 +85,13 @@ pub fn paintGpu(self: *Surface, h: w.HWND) bool {
         dumpGpuFrame(self, g);
     }
     const ok = p.present();
+    @import("surface_pace.zig").logDraw(self, (t_present - t_draw) * 1000, (clock.now() - t_present) * 1000, p.vsync);
     self.trace("gpu paint: {d}x{d} px, chain {d}x{d}, {d} draws, present 0x{x:0>8} ok={}", .{ pw, ph, p.width, p.height, self.instances.items.len, p.last_hr, ok });
     if (!ok) {
         // The device was lost: both go, and a new pair gets the frame.
         std.log.warn("nanoui: present failed (0x{x:0>8}): the device and swap chain are made again", .{p.last_hr});
         release(self);
+        @import("../ui/d3d11_device.zig").checkLost();
         _ = w.InvalidateRect(h, null, 0);
     }
     return true;
@@ -150,6 +157,7 @@ pub fn present(self: *Surface, h: w.HWND) bool {
         std.log.warn("nanoui: presenting the canvas failed (0x{x:0>8}): the chain is made again", .{p.last_hr});
         p.deinit();
         self.presenter = null;
+        @import("../ui/d3d11_device.zig").checkLost();
         _ = w.InvalidateRect(h, null, 0);
     }
     return true;

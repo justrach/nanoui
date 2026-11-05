@@ -85,20 +85,7 @@ const CreateSamplerState = api.CreateSamplerState;
 
 /// A shader of `source`, entry point `entry`, as `create` makes it.
 fn shader(device: *Com, comptime entry: [:0]const u8, comptime target: [:0]const u8, comptime create: usize) !*Com {
-    var blob: ?*Blob = null;
-    var errors: ?*Blob = null;
-    const compile = D3DCompile() orelse return error.ShaderCompilerMissing;
-    const hr = compile(source, source.len, "shader.hlsl", null, null, entry, target, 0, 0, &blob, &errors);
-    if (errors) |e| {
-        if (hr < 0) std.log.err("nanoui: HLSL {s} ({s}):\n{s}", .{ entry, target, e.bytes()[0..e.size()] });
-        e.release();
-    }
-    try check(hr);
-    const b = blob orelse return error.ShaderCompile;
-    defer b.release();
-    var out: ?*Com = null;
-    try check(device.slot(*const fn (*Com, [*]const u8, usize, ?*anyopaque, *?*Com) callconv(.winapi) HRESULT, create)(device, b.bytes(), b.size(), null, &out));
-    return out orelse error.ShaderCompile;
+    return api.shaderFrom(device, source, "shader.hlsl", entry, target, create);
 }
 
 extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
@@ -178,14 +165,11 @@ pub const Renderer = struct {
     /// and a shader whose `Instance` was 96 bytes instead of 144, and printed
     /// numbers from an earlier, working build while doing it.
     pub fn init() !Renderer {
-        var device: ?*Com = null;
-        var context: ?*Com = null;
-        if (D3D11CreateDevice(null, 1, null, bgra_support, null, 0, sdk_version, &device, null, &context) < 0) {
-            if (D3D11CreateDevice(null, 5, null, bgra_support, null, 0, sdk_version, &device, null, &context) < 0)
-                return error.NoDevice;
-        }
-        const dev = device orelse return error.NoDevice;
-        const ctx = context orelse return error.NoDevice;
+        // Made as the app's shared device is (`d3d11_device.zig`): video
+        // support where there is some, multithread protected.
+        const pair = try @import("d3d11_device.zig").create();
+        const dev = pair.device;
+        const ctx = pair.context;
         errdefer {
             ctx.release();
             dev.release();
@@ -310,6 +294,10 @@ pub const Renderer = struct {
         if (f.rtv == null or f.srv == null) return;
         r.frame_w = w;
         r.frame_h = h;
+        // The textures first: an app's D3D11 texture may be converted by the
+        // colour stage, which draws into its slot's target with a viewport
+        // of its own, so the frame's target and viewport are set after it.
+        r.slots.prepare(r.device, g, r.textures);
 
         setViewport(g, @floatFromInt(w), @floatFromInt(h));
         bindTarget(g, f.rtv.?);
@@ -318,7 +306,6 @@ pub const Renderer = struct {
         // The instances go up first: `setState` binds their view, and on the
         // first frame the buffer and its view are only made by the upload.
         r.uploadInstances(instances);
-        r.slots.prepare(r.device, g, r.textures);
         r.setState();
 
         var first: usize = 0;

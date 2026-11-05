@@ -73,7 +73,7 @@ vertex VOut vs(uint vid [[vertex_id]], uint iid [[instance_id]],
     } else if (i.kind == 7.0) {
         // The triangle itself: its third corner twice.
         p = vid == 0 ? i.uv.xy : (vid == 1 ? i.uv.zw : i.border_color.xy);
-    } else if (angle != 0.0 || i.pulse.x > 0.0) {
+    } else if (angle != 0.0 || i.pulse.x > 0.0 || (i.kind == 8.0 && any(i.border_color != float4(0.0)))) {
         float2 d = p - i.xf.zw;
         if (i.pulse.x > 0.0) {
             float s = 0.5 - 0.5 * cos(2.0 * M_PI_F * time / i.pulse.x);
@@ -85,6 +85,12 @@ vertex VOut vs(uint vid [[vertex_id]], uint iid [[instance_id]],
             float ca = cos(angle);
             float sa = sin(angle);
             d = float2(ca * d.x - sa * d.y, sa * d.x + ca * d.y);
+        }
+        // A texture's linear map (`gpu.affine`), after its turn: a shear,
+        // a scale, a mirror. Its corners carry `local` and `uv` with them.
+        if (i.kind == 8.0 && any(i.border_color != float4(0.0))) {
+            float4 m = i.border_color;
+            d = float2(m.x * d.x + m.y * d.y, m.z * d.x + m.w * d.y);
         }
         p = i.xf.zw + d;
     }

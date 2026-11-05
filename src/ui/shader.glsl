@@ -62,7 +62,7 @@ void main() {
     } else if (a_misc.z == 7.0) {
         // The triangle itself: its third corner twice.
         p = gl_VertexID == 0 ? a_uv.xy : (gl_VertexID == 1 ? a_uv.zw : a_border_color.xy);
-    } else if (angle != 0.0 || a_pulse.x > 0.0) {
+    } else if (angle != 0.0 || a_pulse.x > 0.0 || (a_misc.z == 8.0 && any(notEqual(a_border_color, vec4(0.0))))) {
         vec2 d = p - a_xf.zw;
         if (a_pulse.x > 0.0) {
             float s = 0.5 - 0.5 * cos(6.28318530718 * time / a_pulse.x);
@@ -73,6 +73,11 @@ void main() {
         if (angle != 0.0) {
             float ca = cos(angle), sa = sin(angle);
             d = vec2(ca * d.x - sa * d.y, sa * d.x + ca * d.y);
+        }
+        // A texture's linear map (`gpu.affine`), after its turn.
+        if (a_misc.z == 8.0 && any(notEqual(a_border_color, vec4(0.0)))) {
+            vec4 m = a_border_color;
+            d = vec2(m.x * d.x + m.y * d.y, m.z * d.x + m.w * d.y);
         }
         p = a_xf.zw + d;
     }

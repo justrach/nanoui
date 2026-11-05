@@ -93,10 +93,40 @@ pub const Kind = struct {
     pub const hole: f32 = 12;
 };
 
+/// A texture's linear map (`Kind.texture` with `border_color` set, from
+/// `ui.textureAffine`): its 2×2 matrix (row major) after its turn by
+/// `xf[0]`, folded into one, applied about the pivot `xf[2..4]`. Null for
+/// every other instance.
+pub fn affine(i: *const Instance) ?[4]f32 {
+    if (i.kind != Kind.texture) return null;
+    const m = i.border_color;
+    if (m[0] == 0 and m[1] == 0 and m[2] == 0 and m[3] == 0) return null;
+    const ca = @cos(i.xf[0]);
+    const sa = @sin(i.xf[0]);
+    // M · R, where R turns by the angle: [ca, -sa; sa, ca].
+    return .{ m[0] * ca + m[1] * sa, -m[0] * sa + m[1] * ca, m[2] * ca + m[3] * sa, -m[2] * sa + m[3] * ca };
+}
+
+test "a texture's linear map folds its turn in, and is nothing on other instances" {
+    var i: Instance = .{ .rect = .{ 0, 0, 10, 10 }, .color = .{ 1, 1, 1, 1 }, .kind = Kind.texture, .border_color = .{ 1, 0.5, 0, 1 } };
+    try std.testing.expectEqual([4]f32{ 1, 0.5, 0, 1 }, affine(&i).?);
+    i.xf = .{ std.math.pi / 2.0, 0, 5, 5 };
+    const m = affine(&i).?;
+    // A shear after a quarter turn: x' = 0.5·x - y, y' = x.
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), m[0], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, -1), m[1], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 1), m[2], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), m[3], 1e-6);
+    i.kind = Kind.image;
+    try std.testing.expect(affine(&i) == null);
+}
+
 /// Pixels the app gives a frame to show (`ui.texture`), changing as often
 /// as it likes: a video's frames. On macOS a CVPixelBuffer (Metal
 /// compatible) is wrapped as a texture without a copy, a plane at a time;
-/// an app's own MTLTexture (`mtl_texture`) is drawn as it is; else, or for
+/// an app's own MTLTexture (`mtl_texture`) is drawn as it is; on Windows an
+/// ID3D11Texture2D (`d3d11_texture`: a Media Foundation decoder's NV12 or
+/// P010 output, or BGRA) is copied and converted on the GPU; else, or for
 /// the CPU renderer, `bgra` (premultiplied, `stride` bytes a row, 0 for
 /// `width * 4`) is drawn. A frame that isn't BGRA, or that has a LUT, is
 /// first made display sRGB at its own size by the colour stage
@@ -115,6 +145,18 @@ pub const Texture = struct {
     /// frame is drawn. A float or sRGB one holds linear light and is
     /// encoded for the display; any other is shown as its values are.
     mtl_texture: ?*anyopaque = null,
+    /// An app's ID3D11Texture2D, made on `ui.d3d11Device()` (a decoder
+    /// bound to it with `IMFDXGIDeviceManager::ResetDevice`), and the
+    /// subresource shown: a decoder's surfaces are one texture array, a
+    /// frame its slice. Its DXGI format says what its pixels are (NV12
+    /// `ycbcr420_8`, P010 `ycbcr420_10`, BGRA `bgra8`, RGBA half floats
+    /// `rgba16f`) whatever `format` says; `range`, `matrix`, `transfer` and
+    /// the LUTs apply as to any texture. The app keeps it alive until the
+    /// frame is drawn, and nanoui holds a reference of its own until the
+    /// frame after it, so a decoder may recycle the surface once the next
+    /// frame is built. One made on another device is read back by the CPU.
+    d3d11_texture: ?*anyopaque = null,
+    subresource: u32 = 0,
     format: Format = .bgra8,
     range: Range = .video,
     matrix: Matrix = .bt709,

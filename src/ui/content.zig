@@ -21,6 +21,9 @@ pub const Content = union(enum) {
         slot: u32,
         uv: [4]f32 = .{ 0, 0, 1, 1 },
         opacity: f32 = 1,
+        /// A 2×2 linear map (row major) of the box about its rotation
+        /// anchor, after its rotation (`ui.textureAffine`); zero for none.
+        affine: [4]f32 = .{ 0, 0, 0, 0 },
     };
 
     /// A picture: its key in the image atlas, and its bytes for the first
