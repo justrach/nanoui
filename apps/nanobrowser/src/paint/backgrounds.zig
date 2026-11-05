@@ -90,7 +90,12 @@ pub fn picture(c: *ui.Context, bg: display.Kind.Background, bytes: []const u8, p
         const v = replay.svgSize(bytes) orelse [2]f32{ at.ow, at.oh };
         break :blk .{ .w = v[0], .h = v[1] };
     } else ui.imageSize(c, bg.url, bytes) orelse return;
-    const size = tileSize(layer.size, own, at.ow, at.oh);
+    var size = tileSize(layer.size, own, at.ow, at.oh);
+    // A shape with a ratio and no size of its own fits the box whole.
+    if (svg and layer.size.kind == .auto and !layer.size.x.isLength() and !layer.size.y.isLength() and replay.svgOwn(bytes).size == null) {
+        const k = @min(at.ow / @max(own.w, 1), at.oh / @max(own.h, 1));
+        size = .{ .w = own.w * k, .h = own.h * k };
+    }
     if (size.w <= 0 or size.h <= 0) return;
     const x0 = at.ox + (at.ow - size.w) * layer.pos.x_pct / 100 + layer.pos.x_px;
     const y0 = at.oy + (at.oh - size.h) * layer.pos.y_pct / 100 + layer.pos.y_px;
@@ -122,7 +127,7 @@ fn tile(c: *ui.Context, key: []const u8, bytes: []const u8, svg: bool, x: f32, y
     _ = c.open(.{ .absolute = true, .offset = .{ .x = x, .y = y } }, null);
     defer c.end();
     if (svg) {
-        _ = ui.svg(c, .{ .key = key, .bytes = bytes, .width = w, .height = h });
+        _ = ui.svg(c, .{ .key = key, .bytes = bytes, .width = w, .height = h, .current = ui.Color.black });
         return;
     }
     _ = ui.image(c, .{ .key = key, .bytes = bytes, .box = .{ .w = w, .h = h }, .radius = 0 });

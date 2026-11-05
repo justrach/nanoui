@@ -98,6 +98,12 @@ fn signature(p: *Page, root: *Node, w: f32, h: f32) u64 {
         if (n.kind != .element) continue;
         const c: usize = if (n.computed) |s| @intFromPtr(s) else 0;
         hash.update(std.mem.asBytes(&c));
+        // A paint-only restyle writes over the style where it is, so its address
+        // says nothing of what it now holds.
+        if (n.computed) |s| {
+            hash.update(std.mem.asBytes(&s.color));
+            hash.update(std.mem.asBytes(&s.svg));
+        }
     }
     return hash.final();
 }

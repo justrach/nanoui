@@ -341,12 +341,6 @@ def(g, "PerformanceNavigation", PerformanceNavigation);
 if (!performance.navigation) performance.navigation = new PerformanceNavigation();
 class PerformanceObserver { constructor(cb) { this.cb = cb; } observe() {} disconnect() {} takeRecords() { return []; } static get supportedEntryTypes() { return []; } }
 def(g, "PerformanceObserver", PerformanceObserver);
-class PerformanceNavigation {
-  static get TYPE_NAVIGATE() { return 0; }
-  static get TYPE_RELOAD() { return 1; }
-  static get TYPE_BACK_FORWARD() { return 2; }
-  static get TYPE_RESERVED() { return 255; }
-}
 for (const c of [PerformanceEntry, PerformanceNavigation, class PerformanceTiming {}, class PerformanceResourceTiming extends PerformanceEntry {}, class PerformanceNavigationTiming extends PerformanceEntry {}, class PerformanceMark extends PerformanceEntry {}, class PerformanceMeasure extends PerformanceEntry {}, class PerformancePaintTiming extends PerformanceEntry {}]) def(g, c.name, c);
 
 // matchMedia, its `change` events from a viewport or theme change.

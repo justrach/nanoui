@@ -116,8 +116,9 @@ pub fn prepare(p: *Page, c: *ui.Context, w: f32, h: f32) void {
     if (p.doc.layout_dirty or p.list == null) {
         relayout(p, c);
     } else if (p.list_dirty or p.doc.svg_dirty) {
-        // What an SVG's markup comes to is on the list.
-        if (p.doc.svg_dirty) svg_markup.refresh(p);
+        // What an SVG's markup comes to is on the list, and its colors may be
+        // what a paint-only change changed.
+        svg_markup.refresh(p);
         var fonts: Fonts = .{ .p = p, .c = c };
         makeList(p, p.tree.?, fonts.measurer());
     }

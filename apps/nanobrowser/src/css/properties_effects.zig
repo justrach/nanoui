@@ -34,9 +34,14 @@ pub fn apply(ctx: *Ctx, p: Prop, t: []const Token) ?bool {
             s.outline_offset = values.pxAt(ctx, &c) orelse return false;
             return c.atEnd();
         },
-        .isolation, .mix_blend_mode, .will_change, .contain => {
+        .isolation, .mix_blend_mode, .will_change => {
             s.makes_context = makesContext(p, t);
             return true;
+        },
+        // `properties_flow.zig` takes what it does to sizes.
+        .contain => {
+            s.makes_context = makesContext(p, t);
+            return null;
         },
         .appearance => {
             const w = values.ident(t) orelse return false;

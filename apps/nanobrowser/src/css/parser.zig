@@ -280,8 +280,9 @@ const P = struct {
         }
         if (is(name, "property")) {
             if (pre.len == 0) return p.skipBlock();
-            const decls = try p.declarationBlock();
+            // Before the block: what it parses may move `temp`, where `pre` is.
             var rule: sheet.PropertyRule = .{ .name = pre[0].text };
+            const decls = try p.declarationBlock();
             for (decls.items) |d| {
                 if (is(d.name, "initial-value")) rule.initial = d.value;
                 if (is(d.name, "inherits") and d.value.len > 0) rule.inherits = !d.value[0].isIdent("false");

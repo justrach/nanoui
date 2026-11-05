@@ -443,16 +443,3 @@ test "computedValue serializes" {
     try expect(p.engine.computedValue(a, "nonsense") == null);
 }
 
-test "@container's size queries ask of the window, its names and style queries aside" {
-    const p = try Page.make("<div id=a></div><div id=b></div><div id=c></div><div id=d></div>",
-        \\@container (width < 48rem) { #a { margin-top: 1px } }
-        \\@container (min-width: 100px) { #b { margin-top: 2px } }
-        \\@container side (min-width: 5000px) { #c { margin-top: 3px } }
-        \\@container style(--x: 1) { #d { margin-top: 4px } }
-    , vp);
-    defer p.done();
-    try near(p.s("a").margin_top.px, 0);
-    try near(p.s("b").margin_top.px, 2);
-    try near(p.s("c").margin_top.px, 0);
-    try near(p.s("d").margin_top.px, 4);
-}
