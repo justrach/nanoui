@@ -11,6 +11,7 @@ const cookies = @import("cookies.zig");
 const conv = @import("../js/conv.zig");
 const typed = @import("../js/b_typed.zig");
 const page_mod = @import("../page.zig");
+const world_mod = @import("world.zig");
 const Page = page_mod.Page;
 const Value = js.Value;
 const Vm = js.Vm;
@@ -164,6 +165,7 @@ fn request(vm: *Vm, _: Value, args: []const Value) Error!Value {
             bytes = raw[0..@min(raw.len, typed.length(o) * typed.elemSize(o.payload.typed.kind))];
         }
     }
+    if (world_mod.log_to_stderr) std.debug.print("[net] {s} {s} ({s})\n", .{ method, url[0..@min(url.len, 110)], if (p.worker != null) "worker" else "page" });
     const cb = bind.arg(args, 4);
     try vm.protect(cb);
     const r = try p.gpa.create(Req);
@@ -191,6 +193,7 @@ fn answered(r: *Req, res: http.Response) void {
     w.vm.unprotect(cb);
     if (p.dead or w.stopped) return;
     storeCookies(res, res.url);
+    if (world_mod.log_to_stderr) std.debug.print("[net] {d} {s} {s}\n", .{ res.status, asked[0..@min(asked.len, 90)], res.err });
     if (res.status != 0 and !readable(p, asked, res)) {
         var buf: [320]u8 = undefined;
         w.logLine(2, std.fmt.bufPrint(&buf, "Blocked by CORS: {s}", .{asked[0..@min(asked.len, 280)]}) catch "Blocked by CORS");

@@ -302,7 +302,7 @@ fn drawFrame(p: *Page, c: *ui.Context, x: f32, y: f32, r: box.Rect) void {
     defer c.end();
     web.paintStart(p);
     replay.replay(c, l, Replay{ .p = p }, r);
-    scrollbar(c, l, r);
+    if (!noScrolling(p)) scrollbar(c, l, r);
     controls.selectList(p, c, r);
     web.paintEnd(p);
     web.frameEnd(p, c);
@@ -335,7 +335,16 @@ fn wheelThrough(p: *Page, x: f32, y: f32, dx: f32, dy: f32) void {
     wheel(p, l, x, y, dx, dy);
 }
 
+/// An `<iframe scrolling=no>`: its page stays where it is, with no bar.
+fn noScrolling(p: *const Page) bool {
+    const f = p.frame orelse return false;
+    const v = f.node.attr("scrolling") orelse return false;
+    const eq = std.ascii.eqlIgnoreCase;
+    return eq(v, "no") or eq(v, "noscroll") or eq(v, "off");
+}
+
 fn canScroll(p: *Page, x: f32, y: f32, dx: f32, dy: f32) bool {
+    if (noScrolling(p)) return false;
     const l = if (p.list) |*q| q else return false;
     const n = l.hit(x, y);
     if (n) |e| if (e.isTag("iframe")) if (frames.childPage(p, e)) |child| {

@@ -96,6 +96,10 @@ pub const Page = struct {
     /// Its `<iframe>`s, and when it is in one, that one.
     frames: frames_mod.Frames = .{},
     frame: ?*frames_mod.Frame = null,
+    /// The worker this page is the scripts of: it has no window and draws nothing.
+    worker: ?*@import("web/api_worker.zig").Worker = null,
+    /// The workers its scripts started.
+    workers: std.ArrayList(*@import("web/api_worker.zig").Worker) = .empty,
     /// The number other pages' scripts know it by; 0 until one asks.
     id: u32 = 0,
     /// A wheel over this frame was taken by what's outside it.
@@ -162,6 +166,7 @@ pub const Page = struct {
         p.dead = true;
         p.busy += 1;
         frames_mod.destroyAll(p);
+        @import("web/api_worker.zig").destroyAll(p);
         p.host.retire(p.host.ctx, p);
     }
 

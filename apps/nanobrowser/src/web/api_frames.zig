@@ -229,6 +229,17 @@ fn postTo(vm: *Vm, _: Value, args: []const Value) Error!Value {
     return Value.undefined;
 }
 
+/// `$.portSend(page, port, text)`: what a port's partner in another world is sent.
+fn portSend(vm: *Vm, _: Value, args: []const Value) Error!Value {
+    const target = pageArg(args, 0) orelse return Value.undefined;
+    if (target.dead) return Value.undefined;
+    const tw = target.js orelse return Value.undefined;
+    if (!tw.h.portMessage.isCallable()) return Value.undefined;
+    const text = try tw.vm.newString(try bind.str(vm, args, 2));
+    _ = try tw.timers.add(tw, tw.h.portMessage, 0, &.{ bind.arg(args, 1), text }, false);
+    return Value.undefined;
+}
+
 /// A cross-origin window's `location = ...`: only ever a navigation.
 fn navigateFrame(vm: *Vm, _: Value, args: []const Value) Error!Value {
     const w = bind.world(vm);
@@ -278,6 +289,7 @@ pub const internals = [_]bind.Method{
     .{ .name = "callerPage", .arity = 0, .f = caller },
     .{ .name = "pageOrigin", .arity = 1, .f = pageOrigin },
     .{ .name = "postTo", .arity = 3, .f = postTo },
+    .{ .name = "portSend", .arity = 3, .f = portSend },
     .{ .name = "navigateFrame", .arity = 2, .f = navigateFrame },
     .{ .name = "pageId", .arity = 0, .f = pageId },
     .{ .name = "topLayer", .arity = 3, .f = topLayer },

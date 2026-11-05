@@ -141,6 +141,7 @@ fn send(p: *Page, url_in: []const u8, method: []const u8, body: []const u8, kind
     // what it was for fails the usual way.
     const is_document = kind == .document;
     const url = if (!is_document and !net.allowed(p.final_url, url_in)) "data:," else url_in;
+    if (@import("web/world.zig").log_to_stderr) std.debug.print("[net] {s} {s} ({s})\n", .{ method, url[0..@min(url.len, 110)], @tagName(kind) });
     const r = p.gpa.create(Req) catch return;
     r.* = .{ .page = p, .gpa = p.gpa, .kind = kind };
     p.pending += 1;
@@ -247,7 +248,7 @@ pub fn scan(p: *Page) void {
     if (dropGone(p)) changed = true;
     if (changed) p.sheets.apply(p);
     frames.sweep(p);
-    if (!p.icon_asked and p.state != .failed and !std.mem.startsWith(u8, p.final_url, "file:")) {
+    if (!p.icon_asked and p.worker == null and p.state != .failed and !std.mem.startsWith(u8, p.final_url, "file:")) {
         p.icon_asked = true;
         if (resolve(p, "/favicon.ico")) |u| send(p, u, "GET", "", .{ .icon = u });
     }

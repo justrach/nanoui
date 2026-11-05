@@ -34,7 +34,9 @@ fn worldFor(p: *Page) ?*World {
 /// for anything that might answer at once.
 pub fn parsed(p: *Page) void {
     if (p.no_scripts) return;
-    if (scripts.hasScripts(p.doc)) _ = worldFor(p);
+    if (!scripts.hasScripts(p.doc)) return;
+    const w = worldFor(p) orelse return;
+    if (p.worker != null) @import("prelude.zig").workerScope(w) catch |e| w.report(e);
 }
 
 /// The world of a page another page's script has reached for, made if it had none.

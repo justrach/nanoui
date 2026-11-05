@@ -155,22 +155,35 @@ $.hook("frameObservers", () => {
 });
 for (const c of [MutationObserver, MutationRecord, ResizeObserver, ResizeObserverEntry, IntersectionObserver, IntersectionObserverEntry]) def(g, c.name, c);
 
-// Message channels: within the page, a task apart, as `postMessage` is.
+// Message channels: a task apart, as `postMessage` is. A port sent elsewhere stays
+// entangled with its partner through page and port numbers: until the far side has
+// said where it is (`L`), what's posted waits here (`_limbo`).
+const portIds = new Map();
+let nextPort = 1;
 class MessagePort extends EventTarget {
-  _peer = null; _onmessage = null; _started = false; _queue = [];
+  _peer = null; _remote = null; _limbo = null; _onmessage = null; _started = false; _queue = [];
   get onmessage() { return this._onmessage; }
   set onmessage(f) { this._onmessage = f; this.start(); }
   onmessageerror = null;
-  start() { this._started = true; for (const d of this._queue.splice(0)) this._deliver(d); }
-  close() { this._peer = null; }
-  postMessage(data) {
+  start() { this._started = true; for (const m of this._queue.splice(0)) this._deliver(m); }
+  close() { this._peer = null; this._remote = null; this._limbo = null; }
+  postMessage(data, transfer) {
+    if (this._remote || this._limbo) {
+      const text = $.wire(data, transfer);
+      if (this._remote) $.portSend(this._remote.page, this._remote.id, "M" + text);
+      else this._limbo.push(text);
+      return;
+    }
     const to = this._peer;
     if (!to) return;
-    const copy = g.structuredClone(data);
-    g.setTimeout(() => { if (to._started) to._deliver(copy); else to._queue.push(copy); }, 0);
+    const m = { data: g.structuredClone(data), ports: $.transferred(transfer) };
+    // Held at the port from now, not from the next task: it may be sent on before then.
+    if (to._started) g.setTimeout(() => to._arrive(m), 0);
+    else to._queue.push(m);
   }
-  _deliver(data) {
-    const e = new MessageEvent("message", { data, source: null });
+  _arrive(m) { if (this._started) this._deliver(m); else this._queue.push(m); }
+  _deliver(m) {
+    const e = new MessageEvent("message", { data: m.data, ports: m.ports, source: null });
     if (typeof this._onmessage === "function") { try { this._onmessage(e); } catch (x) { $.reportError(x); } }
     this.dispatchEvent(e);
   }
@@ -181,6 +194,41 @@ class MessageChannel {
     this.port1._peer = this.port2; this.port2._peer = this.port1;
   }
 }
+// A port leaving this VM: what its other side needs to find its partner.
+$.portOut = (p) => {
+  const out = { page: 0, id: 0, queue: p._queue.splice(0).map((m) => $.wire(m.data, m.ports)) };
+  if (p._remote) {
+    out.page = p._remote.page; out.id = p._remote.id;
+  } else if (p._peer) {
+    const q = p._peer;
+    q._peer = null; q._limbo = []; q._id = nextPort++;
+    portIds.set(q._id, q);
+    out.page = $.pageId(); out.id = q._id;
+  }
+  p._peer = null; p._remote = null; p._limbo = null;
+  return out;
+};
+$.portIn = (entry) => {
+  const p = new MessagePort();
+  p._id = nextPort++;
+  portIds.set(p._id, p);
+  if (entry.page) {
+    p._remote = { page: entry.page, id: entry.id };
+    $.portSend(entry.page, entry.id, "L" + $.pageId() + ":" + p._id);
+  }
+  for (const t of entry.queue) p._queue.push($.unwire(t));
+  return p;
+};
+$.hook("portMessage", (id, text) => {
+  const p = portIds.get(id);
+  if (!p) return;
+  if (text[0] === "L") {
+    const [page, at] = text.slice(1).split(":").map(Number);
+    p._remote = { page, id: at };
+    for (const t of p._limbo || []) $.portSend(page, at, "M" + t);
+    p._limbo = null;
+  } else p._arrive($.unwire(text.slice(1)));
+});
 const channels = new Map();
 class BroadcastChannel extends EventTarget {
   onmessage = null;

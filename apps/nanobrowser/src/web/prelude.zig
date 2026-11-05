@@ -22,6 +22,7 @@ const eager = [_]Chunk{
     .{ .name = "prelude:events", .source = @embedFile("prelude_events.js") },
     .{ .name = "prelude:dom", .source = @embedFile("prelude_dom.js") },
     .{ .name = "prelude:elements", .source = @embedFile("prelude_elements.js") },
+    .{ .name = "prelude:wire", .source = @embedFile("prelude_wire.js") },
     .{ .name = "prelude:window", .source = @embedFile("prelude_window.js") },
 };
 
@@ -29,6 +30,7 @@ const lazy = [_]Chunk{
     .{ .name = "prelude:url", .source = @embedFile("prelude_url.js"), .globals = &.{ "URL", "URLSearchParams", "webkitURL" } },
     .{ .name = "prelude:net", .source = @embedFile("prelude_net.js"), .globals = &.{ "fetch", "Headers", "Request", "Response", "XMLHttpRequest", "FormData", "Blob", "File", "FileReader", "ProgressEvent", "AbortController", "AbortSignal", "TextEncoder", "TextDecoder", "structuredClone", "ReadableStream", "XMLHttpRequestEventTarget", "XMLHttpRequestUpload" } },
     .{ .name = "prelude:observers", .source = @embedFile("prelude_observers.js"), .globals = &.{ "MutationObserver", "MutationRecord", "ResizeObserver", "ResizeObserverEntry", "IntersectionObserver", "IntersectionObserverEntry", "MessageChannel", "MessagePort", "BroadcastChannel", "DOMParser", "XMLSerializer", "Range", "Selection", "NodeFilter", "TreeWalker", "NodeIterator", "getSelection" } },
+    .{ .name = "prelude:worker", .source = @embedFile("prelude_worker.js"), .globals = &.{"Worker"} },
 };
 
 fn platformName() []const u8 {
@@ -65,6 +67,11 @@ fn loadChunk(w: *World, i: usize) Error!void {
     if (w.chunks_loaded & (@as(u32, 1) << @intCast(i)) != 0) return;
     w.chunks_loaded |= @as(u32, 1) << @intCast(i);
     try runChunk(w, &lazy[i]);
+}
+
+/// What makes a worker's global a worker's: before its first script.
+pub fn workerScope(w: *World) Error!void {
+    try loadChunk(w, lazy.len - 1);
 }
 
 fn runChunk(w: *World, c: *const Chunk) Error!void {

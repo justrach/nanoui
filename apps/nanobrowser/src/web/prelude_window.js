@@ -440,7 +440,7 @@ g.open = function open(url) {
   if (url !== undefined && url !== "") $.navigate(String(url), true);
   return null;
 };
-g.postMessage = function postMessage(data, target) {
+g.postMessage = function postMessage(data, target, transfer) {
   const from = $.callerPage();
   const want = typeof target === "object" && target ? target.targetOrigin : target;
   if (want !== undefined && want !== "*" && want !== "/" && String(want) !== ($.pageOrigin() === "null" ? "null" : new g.URL(String(want), location.href).origin)) { /* its own origin only */ }
@@ -450,13 +450,14 @@ g.postMessage = function postMessage(data, target) {
   const origin = from ? $.pageOrigin(from) : $.pageOrigin();
   const source = from ? $.windowOfPage(from) : g;
   g.setTimeout(() => {
-    const e = new MessageEvent("message", { data: copy, origin, source });
+    const e = new MessageEvent("message", { data: copy, origin, source, ports: $.transferred(transfer ?? target) });
     e.isTrusted = true;
     $.dispatch(g, e);
   }, 0);
 };
 $.hook("deliverMessage", (text, origin, from) => {
-  const e = new MessageEvent("message", { data: JSON.parse(text).v, origin, source: $.windowOfPage(from) });
+  const m = $.unwire(text);
+  const e = new MessageEvent("message", { data: m.data, ports: m.ports, origin, source: $.windowOfPage(from) });
   e.isTrusted = true;
   $.dispatch(g, e);
 });
@@ -467,9 +468,9 @@ $.hook("makeRemote", (peer, id, callable) => {
   let p = remotes.get(key);
   if (p) return p;
   const call = (op, a, b) => $.remote(op, peer, id, a, b);
-  const field = (k) => (typeof k === "symbol" ? undefined : k);
+  const send = (data, target, transfer) => $.postTo(peer, $.wire(data, transfer ?? target), String((typeof target === "object" && target ? target.targetOrigin : target) ?? "/"));
   p = new Proxy(callable ? function () {} : {}, {
-    get(_, k) { return typeof k === "symbol" ? (k === Symbol.toStringTag ? call(0, "constructor")?.name : undefined) : call(0, k); },
+    get(_, k) { if (k === "postMessage" && !callable && call(9)) return send; return typeof k === "symbol" ? (k === Symbol.toStringTag ? call(0, "constructor")?.name : undefined) : call(0, k); },
     set(_, k, v) { if (typeof k !== "symbol") call(1, k, v); return true; },
     has(_, k) { return typeof k !== "symbol" && call(2, k); },
     deleteProperty(_, k) { return typeof k === "symbol" || call(3, k); },
@@ -482,7 +483,6 @@ $.hook("makeRemote", (peer, id, callable) => {
     apply(_, self, args) { return call(6, self, args); },
     construct(_, args) { return call(7, args); },
   });
-  void field;
   remotes.set(key, p);
   return p;
 });
@@ -497,6 +497,7 @@ $.hook("remoteOp", (op, o, a, b) => {
     case 6: return Reflect.apply(o, a, Array.from(b));
     case 7: return Reflect.construct(o, Array.from(a));
     case 8: return Object.getPrototypeOf(o);
+    case 9: return o === g;
   }
 });
 // A window of another origin: it can be sent messages and sent elsewhere, and little else.
@@ -510,7 +511,7 @@ $.hook("crossWindow", (id) => {
     set(_, k, v) { if (k === "href") { $.navigateFrame(id, String(v)); return true; } blocked(k); },
   });
   const known = {
-    postMessage(data, target) { $.postTo(id, JSON.stringify({ v: data }), String((typeof target === "object" && target ? target.targetOrigin : target) ?? "/")); },
+    postMessage(data, target, transfer) { $.postTo(id, $.wire(data, transfer ?? target), String((typeof target === "object" && target ? target.targetOrigin : target) ?? "/")); },
     focus() {}, blur() {}, close() {},
     closed: false,
   };

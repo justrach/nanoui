@@ -213,6 +213,16 @@ pub fn late(node: *Node, ctx: *values.Ctx) void {
     if (is(tag, "ol") or is(tag, "ul") or is(tag, "li")) listHints(node, s);
     if (is(tag, "img") or is(tag, "object") or is(tag, "embed")) imageHints(node, s);
     if (is(tag, "hr")) hrHints(node, ctx);
+    // Whatever doesn't read as a nonzero number turns it off (`0`, `no`).
+    if (is(tag, "iframe")) if (node.attr("frameborder")) |v| {
+        const on = std.fmt.parseInt(i32, std.mem.trim(u8, v, " \t\r\n"), 10) catch 0;
+        if (on == 0) {
+            s.border_top.width = 0;
+            s.border_right.width = 0;
+            s.border_bottom.width = 0;
+            s.border_left.width = 0;
+        }
+    };
 }
 
 /// SVG's attributes that are style: read as CSS, below every author rule.
