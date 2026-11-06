@@ -25,6 +25,15 @@ pub fn build(b: *std.Build) void {
     run.addPassthruArgs();
     b.step("run", "Run nanobrowser").dependOn(&run.step);
 
+    // The engine alone, for tc39/test262 (`tools/parity/test262.mjs`).
+    const host262 = b.addExecutable(.{ .name = "test262-host", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/js/test262_host.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    b.step("test262-host", "Build the test262 host").dependOn(&b.addInstallArtifact(host262, .{}).step);
+
     const filters = b.option([]const []const u8, "test-filter", "Run only tests with this in their name") orelse &.{};
     const tests = b.addTest(.{ .filters = filters, .root_module = b.createModule(.{
         .root_source_file = b.path("src/tests.zig"),
