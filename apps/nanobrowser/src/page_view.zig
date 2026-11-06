@@ -239,6 +239,10 @@ const Replay = struct {
         return loader.background(h.p, url);
     }
 
+    pub fn canvas(h: Replay, n: *dom.Node) ?ui.Texture {
+        return h.p.canvases.pixelsOf(n);
+    }
+
     /// A `loading=lazy` picture has come near the window.
     pub fn nearLazy(h: Replay, n: *dom.Node) void {
         loader.askImage(h.p, n);

@@ -49,6 +49,8 @@ pub const Page = struct {
     pictures: loader.Pictures = .{},
     /// What inline `<svg>`s were last drawn from.
     svgs: svg_markup.Cache = .{},
+    /// What each `<canvas>` with a context shows.
+    canvases: @import("paint/canvas_source.zig").Table = .{},
     /// The screen and window `srcset` and `media` were last answered for.
     pick_signature: u64 = 0,
     icon: ?[]const u8 = null,
@@ -206,6 +208,7 @@ pub const Page = struct {
         p.sheets.deinit(gpa);
         p.pictures.deinit(gpa);
         p.svgs.deinit(gpa);
+        p.canvases.deinit(gpa);
         gpa.free(p.final_url);
         p.doc_arena.deinit();
         gpa.destroy(p);

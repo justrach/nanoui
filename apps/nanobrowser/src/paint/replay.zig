@@ -250,7 +250,7 @@ fn draw(c: *ui.Context, it: *const display.Item, x: f32, y: f32, r: Rect, view: 
             const top = y + (t.baseline - it.rect.y) - (f.ascent + f.leading / 2);
             _ = c.leaf(.{ .absolute = true, .offset = .{ .x = x, .y = top }, .opacity = it.opacity }, .{ .text = .{ .str = t.str, .style = s, .color = color(t.color), .spans = gradientSpans(c, t, it.rect.x, s) } }, null);
         },
-        .image => |im| if (im.node.isTag("iframe")) host.frame(c, im.node, x, y, r) else drawPicture(c, im, placed, r),
+        .image => |im| if (im.node.isTag("iframe")) host.frame(c, im.node, x, y, r) else if (im.node.isTag("canvas")) drawCanvas(c, host.canvas(im.node), placed, r) else drawPicture(c, im, placed, r),
         .background => |bg| if (host.picture(bg.url)) |bytes| backgrounds.picture(c, bg, bytes, placed, r, view),
         .gradient => |g| backgrounds.gradient(c, g, host, placed, r, view),
         .mask => |ms| if (host.picture(ms.url)) |bytes| drawMask(c, ms, bytes, placed, r),
@@ -272,6 +272,16 @@ fn draw(c: *ui.Context, it: *const display.Item, x: f32, y: f32, r: Rect, view: 
         },
         .control => |b| host.control(c, b, x, y, it.opacity),
     }
+}
+
+/// A canvas's pixels stretched over its box, as `object-fit: fill` has it.
+fn drawCanvas(c: *ui.Context, pixels: ?ui.Texture, placed: ui.Style, r: Rect) void {
+    const t = pixels orelse return;
+    if (r.w <= 0 or r.h <= 0) return;
+    var s = placed;
+    s.width = .{ .px = r.w };
+    s.height = .{ .px = r.h };
+    ui.texture(c, s, t, .{ 0, 0, 1, 1 }, 1);
 }
 
 /// A picture with what `drawImage` doesn't do itself around it: a tint, and

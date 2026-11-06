@@ -11,6 +11,7 @@ test {
     _ = @import("tests_motion.zig");
     _ = @import("tests_pointer.zig");
     _ = @import("tests_scrolling.zig");
+    _ = @import("tests_canvas.zig");
     _ = @import("tests_sheets.zig");
     _ = @import("tests_forms.zig");
 }
