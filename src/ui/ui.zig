@@ -164,6 +164,7 @@ pub const View = struct {
 };
 
 test {
+    _ = @import("tests_caret_activity.zig");
     _ = @import("tests_motion.zig");
     _ = frame_log;
     _ = @import("tests_effects.zig");

@@ -101,6 +101,7 @@ pub const Surface = struct {
         const self = try gpa.create(Surface);
         self.* = .{ .gpa = gpa, .window = window, .text = .init(gpa), .ctx = undefined, .view = view, .theme_override = theme_override, .start_time = clock.now() };
         self.ctx = .init(gpa, &self.text);
+        self.ctx.input.window_active = window.isFocused();
         // No theme background under a transparent window's view.
         self.ctx.transparent_root = window.transparent;
         // Diagnostics, off unless asked for: which presenter draws the frame,
@@ -214,7 +215,12 @@ pub const Surface = struct {
             self.ticking = true;
             self.trace("tick timer on", .{});
         };
-        // Something changes now and then: one frame, that much later.
+        // Cancel superseded caret deadlines, even on blur or selection.
+        if (self.hwnd()) |h| _ = w.KillTimer(h, later_timer);
+        if (!more and self.ticking) if (self.hwnd()) |h| {
+            _ = w.KillTimer(h, tick_timer);
+            self.ticking = false;
+        };
         if (!more) if (c.frame_in) |s| if (self.hwnd()) |h| {
             _ = w.SetTimer(h, later_timer, @intFromFloat(@max(1, s * 1000)), null);
             self.trace("later timer {d} ms", .{@as(u32, @intFromFloat(@max(1, s * 1000)))});
@@ -273,10 +279,10 @@ pub const Surface = struct {
         switch (msg) {
             w.WM_PAINT => gpu_side.paint(self, h),
             w.WM_ERASEBKGND => return 1,
-            // Back from a lock, a display change, another desktop or a hidden
-            // window: the frame is built again, as a resize would build it, so
-            // what is on screen is what the app is now.
-            w.WM_ACTIVATEAPP => if (wp != 0) self.requestFrame(),
+            w.WM_SETFOCUS, w.WM_KILLFOCUS, w.WM_ACTIVATEAPP => {
+                self.ctx.input.window_active = if (msg == w.WM_ACTIVATEAPP) wp != 0 and self.window.isFocused() else msg == w.WM_SETFOCUS;
+                self.frame();
+            },
             w.WM_SHOWWINDOW => if (wp != 0) self.requestFrame(),
             w.WM_DISPLAYCHANGE => self.requestFrame(),
             w.WM_SETTINGCHANGE => {
