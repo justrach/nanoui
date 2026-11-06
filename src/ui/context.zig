@@ -67,7 +67,7 @@ pub const Interaction = struct {
     /// (`Context.adjustable`): a splitter, a slider.
     a11y_step: i8 = 0,
 };
-pub const Hit = struct { id: u64, index: u32, rect: types.Rect, scroll: bool, wheel: bool = false };
+pub const Hit = struct { id: u64, index: u32, rect: types.Rect, scroll: bool, scroll_x: bool = false, wheel: bool = false };
 pub const Cursor = enum { arrow, hand, text, resize_left_right, resize_up_down, open_hand, closed_hand, not_allowed, crosshair };
 pub const A11yRole = @import("access.zig").Role;
 pub const A11yItem = @import("access.zig").Item;

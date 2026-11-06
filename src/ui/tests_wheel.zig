@@ -52,6 +52,46 @@ test "the wheel over a wheel box pans it, not the scrolling page behind" {
     try testing.expectEqual(@as(f32, 40), pageOffset(&t, &s));
 }
 
+const Horizontal = struct {
+    page: u64 = 0,
+    panned: f32 = 0,
+    fn view(s: *Horizontal, c: *ui.Context) void {
+        const root = ui.div(c).column().sizeFull();
+        defer root.end();
+        {
+            const page = c.open(.{ .direction = .row, .scroll_x = true, .width = .fill, .height = .fill, .scroll_bar = false }, null);
+            defer c.end();
+            s.page = c.node(page).id;
+            for (0..5) |_| ui.div(c).w(100).h(100).end();
+        }
+        const strip = ui.div(c).fixed().offset(10, 10).w(100).h(30).layer(1).clip().wheel();
+        defer strip.end();
+        if (strip.hovered()) {
+            c.wants_wheel = true;
+            s.panned -= c.input.scroll.x;
+        }
+    }
+};
+
+test "a wheel overlay consumes x without moving the horizontal page behind" {
+    var s: Horizontal = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&s, Horizontal.view), .{ .width = 200, .height = 200, .scale = 1 });
+    defer t.deinit();
+    t.moveTo(30, 20);
+    t.hscroll(30, 20, -40);
+    try testing.expectEqual(@as(f32, 40), s.panned);
+    try testing.expectEqual(@as(f32, 0), t.ctx.scroll_x.get(s.page) orelse 0);
+    // Outside the painted strip the normal horizontal scroller still owns x.
+    t.moveTo(150, 150);
+    t.hscroll(150, 150, -40);
+    try testing.expectEqual(@as(f32, 40), s.panned);
+    try testing.expectEqual(@as(f32, 40), t.ctx.scroll_x.get(s.page).?);
+    // A positive delta reverses direction, clamping at the start as before.
+    t.hscroll(150, 150, 100);
+    try testing.expectEqual(@as(f32, 0), t.ctx.scroll_x.get(s.page).?);
+}
+
 test "without it, the page behind takes the wheel (what `wheel` fixes)" {
     var s: Scene = .{ .wheel = false };
     var t: ui.Tester = undefined;
