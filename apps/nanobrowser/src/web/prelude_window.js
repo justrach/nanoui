@@ -100,12 +100,13 @@ class Location {
 }
 def(g, "Location", Location);
 // What our user agent string claims, said the way Chromium says it.
+const chromeMajor = /Chrome\/(\d+)/.exec($.userAgent)[1];
 const userAgentData = {
-  brands: [{ brand: "Chromium", version: "142" }, { brand: "Not_A Brand", version: "99" }],
+  brands: [{ brand: "Chromium", version: chromeMajor }, { brand: "Not_A Brand", version: "99" }],
   mobile: false,
   platform: ({ MacIntel: "macOS", Win32: "Windows", iPhone: "iOS" })[$.platform] || "Linux",
   getHighEntropyValues(hints) {
-    const known = { architecture: "arm", bitness: "64", model: "", platformVersion: "10.15.7", uaFullVersion: "142.0.0.0", fullVersionList: this.brands.map((b) => ({ brand: b.brand, version: b.version + ".0.0.0" })), wow64: false, formFactors: ["Desktop"] };
+    const known = { architecture: "arm", bitness: "64", model: "", platformVersion: "10.15.7", uaFullVersion: chromeMajor + ".0.0.0", fullVersionList: this.brands.map((b) => ({ brand: b.brand, version: b.version + ".0.0.0" })), wow64: false, formFactors: ["Desktop"] };
     const out = { brands: this.brands, mobile: this.mobile, platform: this.platform };
     for (const h of hints || []) if (h in known) out[h] = known[h];
     return Promise.resolve(out);

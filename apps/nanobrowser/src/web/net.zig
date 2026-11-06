@@ -49,7 +49,7 @@ pub fn cookieLine(a: std.mem.Allocator, url: []const u8) ?[]const u8 {
 
 /// What our user agent string claims, as Chromium says it to servers.
 pub const client_hints = [_]http.Header{
-    .{ .name = "sec-ch-ua", .value = "\"Chromium\";v=\"142\", \"Not_A Brand\";v=\"99\"" },
+    .{ .name = "sec-ch-ua", .value = "\"Chromium\";v=\"" ++ page_mod.chrome_major ++ "\", \"Not_A Brand\";v=\"99\"" },
     .{ .name = "sec-ch-ua-mobile", .value = "?0" },
     .{ .name = "sec-ch-ua-platform", .value = switch (@import("builtin").os.tag) {
         .macos => "\"macOS\"",

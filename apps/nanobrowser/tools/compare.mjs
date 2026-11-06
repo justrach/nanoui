@@ -32,7 +32,8 @@ mkdirSync(out, { recursive: true });
 
 // The Mac's user agent: both browsers get the same page.
 const pageZig = readFileSync(join(here, '../src/page.zig'), 'utf8');
-const ua = /user_agent = "(.+?)" \+\+ platform_ua \+\+ "(.+?)";/.exec(pageZig).slice(1).join('Macintosh; Intel Mac OS X 10_15_7');
+const major = /chrome_major = "(\d+)"/.exec(pageZig)[1];
+const ua = /user_agent = "(.+?)" \+\+ platform_ua \+\+ "(.+?)" \+\+ chrome_major \+\+ "(.+?)";/.exec(pageZig).slice(1).reduce((all, part, i) => all + ['', 'Macintosh; Intel Mac OS X 10_15_7', major][i] + part, '');
 const bin = resolve(here, '../zig-out/rel/bin/nanobrowser');
 const width = 1280, height = 808, strip = 52;
 

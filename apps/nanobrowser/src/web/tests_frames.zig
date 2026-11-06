@@ -169,7 +169,8 @@ test "navigator says what the user agent claims" {
     try u.table(&r, &.{
         .{ .js = "navigator.webdriver", .want = "false" },
         .{ .js = "navigator.userAgentData.brands.some((b) => b.brand === 'Chromium')", .want = "true" },
-        .{ .js = "navigator.userAgent.includes('Chrome/' + navigator.userAgentData.brands[0].version)", .want = "true" },
+        .{ .js = "navigator.userAgent.includes('Chrome/' + navigator.userAgentData.brands[0].version + '.0.0.0')", .want = "true" },
+        .{ .js = "navigator.userAgent.endsWith(' Safari/537.36')", .want = "true" },
         .{ .js = "typeof window.chrome", .want = "object" },
     });
 }

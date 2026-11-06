@@ -43,6 +43,10 @@ typing, and update. It is not a browser to trust with a bank account.
 - **Bot walls.** Google, Cloudflare and DataDome challenges appear and can't be passed:
   reCAPTCHA's box draws but times out, and Turnstile stops in its scripts. A search that
   lands on Google's wall lands there in headless Chromium from the same network too.
+- **It says it's Chrome.** The user agent is Chrome's own string, with the version in
+  `chrome_major` (`src/page.zig`) and no name of ours, so sites can't tell it apart by that
+  and it needs raising as Chrome moves on. It doesn't get past the walls above: Google's
+  stopped this browser with and without our name, and headless Chromium too.
 - **Suggestions leave the machine.** What's typed in the address field goes to the chosen
   engine as it's typed, once it stops looking like an address. An address is never sent.
 - **Slow on big sites.** No JIT, and a script that inserts CSS rules restyles the whole

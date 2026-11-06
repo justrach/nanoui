@@ -18,9 +18,11 @@ const frames_mod = @import("frames.zig");
 const http = nanoui.http;
 const Allocator = std.mem.Allocator;
 
-/// Chrome's shape with our name at the end, as other new engines do: sites give
-/// anything they don't recognize their oldest, plainest page.
-pub const user_agent = "Mozilla/5.0 (" ++ platform_ua ++ ") AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36 nanobrowser/0.1";
+/// Which Chrome the user agent says. Kept near the current stable: sites treat an
+/// old one as out of date, and anything they don't recognize gets their plainest page.
+pub const chrome_major = "158";
+/// Chrome's own string, as Chromium's other browsers send it, with no name of ours.
+pub const user_agent = "Mozilla/5.0 (" ++ platform_ua ++ ") AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" ++ chrome_major ++ ".0.0.0 Safari/537.36";
 const platform_ua = switch (@import("builtin").os.tag) {
     .macos => "Macintosh; Intel Mac OS X 10_15_7",
     .windows => "Windows NT 10.0; Win64; x64",

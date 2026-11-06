@@ -21,7 +21,7 @@ test "window's names, and what it offers and doesn't" {
         .{ .js = "innerWidth > 0 && innerHeight > 0 && outerWidth === innerWidth", .want = "true" },
         .{ .js = "devicePixelRatio", .want = "1" },
         .{ .js = "screen.width > 0 && screen.colorDepth", .want = "24" },
-        .{ .js = "navigator.userAgent.includes('nanobrowser') + navigator.language + navigator.onLine + navigator.cookieEnabled + typeof navigator.hardwareConcurrency", .want = "trueen-UStruetruenumber" },
+        .{ .js = "navigator.userAgent.includes('Chrome/') + navigator.language + navigator.onLine + navigator.cookieEnabled + typeof navigator.hardwareConcurrency", .want = "trueen-UStruetruenumber" },
         .{ .js = "typeof navigator.serviceWorker + typeof navigator.clipboard", .want = "undefinedobject" },
         .{ .js = "typeof WebSocket + typeof Worker + typeof setImmediate + typeof indexedDB + typeof document.all", .want = "undefinedfunctionundefinedundefinedundefined" },
         .{ .js = "[document.all === undefined, document.all == null, !document.all, undefined === document.all, document.all ? 1 : 2, document.all.length > 0, document.all[0] === document.documentElement, document.all.item(0) === document.documentElement, document.all.nope].join()", .want = "false,true,true,false,2,true,true,true," },
