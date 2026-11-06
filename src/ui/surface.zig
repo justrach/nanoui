@@ -175,6 +175,18 @@ pub const Surface = struct {
         self.link_fps = -1;
     }
 
+    /// Drops the link: a layer with one attached refuses `nextDrawable`,
+    /// and a live resize draws its steps in the window's transaction with
+    /// drawables taken from the layer.
+    pub fn stopLink(self: *Surface) void {
+        const link = self.display_link orelse return;
+        objc.msg(void, link, "setDelegate:", .{@as(?objc.Object, null)});
+        objc.msg(void, link, "invalidate", .{});
+        objc.release(link);
+        self.display_link = null;
+        self.paced = false;
+    }
+
     pub fn destroy(self: *Surface) void {
         self.dead = true;
         self.force_destroy = !self.window.app.running;
@@ -400,6 +412,29 @@ pub const Surface = struct {
         return self.ctx.live_resizing and cf.CACurrentMediaTime() - self.resize_step_at < resize_grace;
     }
 
+    /// One live-resize step drawn in the window's own transaction: the
+    /// frame is laid out and presented at this size before Core Animation
+    /// composites the step, so the window never shows a stale one. False
+    /// when it can't (hidden, or `NANOUI_RESIZE_SYNC=0`): the link draws.
+    pub fn resizeSyncEnabled(_: *Surface) bool {
+        if (getenv("NANOUI_RESIZE_SYNC")) |v| if (std.mem.eql(u8, std.mem.span(v), "0")) return false;
+        return true;
+    }
+
+    pub fn resizeInTransaction(self: *Surface) bool {
+        if (self.in_frame or self.dead or !self.visible() or self.display_link != null) return false;
+        if (!self.resizeSyncEnabled()) return false;
+        const drawable = objc.msg(?objc.Object, self.renderer.layer, "nextDrawable", .{}) orelse return false;
+        self.renderer.given_drawable = drawable;
+        defer self.renderer.given_drawable = null;
+        self.pending_sync = true;
+        self.full_pending = true;
+        const now = @max(cf.CACurrentMediaTime(), self.last_frame_time);
+        const fallback_dur = 1.0 / @as(f64, @max(60.0, self.max_fps));
+        self.frameAt(.input, now, if (self.link_duration > 0) self.link_duration else fallback_dur);
+        return true;
+    }
+
     pub fn redrawRetained(self: *Surface, target_in: f64, duration_in: f64) void {
         if (self.in_frame or self.dead) return;
         if (!self.visible() or self.renderer.given_drawable == null) {
@@ -451,6 +486,7 @@ pub const Surface = struct {
         self.renderer.syncImages(&self.text.images);
         self.renderer.textures = c.textures.items;
         const clear = if (self.transparent) types.Color.transparent else c.theme.background;
+        self.renderer.setBackdrop(clear);
         const present_at = if (target_in > 0) target_in else if (self.last_present_target > 0) @max(wall_now, self.last_present_target + dur) else wall_now;
         self.renderer.present_at = present_at;
         self.renderer.time = @floatCast(now - self.start_time);

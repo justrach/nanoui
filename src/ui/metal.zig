@@ -52,6 +52,7 @@ pub const Renderer = struct {
     layer: objc.Object,
     framebuffer_only: bool = true,
     live_resize: bool = false,
+    backdrop: ?types.Color = null,
     present_at: f64 = 0,
     given_drawable: ?objc.Object = null,
     time: f32 = 0,
@@ -102,6 +103,12 @@ pub const Renderer = struct {
         // Three drawables managed by CAMetalDisplayLink.
         objc.msg(void, layer, "setMaximumDrawableCount:", .{@as(objc.NSUInteger, 3)});
         objc.msg(void, layer, "setOpaque:", .{objc.YES});
+        // In a live resize the window outruns the frames: the layer's last
+        // drawable is older than its bounds. The default gravity scales it to
+        // fit, which smears corners and fixed-size chrome. Pinned to the top
+        // left it keeps its pixels at their size; the strip it doesn't cover
+        // shows the layer's background until the next frame lands.
+        objc.msg(void, layer, "setContentsGravity:", .{objc.nsString("topLeft")});
         // A frame waits for a drawable rather than being dropped: a dropped
         // one in a resize leaves the last, at the old size, stretched.
         objc.msg(void, layer, "setAllowsNextDrawableTimeout:", .{objc.NO});
@@ -296,6 +303,15 @@ pub const Renderer = struct {
         if (self.live_resize == on) return;
         self.live_resize = on;
         objc.msg(void, self.layer, "setPresentsWithTransaction:", .{on or self.in_transaction});
+    }
+
+    /// The layer's own fill: what shows where a live resize has outgrown the
+    /// last drawable, until the next frame covers it.
+    pub fn setBackdrop(self: *Renderer, c: types.Color) void {
+        if (self.backdrop) |b| if (b.r == c.r and b.g == c.g and b.b == c.b and b.a == c.a) return;
+        self.backdrop = c;
+        const ns = objc.msg(objc.Object, objc.class("NSColor"), "colorWithSRGBRed:green:blue:alpha:", .{ @as(f64, c.r), @as(f64, c.g), @as(f64, c.b), @as(f64, c.a) });
+        objc.msg(void, self.layer, "setBackgroundColor:", .{objc.msg(objc.Object, ns, "CGColor", .{})});
     }
 
     pub fn setOpaque(self: *Renderer, on: bool) void {
