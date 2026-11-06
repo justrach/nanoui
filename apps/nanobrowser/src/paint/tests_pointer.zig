@@ -38,6 +38,7 @@ test "hover waits for a scroll to stop, then finds what's there" {
     r.t.moveTo(x, y);
     r.t.frame();
     const first = p.doc.hover orelse return error.NoHover;
+    r.t.ctx.input.precise = true;
     r.t.scroll(x, y, -150);
     r.t.frame();
     try testing.expect(p.doc.hover == first);
@@ -57,6 +58,7 @@ test "a click during a scroll goes to what's under the pointer now" {
     const y = p.origin[1] + 50;
     r.t.moveTo(x, y);
     r.t.frame();
+    r.t.ctx.input.precise = true;
     r.t.scroll(x, y, -150);
     r.t.click(x, y);
     // 50 down the window, scrolled by 150: the third row.

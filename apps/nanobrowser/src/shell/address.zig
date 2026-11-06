@@ -1,6 +1,5 @@
-//! What was typed in the address field, as a place to go. It takes addresses
-//! and only addresses: something that isn't a place is refused, not quietly
-//! handed to a search engine.
+//! What was typed in the address field, as a place to go. What isn't one is a
+//! search (`search.zig`).
 const std = @import("std");
 
 /// The URL `typed` means, in `gpa`; null when it isn't an address.

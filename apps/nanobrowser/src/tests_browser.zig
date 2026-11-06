@@ -52,19 +52,6 @@ const Run = struct {
 
 const first = "data:text/html,<!doctype html><title>One</title><body><h1>First page</h1><a href='data:text/html,<title>Two</title><p>Second page</p>'>Go on</a>";
 
-test "an empty tab is the field alone, and refuses what isn't an address" {
-    var r: Run = undefined;
-    try r.start();
-    defer r.stop();
-    r.t.frame();
-    try testing.expect(r.b.tabs.items[0].isEmpty());
-    r.t.typeText("not an address");
-    r.t.key(.enter);
-    r.t.frame();
-    try testing.expect(r.b.tabs.items[0].isEmpty());
-    try testing.expect(r.b.box.refused);
-}
-
 test "a page draws, and a link goes on and comes back" {
     var r: Run = undefined;
     try r.start();
@@ -148,6 +135,7 @@ test "the page scrolls by the wheel and stops at its end" {
     defer r.stop();
     r.open("data:text/html,<!doctype html><body style='margin:0'><div style='height:3000px'>Tall</div>");
     r.t.ctx.input.mouse = .{ .x = 400, .y = 300 };
+    r.t.ctx.input.precise = true;
     r.t.ctx.input.scroll = .{ .y = -200 };
     r.t.frame();
     try testing.expectEqual(@as(f32, 200), r.page().scrollY());

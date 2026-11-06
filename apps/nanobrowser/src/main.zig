@@ -18,6 +18,7 @@ pub fn main(init: std.process.Init) !void {
     var browser: Browser = .{ .gpa = app.gpa };
     defer browser.deinit();
     try browser.init();
+    try browser.connect();
 
     const window = try app.newWindow(.{
         .title = "nanobrowser",

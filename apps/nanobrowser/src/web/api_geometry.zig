@@ -84,9 +84,15 @@ pub fn docScroll(p: anytype) [2]f32 {
 
 fn clientRect(w: *World, n: *Node) ?box.Rect {
     if (!flushLayout(w)) return null;
-    const b = layout.boxOfNode(n) orelse return null;
+    if (layout.boxOfNode(n) == null) return null;
+    return placedRect(w.page, n);
+}
+
+/// Where `n`'s box is in the window as things stand, laid out or not. It has a box.
+pub fn placedRect(p: anytype, n: *Node) box.Rect {
+    const b = layout.boxOfNode(n).?;
     var r = transformedRect(n, b.borderRect());
-    const o = scrollOffset(w.page, n);
+    const o = scrollOffset(p, n);
     r.x -= o[0];
     r.y -= o[1];
     return r;

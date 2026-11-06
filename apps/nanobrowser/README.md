@@ -20,7 +20,7 @@ NANOBROWSER_LOG=1 zig-out/bin/...  # the page's console on stderr
 
 | Key | |
 |---|---|
-| ⌘L | Go somewhere: the field takes addresses only, and shivers at anything else |
+| ⌘L | Go somewhere: an address goes there, anything else is searched for with the engine picked in the field (Google or DuckDuckGo) |
 | ⌘K | Find a tab |
 | ⌘S | Hide the tabs |
 | ⌘D | Two pages side by side; ⇧⌘D duplicates the tab |
@@ -43,6 +43,8 @@ typing, and update. It is not a browser to trust with a bank account.
 - **Bot walls.** Google, Cloudflare and DataDome challenges appear and can't be passed:
   reCAPTCHA's box draws but times out, and Turnstile stops in its scripts. A search that
   lands on Google's wall lands there in headless Chromium from the same network too.
+- **Suggestions leave the machine.** What's typed in the address field goes to the chosen
+  engine as it's typed, once it stops looking like an address. An address is never sent.
 - **Slow on big sites.** No JIT, and a script that inserts CSS rules restyles the whole
   page. A heavy page such as GitHub takes many seconds to settle.
 
@@ -60,6 +62,21 @@ what the worker's script names literally.
 the same size with the same user agent, and writes a side-by-side picture and a report of the
 boxes that differ while their parent's doesn't. `NANOBROWSER_DUMP`, `NANOBROWSER_EVAL` and
 `NANOBROWSER_LOG` are what it reads, and work alone.
+
+## Parity with Ladybird
+
+`tools/parity/` runs what Ladybird publishes, at the same revisions, and `report.py` puts the
+results beside theirs test by test. `zig build test262-host` is the engine alone for
+tc39/test262 (`test262.mjs`). `wpt_container.sh` runs WPT's testharness tests in a Linux
+container through a hidden window (`wpt_run.py`), and `reftest.py` a sample of its reftests
+and crashtests, more roughly than wptrunner does. There is no WebDriver, so tests needing
+simulated input can't pass.
+
+| Suite | nanobrowser | Ladybird |
+|---|---:|---:|
+| test262 | 72.4% | 98.8% |
+| WPT subtests | 13.9% | 96.3% |
+| WPT subtests, without encoding, wasm and crypto | 38.3% | 90.1% |
 
 ## How it is laid out
 

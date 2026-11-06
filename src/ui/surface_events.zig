@@ -248,13 +248,14 @@ fn scrollWheel(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) v
     // Sideways always reaches the view (rows that scroll sideways); down
     // and up the scrolling box under the pointer, else a view that takes it.
     const took = dy != 0 and s.ctx.applyScroll(0);
-    if (took) s.scroll.add(dy, cf.CACurrentMediaTime());
     const wheel = s.ctx.wants_wheel and !took;
+    // A view taking the wheel keeps the same beat as a scrolling box: events come
+    // unevenly, and a display link stopping between them misses frames.
+    if (took or (wheel and s.visible())) s.scroll.add(dy, cf.CACurrentMediaTime());
     const release_over = !s.ctx.scroll_holding and s.ctx.hasOverscroll();
     if (!took and dx == 0 and !wheel and !release_over) return;
     if (s.visible()) {
         in.scroll.x += dx;
-        if (wheel) in.scroll.y += dy;
         s.requestFrame();
     } else {
         in.scroll = .{ .x = dx, .y = if (wheel) dy else 0 };

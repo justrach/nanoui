@@ -11,6 +11,9 @@ test {
     _ = @import("paint/replay_box.zig");
     _ = @import("paint/filters.zig");
     _ = @import("paint/tests.zig");
+    _ = @import("shell/search.zig");
+    _ = @import("shell/suggest.zig");
+    _ = @import("shell/tests_search.zig");
     _ = @import("css/effects.zig");
     _ = @import("css/transform.zig");
     _ = @import("css/animate.zig");

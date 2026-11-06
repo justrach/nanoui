@@ -10,9 +10,13 @@ const strip = @import("strip.zig");
 const omnibox = @import("omnibox.zig");
 const switcher = @import("switcher.zig");
 const address = @import("address.zig");
+const search = @import("search.zig");
+const Suggest = @import("suggest.zig").Suggest;
 const theme = @import("theme.zig");
 const box = @import("../layout/box.zig");
 const m = theme.metrics;
+
+const max_offers = 8;
 
 pub const Browser = struct {
     gpa: std.mem.Allocator,
@@ -27,6 +31,13 @@ pub const Browser = struct {
     /// The address field raised over the page.
     address_open: bool = false,
     box: omnibox.Omnibox = .{},
+    engine: search.Engine = .google,
+    /// Null where nothing should reach an engine as it's typed: in tests.
+    suggest: ?*Suggest = null,
+    /// Remembers the engine across runs: `main` says so, tests don't.
+    keep_engine: bool = false,
+    /// In tests, where a search goes instead of the engine.
+    search_base: ?[]const u8 = null,
     /// ⌘K.
     finder: switcher.Switcher = .{},
     /// ⌘F.
@@ -51,7 +62,15 @@ pub const Browser = struct {
         try b.newTab(null);
     }
 
+    /// What a real run has and a test doesn't: the chosen engine, and suggestions.
+    pub fn connect(b: *Browser) !void {
+        b.engine = search.load(b.gpa);
+        b.keep_engine = true;
+        b.suggest = try Suggest.create(b.gpa, b, redrawn);
+    }
+
     pub fn deinit(b: *Browser) void {
+        if (b.suggest) |s| s.release();
         for (b.tabs.items) |t| t.destroy();
         b.tabs.deinit(b.gpa);
         if (b.split) |t| t.destroy();
@@ -86,7 +105,7 @@ pub const Browser = struct {
         return .{ .ctx = b, .navigate = navigated, .redraw = redrawn, .loaded = pageLoaded, .uiContext = uiContext, .viewport = viewport, .urlChanged = urlChanged, .history = historyAsked, .retire = retire };
     }
 
-    fn redrawn(ctx: *anyopaque) void {
+    pub fn redrawn(ctx: *anyopaque) void {
         const b: *Browser = @ptrCast(@alignCast(ctx));
         b.dirty = true;
         if (b.window) |w| w.redraw();
@@ -277,8 +296,8 @@ pub const Browser = struct {
         if (b.find_open) b.findBar(c, top);
         if (b.finder.showing) b.switcherView(c, top, h);
         if (b.address_open) if (b.live()) |t| {
-            var buf: [6]omnibox.Offer = undefined;
-            const r = b.box.view(c, 0, top, w, h, true, omnibox.offersFor(b.box.field.text(), b.visited.items, &buf));
+            var buf: [max_offers]omnibox.Offer = undefined;
+            const r = b.box.view(c, 0, top, w, h, true, b.currentOffers(c, &buf), b.engine);
             b.fieldResult(c, t, r);
         };
     }
@@ -291,8 +310,8 @@ pub const Browser = struct {
             return;
         }
         if (b.address_open and !side) return;
-        var buf: [6]omnibox.Offer = undefined;
-        const r = b.box.view(c, x, y, w, h, false, omnibox.offersFor(b.box.field.text(), b.visited.items, &buf));
+        var buf: [max_offers]omnibox.Offer = undefined;
+        const r = b.box.view(c, x, y, w, h, false, b.currentOffers(c, &buf), b.engine);
         b.fieldResult(c, t, r);
     }
 
@@ -301,16 +320,48 @@ pub const Browser = struct {
             .none, .typed => {},
             .dismiss => b.address_open = false,
             .go => |typed| {
-                const url = address.parse(b.gpa, typed) catch return orelse {
+                const url = search.destination(b.gpa, typed, b.engine, b.search_base) catch return orelse {
                     b.box.refuse(c.time);
                     return;
                 };
-                defer b.gpa.free(url);
-                b.address_open = false;
-                t.go(url);
+                b.goTo(c, t, url);
+            },
+            .search => |query| {
+                const url = search.resultsUrl(b.gpa, b.engine, query, b.search_base) catch return;
+                b.goTo(c, t, url);
+            },
+            .engine => |e| {
+                b.engine = e;
+                if (b.keep_engine) search.save(e);
+                b.box.wants_focus = true;
                 c.changed = true;
             },
         }
+    }
+
+    /// Takes `url`, which it frees.
+    fn goTo(b: *Browser, c: *ui.Context, t: *Tab, url: []u8) void {
+        defer b.gpa.free(url);
+        b.address_open = false;
+        t.go(url);
+        c.changed = true;
+    }
+
+    /// Places it knows first, then what the engine suggests for the same text.
+    pub fn currentOffers(b: *Browser, c: *ui.Context, buf: *[max_offers]omnibox.Offer) []omnibox.Offer {
+        const typed = b.box.field.text();
+        const s = b.suggest orelse return omnibox.offersFor(typed, b.visited.items, buf);
+        s.watch(c, typed, b.engine);
+        if (typed.len == 0) return buf[0..0];
+        var n = omnibox.offersFor(typed, b.visited.items, buf[0..if (s.rows.len > 0) @as(usize, 3) else buf.len]).len;
+        const shown = std.mem.trim(u8, typed, " \t\r\n");
+        for (s.rows) |row| {
+            if (n == buf.len) break;
+            if (std.ascii.eqlIgnoreCase(row, shown)) continue;
+            buf[n] = .{ .url = row, .title = "", .search = true };
+            n += 1;
+        }
+        return buf[0..n];
     }
 
     fn act(b: *Browser, a: strip.Action) void {

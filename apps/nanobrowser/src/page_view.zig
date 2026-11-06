@@ -15,6 +15,8 @@ const controls = @import("paint/controls.zig");
 const svg_markup = @import("paint/svg_markup.zig");
 const loader = @import("loader.zig");
 const input = @import("page_input.zig");
+const glide = @import("page_glide.zig");
+const motion = @import("page_motion.zig");
 const frames = @import("frames.zig");
 const web = @import("web/web.zig");
 const webfonts = @import("webfonts.zig");
@@ -129,14 +131,21 @@ fn runAnimations(p: *Page, c: *ui.Context) void {
     p.engine.now = c.time;
     const plan = p.engine.anim.tick(&p.engine, c.time);
     if (plan.layout) p.doc.layout_dirty = true;
-    if (plan.paint) p.list_dirty = true;
+    p.motion_unseen = p.engine.anim.states.count() > 0 and !motion.anyShown(p);
+    if (plan.paint) {
+        if (p.motion_unseen) p.list_stale = true else p.list_dirty = true;
+    }
+    // Back in view, or over: the list catches up.
+    if (p.list_stale and !p.motion_unseen) p.list_dirty = true;
     web.animationEvents(p);
 }
 
 fn wantFrames(p: *Page, c: *ui.Context) void {
     if (p.dead) return;
     const plan = p.engine.anim.plan(c.time);
-    if (plan.frames) {
+    if (plan.frames and p.motion_unseen) {
+        c.frameIn(motion.unseen_pace);
+    } else if (plan.frames) {
         c.animationFrame();
     } else if (plan.wake_in) |seconds| c.frameIn(@max(seconds, 0.001));
 }
@@ -212,6 +221,8 @@ pub fn relayout(p: *Page, c: *ui.Context) void {
 
 fn makeList(p: *Page, tree: box.Tree, m: box.Measurer) void {
     p.list_dirty = false;
+    p.list_stale = false;
+    p.lists +%= 1;
     svg_markup.refresh(p);
     _ = p.list_arena.reset(.retain_capacity);
     p.list = display.build(p.list_arena.allocator(), tree, p.doc.node, m, &p.scrolls) catch null;
@@ -277,6 +288,7 @@ fn advanceFrames(p: *Page, c: *ui.Context) void {
                 const cl = &child.list.?;
                 cl.resolve(r.x, r.y, r.w, r.h);
                 clampScrolls(child, cl);
+                glide.step(child, c, cl);
                 cl.resolve(r.x, r.y, r.w, r.h);
             }
             advanceFrames(child, c);
@@ -327,13 +339,13 @@ fn underPointer(p: *Page, x: f32, y: f32) Under {
 }
 
 /// A wheel over a frame scrolls it while it can, then what holds it.
-fn wheelThrough(p: *Page, x: f32, y: f32, dx: f32, dy: f32) void {
+fn wheelThrough(p: *Page, c: *ui.Context, x: f32, y: f32, dx: f32, dy: f32) void {
     const l = if (p.list) |*q| q else return;
     const n = l.hit(x, y);
     if (n) |e| if (e.isTag("iframe")) if (frames.childPage(p, e)) |child| {
-        if (child.list != null and child.frame.?.rect.contains(x, y) and canScroll(child, x, y, dx, dy)) return wheelThrough(child, x, y, dx, dy);
+        if (child.list != null and child.frame.?.rect.contains(x, y) and canScroll(child, x, y, dx, dy)) return wheelThrough(child, c, x, y, dx, dy);
     };
-    wheel(p, l, x, y, dx, dy);
+    wheel(p, c, l, x, y, dx, dy);
 }
 
 /// An `<iframe scrolling=no>`: its page stays where it is, with no bar.
@@ -451,12 +463,13 @@ pub fn view(p: *Page, c: *ui.Context, rect: box.Rect) void {
     if (p.list == null) return;
     const shown = &p.list.?;
     shown.resolve(rect.x, rect.y, rect.w, rect.h);
-    if (inside and !wheel_taken and (c.input.scroll.y != 0 or c.input.scroll.x != 0)) wheelThrough(p, mouse.x, mouse.y, c.input.scroll.x, c.input.scroll.y);
+    if (inside and !wheel_taken and (c.input.scroll.y != 0 or c.input.scroll.x != 0)) wheelThrough(p, c, mouse.x, mouse.y, c.input.scroll.x, c.input.scroll.y);
     if (inside) {
         if (typing == p) {
             keyScroll(p, c, shown, rect.h);
         } else if (typing.list) |*tl| keyScroll(typing, c, tl, typing.viewport_h);
     }
+    glide.step(p, c, shown);
     shown.resolve(rect.x, rect.y, rect.w, rect.h);
     web.paintStart(p);
     replay.replay(c, shown, Replay{ .p = p }, rect);
@@ -466,13 +479,19 @@ pub fn view(p: *Page, c: *ui.Context, rect: box.Rect) void {
     web.paintEnd(p);
 }
 
-fn wheel(p: *Page, l: *display.List, x: f32, y: f32, dx: f32, dy: f32) void {
+fn wheel(p: *Page, c: *ui.Context, l: *display.List, x: f32, y: f32, dx: f32, dy: f32) void {
     const i = l.scrollerAt(x, y);
     if (i == 1 and !l.clips[1].scrolls) return;
-    scrollBy(p, l, i, -dx, -dy);
+    if (c.input.precise) scrollBy(p, l, i, -dx, -dy) else glide.by(p, c, l, i, -dx, -dy);
 }
 
 pub fn scrollBy(p: *Page, l: *display.List, i: u32, dx: f32, dy: f32) void {
+    p.glide = null;
+    moveBy(p, l, i, dx, dy);
+}
+
+/// `scrollBy` for a glide, which goes on.
+pub fn moveBy(p: *Page, l: *display.List, i: u32, dx: f32, dy: f32) void {
     const c = &l.clips[i];
     const m = l.maxScroll(i);
     const was = [2]f32{ c.scroll_x, c.scroll_y };
@@ -507,18 +526,18 @@ fn keyScroll(p: *Page, c: *ui.Context, l: *display.List, h: f32) void {
     if (c.focus != 0 or !l.clips[1].scrolls) return;
     const step: f32 = 48;
     if (c.input.key) |k| switch (k) {
-        .up => scrollBy(p, l, 1, 0, -step),
-        .down => scrollBy(p, l, 1, 0, step),
-        .left => scrollBy(p, l, 1, -step, 0),
-        .right => scrollBy(p, l, 1, step, 0),
-        .page_up => scrollBy(p, l, 1, 0, -(h - step)),
-        .page_down => scrollBy(p, l, 1, 0, h - step),
-        .home => scrollBy(p, l, 1, 0, -1e9),
-        .end => scrollBy(p, l, 1, 0, 1e9),
+        .up => glide.by(p, c, l, 1, 0, -step),
+        .down => glide.by(p, c, l, 1, 0, step),
+        .left => glide.by(p, c, l, 1, -step, 0),
+        .right => glide.by(p, c, l, 1, step, 0),
+        .page_up => glide.by(p, c, l, 1, 0, -(h - step)),
+        .page_down => glide.by(p, c, l, 1, 0, h - step),
+        .home => glide.by(p, c, l, 1, 0, -1e9),
+        .end => glide.by(p, c, l, 1, 0, 1e9),
         else => {},
     };
-    if (c.shortcut(.{ .key = ' ' })) scrollBy(p, l, 1, 0, h - step);
-    if (c.shortcut(.{ .key = ' ', .shift = true })) scrollBy(p, l, 1, 0, -(h - step));
+    if (c.shortcut(.{ .key = ' ' })) glide.by(p, c, l, 1, 0, h - step);
+    if (c.shortcut(.{ .key = ' ', .shift = true })) glide.by(p, c, l, 1, 0, -(h - step));
 }
 
 /// A slim bar along the right while there's more page than window.

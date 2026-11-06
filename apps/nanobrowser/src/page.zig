@@ -60,6 +60,14 @@ pub const Page = struct {
     /// alone, each frame of an animation say.
     list_arena: std.heap.ArenaAllocator,
     list_dirty: bool = false,
+    /// The list is behind on something out of sight (`page_motion`).
+    list_stale: bool = false,
+    /// All that's animating is out of sight.
+    motion_unseen: bool = false,
+    /// How many times the display list has been built.
+    lists: u32 = 0,
+    /// Scrolling on its way (`page_glide`).
+    glide: ?@import("page_glide.zig").Glide = null,
     /// How many times the page has been laid out.
     layouts: u32 = 0,
     list: ?display.List = null,

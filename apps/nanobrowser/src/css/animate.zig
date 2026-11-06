@@ -25,7 +25,7 @@ const Allocator = std.mem.Allocator;
 
 pub const Pseudo = enum(u8) { none, before, after, marker, backdrop };
 
-const Key = struct { node: *dom.Node, pseudo: Pseudo };
+pub const Key = struct { node: *dom.Node, pseudo: Pseudo };
 
 /// One frame's style: its element's after-change style with its declarations over.
 const Frame = struct { at: f32, style: Style, timing: ?fx.Timing };

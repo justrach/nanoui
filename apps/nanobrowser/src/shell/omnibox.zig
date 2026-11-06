@@ -1,16 +1,18 @@
-//! One field in the middle, and the few places it thinks you mean. On an empty
-//! tab it is all there is; ⌘L raises it over the page, which stays there, out
-//! of the way. Something that isn't an address makes it shiver and say so.
+//! One field in the middle, and the few places and searches it thinks you mean.
+//! On an empty tab it is all there is; ⌘L raises it over the page, which stays
+//! there, out of the way. An address goes there, anything else is searched for
+//! with the engine chosen at its right, and nothing at all makes it shiver.
 const std = @import("std");
 const text_search = @import("../text_search.zig");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const theme = @import("theme.zig");
 const address = @import("address.zig");
+const search = @import("search.zig");
 const m = theme.metrics;
 
-/// A place it offers.
-pub const Offer = struct { url: []const u8, title: []const u8 };
+/// A place it offers, or with `search` a search for what's in `url`.
+pub const Offer = struct { url: []const u8, title: []const u8, search: bool = false };
 
 pub const Omnibox = struct {
     field: ui.TextBuffer = .{},
@@ -22,7 +24,7 @@ pub const Omnibox = struct {
     /// It should take the keys in its next frame.
     wants_focus: bool = false,
 
-    pub const Result = union(enum) { none, go: []const u8, dismiss, typed };
+    pub const Result = union(enum) { none, go: []const u8, search: []const u8, engine: search.Engine, dismiss, typed };
 
     pub fn reset(o: *Omnibox, text: []const u8) void {
         o.field.set(text);
@@ -37,7 +39,7 @@ pub const Omnibox = struct {
     }
 
     /// Draws it across the area of (`x`, `y`, `w`, `h`). `over`: raised over a page.
-    pub fn view(o: *Omnibox, c: *ui.Context, x: f32, y: f32, w: f32, h: f32, over: bool, offers: []const Offer) Result {
+    pub fn view(o: *Omnibox, c: *ui.Context, x: f32, y: f32, w: f32, h: f32, over: bool, offers: []const Offer, engine: search.Engine) Result {
         const p = theme.of(c);
         var out: Result = .none;
         // The page is still there, just out of the way; a click on it dismisses.
@@ -85,7 +87,7 @@ pub const Omnibox = struct {
         }
         ui.key(c, "address");
         const r = ui.textField(c, &o.field, .{
-            .placeholder = "Go somewhere",
+            .placeholder = engine.prompt(),
             .width = .fill,
             .size = 15,
             .bare = true,
@@ -93,13 +95,14 @@ pub const Omnibox = struct {
             .color = p.ink,
             .placeholder_color = p.muted,
         });
+        if (engines(c, engine)) |e| out = .{ .engine = e };
         c.end();
         if (r.changed) {
             o.refused = false;
             o.picked = null;
             out = .typed;
         }
-        if (r.submitted) out = .{ .go = if (o.picked) |i| (if (i < offers.len) offers[i].url else o.field.text()) else o.field.text() };
+        if (r.submitted) out = if (o.picked) |i| (if (i < offers.len) chosen(offers[i]) else Result{ .go = o.field.text() }) else .{ .go = o.field.text() };
 
         if (r.focused) {
             if (c.shortcut(.{ .key = ui.Shortcut.down })) o.step(1, offers.len);
@@ -107,6 +110,21 @@ pub const Omnibox = struct {
         }
         if (offers.len > 0) out = o.list(c, (w - field_w) / 2, top + height + 8, field_w, offers, out);
         return out;
+    }
+
+    /// The engines, the one in use marked. Which was clicked, if one was.
+    fn engines(c: *ui.Context, in_use: search.Engine) ?search.Engine {
+        const p = theme.of(c);
+        var clicked: ?search.Engine = null;
+        for ([_]search.Engine{ .google, .duckduckgo }) |e| {
+            ui.key(c, e.name());
+            const on = e == in_use;
+            const it = ui.pressable(c, .{ .padding = .xy(8, 3), .radius = 7, .control = true, .background = if (on) p.wash else null }, p.hover);
+            if (it.clicked and !on) clicked = e;
+            _ = c.leaf(.{}, .{ .text = .{ .str = e.name(), .style = .{ .size = 11.5 }, .color = if (on) p.ink else p.muted } }, null);
+            c.end();
+        }
+        return clicked;
     }
 
     fn step(o: *Omnibox, by: i32, n: usize) void {
@@ -135,13 +153,18 @@ pub const Omnibox = struct {
             ui.key(c, offer.url);
             const it = ui.pressable(c, .{ .direction = .row, .width = .fill, .padding = .xy(12, 8), .gap = 10, .radius = 9, .align_items = .center, .control = true, .background = if (o.picked == i) p.wash else null }, p.hover);
             defer c.end();
-            if (it.clicked) out = .{ .go = offer.url };
-            _ = c.leaf(.{ .clip = true }, .{ .text = .{ .str = address.display(offer.url), .style = .{ .size = 13, .truncate = .fade }, .color = p.ink } }, null);
+            if (it.clicked) out = chosen(offer);
+            if (offer.search) ui.icon(c, "magnifyingglass", .{ .size = 12, .frame = 16, .color = p.muted });
+            _ = c.leaf(.{ .clip = true }, .{ .text = .{ .str = if (offer.search) offer.url else address.display(offer.url), .style = .{ .size = 13, .truncate = .fade }, .color = p.ink } }, null);
             if (offer.title.len > 0) _ = c.leaf(.{ .grow = 1, .clip = true }, .{ .text = .{ .str = offer.title, .style = .{ .size = 12.5, .truncate = .fade }, .color = p.muted } }, null);
         }
         return out;
     }
 };
+
+fn chosen(offer: Offer) Omnibox.Result {
+    return if (offer.search) .{ .search = offer.url } else .{ .go = offer.url };
+}
 
 /// The places that begin with, or hold, what was typed: the best few of those
 /// `known` lists, most recent first, into `out`.

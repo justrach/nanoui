@@ -200,6 +200,7 @@ test "scroll and wheel events" {
     _ = try r.eval("scrollTo(0, 0); 0");
     r.t.frame();
     r.t.ctx.input.mouse = .{ .x = 400, .y = 400 };
+    r.t.ctx.input.precise = true;
     r.t.ctx.input.scroll = .{ .y = -120 };
     r.t.frame();
     r.t.ctx.input.scroll = .{ .y = 0 };
