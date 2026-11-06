@@ -268,6 +268,10 @@ pub const Tray = struct {
     }
 
     fn handle(self: *Tray, wp: w.WPARAM, lp: w.LPARAM) void {
+        // A click on the icon while the popup is up arrives inside
+        // TrackPopupMenuEx's own loop; reopening there would clear
+        // `tracking` under the outer frame and let a destroy free it.
+        if (self.tracking) return;
         const cb = model.decode(wp, lp);
         switch (model.action(cb.event, self.on_click != null, self.menu != null)) {
             .none => {},
