@@ -24,7 +24,7 @@ function pack(v, seen, ports) {
   try {
     if (Array.isArray(v)) return v.map((x) => pack(x, seen, ports));
     if (ports.includes(v)) return { $nb: "port", i: ports.indexOf(v) };
-    if (g.MessagePort && v instanceof g.MessagePort) throw cloneError("A MessagePort not in the transfer list");
+    if (g.MessagePort && (v instanceof g.MessagePort || $.remotePort(v))) throw cloneError("A MessagePort not in the transfer list");
     if (v instanceof Date) return { $nb: "date", d: v.getTime() };
     if (v instanceof RegExp) return { $nb: "regexp", d: v.source, f: v.flags };
     if (v instanceof Map) return { $nb: "map", d: [...v].map(([a, b]) => [pack(a, seen, ports), pack(b, seen, ports)]) };
@@ -70,10 +70,14 @@ function unpack(v, ports) {
 
 function transferred(transfer) {
   const list = Array.isArray(transfer) ? transfer : transfer && transfer.transfer ? Array.from(transfer.transfer) : [];
-  return list.filter((x) => g.MessagePort && x instanceof g.MessagePort);
+  return list.filter((x) => g.MessagePort && (x instanceof g.MessagePort || $.remotePort(x)));
 }
 
 $.transferred = transferred;
+// `postMessage(data, origin, transfer)` or `postMessage(data, options)`. An array as
+// the second is an options dictionary with nothing in it, not a transfer list, however
+// it looks: reCAPTCHA posts one to itself, and takes what comes for its peer's port.
+$.windowTransfer = (target, transfer) => (transfer !== undefined ? transfer : target && typeof target === "object" ? target.transfer : undefined);
 $.wire = (data, transfer) => {
   const ports = transferred(transfer);
   // Read first: a message that can't be sent mustn't take its ports away.

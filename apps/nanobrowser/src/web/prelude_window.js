@@ -217,7 +217,7 @@ class Navigator {
   vibrate() { return false; }
   share() { return Promise.reject(new DOMException("Sharing is not available.", "NotAllowedError")); }
   canShare() { return false; }
-  getBattery() { return Promise.reject(new DOMException("Not available.", "NotSupportedError")); }
+  // No battery backend: leave getBattery absent so feature detection can fall back.
   getGamepads() { return []; }
   registerProtocolHandler() {}
 }
@@ -451,7 +451,7 @@ g.postMessage = function postMessage(data, target, transfer) {
   const origin = from ? $.pageOrigin(from) : $.pageOrigin();
   const source = from ? $.windowOfPage(from) : g;
   g.setTimeout(() => {
-    const e = new MessageEvent("message", { data: copy, origin, source, ports: $.transferred(transfer ?? target) });
+    const e = new MessageEvent("message", { data: copy, origin, source, ports: $.transferred($.windowTransfer(target, transfer)) });
     e.isTrusted = true;
     $.dispatch(g, e);
   }, 0);

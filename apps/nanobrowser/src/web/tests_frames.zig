@@ -219,3 +219,56 @@ test "a native read off an iframe that's then removed still binds and runs, as S
     try r.expectJs("typeof st + ',' + at.call(window, 'hi')", "function,aGk=");
     try r.expectNoErrors();
 }
+
+test "frame arrays keep their brand, iterator and message clone" {
+    var r: Run = undefined;
+    try r.start();
+    defer r.stop();
+    try r.html("<!doctype html><body><iframe id=f srcdoc=\"<script>var entries = [[1, 2]];</script>\"></iframe>");
+    try r.waitJs("f.contentWindow.entries !== undefined");
+    try r.expectJs("Array.isArray(f.contentWindow.entries)", "true");
+    try r.expectJs("new Map(f.contentWindow.entries).get(1)", "2");
+    try r.expectJs("JSON.stringify(structuredClone(f.contentWindow.entries))", "[[1,2]]");
+    try r.expectJs("var ch = new MessageChannel(), cloned; ch.port1.onmessage = e => cloned = e.data; ch.port2.postMessage({tT:f.contentWindow.entries}); 0", "0");
+    try r.waitJs("cloned !== undefined");
+    try r.expectJs("new Map(cloned.tT).get(1)", "2");
+    try r.expectNoErrors();
+}
+
+test "a frame's message port can be transferred by its parent" {
+    var r: Run = undefined;
+    try r.start();
+    defer r.stop();
+    try r.html("<!doctype html><body><iframe id=f></iframe>");
+    _ = try r.eval(
+        \\var foreign = new f.contentWindow.MessageChannel(), ports, answer;
+        \\addEventListener('message', e => ports = e.ports);
+        \\postMessage('port', '*', [foreign.port2]);
+    );
+    try r.waitJs("ports !== undefined");
+    try r.expectJs("ports.length", "1");
+    _ = try r.eval("ports[0].onmessage = e => answer = e.data; foreign.port1.postMessage('hello')");
+    try r.waitJs("answer !== undefined");
+    try r.expectJs("answer", "hello");
+    try r.expectNoErrors();
+}
+
+test "postMessage's second argument as an array transfers nothing; as options it does" {
+    var r: Run = undefined;
+    try r.start();
+    defer r.stop();
+    try r.html(
+        \\<!doctype html><body><script>
+        \\var got = [];
+        \\addEventListener('message', (e) => got.push(e.data + ':' + e.ports.length));
+        \\var a = new MessageChannel(), b = new MessageChannel(), c = new MessageChannel();
+        \\postMessage('array', [a.port2]);
+        \\postMessage('options', { transfer: [b.port2] });
+        \\postMessage('third', '*', [c.port2]);
+        \\var options = []; options.transfer = [new MessageChannel().port2];
+        \\postMessage('array-options', options);
+        \\</script>
+    );
+    try r.waitJs("got.length === 4");
+    try r.expectJs("got.join()", "array:0,options:1,third:1,array-options:1");
+}

@@ -22,6 +22,8 @@ pub const Ctx = struct {
     root_font: f32 = 16,
     vw: f32 = 1024,
     vh: f32 = 768,
+    /// Told when anything reads the viewport's size: a new size then has to restyle.
+    viewport_read: ?*bool = null,
     viewport_dark: bool = false,
     node: ?*dom.Node = null,
     arena: Allocator,
@@ -200,6 +202,9 @@ pub fn unitPx(ctx: *const Ctx, unit: []const u8) ?f32 {
     if (eql(u8, u, "px")) return 1;
     if (eql(u8, u, "em")) return ctx.em();
     if (eql(u8, u, "rem")) return ctx.root_font;
+    if (u.len > 1 and (u[0] == 'v' or u[1] == 'v')) if (ctx.viewport_read) |r| {
+        r.* = true;
+    };
     if (eql(u8, u, "vw") or eql(u8, u, "dvw") or eql(u8, u, "svw") or eql(u8, u, "lvw") or eql(u8, u, "vi")) return ctx.vw / 100;
     if (eql(u8, u, "vh") or eql(u8, u, "dvh") or eql(u8, u, "svh") or eql(u8, u, "lvh") or eql(u8, u, "vb")) return ctx.vh / 100;
     if (eql(u8, u, "vmin") or eql(u8, u, "dvmin") or eql(u8, u, "svmin") or eql(u8, u, "lvmin")) return @min(ctx.vw, ctx.vh) / 100;
@@ -229,6 +234,7 @@ pub fn unitPx(ctx: *const Ctx, unit: []const u8) ?f32 {
 /// A container's content box on one axis, for cq units: the nearest that contains
 /// that axis, and the viewport when there's none, or none laid out yet.
 fn cqSize(ctx: *const Ctx, inline_axis: bool) f32 {
+    if (ctx.viewport_read) |r| r.* = true;
     const viewport = if (inline_axis) ctx.vw else ctx.vh;
     var at = if (ctx.node) |n| n.parent else null;
     while (at) |a| : (at = a.parent) {

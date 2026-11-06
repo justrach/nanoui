@@ -37,13 +37,15 @@ typing, and update. It is not a browser to trust with a bank account.
 - **Not safe for hostile sites yet.** Nothing is sandboxed: a page's scripts, parsers and
   decoders share one process with everything else, in a language without memory safety.
   CORS is only checked when a response is read (no preflights), and CSP and subresource
-  integrity are ignored.
+  integrity are ignored. WebGL shaders reach the OpenGL driver without ANGLE validation;
+  the limited WGSL-to-Metal translator is not a complete WebGPU validator.
 - **Little is kept.** `localStorage` and history live for the life of the process. On
   Apple's systems the system's HTTP client also keeps cookies and a cache of its own on
   disk, so a site can remember what it decided about this browser between runs.
-- **Bot walls.** Google, Cloudflare and DataDome challenges appear and can't be passed:
-  reCAPTCHA's box draws but times out, and Turnstile stops in its scripts. A search that
-  lands on Google's wall lands there in headless Chromium from the same network too.
+- **Bot walls remain unsupported.** Cross-frame array and message-port fixes remove
+  reCAPTCHA's earlier JavaScript errors, but the demo still times out waiting for its
+  challenge frame in hidden-window tests, even though the checkbox receives its click.
+  This is not a completed CAPTCHA fix. Turnstile still stops in its scripts.
 - **It says it's Chrome.** The user agent is Chrome's own string, with the version in
   `chrome_major` (`src/page.zig`) and no name of ours, so sites can't tell it apart by that
   and it needs raising as Chrome moves on. It doesn't get past the walls above: Google's
@@ -53,7 +55,13 @@ typing, and update. It is not a browser to trust with a bank account.
 - **Slow on big sites.** No JIT, and a script that inserts CSS rules restyles the whole
   page. A heavy page such as GitHub takes many seconds to settle.
 
-Absent: `WebSocket`, service workers, `indexedDB`, WebGL, WebRTC, video and audio, canvas
+On macOS, canvases can draw with bounded, offscreen [WebGL 1/2](src/gl/README.md)
+and [WebGPU](src/gpu/SUBSET.md) implementations. These execute real shaders and expose
+readback, not the full APIs or conformance; unsupported platforms return no GPU context.
+WebGPU includes a small WGSL grammar, compute/storage buffers and triangle rendering.
+Both implementations run synchronously and can hold up the UI thread.
+
+Absent: `WebSocket`, service workers, `indexedDB`, WebRTC, video and audio, canvas 2D
 drawing (2D contexts exist and draw nothing), WebP and AVIF off Apple's systems,
 `contenteditable`, bidirectional text and complex scripts off Apple's systems.
 
@@ -92,6 +100,8 @@ src/layout/  block, inline, float, flex, grid, table, positioned
 src/paint/   the display list, drawn through nanoui's boxes; form controls
 src/js/      the JavaScript engine: parser, bytecode VM, GC, built-ins, RegExp (js.zig is its API)
 src/web/     the DOM and web APIs scripts see, the event loop, script loading
+src/gl/      offscreen CGL contexts, GLSL translation and WebGL draw validation
+src/gpu/     Metal resources, commands and the bounded WGSL-to-Metal compiler
 src/shell/   the tabs, the field, the finder
 src/page*.zig, loader.zig   one document: fetching, frames, input
 ```

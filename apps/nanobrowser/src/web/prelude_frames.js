@@ -17,7 +17,7 @@ function crossWindow(id, self) {
     set(_, k, v) { if (k === "href") { $.navigateFrame(id, String(v)); return true; } blocked(k); },
   });
   const known = {
-    postMessage(data, target, transfer) { $.postTo(id, $.wire(data, transfer ?? target), targetOrigin(target)); },
+    postMessage(data, target, transfer) { $.postTo(id, $.wire(data, $.windowTransfer(target, transfer)), targetOrigin(target)); },
     focus() {}, blur() {}, close() {},
     closed: false,
   };
@@ -51,7 +51,7 @@ const remotes = new Map();
 // once the frame has gone. Sentry and others read clean natives from an iframe they
 // remove straight away, and go on to bind and call them.
 const localOf = new WeakMap();
-$.hook("makeRemote", (peer, id, callable) => {
+$.hook("makeRemote", (peer, id, callable, array) => {
   const key = peer + ":" + id;
   let p = remotes.get(key);
   if (p) return p;
@@ -59,9 +59,10 @@ $.hook("makeRemote", (peer, id, callable) => {
   const isWindow = id === 0;
   const state = isWindow ? () => $.peerState(peer) : () => 1;
   const far = () => crossWindow(peer, p);
-  const send = (data, target, transfer) => $.postTo(peer, $.wire(data, transfer ?? target), targetOrigin(target));
+  const send = (data, target, transfer) => $.postTo(peer, $.wire(data, $.windowTransfer(target, transfer)), targetOrigin(target));
   const orphan = () => (callable && $.peerState(peer) === gone ? localOf.get(p) ?? Function.prototype : null);
-  p = new Proxy(callable ? function () {} : {}, {
+  // An array must remain an array to Array.isArray and structuredClone.
+  p = new Proxy(callable ? function () {} : array ? [] : {}, {
     get(_, k) {
       const left = orphan();
       if (left) return left[k];
@@ -71,6 +72,7 @@ $.hook("makeRemote", (peer, id, callable) => {
         if (k === "postMessage") return s === gone ? () => {} : send;
         if (k === "closed" && s === gone) return true;
       }
+      if (k === Symbol.iterator) return call(9, "iterator");
       if (typeof k === "symbol") return k === Symbol.toStringTag ? call(0, "constructor")?.name : undefined;
       const v = call(0, k);
       if (isWindow && typeof v === "function" && typeof g[k] === "function") localOf.set(v, g[k]);
@@ -87,7 +89,9 @@ $.hook("makeRemote", (peer, id, callable) => {
     getOwnPropertyDescriptor(_, k) {
       if (state() === cross) return Reflect.getOwnPropertyDescriptor(far(), k);
       if (typeof k === "symbol" || !call(5, k)) return undefined;
-      return { value: call(0, k), writable: true, enumerable: true, configurable: true };
+      // The local array target's length is non-configurable, as the remote's is.
+      const length = array && k === "length";
+      return { value: call(0, k), writable: true, enumerable: !length, configurable: !length };
     },
     getPrototypeOf() { return state() === cross ? null : call(8) ?? null; },
     apply(_, self, args) {
@@ -102,6 +106,13 @@ $.hook("makeRemote", (peer, id, callable) => {
   remotes.set(key, p);
   return p;
 });
+// Arguments already are a list. Iterating their remote proxy here would call
+// another remote function to obtain its iterator, recursively marshalling args.
+function argumentList(value) {
+  const out = [];
+  for (let i = 0; i < value.length; i++) out.push(value[i]);
+  return out;
+}
 $.hook("remoteOp", (op, o, a, b) => {
   switch (op) {
     case 0: return o[a];
@@ -110,9 +121,11 @@ $.hook("remoteOp", (op, o, a, b) => {
     case 3: return delete o[a];
     case 4: return Reflect.ownKeys(o).filter((k) => typeof k === "string");
     case 5: return Object.getOwnPropertyDescriptor(o, a) !== undefined;
-    case 6: return Reflect.apply(o, a, Array.from(b));
-    case 7: return Reflect.construct(o, Array.from(a));
+    case 6: return Reflect.apply(o, a, argumentList(b));
+    case 7: return Reflect.construct(o, argumentList(a));
     case 8: return Object.getPrototypeOf(o);
+    case 9: return o[Symbol[a]];
+    case 10: return o instanceof g.MessagePort || $.remotePort(o);
   }
 });
 })

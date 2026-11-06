@@ -36,6 +36,7 @@ pub const Value = struct {
     /// The value as a plain number, for comparing.
     fn estimate(v: Value, ctx: *const Ctx) f32 {
         if (v.kind == .number) return v.num;
+        if (ctx.viewport_read) |r| r.* = true;
         return v.px + v.pct * ctx.vw / 100;
     }
 };

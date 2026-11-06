@@ -62,6 +62,8 @@ pub const Engine = struct {
     /// Elements with a `container-type`: their boxes are read after each layout.
     containers: std.AutoHashMapUnmanaged(*dom.Node, void) = .empty,
     viewport: Viewport = .{ .width = 1024, .height = 768 },
+    /// A style in this generation came from the viewport's size.
+    viewport_read: bool = false,
     /// Whether scripts run: `<noscript>` then stays hidden.
     scripting: bool = true,
 
@@ -163,11 +165,15 @@ pub const Engine = struct {
 
     pub fn setViewport(e: *Engine, v: Viewport) void {
         const same_units = v.width == e.viewport.width and v.height == e.viewport.height and v.dark == e.viewport.dark;
+        const same_scheme = v.dark == e.viewport.dark;
         e.viewport = v;
         if (same_units) return;
-        // Viewport units in every value, and maybe the media queries.
-        e.doc.touchStyle();
-        if (e.signature() != e.media_signature) e.index_dirty = true;
+        // A media query that flipped, or a value in viewport units. Failing those,
+        // only layout reads the size, and a long page's restyle is spared on each
+        // change of a window being dragged.
+        const flipped = e.signature() != e.media_signature;
+        if (flipped) e.index_dirty = true;
+        if (flipped or e.viewport_read or !same_scheme) e.doc.touchStyle() else e.doc.touchLayout();
     }
 
     fn signature(e: *const Engine) u64 {
@@ -287,6 +293,7 @@ pub const Engine = struct {
         if (e.generation == 0) e.generation = 1;
         e.root_font = 16;
         e.match_ctx = .{ .doc = e.doc };
+        e.viewport_read = false;
 
         const doc_node = e.doc.node;
         var at = doc_node.first_child;

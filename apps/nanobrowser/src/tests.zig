@@ -36,4 +36,6 @@ test {
     _ = @import("web/tests.zig");
     _ = @import("web/source_pick.zig");
     _ = @import("paint/tests_pictures.zig");
+    _ = @import("tests_webgl.zig");
+    _ = @import("web/tests_webgpu.zig");
 }

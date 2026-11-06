@@ -16,6 +16,7 @@ const svg_markup = @import("paint/svg_markup.zig");
 const loader = @import("loader.zig");
 const input = @import("page_input.zig");
 const glide = @import("page_glide.zig");
+const resize = @import("page_resize.zig");
 const motion = @import("page_motion.zig");
 const frames = @import("frames.zig");
 const web = @import("web/web.zig");
@@ -108,13 +109,16 @@ pub fn prepare(p: *Page, c: *ui.Context, w: f32, h: f32) void {
     // Pictures on the web are as large as the screen is dense; the budget is
     // what scrolling back past them shouldn't decode again.
     ui.imageLimits(c, .{ .picture_side = 8192, .atlas_side = 8192, .decoded_bytes = 256 * 1024 * 1024 });
-    if (w != p.viewport_w or h != p.viewport_h or c.theme.dark != p.dark) {
+    var resize_from: ?f64 = null;
+    // Over a dark change a window isn't being dragged, and nothing should wait for it.
+    if (c.theme.dark != p.dark or ((w != p.viewport_w or h != p.viewport_h) and resize.due(p, c))) {
+        resize_from = resize.now();
         p.viewport_w = w;
         p.viewport_h = h;
         p.dark = c.theme.dark;
         p.engine.setViewport(.{ .width = w, .height = h, .dark = p.dark });
-        p.doc.touchStyle();
     }
+    defer if (resize_from) |from| resize.done(p, from);
     flushStyle(p);
     if (p.doc.layout_dirty or p.list == null) {
         relayout(p, c);

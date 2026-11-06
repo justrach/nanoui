@@ -23,6 +23,7 @@ test "window's names, and what it offers and doesn't" {
         .{ .js = "screen.width > 0 && screen.colorDepth", .want = "24" },
         .{ .js = "navigator.userAgent.includes('Chrome/') + navigator.language + navigator.onLine + navigator.cookieEnabled + typeof navigator.hardwareConcurrency", .want = "trueen-UStruetruenumber" },
         .{ .js = "typeof navigator.serviceWorker + typeof navigator.clipboard", .want = "undefinedobject" },
+        .{ .js = "'getBattery' in navigator", .want = "false" },
         .{ .js = "typeof WebSocket + typeof Worker + typeof setImmediate + typeof indexedDB + typeof document.all", .want = "undefinedfunctionundefinedundefinedundefined" },
         .{ .js = "[document.all === undefined, document.all == null, !document.all, undefined === document.all, document.all ? 1 : 2, document.all.length > 0, document.all[0] === document.documentElement, document.all.item(0) === document.documentElement, document.all.nope].join()", .want = "false,true,true,false,2,true,true,true," },
         .{ .js = "MediaError.MEDIA_ERR_DECODE + PerformanceNavigation.TYPE_RELOAD + performance.navigation.type + typeof webkitSpeechRecognition", .want = "4function" },

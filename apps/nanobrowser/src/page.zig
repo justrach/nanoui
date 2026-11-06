@@ -51,6 +51,8 @@ pub const Page = struct {
     svgs: svg_markup.Cache = .{},
     /// What each `<canvas>` with a context shows.
     canvases: @import("paint/canvas_source.zig").Table = .{},
+    webgl: @import("gl/context.zig").List = .{},
+    gpu: @import("gpu/context.zig").Context = .{},
     /// The screen and window `srcset` and `media` were last answered for.
     pick_signature: u64 = 0,
     icon: ?[]const u8 = null,
@@ -64,6 +66,9 @@ pub const Page = struct {
     /// alone, each frame of an animation say.
     list_arena: std.heap.ArenaAllocator,
     list_dirty: bool = false,
+    /// What the last new size cost to lay out and when that finished, in seconds.
+    resize_cost: f64 = 0,
+    resized_at: f64 = 0,
     /// The list is behind on something out of sight (`page_motion`).
     list_stale: bool = false,
     /// All that's animating is out of sight.
@@ -208,6 +213,8 @@ pub const Page = struct {
         p.sheets.deinit(gpa);
         p.pictures.deinit(gpa);
         p.svgs.deinit(gpa);
+        p.webgl.deinit(gpa);
+        p.gpu.deinit();
         p.canvases.deinit(gpa);
         gpa.free(p.final_url);
         p.doc_arena.deinit();

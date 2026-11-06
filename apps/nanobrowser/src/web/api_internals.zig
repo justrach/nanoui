@@ -306,5 +306,7 @@ pub fn make(w: *World) Error!*js.Object {
     try bind.methods(vm, o, &api_document.internals);
     try bind.methods(vm, o, &@import("api_frames.zig").internals);
     try bind.methods(vm, o, &@import("api_worker.zig").internals);
+    try bind.methods(vm, o, &@import("api_webgl.zig").internals);
+    try bind.methods(vm, o, &@import("api_webgpu.zig").internals);
     return o;
 }

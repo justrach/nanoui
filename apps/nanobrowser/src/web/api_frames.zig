@@ -96,17 +96,17 @@ pub fn carry(from: *World, to: *World, v: Value) Error!Value {
         if (r.id != window_export and r.peer == idOf(to.page)) return to.exports.items[r.id - 1];
     }
     if (obj == from.vm.global()) return windowProxy(to, from.page);
-    return makeProxy(to, idOf(from.page), try exported(from, obj), v.isCallable());
+    return makeProxy(to, idOf(from.page), try exported(from, obj), v.isCallable(), try @import("../js/b_array.zig").isArrayValue(from.vm, v));
 }
 
-fn makeProxy(to: *World, peer: u32, id: u32, callable: bool) Error!Value {
-    const proxy = try to.vm.call(to.h.makeRemote, Value.undefined, &.{ Value.fromUsize(peer), Value.fromUsize(id), Value.fromBool(callable) });
+fn makeProxy(to: *World, peer: u32, id: u32, callable: bool, array: bool) Error!Value {
+    const proxy = try to.vm.call(to.h.makeRemote, Value.undefined, &.{ Value.fromUsize(peer), Value.fromUsize(id), Value.fromBool(callable), Value.fromBool(array) });
     if (proxy.isObject()) try to.imports.put(to.gpa, proxy.asObject(), .{ .peer = peer, .id = id });
     return proxy;
 }
 
 fn windowProxy(to: *World, target: *Page) Error!Value {
-    return makeProxy(to, windowIdOf(target), window_export, false);
+    return makeProxy(to, windowIdOf(target), window_export, false, false);
 }
 
 /// `target`'s window, as the world of `w` may see it.
@@ -325,7 +325,16 @@ fn popoverOpen(vm: *Vm, _: Value, args: []const Value) Error!Value {
     return Value.undefined;
 }
 
+/// A port from another same-origin realm still has its transferable type there.
+fn remotePort(vm: *Vm, _: Value, args: []const Value) Error!Value {
+    const v = bind.arg(args, 0);
+    if (!v.isObject()) return Value.false;
+    const r = bind.world(vm).imports.get(v.asObject()) orelse return Value.false;
+    return remote(vm, Value.undefined, &.{ Value.fromInt(10), Value.fromUsize(r.peer), Value.fromUsize(r.id) });
+}
+
 pub const internals = [_]bind.Method{
+    .{ .name = "remotePort", .arity = 1, .f = remotePort },
     .{ .name = "remote", .arity = 5, .f = remote },
     .{ .name = "peerState", .arity = 1, .f = peerState },
     .{ .name = "frameWindow", .arity = 1, .f = frameWindow },

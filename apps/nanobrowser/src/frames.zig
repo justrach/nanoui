@@ -249,7 +249,13 @@ pub fn urlOrigin(u: []const u8) []const u8 {
     const from = scheme_end + 3;
     const rest = u[from..];
     const end = std.mem.indexOfAny(u8, rest, "/?#") orelse rest.len;
-    return u[0 .. from + end];
+    const whole = u[0 .. from + end];
+    // A scheme's own port isn't part of its origin: reCAPTCHA says `https://x:443`.
+    const https = std.ascii.startsWithIgnoreCase(u, "https://");
+    const http = std.ascii.startsWithIgnoreCase(u, "http://");
+    if (https and std.mem.endsWith(u8, whole, ":443")) return whole[0 .. whole.len - 4];
+    if (http and std.mem.endsWith(u8, whole, ":80")) return whole[0 .. whole.len - 3];
+    return whole;
 }
 
 /// The page whose origin a page has: its own, or for one with no address the page
@@ -420,6 +426,10 @@ pub fn keyboardPage(top: *Page) *Page {
 test "an address's origin" {
     try std.testing.expectEqualStrings("https://a.test:8080", urlOrigin("https://a.test:8080/x?y#z"));
     try std.testing.expectEqualStrings("https://a.test", urlOrigin("https://a.test"));
+    try std.testing.expectEqualStrings("https://a.test", urlOrigin("https://a.test:443/x"));
+    try std.testing.expectEqualStrings("http://a.test", urlOrigin("http://a.test:80"));
+    try std.testing.expectEqualStrings("https://a.test:80", urlOrigin("https://a.test:80"));
+    try std.testing.expectEqualStrings("http://a.test:443", urlOrigin("http://a.test:443"));
     try std.testing.expectEqualStrings("null", urlOrigin("data:text/html,hi"));
     try std.testing.expectEqualStrings("null", urlOrigin("about:blank"));
 }
