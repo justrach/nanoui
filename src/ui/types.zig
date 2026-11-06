@@ -122,6 +122,12 @@ pub const Shadow = struct {
     /// 0 shrinks it, as CSS's spread radius does.
     spread: f32 = 0,
 
+    /// Tailwind's `shadow-md`, as GPUI draws it: tooltips and cards.
+    pub const md = [_]Shadow{
+        .{ .color = .{ .a = 0.1 }, .blur = 6, .y = 4, .spread = -1 },
+        .{ .color = .{ .a = 0.1 }, .blur = 4, .y = 2, .spread = -2 },
+    };
+
     /// Tailwind's `shadow-lg`, as GPUI draws it: two faint layers.
     pub const lg = [_]Shadow{
         .{ .color = .{ .a = 0.1 }, .blur = 15, .y = 10, .spread = -3 },
@@ -292,6 +298,39 @@ pub const Span = struct {
     }
 };
 
+/// How text breaks into lines (`TextSystem.wrap_rule`).
+pub const WrapRule = enum {
+    /// Where the platform's typesetter suggests (CoreText on Apple systems).
+    typesetter,
+    /// A paragraph's glyph positions, breaking before the overflowing word
+    /// or glyph, as GPUI's `LineLayout::compute_wrap_boundaries` does.
+    glyph_positions,
+};
+
+/// What is centered within a line's extra height (`TextSystem.baseline_rule`).
+pub const BaselineRule = enum {
+    /// The font's line: ascent, descent and leading, rounded up.
+    font_line,
+    /// Ascent and descent alone, as GPUI and CSS place the glyphs.
+    glyph_box,
+};
+
+/// How glyph origins land on device pixels (`TextSystem.glyph_snap`).
+pub const GlyphSnap = enum {
+    /// Baseline to the nearest pixel, x down to a quarter pixel.
+    nearest,
+    /// Both to nearest (quarters across), with ties toward zero, as GPUI.
+    half_toward_zero,
+};
+
+/// A span's background relative to its line's box: horizontal padding,
+/// vertical inset from the line's edges, and corner radius, in points.
+pub const SpanBox = struct {
+    pad_x: f32,
+    inset_y: f32,
+    radius: f32,
+};
+
 pub const TextStyle = struct {
     size: f32 = 14,
     weight: Weight = .regular,
@@ -300,6 +339,9 @@ pub const TextStyle = struct {
     wrap: bool = false,
     mono: bool = false,
     italic: bool = false,
+    /// Use the system's proportional font, not the theme's (tooltips).
+    /// Monospaced text still uses the theme's monospaced family.
+    system_font: bool = false,
     /// Line height as a multiple of the font's (1.5 for airy prose).
     leading: f32 = 1,
     /// Line height in points (CSS's `line-height: 22px`), taking the place
@@ -308,6 +350,9 @@ pub const TextStyle = struct {
     /// Inline code's size (`Span.mono`) over the text's: smaller, as the
     /// monospaced font looks larger at the same size; 1 keeps it.
     mono_scale: f32 = 0.9,
+    /// A span background's padding, inset and radius relative to its line.
+    /// Null keeps the default background fitted to the font's glyph box.
+    span_box: ?SpanBox = null,
     /// A line longer than its box (text that doesn't wrap): cut before an
     /// ellipsis, faded toward its end, or shortened through its middle.
     truncate: Truncate = .none,

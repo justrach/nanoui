@@ -39,6 +39,10 @@ fn snap(v: f32, scale: f32) f32 {
     return @round(v * scale) / scale;
 }
 
+fn halfTowardZero(v: f32) f32 {
+    return if (v >= 0) @ceil(v - 0.5) else @floor(v + 0.5);
+}
+
 fn push(c: *Context, out: *std.ArrayList(metal.Instance), inst: metal.Instance) void {
     out.append(c.gpa, inst) catch {};
 }
@@ -379,21 +383,26 @@ fn textRunLimit(c: *Context, out: *std.ArrayList(metal.Instance), t: ctx_mod.Con
     if (lay.glyphs.len == 0 or x + lay.width < clip4[0]) return;
     const scale = c.scale;
     // The line's extra height (its leading) goes half above, half below.
-    const raw_baseline = y + (lh - f.lineHeight()) / 2 + f.leading / 2 + f.ascent;
-    const baseline = if (moving) raw_baseline else snap(raw_baseline, scale);
+    const gpui_snap = c.text.glyph_snap == .half_toward_zero;
+    const raw_baseline = if (c.text.baseline_rule == .glyph_box and lh != f.lineHeight())
+        y + (lh - f.ascent - f.descent) / 2 + f.ascent
+    else
+        y + (lh - f.lineHeight()) / 2 + f.leading / 2 + f.ascent;
+    const baseline = if (gpui_snap) halfTowardZero(raw_baseline * scale) / scale else if (moving) raw_baseline else snap(raw_baseline, scale);
     const base = metal.color4(t.color.alpha(opacity));
     if (sel) |s| @import("selection.zig").line(c, out, s.id, s.index, t.str, start, end, lay, x, y, lh, s.x0, s.x1, clip4);
-    if (t.spans.len > 0) decorations(c, out, &t, lay, start, end, x, baseline, f, clip4, opacity);
+    if (t.spans.len > 0) decorations(c, out, &t, lay, start, end, x, .{ .top = y, .h = lh, .baseline = baseline }, f, clip4, opacity);
     var span_i: usize = 0;
     for (lay.glyphs) |g| {
         const pen = (x + g.x) * scale;
         if (pen / scale > clip4[2]) break;
         if (limit) |l| if (pen / scale >= l.end) break;
         const positions: f32 = if (native_windows) @floatFromInt(c.text.positions(g)) else text_mod.subpixel_bins;
-        const quantized = if (native_windows) @round(pen * positions) / positions else pen;
+        // DirectWrite keeps its per-face phase count (including grid fitting).
+        const quantized = if (gpui_snap) halfTowardZero(pen * positions) / positions else if (native_windows) @round(pen * positions) / positions else pen;
         const px = @floor(quantized);
         const phase = (quantized - px) * text_mod.subpixel_bins;
-        const bin: u8 = @intFromFloat(@min(text_mod.subpixel_bins - 1, if (native_windows) @round(phase) else @floor(phase)));
+        const bin: u8 = @intFromFloat(@min(text_mod.subpixel_bins - 1, if (native_windows) @round(phase) else @floor(phase + if (gpui_snap) @as(f32, 0.001) else 0)));
         var color = base;
         var tone = t.color;
         if (t.spans.len > 0) {
@@ -441,9 +450,12 @@ fn xAt(lay: text_mod.Layout, at: usize) f32 {
     return lay.width;
 }
 
+const LineBox = struct { top: f32, h: f32, baseline: f32 };
+
 /// What spans draw besides their glyphs: backgrounds (inline code, marks)
 /// behind the text, underlines (links) and lines through.
-fn decorations(c: *Context, out: *std.ArrayList(metal.Instance), t: *const ctx_mod.Content.Text, lay: text_mod.Layout, start: usize, end: usize, x: f32, baseline: f32, f: text_mod.Font, clip4: [4]f32, opacity: f32) void {
+fn decorations(c: *Context, out: *std.ArrayList(metal.Instance), t: *const ctx_mod.Content.Text, lay: text_mod.Layout, start: usize, end: usize, x: f32, line: LineBox, f: text_mod.Font, clip4: [4]f32, opacity: f32) void {
+    const baseline = line.baseline;
     for (t.spans) |sp| {
         if (sp.end <= start or sp.start >= end) continue;
         if (sp.background == null and !sp.underline and !sp.strike) continue;
@@ -454,9 +466,12 @@ fn decorations(c: *Context, out: *std.ArrayList(metal.Instance), t: *const ctx_m
         if (x1 <= x0) continue;
         const color = sp.color orelse t.color;
         if (sp.background) |bg| push(c, out, .{
-            .rect = .{ x0 - 3, baseline - f.ascent * 0.92 - 2, x1 - x0 + 6, (f.ascent + f.descent) * 0.92 + 4 },
+            .rect = if (t.style.span_box) |box|
+                .{ x0 - box.pad_x, line.top + box.inset_y, x1 - x0 + 2 * box.pad_x, line.h - 2 * box.inset_y }
+            else
+                .{ x0 - 3, baseline - f.ascent * 0.92 - 2, x1 - x0 + 6, (f.ascent + f.descent) * 0.92 + 4 },
             .color = metal.color4(bg.alpha(opacity)),
-            .radius = 4,
+            .radius = if (t.style.span_box) |box| box.radius else 4,
             .clip = clip4,
         });
         if (sp.underline) push(c, out, .{

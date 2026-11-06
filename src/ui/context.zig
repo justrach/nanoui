@@ -26,6 +26,8 @@ pub const Node = struct {
     interactive: bool = false,
     /// Holds wrapping text: may shrink below its measured width in a row.
     flexible: bool = false,
+    /// Built using the preceding size; a size change needs another frame.
+    layout_dependent: bool = false,
     measured: types.Size = .{},
     rect: types.Rect = .{},
 };
@@ -94,6 +96,10 @@ pub const Context = struct {
     theme_chosen: ?Theme = null, // the view's own choice; null: the system's
     size: types.Size = .{},
     scale: f32 = 2,
+    /// Opt in to device-pixel edges after layout (half ties toward zero).
+    pixel_snap: bool = false,
+    /// With pixel snapping, round text measurements up to device pixels too.
+    pixel_snap_text: bool = true,
     /// What draws the frames: Metal, OpenGL, or nanoui's own CPU renderer.
     renderer: []const u8 = if (@import("text.zig").portable) "CPU" else "Metal",
     /// Wait for the display's refresh when presenting (Windows' Direct3D 11).
@@ -160,6 +166,8 @@ pub const Context = struct {
     copy_requested: bool = false,
     /// The soonest a view asked for another frame (`frameIn`), seconds.
     frame_in: ?f32 = null,
+    /// Delayed help requested during build, drawn over the completed view.
+    tooltip: @import("tooltip.zig").Frame = .{},
     copy_done: bool = false,
     /// Set when the view took the offered shortcut: it goes no further.
     shortcut_taken: bool = false,
@@ -186,6 +194,9 @@ pub const Context = struct {
     next_key_int: ?u64 = null,
     /// The topmost interactive box under the pointer, and its interactive ancestors.
     hot: u64 = 0,
+    /// Hide hover after keyboard input until the next pointer move or press.
+    keyboard_hides_hover: bool = false,
+    keyboard_modality: bool = false,
     hot_path: std.ArrayList(u64) = .empty,
     active: u64 = 0,
     focus: u64 = 0,
@@ -294,6 +305,8 @@ pub const Context = struct {
     }
     /// Starts building a frame: the root fills the window.
     pub fn begin(c: *Context) void {
+        c.noteModality();
+        c.tooltip = .{};
         if (c.frame == 0 and c.nodes.capacity == 0) c.warmMaps();
         if (c.input.key == .tab and c.focus == 0 and c.last_focusable_ids.items.len > 0) {
             hooks.focusCycle(c, c.input.shift);
@@ -516,8 +529,10 @@ pub const Context = struct {
     }
 
     pub const addHit = hooks.addHit;
-    pub const commitHits = hooks.commitHits;
-    pub const updateHot = hooks.updateHot;
+    const hit_mod = @import("context_hits.zig");
+    pub const commitHits = hit_mod.commitHits;
+    pub const updateHot = hit_mod.updateHot;
+    pub const noteModality = hit_mod.noteModality;
     pub const applyScroll = scroll_mod.applyScroll;
     pub const hasOverscroll = scroll_mod.hasOverscroll;
 
@@ -529,10 +544,12 @@ pub const Context = struct {
     /// The secondary button went down (`Input.secondary`): no press, and
     /// the focus stays where it was.
     pub fn secondaryDown(c: *Context) void {
+        c.updateHot();
         c.input.secondary = true;
     }
 
     pub fn pointerDown(c: *Context) void {
+        c.updateHot();
         c.input.down = true;
         c.input.pressed = true;
         c.right_press = c.input.button == .right or (@import("keys.zig").mac and c.input.button == .left and c.input.ctrl);

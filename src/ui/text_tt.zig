@@ -33,10 +33,10 @@ pub const Glyph = struct { font: u16, glyph: u16, x: f32, y: f32, index: u32 = 0
 pub const Layout = struct { width: f32, glyphs: []const Glyph };
 pub const Line = struct { start: usize, end: usize, width: f32 };
 
-const FontKey = struct { size_bits: u32, weight: types.Weight, mono: bool, italic: bool };
+const FontKey = struct { size_bits: u32, weight: types.Weight, mono: bool, italic: bool, system: bool };
 
 fn fontKey(style: types.TextStyle) FontKey {
-    return .{ .size_bits = @bitCast(style.size), .weight = style.weight, .mono = style.mono, .italic = style.italic };
+    return .{ .size_bits = @bitCast(style.size), .weight = style.weight, .mono = style.mono, .italic = style.italic, .system = style.system_font };
 }
 
 fn weightOf(w: types.Weight) u16 {
@@ -66,6 +66,12 @@ pub const TextSystem = struct {
     mono_family: ?[]const u8 = null,
     /// Every size times this (`Context.setZoom`).
     zoom: f32 = 1,
+    /// The portable typesetter currently uses its own line breaks for both.
+    wrap_rule: types.WrapRule = .typesetter,
+    /// What is centered in a line given its own height.
+    baseline_rule: types.BaselineRule = .font_line,
+    /// How glyph origins land on device pixels.
+    glyph_snap: types.GlyphSnap = .nearest,
 
     pub fn init(gpa: std.mem.Allocator) TextSystem {
         return .{ .gpa = gpa, .db = .init(gpa, std.Io.Threaded.global_single_threaded.io()), .atlas = .init(gpa), .images = .{ .gpa = gpa } };
@@ -164,7 +170,7 @@ pub const TextSystem = struct {
         if (self.fonts.get(fk)) |f| return f;
         const weight = weightOf(style.weight);
         const size = style.size * self.zoom;
-        const face = self.db.match(if (style.mono) self.mono_family else self.family, weight, style.italic, style.mono);
+        const face = self.db.match(if (style.mono) self.mono_family else if (style.system_font) null else self.family, weight, style.italic, style.mono);
         var f: Font = .{ .ascent = size * 0.8, .descent = size * 0.2, .leading = 0, .id = 0xffff, .weight = weight };
         if (face) |fc| if (self.db.load(fc)) |tf| {
             const k = size / tf.units_per_em;
@@ -179,7 +185,7 @@ pub const TextSystem = struct {
         h.update(s);
         h.update(std.mem.asBytes(&style.size));
         h.update(std.mem.asBytes(&style.mono_scale));
-        h.update(&.{ @backingInt(style.weight), @intFromBool(style.mono), @intFromBool(style.italic), @intFromBool(style.tabular) });
+        h.update(&.{ @backingInt(style.weight), @intFromBool(style.mono), @intFromBool(style.italic), @intFromBool(style.system_font), @intFromBool(style.tabular) });
         h.update(std.mem.asBytes(&style.tracking));
         return h.final();
     }

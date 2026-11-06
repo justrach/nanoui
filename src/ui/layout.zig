@@ -53,10 +53,11 @@ pub fn measure(c: *Context, index: u32, avail_w: f32) types.Size {
                 if (t.style.max_lines > 0 and t.lines.len > t.style.max_lines) t.lines = t.lines[0..t.style.max_lines];
                 for (t.lines) |l| content.w = @max(content.w, l.width);
                 content.h = lh * @as(f32, @floatFromInt(t.lines.len));
+                if (c.pixel_snap and c.pixel_snap_text) content = .{ .w = ceilDevice(content.w, c.scale), .h = ceilDevice(content.h, c.scale) };
             } else {
                 const w = if (rich.styled(t.spans)) rich.layout(c.text, t.str, t.style, t.spans, 0).width else c.text.width(t.str, t.style);
-                content.w = @ceil(w);
-                content.h = lh;
+                content.w = if (c.pixel_snap and c.pixel_snap_text) ceilDevice(w, c.scale) else @ceil(w);
+                content.h = if (c.pixel_snap and c.pixel_snap_text) ceilDevice(lh, c.scale) else lh;
                 // Cut or fade to fit (`truncate.zig`): a row may shrink it.
                 flexible = t.style.truncate != .none;
                 if (t.style.truncate != .none) content.w = @min(content.w, inner_w);
@@ -113,6 +114,27 @@ pub fn measure(c: *Context, index: u32, avail_w: f32) types.Size {
     c.node(index).measured = size;
     c.node(index).flexible = flexible and st.width != .px;
     return size;
+}
+
+/// Points rounded up to a device pixel, tolerating floating-point noise.
+fn ceilDevice(v: f32, scale: f32) f32 {
+    return @ceil(@max(v, 0) * scale - 0.001) / scale;
+}
+
+/// Snap absolute edges, not widths: adjacent boxes keep a common edge.
+pub fn snapToPixels(c: *Context) void {
+    const s = c.scale;
+    for (c.nodes.items) |*n| {
+        const x0 = roundHalfTowardZero(n.rect.x * s) / s;
+        const y0 = roundHalfTowardZero(n.rect.y * s) / s;
+        const x1 = roundHalfTowardZero((n.rect.x + n.rect.w) * s) / s;
+        const y1 = roundHalfTowardZero((n.rect.y + n.rect.h) * s) / s;
+        n.rect = .{ .x = x0, .y = y0, .w = x1 - x0, .h = y1 - y0 };
+    }
+}
+
+fn roundHalfTowardZero(v: f32) f32 {
+    return if (v >= 0) @ceil(v - 0.5) else @floor(v + 0.5);
 }
 
 /// Places box `index` in `rect` and its children inside it.

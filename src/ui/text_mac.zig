@@ -55,10 +55,10 @@ pub const Layout = struct { width: f32, glyphs: []const Glyph };
 /// A line of wrapped text: a byte range and its width.
 pub const Line = struct { start: usize, end: usize, width: f32 };
 
-const FontKey = struct { size_bits: u32, weight: types.Weight, mono: bool, italic: bool, tabular: bool, rounded: bool, serif: bool };
+const FontKey = struct { size_bits: u32, weight: types.Weight, mono: bool, italic: bool, system: bool, tabular: bool, rounded: bool, serif: bool };
 
 fn fontKey(style: types.TextStyle) FontKey {
-    return .{ .size_bits = @bitCast(style.size), .weight = style.weight, .mono = style.mono, .italic = style.italic, .tabular = style.tabular, .rounded = style.rounded and !style.mono, .serif = style.serif and !style.mono };
+    return .{ .size_bits = @bitCast(style.size), .weight = style.weight, .mono = style.mono, .italic = style.italic, .system = style.system_font, .tabular = style.tabular, .rounded = style.rounded and !style.mono, .serif = style.serif and !style.mono };
 }
 
 pub const TextSystem = struct {
@@ -84,6 +84,12 @@ pub const TextSystem = struct {
     mono_family: ?[]const u8 = null,
     /// Every size times this (`Context.setZoom`).
     zoom: f32 = 1,
+    /// Where text breaks into lines.
+    wrap_rule: types.WrapRule = .typesetter,
+    /// What is centered in a line given its own height.
+    baseline_rule: types.BaselineRule = .font_line,
+    /// How glyph origins land on device pixels.
+    glyph_snap: types.GlyphSnap = .nearest,
 
     pub fn init(gpa: std.mem.Allocator, device: objc.Object) TextSystem {
         return .{ .gpa = gpa, .atlas = .init(gpa, device), .images = .{ .gpa = gpa } };
@@ -190,7 +196,7 @@ pub const TextSystem = struct {
     pub fn font(self: *TextSystem, style: types.TextStyle) Font {
         const fk = fontKey(style);
         if (self.fonts.get(fk)) |f| return f;
-        var ref = fonts.create(if (style.mono) self.mono_family else self.family, style.size * self.zoom, style.weight, style.italic, style.mono);
+        var ref = fonts.create(if (style.mono) self.mono_family else if (style.system_font) null else self.family, style.size * self.zoom, style.weight, style.italic, style.mono);
         if (style.tabular) ref = fonts.tabular(ref);
         if (fontKey(style).rounded) ref = fonts.rounded(ref);
         if (fontKey(style).serif) ref = fonts.serif(ref);
@@ -209,7 +215,7 @@ pub const TextSystem = struct {
         h.update(s);
         h.update(std.mem.asBytes(&style.size));
         h.update(std.mem.asBytes(&style.mono_scale));
-        h.update(&.{ @backingInt(style.weight), @intFromBool(style.mono), @intFromBool(style.italic), @intFromBool(style.tabular), @intFromBool(style.rounded), @intFromBool(style.serif) });
+        h.update(&.{ @backingInt(style.weight), @intFromBool(style.mono), @intFromBool(style.italic), @intFromBool(style.system_font), @intFromBool(style.tabular), @intFromBool(style.rounded), @intFromBool(style.serif) });
         h.update(std.mem.asBytes(&style.tracking));
         return h.final();
     }
@@ -355,14 +361,94 @@ pub const TextSystem = struct {
     /// `s` with its spans broken into lines no wider than `max_width`.
     pub fn wrapAttributed(self: *TextSystem, s: []const u8, style: types.TextStyle, spans: []const types.Span, max_width: f32) []const Line {
         const styled = rich.styled(spans);
-        const k = key(s, style, (@as(u64, @intFromFloat(@max(0, @min(max_width, 1e6)))) + 2) ^ (if (styled) rich.spansHash(spans, 0, s.len) else 0));
+        const k = key(s, style, (@as(u64, @intFromFloat(@max(0, @min(max_width, 1e6)))) + 2) ^ (if (styled) rich.spansHash(spans, 0, s.len) else 0) ^ (@as(u64, @backingInt(self.wrap_rule)) << 60));
         if (self.wraps.get(self.gpa, k)) |lines| return lines;
         if (self.oneLine(s, style, spans, max_width)) |line_| {
             const one = self.gpa.alloc(Line, 1) catch return &.{};
             one[0] = line_;
             return self.wraps.put(self.gpa, k, one);
         }
-        return self.wraps.put(self.gpa, k, self.breakLines(s, style, spans, max_width) catch return &.{});
+        const lines = switch (self.wrap_rule) {
+            .typesetter => self.breakLines(s, style, spans, max_width),
+            .glyph_positions => self.breakAtGlyphs(s, style, spans, max_width),
+        };
+        return self.wraps.put(self.gpa, k, lines catch return &.{});
+    }
+
+    /// `s` broken as GPUI breaks it, each newline-delimited paragraph alone.
+    pub fn breakAtGlyphs(self: *TextSystem, s: []const u8, style: types.TextStyle, spans: []const types.Span, max_width: f32) ![]Line {
+        var lines: std.ArrayList(Line) = .empty;
+        defer lines.deinit(self.gpa);
+        var a: usize = 0;
+        while (true) {
+            const b = std.mem.indexOfScalarPos(u8, s, a, '\n') orelse s.len;
+            try self.breakParagraph(&lines, s, a, b, style, spans, max_width);
+            if (b >= s.len) break;
+            a = b + 1;
+        }
+        return lines.toOwnedSlice(self.gpa);
+    }
+
+    fn breakParagraph(self: *TextSystem, lines: *std.ArrayList(Line), s: []const u8, a: usize, b: usize, style: types.TextStyle, spans: []const types.Span, max_width: f32) !void {
+        const seg = std.mem.trimEnd(u8, s[a..b], "\r");
+        if (seg.len == 0) return lines.append(self.gpa, .{ .start = a, .end = a, .width = 0 });
+        const attr = if (rich.styled(spans)) rich.attributed(self, seg, style, spans, a) else cf.attributed(seg, self.font(style).ref);
+        defer cf.CFRelease(attr);
+        const ln = cf.CTLineCreateWithAttributedString(attr).?;
+        defer cf.CFRelease(ln);
+        // Each character's start and x, then the paragraph's end. Decode
+        // defensively: a streaming chunk can end inside a UTF-8 sequence.
+        var marks: std.ArrayList(struct { at: usize, x: f32, c: u21 }) = .empty;
+        defer marks.deinit(self.gpa);
+        var at: usize = 0;
+        while (at < seg.len) {
+            const n = @min(utf8.seqLen(seg[at]), seg.len - at);
+            const c = std.unicode.utf8Decode(seg[at .. at + n]) catch 0xfffd;
+            const x: f32 = @floatCast(cf.CTLineGetOffsetForStringIndex(ln, cf.utf16Offset(seg, at), null));
+            try marks.append(self.gpa, .{ .at = at, .x = x + @as(f32, @floatFromInt(marks.items.len)) * style.tracking, .c = c });
+            at += n;
+        }
+        const total = @as(f32, @floatCast(cf.CTLineGetTypographicBounds(ln, null, null, null))) + @as(f32, @floatFromInt(marks.items.len)) * style.tracking;
+        var first_non_ws = false;
+        var candidate: ?usize = null;
+        var line_start: usize = 0;
+        var prev: u21 = 0;
+        const items = marks.items;
+        for (items, 0..) |m, i| {
+            if (isWordChar(m.c)) {
+                if (prev == ' ' and first_non_ws) candidate = i;
+            } else if (m.c != ' ' and !isWordChar(prev) and first_non_ws) candidate = i;
+            if (m.c != ' ') first_non_ws = true;
+            const x_end = if (i + 1 < items.len) items[i + 1].x else total;
+            if (x_end - items[line_start].x > @max(1, max_width) and i > line_start) {
+                const cut = if (candidate) |cnd| (if (cnd > line_start) cnd else i) else i;
+                candidate = null;
+                try self.appendLine(lines, seg, a, items, line_start, cut, total);
+                line_start = cut;
+            }
+            prev = m.c;
+        }
+        try self.appendLine(lines, seg, a, items, line_start, items.len, total);
+    }
+
+    /// Characters `from` to `to`, without trailing spaces or tabs.
+    fn appendLine(self: *TextSystem, lines: *std.ArrayList(Line), seg: []const u8, a: usize, items: anytype, from: usize, to: usize, total: f32) !void {
+        var end = to;
+        while (end > from and (items[end - 1].c == ' ' or items[end - 1].c == '\t')) end -= 1;
+        const end_b = if (end < items.len) items[end].at else seg.len;
+        const x_end = if (end < items.len) items[end].x else total;
+        try lines.append(self.gpa, .{ .start = a + items[from].at, .end = a + end_b, .width = x_end - items[from].x });
+    }
+
+    /// A character GPUI's `LineWrapper::is_word_char` holds in a word.
+    pub fn isWordChar(c: u21) bool {
+        return switch (c) {
+            'a'...'z', 'A'...'Z', '0'...'9' => true,
+            0xC0...0xFF, 0x100...0x17F, 0x180...0x24F, 0x400...0x4FF, 0x1E00...0x1EFF, 0x300...0x36F, 0x980...0x9FF => true,
+            '-', '_', '.', '\'', 0x2019, 0x2018, '$', '%', '@', '#', '^', '~', ',', '=', ':', ';' => true,
+            0x22EF, 0x202F, 0xA0, 0x2011 => true,
+            else => false,
+        };
     }
 
     /// `s` as one line, when it has no line breaks and fits: what CoreText
