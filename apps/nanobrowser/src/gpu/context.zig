@@ -20,6 +20,9 @@ pub const Resource = struct {
     width: u32 = 0,
     height: u32 = 0,
     shader: u32 = 0,
+    fragment_shader: u32 = 0,
+    binding_mask: u8 = 0,
+    fragment_binding_mask: u8 = 0,
     wg: [3]usize = .{ 1, 1, 1 },
     arena: ?std.heap.ArenaAllocator = null,
     translation: ?wgsl.Translation = null,
@@ -161,6 +164,9 @@ pub const Context = struct {
         errdefer metal.release(lib);
         return c.add(.{ .kind = .shader, .obj = lib, .arena = arena, .translation = tr });
     }
+    pub fn bindings(c: *Context, shader_id: u32) Error![]const wgsl.Binding {
+        return (try c.get(shader_id, .shader)).translation.?.bindings;
+    }
     fn entry(c: *Context, r: *Resource, name: []const u8, stage: @import("wgsl_ast.zig").Stage) Error!wgsl.Entry {
         for (r.translation.?.entries) |e| if (std.mem.eql(u8, e.name, name) and e.stage == stage) return e;
         return c.fail("entry point missing or has wrong stage");
@@ -171,17 +177,21 @@ pub const Context = struct {
         const e = try c.entry(r, name, .compute);
         const obj = metal.compute(c, r.obj.?, name) orelse return error.Validation;
         errdefer metal.release(obj);
-        return c.add(.{ .kind = .compute, .obj = obj, .shader = shader_id, .wg = e.workgroup });
+        return c.add(.{ .kind = .compute, .obj = obj, .shader = shader_id, .binding_mask = e.bindings, .wg = e.workgroup });
     }
     pub fn render(c: *Context, vs: u32, vertex: []const u8, fs: u32, fragment: []const u8) Error!u32 {
         if (comptime !supported) return error.Unsupported;
         const v = try c.get(vs, .shader);
         const f = try c.get(fs, .shader);
-        _ = try c.entry(v, vertex, .vertex);
-        _ = try c.entry(f, fragment, .fragment);
+        const ve = try c.entry(v, vertex, .vertex);
+        const fe = try c.entry(f, fragment, .fragment);
+        for (v.translation.?.bindings) |vb| for (f.translation.?.bindings) |fb| {
+            if (vb.slot == fb.slot and uses(ve.bindings, vb.slot) and uses(fe.bindings, fb.slot) and
+                (vb.kind != fb.kind or vb.writable != fb.writable)) return c.fail("incompatible vertex and fragment buffer binding types");
+        };
         const obj = metal.render(c, v.obj.?, vertex, f.obj.?, fragment) orelse return error.Validation;
         errdefer metal.release(obj);
-        return c.add(.{ .kind = .render, .obj = obj });
+        return c.add(.{ .kind = .render, .obj = obj, .shader = vs, .fragment_shader = fs, .binding_mask = ve.bindings, .fragment_binding_mask = fe.bindings });
     }
     pub fn texture(c: *Context, width: u32, height: u32) Error!u32 {
         if (comptime !supported) return error.Unsupported;
@@ -224,22 +234,19 @@ pub const Context = struct {
         for (groups) |g| if (g > 65535) return c.fail("dispatch dimensions exceed limit");
         const total = groups[0] * groups[1] * groups[2] * p.wg[0] * p.wg[1] * p.wg[2];
         if (total > 1048576) return c.fail("dispatch exceeds supported one-million-thread limit");
-        for (buffers, 0..) |buf, slot| {
-            if (buf == 0) continue;
-            var declared = false;
-            for (shader_r.translation.?.bindings) |b| {
-                if (b.slot == slot) declared = true;
-            }
-            if (!declared) return c.fail("bind group includes undeclared storage binding");
-        }
+        // Explicit layouts may contain bindings unused by this entry point.
+        for (buffers) |buf| if (buf != 0) {
+            _ = try c.get(buf, .buffer);
+        };
         for (shader_r.translation.?.bindings, 0..) |b, i| {
+            if (!uses(p.binding_mask, b.slot)) continue;
             for (shader_r.translation.?.bindings[0..i]) |previous| {
-                if (buffers[b.slot] != 0 and buffers[b.slot] == buffers[previous.slot] and (b.writable or previous.writable)) return c.fail("writable storage bindings must not alias");
+                if (uses(p.binding_mask, previous.slot) and buffers[b.slot] != 0 and buffers[b.slot] == buffers[previous.slot] and (b.writable or previous.writable)) return c.fail("writable storage bindings must not alias");
             }
             const r = try c.get(buffers[b.slot], .buffer);
-            if (r.usage & 128 == 0 or r.size < b.stride or r.size % b.stride != 0) return c.fail("storage binding requires STORAGE usage and whole scalar elements");
+            try c.validateBuffer(r, b);
             bound[b.slot] = r.obj;
-            lengths[b.slot] = @intCast(r.size / b.stride);
+            if (b.kind == .storage) lengths[b.slot] = @intCast(r.size / b.stride);
         }
         if (execute and total != 0) try metal.dispatch(c, p.obj.?, bound, lengths, groups, p.wg);
     }
@@ -252,11 +259,44 @@ pub const Context = struct {
         _ = try c.bytes(dst, dst_offset, len);
         if (len > 0) try metal.copy(c, s.obj.?, src_offset, d.obj.?, dst_offset, len);
     }
+    fn uses(mask: u8, slot: usize) bool {
+        return mask & (@as(u8, 1) << @intCast(slot)) != 0;
+    }
+    fn validateBuffer(c: *Context, r: *Resource, b: wgsl.Binding) Error!void {
+        if (b.kind == .uniform) {
+            if (r.usage & 64 == 0 or r.size < b.min_size or r.size > 65536) return c.fail("uniform binding requires UNIFORM usage, the shader minimum size and at most 64 KiB");
+        } else if (r.usage & 128 == 0 or r.size < b.min_size or r.size % b.stride != 0)
+            return c.fail("storage binding requires STORAGE usage and whole scalar elements");
+    }
+    pub fn validateRenderBindings(c: *Context, id: u32, buffers: [8]u32) Error!void {
+        if (comptime !supported) return error.Unsupported;
+        const p = try c.get(id, .render);
+        for (buffers) |buf| if (buf != 0) {
+            _ = try c.get(buf, .buffer);
+        };
+        for ([_]u32{ p.shader, p.fragment_shader }, [_]u8{ p.binding_mask, p.fragment_binding_mask }) |shader_id, mask| {
+            for (try c.bindings(shader_id)) |b| {
+                if (uses(mask, b.slot)) try c.validateBuffer(try c.get(buffers[b.slot], .buffer), b);
+            }
+        }
+    }
     pub fn draw(c: *Context, texture_id: u32, pipeline: u32, count: usize, first: usize, clear: ?[4]f64) Error!void {
+        return c.drawBound(texture_id, pipeline, count, first, clear, @splat(0));
+    }
+    pub fn drawBound(c: *Context, texture_id: u32, pipeline: u32, count: usize, first: usize, clear: ?[4]f64, buffers: [8]u32) Error!void {
         if (comptime !supported) return error.Unsupported;
         const tex = try c.get(texture_id, .texture);
         const p = if (pipeline != 0) try c.get(pipeline, .render) else null;
         if (count > 65535 or first > 65535 or (count > 0 and p == null)) return c.fail("invalid draw");
-        try metal.draw(c, tex.obj.?, if (p) |r| r.obj else null, count, first, clear);
+        var vertex_buffers: [8]?Obj = @splat(null);
+        var fragment_buffers: [8]?Obj = @splat(null);
+        if (p) |r| {
+            try c.validateRenderBindings(pipeline, buffers);
+            for (buffers, 0..) |buf, slot| {
+                if (uses(r.binding_mask, slot)) vertex_buffers[slot] = (try c.get(buf, .buffer)).obj;
+                if (uses(r.fragment_binding_mask, slot)) fragment_buffers[slot] = (try c.get(buf, .buffer)).obj;
+            }
+        }
+        try metal.draw(c, tex.obj.?, if (p) |r| r.obj else null, count, first, clear, vertex_buffers, fragment_buffers);
     }
 };

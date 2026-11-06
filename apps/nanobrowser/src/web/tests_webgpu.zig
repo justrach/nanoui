@@ -60,6 +60,29 @@ test "WebGPU JS real compute queue submit map readback and resource validation" 
     try r.expectNoErrors();
 }
 
+test "WebGPU explicit storage layout mapped upload dispatch and readback" {
+    var r: u.Run = undefined;
+    try start(&r);
+    defer r.stop();
+    _ = try r.eval(
+        \\var module=device.createShaderModule({code:'@group(0) @binding(0) var<storage,read_write> numbers:array<f32>; @compute @workgroup_size(1) fn main(@builtin(global_invocation_id) id:vec3<u32>){let index=id.x;numbers[index]=numbers[index]*2.0;}'});
+        \\var values=new Float32Array([12.5,45,100.5,0.25]);
+        \\var input=device.createBuffer({size:values.byteLength,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_SRC|GPUBufferUsage.COPY_DST,mappedAtCreation:true});
+        \\new Float32Array(input.getMappedRange()).set(values);input.unmap();
+        \\var output=device.createBuffer({size:values.byteLength,usage:GPUBufferUsage.COPY_DST|GPUBufferUsage.MAP_READ});
+        \\var layout=device.createBindGroupLayout({entries:[{binding:0,visibility:GPUShaderStage.COMPUTE,buffer:{type:'storage'}}]});
+        \\var group=device.createBindGroup({layout,entries:[{binding:0,resource:{buffer:input}}]});
+        \\var pipeline=device.createComputePipeline({layout:device.createPipelineLayout({bindGroupLayouts:[layout]}),compute:{module,entryPoint:'main'}});
+        \\var encoder=device.createCommandEncoder(),pass=encoder.beginComputePass();pass.setPipeline(pipeline);pass.setBindGroup(0,group);pass.dispatchWorkgroups(values.length);pass.end();
+        \\encoder.copyBufferToBuffer(input,0,output,0,values.byteLength);device.queue.submit([encoder.finish()]);
+        \\done=false;var result='';output.mapAsync(GPUMapMode.READ).then(()=>{result=new Float32Array(output.getMappedRange()).join(',');output.unmap();done=true}).catch(e=>{failure=String(e);done=true});
+    );
+    try r.waitJs("done");
+    try r.expectJs("failure", "");
+    try r.expectJs("result", "25,90,201,0.5");
+    try r.expectNoErrors();
+}
+
 test "WebGPU shader diagnostics and error scopes never fake a pipeline" {
     var r: u.Run = undefined;
     try start(&r);
@@ -110,6 +133,83 @@ test "WebGPU canvas real triangle BGRA top-row pixels resize and unconfigure" {
     try r.waitJs("scoped");
     try r.expectJs("context.getConfiguration()", "null");
     try testing.expect(page.canvases.pixelsOf(node) == null);
+    try r.expectNoErrors();
+}
+
+test "WebGPU explicit layout validation and structural compatibility" {
+    var r: u.Run = undefined;
+    try start(&r);
+    defer r.stop();
+    _ = try r.eval(
+        \\var module=device.createShaderModule({code:'@group(0) @binding(0) var<storage,read_write> data:array<f32>; @compute @workgroup_size(1) fn main(){data[0]=7.0;}'});
+        \\var input=device.createBuffer({size:16,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_SRC});
+        \\var output=device.createBuffer({size:16,usage:GPUBufferUsage.MAP_READ|GPUBufferUsage.COPY_DST});
+        \\function layout(type='storage',visibility=4,minBindingSize=0){return device.createBindGroupLayout({entries:[{binding:0,visibility,buffer:{type,minBindingSize}}]});}
+        \\var good=layout(),same=layout();
+        \\var pipeline=device.createComputePipeline({layout:device.createPipelineLayout({bindGroupLayouts:[good]}),compute:{module}});
+        \\var group=device.createBindGroup({layout:same,entries:[{binding:0,resource:{buffer:input}}]});
+        \\var e=device.createCommandEncoder(),p=e.beginComputePass();p.setPipeline(pipeline);p.setBindGroup(0,group);p.dispatchWorkgroups(1);p.end();e.copyBufferToBuffer(input,0,output,0,16);device.queue.submit([e.finish()]);
+        \\done=false;var result='';output.mapAsync(1).then(()=>{result=new Float32Array(output.getMappedRange())[0];output.unmap();done=true});
+    );
+    try r.waitJs("done");
+    try r.expectJs("failure", "");
+    try r.expectJs("result", "7");
+    _ = try r.eval(
+        \\var errors=[];
+        \\function capture(fn){device.pushErrorScope('validation');fn();device.popErrorScope().then(e=>errors.push(e&&e.message));}
+        \\capture(()=>device.createComputePipeline({layout:device.createPipelineLayout({bindGroupLayouts:[layout('uniform')]}),compute:{module}}));
+        \\capture(()=>device.createComputePipeline({layout:device.createPipelineLayout({bindGroupLayouts:[layout('storage',2)]}),compute:{module}}));
+        \\capture(()=>device.createBindGroup({layout:layout('storage',4,32),entries:[{binding:0,resource:{buffer:input}}]}));
+        \\capture(()=>device.createBindGroup({layout:good,entries:[]}));
+        \\capture(()=>device.createBindGroup({layout:good,entries:[{binding:0,resource:{buffer:output}}]}));
+        \\capture(()=>device.createBindGroupLayout({entries:[{binding:0,visibility:4,buffer:{hasDynamicOffset:true}}]}));
+        \\capture(()=>device.createBindGroupLayout({entries:[{binding:0,visibility:4,buffer:{}},{binding:0,visibility:4,buffer:{}}]}));
+        \\capture(()=>device.createPipelineLayout({bindGroupLayouts:[good,same]}));
+    );
+    try r.waitJs("errors.length===8");
+    try r.expectJs("errors.every(e=>typeof e==='string' && e.length>0)", "true");
+    try r.expectJs("failure", "");
+    try r.expectNoErrors();
+}
+
+test "WebGPU explicit uniform layout renders and updates interpolated triangle" {
+    var r: u.Run = undefined;
+    try start(&r);
+    defer r.stop();
+    _ = try r.eval(
+        \\var shader=device.createShaderModule({code:`
+        \\struct Uniforms {angle:f32,};
+        \\@group(0) @binding(0) var<uniform> uniforms:Uniforms;
+        \\struct VertexOutput {@builtin(position) position:vec4<f32>,@location(0) color:vec4<f32>,};
+        \\@vertex fn vs_main(@builtin(vertex_index) vertexIndex:u32)->VertexOutput {
+        \\var pos=array<vec2<f32>,3>(vec2<f32>(0.0,0.5),vec2<f32>(-0.5,-0.5),vec2<f32>(0.5,-0.5));
+        \\var color=array<vec4<f32>,3>(vec4<f32>(1.0,0.1,0.5,1.0),vec4<f32>(0.0,0.8,1.0,1.0),vec4<f32>(0.5,0.0,1.0,1.0));
+        \\let cos_a=cos(uniforms.angle);let sin_a=sin(uniforms.angle);
+        \\let x=pos[vertexIndex].x*cos_a-pos[vertexIndex].y*sin_a;
+        \\let y=pos[vertexIndex].x*sin_a+pos[vertexIndex].y*cos_a;
+        \\var out:VertexOutput;out.position=vec4<f32>(x,y,0.0,1.0);out.color=color[vertexIndex];return out;}
+        \\@fragment fn fs_main(in:VertexOutput)->@location(0) vec4<f32>{return in.color;}
+        \\`});
+        \\var uniform=device.createBuffer({size:4,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});
+        \\var layout=device.createBindGroupLayout({entries:[{binding:0,visibility:GPUShaderStage.VERTEX,buffer:{type:'uniform'}}]});
+        \\var group=device.createBindGroup({layout,entries:[{binding:0,resource:{buffer:uniform}}]});
+        \\var pipeline=device.createRenderPipeline({layout:device.createPipelineLayout({bindGroupLayouts:[layout]}),vertex:{module:shader,entryPoint:'vs_main'},fragment:{module:shader,entryPoint:'fs_main',targets:[{format:'bgra8unorm'}]}});
+        \\var context=c.getContext('webgpu');context.configure({device,format:'bgra8unorm'});
+        \\function draw(angle){device.queue.writeBuffer(uniform,0,new Float32Array([angle]));var e=device.createCommandEncoder(),p=e.beginRenderPass({colorAttachments:[{view:context.getCurrentTexture().createView(),clearValue:[0,0,0,1],loadOp:'clear',storeOp:'store'}]});p.setPipeline(pipeline);p.setBindGroup(0,group);p.draw(3);p.end();device.queue.submit([e.finish()]);}
+        \\draw(0);
+    );
+    try r.expectJs("failure", "");
+    const page = r.page();
+    const node = page.gpu.canvases.items[0].node;
+    const pixels = page.canvases.pixelsOf(node) orelse return error.TestFailed;
+    const center = (16 * 32 + 16) * 4;
+    try testing.expect(pixels.bgra[center] > 20 and pixels.bgra[center + 1] > 20 and pixels.bgra[center + 2] > 20);
+    const edge = (22 * 32 + 10) * 4;
+    try testing.expect(pixels.bgra[edge] > 20);
+    _ = try r.eval("draw(Math.PI)");
+    try r.expectJs("failure", "");
+    const rotated = page.canvases.pixelsOf(node) orelse return error.TestFailed;
+    try testing.expectEqualSlices(u8, &.{ 0, 0, 0, 255 }, rotated.bgra[edge..][0..4]);
     try r.expectNoErrors();
 }
 

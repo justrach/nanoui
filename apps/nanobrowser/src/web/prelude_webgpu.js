@@ -43,6 +43,7 @@
   }
   const limits = Object.freeze({ maxTextureDimension2D: 4096, maxBindGroups: 1,
     maxStorageBuffersPerShaderStage: 8, maxBufferSize: 67108864,
+    maxUniformBuffersPerShaderStage: 8, maxUniformBufferBindingSize: 65536,
     maxStorageBufferBindingSize: 67108864, maxComputeInvocationsPerWorkgroup: 256,
     maxComputeWorkgroupSizeX: 256, maxComputeWorkgroupSizeY: 256,
     maxComputeWorkgroupSizeZ: 256, maxComputeWorkgroupsPerDimension: 65535 });
@@ -123,9 +124,9 @@
       const p = own(new GPUComputePipeline(), 'compute', this); p.label = String(desc.label || '');
       const s = state.get(p);
       s.id = attempt(this, () => {
-        if (desc.layout !== 'auto') fail('Only automatic pipeline layouts supported');
         if (desc.compute.constants && Object.keys(desc.compute.constants).length) fail('Pipeline constants unsupported');
         const m = get(desc.compute.module, 'shader', this);
+        $.wg.pipelineLayout(this, p, desc.layout, [Object.assign({}, desc.compute, { visibility: 4 })]);
         return $.gpuCompute(m.id, String(desc.compute.entryPoint || 'main'));
       }); return p;
     }
@@ -138,25 +139,11 @@
       const p = this.createRenderPipeline(desc);
       return state.get(p).id ? Promise.resolve(p) : Promise.reject(new GPUValidationError('Render pipeline compilation failed'));
     }
-    createBindGroup(desc) {
-      const b = own(new GPUBindGroup(), 'bindgroup', this, { buffers: Array(8).fill(null), pipeline: null });
-      attempt(this, () => {
-        const layout = get(desc.layout, 'layout', this), s = state.get(b); s.pipeline = layout.pipeline;
-        for (const e of desc.entries) {
-          const n = uint(e.binding, 7), r = e.resource;
-          if (s.buffers[n]) fail('Duplicate binding');
-          const buf = get(r.buffer, 'buffer', this);
-          if ((r.offset || 0) !== 0 || (r.size !== undefined && r.size !== buf.size)) fail('Only whole-buffer storage bindings supported');
-          if (!(buf.usage & 128)) fail('Storage binding requires STORAGE usage');
-          s.buffers[n] = r.buffer;
-        }
-        s.valid = true;
-      }); return b;
-    }
+    createBindGroup(desc) { return $.wg.createBindGroup(this, desc); }
     createTexture(desc) { return $.wg.createTexture(this, desc); }
     createCommandEncoder(desc = {}) { return $.wg.encoder(this, desc); }
-    createBindGroupLayout() { attempt(this, () => fail('Explicit layouts unsupported')); return own({}, 'invalid', this); }
-    createPipelineLayout() { attempt(this, () => fail('Explicit layouts unsupported')); return own({}, 'invalid', this); }
+    createBindGroupLayout(desc) { return $.wg.createBindGroupLayout(this, desc); }
+    createPipelineLayout(desc) { return $.wg.createPipelineLayout(this, desc); }
     createSampler() { attempt(this, () => fail('Sampling unsupported')); return own({}, 'invalid', this); }
     createQuerySet() { attempt(this, () => fail('Queries unsupported')); return own({}, 'invalid', this); }
   }
@@ -199,10 +186,7 @@
   }
   class GPUShaderModule { getCompilationInfo() { return Promise.resolve({ messages: state.get(this).messages.slice() }); } }
   class GPUComputePipeline {
-    getBindGroupLayout(index) {
-      const s = get(this, 'compute');
-      return attempt(s.device, () => { if (index !== 0 || !s.id) fail('Invalid bind group index or pipeline'); return own(new GPUBindGroupLayout(), 'layout', s.device, { pipeline: this }); }, null);
-    }
+    getBindGroupLayout(index) { return $.wg.getBindGroupLayout(this, index, 'compute'); }
   }
   class GPUBindGroupLayout {}
   class GPUBindGroup {}

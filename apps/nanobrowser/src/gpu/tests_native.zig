@@ -3,6 +3,7 @@ const testing = std.testing;
 const gpu = @import("context.zig");
 const wgsl = @import("wgsl.zig");
 const metal = @import("metal.zig");
+pub const diagnostic_source = @embedFile("diagnostic_triangle.wgsl");
 const compute_source =
     \\@group(0) @binding(0) var<storage, read_write> data: array<f32>;
     \\@compute @workgroup_size(1)
@@ -87,4 +88,114 @@ test "WebGPU real Metal offscreen triangle has red center and blue clear corners
     // The top has the triangle's narrow tip, the bottom its wide base.
     try testing.expectEqualSlices(u8, &.{ 255, 0, 0, 255 }, pixels[(6 * 32 + 8) * 4 ..][0..4]);
     try testing.expectEqualSlices(u8, &.{ 0, 0, 255, 255 }, pixels[(24 * 32 + 8) * 4 ..][0..4]);
+}
+
+test "WebGPU diagnostic shader reflects uniform size and entry visibility" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var sink: wgsl.Sink = .{ .arena = arena.allocator() };
+    const tr = try wgsl.translate(arena.allocator(), &sink, diagnostic_source);
+    try testing.expectEqual(@as(usize, 1), tr.bindings.len);
+    try testing.expectEqual(.uniform, tr.bindings[0].kind);
+    try testing.expectEqual(@as(usize, 4), tr.bindings[0].min_size);
+    try testing.expectEqual(@as(u8, 1), tr.bindings[0].visibility);
+    try testing.expectEqual(@as(u8, 1), tr.entries[0].bindings);
+    try testing.expectEqual(@as(u8, 0), tr.entries[1].bindings);
+    try testing.expect(std.mem.indexOf(u8, tr.source, "constant __element0& uniforms [[buffer(0)]]") != null);
+    try testing.expect(std.mem.indexOf(u8, tr.source, "VertexOutput in [[stage_in]]") != null);
+    try testing.expect(std.mem.indexOf(u8, tr.source, "min(uint(vertexIndex), 2u)") != null);
+}
+
+test "WebGPU rejects unsupported uniform layout and indexing honestly" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var sink: wgsl.Sink = .{ .arena = arena.allocator() };
+    const bad = [_][]const u8{
+        "struct U { a:vec3f } @group(0) @binding(0) var<uniform> u:U; @compute @workgroup_size(1) fn c(){}",
+        "struct U { @size(16) a:f32 } @group(0) @binding(0) var<uniform> u:U; @compute @workgroup_size(1) fn c(){}",
+        "struct U { a:f32 } @group(0) @binding(0) var<uniform,read> u:U; @compute @workgroup_size(1) fn c(){}",
+        "struct U { a:f32 } @group(0) @binding(0) var<uniform> u:U; @compute @workgroup_size(1) fn c(){let x=u[0];}",
+        "struct U { a:f32 } @group(0) @binding(0) var<uniform> u:U; @compute @workgroup_size(1) fn c(){let x=arrayLength(&u);}",
+    };
+    for (bad) |s| {
+        sink.diag = null;
+        try testing.expectError(error.Wgsl, wgsl.translate(arena.allocator(), &sink, s));
+        try testing.expect(sink.diag != null);
+    }
+}
+
+test "WebGPU diagnostic triangle consumes uniform rotation and interpolates colors offscreen" {
+    if (!gpu.supported) return error.SkipZigTest;
+    var c: gpu.Context = .{ .gpa = testing.allocator };
+    defer c.deinit();
+    if (!c.available()) return error.SkipZigTest;
+    const shader = c.shader(diagnostic_source) catch |e| {
+        std.debug.print("{s}\n", .{c.diagnostic()});
+        return e;
+    };
+    const pipeline = c.render(shader, "vs_main", shader, "fs_main") catch |e| {
+        std.debug.print("{s}\n", .{c.diagnostic()});
+        return e;
+    };
+    const texture = try c.texture(64, 64);
+    const uniform = try c.buffer(4, 64 | 8);
+    var bindings: [8]u32 = @splat(0);
+    try testing.expectError(error.Validation, c.validateRenderBindings(pipeline, bindings));
+    try testing.expectError(error.Validation, c.draw(texture, pipeline, 3, 0, null));
+    bindings[0] = try c.buffer(4, 128);
+    try testing.expectError(error.Validation, c.validateRenderBindings(pipeline, bindings));
+    bindings[0] = try c.buffer(3, 64);
+    try testing.expectError(error.Validation, c.validateRenderBindings(pipeline, bindings));
+    bindings[0] = try c.buffer(65540, 64);
+    try testing.expectError(error.Validation, c.validateRenderBindings(pipeline, bindings));
+    bindings[0] = uniform;
+    bindings[7] = try c.buffer(4, 64); // unused explicit-layout entry is legal
+    try c.validateRenderBindings(pipeline, bindings);
+    try c.drawBound(texture, pipeline, 3, 0, .{ 0, 0, 0, 1 }, bindings);
+    var first: [64 * 64 * 4]u8 = undefined;
+    var rotated: [64 * 64 * 4]u8 = undefined;
+    const obj = (try c.get(texture, .texture)).obj.?;
+    metal.readTexture(obj, 64, 64, &first);
+    const center = first[(32 * 64 + 32) * 4 ..][0..4];
+    try testing.expect(center[0] > 80 and center[1] > 20 and center[2] > 40 and center[3] == 255);
+    try testing.expectEqualSlices(u8, &.{ 0, 0, 0, 255 }, first[0..4]);
+    const angle: f32 = std.math.pi;
+    @memcpy(try c.bytes(uniform, 0, 4), std.mem.asBytes(&angle));
+    try c.drawBound(texture, pipeline, 3, 0, .{ 0, 0, 0, 1 }, bindings);
+    metal.readTexture(obj, 64, 64, &rotated);
+    // Near the lower-left base is colored before rotation, outside afterwards.
+    const offset = (43 * 64 + 22) * 4;
+    try testing.expect(first[offset] > 0);
+    try testing.expectEqualSlices(u8, &.{ 0, 0, 0, 255 }, rotated[offset..][0..4]);
+    try testing.expect(!std.mem.eql(u8, &first, &rotated));
+    c.destroy(uniform);
+    try testing.expectError(error.Validation, c.validateRenderBindings(pipeline, bindings));
+}
+
+test "WebGPU fragment uniform binding uses fragment stage and enforces size" {
+    if (!gpu.supported) return error.SkipZigTest;
+    var c: gpu.Context = .{ .gpa = testing.allocator };
+    defer c.deinit();
+    if (!c.available()) return error.SkipZigTest;
+    const shader = try c.shader(
+        \\struct U { r:f32, g:f32, b:f32, a:f32 }
+        \\@group(0) @binding(2) var<uniform> color:U;
+        \\@vertex fn vs(@builtin(vertex_index) i:u32) -> @builtin(position) vec4f {
+        \\let p=array<vec2f,3>(vec2f(-1.0,-1.0),vec2f(1.0,-1.0),vec2f(0.0,1.0));
+        \\return vec4f(p[i],0.0,1.0); }
+        \\@fragment fn fs() -> @location(0) vec4f {return vec4f(color.r,color.g,color.b,color.a);}
+    );
+    try testing.expectEqual(@as(u8, 2), (try c.bindings(shader))[0].visibility);
+    const pipeline = try c.render(shader, "vs", shader, "fs");
+    var buffers: [8]u32 = @splat(0);
+    buffers[2] = try c.buffer(4, 64);
+    try testing.expectError(error.Validation, c.validateRenderBindings(pipeline, buffers));
+    buffers[2] = try c.buffer(16, 64);
+    const color = [_]f32{ 0, 1, 0, 1 };
+    @memcpy(try c.bytes(buffers[2], 0, 16), std.mem.asBytes(&color));
+    const texture = try c.texture(16, 16);
+    try c.drawBound(texture, pipeline, 3, 0, .{ 0, 0, 0, 1 }, buffers);
+    var pixels: [16 * 16 * 4]u8 = undefined;
+    metal.readTexture((try c.get(texture, .texture)).obj.?, 16, 16, &pixels);
+    try testing.expectEqualSlices(u8, &.{ 0, 255, 0, 255 }, pixels[(8 * 16 + 8) * 4 ..][0..4]);
 }

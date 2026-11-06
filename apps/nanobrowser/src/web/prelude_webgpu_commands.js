@@ -36,7 +36,7 @@
           clear = Array.isArray(c) ? c.slice() : [c.r, c.g, c.b, c.a];
           if (clear.length !== 4 || clear.some(n => !Number.isFinite(Number(n)))) fail('Invalid clear color');
         }
-        const p = own(new GPURenderPassEncoder(), 'renderPass', s.device, { encoder: this, texture: v.texture, clear, commands: [], pipeline: null });
+        const p = own(new GPURenderPassEncoder(), 'renderPass', s.device, { encoder: this, texture: v.texture, clear, commands: [], pipeline: null, group: null });
         s.pass = p; return p;
       });
     }
@@ -91,19 +91,24 @@
     draw(vertexCount, instanceCount = 1, firstVertex = 0, firstInstance = 0) {
       record(this, 'renderPass', s => {
         if (!s.pipeline || instanceCount !== 1 || firstInstance !== 0) fail('Only non-instanced draws supported');
-        s.commands.push({ pipeline: s.pipeline, count: uint(vertexCount, 65535), first: uint(firstVertex, 65535) });
+        s.commands.push({ pipeline: s.pipeline, group: s.group, count: uint(vertexCount, 65535), first: uint(firstVertex, 65535) });
       });
     }
     setVertexBuffer() { record(this, 'renderPass', () => fail('Vertex buffers unsupported; use vertex_index')); }
     setIndexBuffer() { record(this, 'renderPass', () => fail('Index buffers unsupported')); }
-    setBindGroup() { record(this, 'renderPass', () => fail('Render bindings unsupported')); }
+    setBindGroup(index, group, dynamicOffsets = []) {
+      record(this, 'renderPass', s => {
+        if (index !== 0 || dynamicOffsets.length) fail('Only bind group 0 without dynamic offsets supported');
+        get(group, 'bindgroup', s.device); s.group = group;
+      });
+    }
     drawIndexed() { record(this, 'renderPass', () => fail('Indexed rendering unsupported')); }
     setViewport() { record(this, 'renderPass', () => fail('Custom viewports unsupported')); }
     setScissorRect() { record(this, 'renderPass', () => fail('Scissor rectangles unsupported')); }
     end() { endPass(this, 'renderPass'); }
   }
   class GPURenderPipeline {
-    getBindGroupLayout() { const s = get(this, 'render'); return attempt(s.device, () => fail('Render bindings unsupported'), null); }
+    getBindGroupLayout(index) { return $.wg.getBindGroupLayout(this, index, 'render'); }
   }
   class GPUTexture {
     get width() { return state.get(this).width; }
@@ -144,7 +149,7 @@
     const p = own(new GPURenderPipeline(), 'render', d); p.label = String(desc.label || '');
     state.get(p).id = attempt(d, () => {
       const v = desc.vertex, f = desc.fragment, primitive = desc.primitive || {}, ms = desc.multisample || {};
-      if (desc.layout !== 'auto' || !v || !f || desc.depthStencil || (v.buffers && v.buffers.length) ||
+      if (!v || !f || desc.depthStencil || (v.buffers && v.buffers.length) ||
           (v.constants && Object.keys(v.constants).length) || (f.constants && Object.keys(f.constants).length) ||
           (primitive.topology && primitive.topology !== 'triangle-list') || (primitive.cullMode && primitive.cullMode !== 'none') ||
           (primitive.frontFace && primitive.frontFace !== 'ccw') || primitive.stripIndexFormat || primitive.unclippedDepth ||
@@ -152,6 +157,7 @@
         fail('Unsupported render pipeline state');
       if (!f.targets || f.targets.length !== 1 || f.targets[0].format !== 'bgra8unorm' || f.targets[0].blend ||
           (f.targets[0].writeMask !== undefined && f.targets[0].writeMask !== 15)) fail('Only one unblended bgra8unorm target supported');
+      $.wg.pipelineLayout(d, p, desc.layout, [Object.assign({}, v, { visibility: 1 }), Object.assign({}, f, { visibility: 2 })]);
       return $.gpuRender(get(v.module, 'shader', d).id, String(v.entryPoint || 'main'), get(f.module, 'shader', d).id, String(f.entryPoint || 'main'));
     }); return p;
   };
@@ -175,15 +181,9 @@
           if (c.kind === 'render' && !get(pass.texture, 'texture', d).id) fail('Invalid texture');
           for (const cmd of pass.commands) {
             if (!get(cmd.pipeline, c.kind === 'compute' ? 'compute' : 'render', d).id) fail('Invalid pipeline');
-            if (c.kind === 'compute' && cmd.group) {
-              const group = get(cmd.group, 'bindgroup', d);
-              if (!group.valid || group.pipeline !== cmd.pipeline) fail('Bind group layout incompatible with pipeline');
-              for (const buf of group.buffers) if (buf) usableBuffer(buf, d);
-            }
-            if (c.kind === 'compute') {
-              const ids = cmd.group ? state.get(cmd.group).buffers.map(b => b ? state.get(b).id : 0) : Array(8).fill(0);
-              $.gpuValidateDispatch(state.get(cmd.pipeline).id, ids, cmd.groups[0], cmd.groups[1], cmd.groups[2]);
-            }
+            const ids = $.wg.bindingIds(d, cmd.pipeline, cmd.group);
+            if (c.kind === 'compute') $.gpuValidateDispatch(state.get(cmd.pipeline).id, ids, cmd.groups[0], cmd.groups[1], cmd.groups[2]);
+            else $.gpuValidateRenderBindings(state.get(cmd.pipeline).id, ids);
           }
         }
       }
@@ -196,13 +196,13 @@
         if (c.kind === 'copy') $.gpuCopy(state.get(c.src).id, c.so, state.get(c.dst).id, c.offset, c.size);
         else if (c.kind === 'compute') {
           for (const cmd of c.pass.commands) {
-            const ids = cmd.group ? state.get(cmd.group).buffers.map(b => b ? state.get(b).id : 0) : Array(8).fill(0);
+            const ids = $.wg.bindingIds(d, cmd.pipeline, cmd.group);
             $.gpuDispatch(state.get(cmd.pipeline).id, ids, cmd.groups[0], cmd.groups[1], cmd.groups[2]);
           }
         } else {
           const pass = c.pass, id = state.get(pass.texture).id;
           if (pass.clear) $.gpuDraw(id, 0, 0, 0, pass.clear);
-          for (const cmd of pass.commands) $.gpuDraw(id, state.get(cmd.pipeline).id, cmd.count, cmd.first, null);
+          for (const cmd of pass.commands) $.gpuDraw(id, state.get(cmd.pipeline).id, cmd.count, cmd.first, null, $.wg.bindingIds(d, cmd.pipeline, cmd.group));
         }
       }
     }

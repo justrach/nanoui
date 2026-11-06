@@ -17,10 +17,16 @@ than replaced by fabricated successful results.
 - Shader modules compile parsed WGSL into Metal source and a Metal library.
   Compilation information includes diagnostic messages. Entry names are mangled
   so WGSL `main` does not collide with Metal's reserved entry name.
-- Automatic compute layouts, group 0, bindings 0–7, whole-buffer scalar storage
+- Automatic and explicit buffer bind-group/pipeline layouts, group 0, bindings
+  0–7, whole-buffer scalar storage
   arrays; unsigned, signed and float 32-bit elements. Runtime array lengths are
   passed separately. Shader array accesses clamp to valid bounds. Writable
   binding aliases, invalid resources, mapped buffers and wrong usages fail.
+- Whole-buffer uniform structs containing f32/i32/u32 scalar fields, with native
+  usage/minimum-size validation and entry-specific binding reflection. Vertex and
+  fragment buffers are bound independently; unused explicit-layout entries are
+  accepted. Struct vertex outputs and fragment inputs preserve position and
+  interpolated location varyings (including the rotating diagnostic triangle).
 - Single-layer, single-mip, single-sample `bgra8unorm` render-attachment textures.
   Nonindexed, noninstanced triangle-list draws with vertex_index, no vertex
   buffers. One unblended color target, clear/load/store, whole-target viewport.
@@ -41,10 +47,10 @@ fixed local arrays, runtime storage arrays, arithmetic/comparison expressions,
 arrayLength, selected scalar/vector math builtins, and fragment discard.
 
 Loops, helper functions, overrides, aliases, pointers (except arrayLength's
-storage-array address), atomics, textures/samplers, matrices, explicit layouts,
-uniforms, subrange/dynamic bindings, render storage bindings, and non-ASCII
+storage-array address), atomics, textures/samplers, matrices, nested/vector/array
+uniform fields, subrange/dynamic bindings, render storage bindings, and non-ASCII
 identifiers are rejected with diagnostics. Only named fixed local and storage
-arrays can be indexed. Shadowing array/storage names is rejected. The parser's
+arrays can be indexed. Shadowing array/buffer names is rejected. The parser's
 accepted grammar is broader than the emitter: parsing never implies support.
 Metal validates emitted types and stages; this is not a complete WGSL semantic
 validator or a promise of full WGSL numerical conformance.
@@ -53,7 +59,8 @@ validator or a promise of full WGSL numerical conformance.
 
 Resources are retained until destroy/device destruction/page teardown, not JS GC.
 The page permits 4096 total resource IDs and 256 MiB of live buffer/texture storage;
-a buffer is nonempty and at most 64 MiB. Textures are at most 4096². Compute has
+a buffer is nonempty and at most 64 MiB; uniform bindings are at most 64 KiB.
+Textures are at most 4096². Compute has
 at most 256 threads per workgroup and one million threads per dispatch. Shader
 source is at most 64 KiB, 4096 tokens, and 64 levels of delimiter nesting.
 

@@ -137,7 +137,7 @@ pub fn copy(c: *ctx.Context, src: Obj, so: usize, dst: Obj, do: usize, n: usize)
     objc.msg(void, enc, "endEncoding", .{});
     try complete(c, cmd);
 }
-pub fn draw(c: *ctx.Context, t: Obj, p: ?Obj, count: usize, first: usize, clear: ?[4]f64) ctx.Error!void {
+pub fn draw(c: *ctx.Context, t: Obj, p: ?Obj, count: usize, first: usize, clear: ?[4]f64, vertex_buffers: [8]?Obj, fragment_buffers: [8]?Obj) ctx.Error!void {
     const pool = objc.Pool.push();
     defer pool.pop();
     const desc = objc.msg(Obj, objc.class("MTLRenderPassDescriptor"), "renderPassDescriptor", .{});
@@ -151,6 +151,12 @@ pub fn draw(c: *ctx.Context, t: Obj, p: ?Obj, count: usize, first: usize, clear:
     const enc = objc.msg(?Obj, cmd, "renderCommandEncoderWithDescriptor:", .{desc}) orelse return c.fail("Metal render encoder failed");
     if (p) |pipeline| {
         objc.msg(void, enc, "setRenderPipelineState:", .{pipeline});
+        for (vertex_buffers, 0..) |buffer_, slot| if (buffer_) |b| {
+            objc.msg(void, enc, "setVertexBuffer:offset:atIndex:", .{ b, @as(usize, 0), slot });
+        };
+        for (fragment_buffers, 0..) |buffer_, slot| if (buffer_) |b| {
+            objc.msg(void, enc, "setFragmentBuffer:offset:atIndex:", .{ b, @as(usize, 0), slot });
+        };
         if (count > 0) objc.msg(void, enc, "drawPrimitives:vertexStart:vertexCount:", .{ @as(usize, 3), first, count });
     }
     objc.msg(void, enc, "endEncoding", .{});

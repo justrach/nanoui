@@ -35,6 +35,28 @@ fn shader(vm: *Vm, _: V, args: []const V) E!V {
     const id = context(vm).shader(try bind.str(vm, args, 0)) catch |e| return failure(vm, e);
     return V.fromUsize(id);
 }
+fn bindings(vm: *Vm, _: V, args: []const V) E!V {
+    const c = context(vm);
+    const shader_r = c.get(try num(vm, args, 0), .shader) catch |e| return failure(vm, e);
+    const name = try bind.str(vm, args, 1);
+    var mask: ?u8 = null;
+    for (shader_r.translation.?.entries) |entry| {
+        if (std.mem.eql(u8, name, entry.name)) mask = entry.bindings;
+    }
+    const used = mask orelse return failure(vm, c.fail("Shader entry point not found"));
+    const result = try vm.newArray(&.{});
+    var index: u32 = 0;
+    for (shader_r.translation.?.bindings) |b| {
+        if (used & (@as(u8, 1) << @intCast(b.slot)) == 0) continue;
+        const item = try vm.newObject();
+        try item.set(vm, "binding", V.fromUsize(b.slot));
+        try item.set(vm, "type", try vm.newString(if (b.kind == .uniform) "uniform" else if (b.writable) "storage" else "read-only-storage"));
+        try item.set(vm, "minBindingSize", V.fromUsize(b.min_size));
+        try result.setIdx(vm, index, item.value());
+        index += 1;
+    }
+    return result.value();
+}
 fn compute(vm: *Vm, _: V, args: []const V) E!V {
     const id = context(vm).compute(try num(vm, args, 0), try bind.str(vm, args, 1)) catch |e| return failure(vm, e);
     return V.fromUsize(id);
@@ -80,13 +102,21 @@ fn dispatch(vm: *Vm, _: V, args: []const V) E!V {
 fn validateDispatch(vm: *Vm, _: V, args: []const V) E!V {
     return dispatchChecked(vm, args, false);
 }
-fn dispatchChecked(vm: *Vm, args: []const V, execute: bool) E!V {
+fn bufferIds(vm: *Vm, value: V) E![8]u32 {
     var buffers: [8]u32 = @splat(0);
-    const arr = bind.arg(args, 1).objectOrNull() orelse return bind.illegal(vm);
+    const arr = value.objectOrNull() orelse return bind.illegal(vm);
     for (&buffers, 0..) |*b, i| {
-        const value = try arr.getIdx(vm, @intCast(i));
-        b.* = try num(vm, &.{value}, 0);
+        const v = try arr.getIdx(vm, @intCast(i));
+        b.* = try num(vm, &.{v}, 0);
     }
+    return buffers;
+}
+fn validateRenderBindings(vm: *Vm, _: V, args: []const V) E!V {
+    context(vm).validateRenderBindings(try num(vm, args, 0), try bufferIds(vm, bind.arg(args, 1))) catch |e| return failure(vm, e);
+    return V.undefined;
+}
+fn dispatchChecked(vm: *Vm, args: []const V, execute: bool) E!V {
+    const buffers = try bufferIds(vm, bind.arg(args, 1));
     const id = try num(vm, args, 0);
     const groups: [3]usize = .{ try num(vm, args, 2), try num(vm, args, 3), try num(vm, args, 4) };
     if (execute) context(vm).dispatch(id, buffers, groups) catch |e| return failure(vm, e) else context(vm).validateDispatch(id, buffers, groups) catch |e| return failure(vm, e);
@@ -102,7 +132,8 @@ fn draw(vm: *Vm, _: V, args: []const V) E!V {
         }
         clear = color;
     }
-    context(vm).draw(try num(vm, args, 0), try num(vm, args, 1), try num(vm, args, 2), try num(vm, args, 3), clear) catch |e| return failure(vm, e);
+    const buffers: [8]u32 = if (args.len > 5) try bufferIds(vm, args[5]) else @splat(0);
+    context(vm).drawBound(try num(vm, args, 0), try num(vm, args, 1), try num(vm, args, 2), try num(vm, args, 3), clear, buffers) catch |e| return failure(vm, e);
     bind.world(vm).changed();
     return V.undefined;
 }
@@ -123,6 +154,7 @@ pub const internals = [_]bind.Method{
     .{ .name = "gpuAvailable", .arity = 0, .f = available },
     .{ .name = "gpuBuffer", .arity = 2, .f = buffer },
     .{ .name = "gpuShader", .arity = 1, .f = shader },
+    .{ .name = "gpuBindings", .arity = 2, .f = bindings },
     .{ .name = "gpuCompute", .arity = 2, .f = compute },
     .{ .name = "gpuRender", .arity = 4, .f = render },
     .{ .name = "gpuTexture", .arity = 2, .f = texture },
@@ -133,7 +165,8 @@ pub const internals = [_]bind.Method{
     .{ .name = "gpuCopy", .arity = 5, .f = copy },
     .{ .name = "gpuDispatch", .arity = 5, .f = dispatch },
     .{ .name = "gpuValidateDispatch", .arity = 5, .f = validateDispatch },
-    .{ .name = "gpuDraw", .arity = 5, .f = draw },
+    .{ .name = "gpuValidateRenderBindings", .arity = 2, .f = validateRenderBindings },
+    .{ .name = "gpuDraw", .arity = 6, .f = draw },
     .{ .name = "gpuAttach", .arity = 3, .f = attach },
     .{ .name = "gpuUnconfigure", .arity = 1, .f = unconfigure },
 };

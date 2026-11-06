@@ -27,6 +27,7 @@ const eager = [_]Chunk{
     .{ .name = "prelude:wire", .source = @embedFile("prelude_wire.js") },
     .{ .name = "prelude:window", .source = @embedFile("prelude_window.js") },
     .{ .name = "prelude:webgpu", .source = @embedFile("prelude_webgpu.js") },
+    .{ .name = "prelude:webgpu_layouts", .source = @embedFile("prelude_webgpu_layouts.js") },
     .{ .name = "prelude:webgpu_commands", .source = @embedFile("prelude_webgpu_commands.js") },
     .{ .name = "prelude:frames", .source = @embedFile("prelude_frames.js") },
     .{ .name = "prelude:gaps", .source = @embedFile("prelude_gaps.js") },

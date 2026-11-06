@@ -4,8 +4,8 @@ const std = @import("std");
 const ast = @import("wgsl_ast.zig");
 const lex = @import("wgsl_lex.zig");
 const E = lex.Error;
-pub const Entry = struct { name: []const u8, stage: ast.Stage, workgroup: [3]usize = .{ 1, 1, 1 } };
-pub const Binding = struct { name: []const u8, slot: usize, stride: usize, writable: bool };
+pub const Entry = struct { name: []const u8, stage: ast.Stage, workgroup: [3]usize = .{ 1, 1, 1 }, bindings: u8 = 0 };
+pub const Binding = struct { name: []const u8, slot: usize, stride: usize, writable: bool, kind: enum { storage, uniform } = .storage, min_size: usize = 4, visibility: u8 = 0 };
 pub const Translation = struct { source: []const u8, entries: []const Entry, bindings: []const Binding };
 pub const Sink = lex.Sink;
 
@@ -33,7 +33,7 @@ pub fn translate(a: std.mem.Allocator, sink: *Sink, source: []const u8) E!Transl
         if (depth > 64 or unary_run > 64 or tokens > 4096) return sink.fail(t.pos, "shader exceeds supported nesting or token limit", .{});
     }
     const module = try @import("wgsl_parse.zig").parse(a, sink, source);
-    var w: Writer = .{ .a = a, .sink = sink };
+    var w: Writer = .{ .a = a, .sink = sink, .module = module };
     try w.put("#include <metal_stdlib>\nusing namespace metal;\n");
     for (module.decls) |d| switch (d) {
         .global => |g| try w.global(g),
@@ -70,7 +70,19 @@ const Writer = struct {
     entries: std.ArrayList(Entry) = .empty,
     bindings: std.ArrayList(Binding) = .empty,
     stage: ast.Stage = .compute,
+    module: ast.Module,
+    used_bindings: u8 = 0,
     arrays: std.StringHashMapUnmanaged(usize) = .empty,
+    fn useBinding(w: *Writer, name: []const u8) void {
+        for (w.bindings.items) |*b| if (eq(b.name, name)) {
+            w.used_bindings |= @as(u8, 1) << @intCast(b.slot);
+            b.visibility |= switch (w.stage) {
+                .vertex => @as(u8, 1),
+                .fragment => 2,
+                .compute => 4,
+            };
+        };
+    }
     fn put(w: *Writer, s: []const u8) E!void {
         try w.out.appendSlice(w.a, s);
     }
@@ -129,13 +141,32 @@ const Writer = struct {
     }
     fn global(w: *Writer, g: *ast.Global) E!void {
         try w.attrs(g.attrs, .global);
-        if (!eq(g.space orelse "", "storage") or g.ty == null or g.init != null or g.attrs.group == null or g.attrs.binding == null)
-            return w.sink.fail(g.pos, "only group(0) storage arrays are supported as globals", .{});
+        const uniform = eq(g.space orelse "", "uniform");
+        if ((!uniform and !eq(g.space orelse "", "storage")) or g.ty == null or g.init != null or g.attrs.group == null or g.attrs.binding == null)
+            return w.sink.fail(g.pos, "only group(0) storage arrays and scalar uniform structs are supported as globals", .{});
         if (try w.integer(g.attrs.group.?) != 0) return w.sink.fail(g.pos, "only bind group 0 is supported", .{});
         const slot = try w.integer(g.attrs.binding.?);
         if (slot >= 8) return w.sink.fail(g.pos, "only bindings 0 through 7 are supported", .{});
         for (w.bindings.items) |b| if (b.slot == slot or eq(b.name, g.name)) return w.sink.fail(g.pos, "duplicate storage binding", .{});
         const t = g.ty.?.k;
+        if (uniform) {
+            if (g.access != null or t != .ident) return w.sink.fail(g.pos, "uniform requires a scalar struct without an access qualifier", .{});
+            var size: usize = 0;
+            for (w.module.decls) |d| if (d == .strct and eq(d.strct.name, t.ident)) {
+                for (d.strct.members) |m| {
+                    try w.attrs(m.attrs, .member);
+                    if (m.attrs.builtin != null or m.attrs.location != null or m.ty.k != .ident or
+                        (!eq(m.ty.k.ident, "f32") and !eq(m.ty.k.ident, "u32") and !eq(m.ty.k.ident, "i32")))
+                        return w.sink.fail(m.pos, "uniform structs support only undecorated f32, u32 and i32 fields", .{});
+                    size += 4;
+                }
+                break;
+            };
+            if (size == 0) return w.sink.fail(g.pos, "uniform requires a nonempty declared scalar struct", .{});
+            try w.bindings.append(w.a, .{ .name = g.name, .slot = slot, .stride = 0, .writable = false, .kind = .uniform, .min_size = size });
+            try w.fmt("typedef {s} __element{d};\n", .{ t.ident, slot });
+            return;
+        }
         if (t != .tmpl or !eq(t.tmpl.name, "array") or t.tmpl.args.len != 1 or t.tmpl.args[0].k != .ident)
             return w.sink.fail(g.pos, "storage must be a runtime array of f32, i32 or u32", .{});
         const scalar = t.tmpl.args[0].k.ident;
@@ -151,7 +182,10 @@ const Writer = struct {
         const stage = f.attrs.stage orelse return w.sink.fail(f.pos, "helper functions are not supported yet", .{});
         w.stage = stage;
         w.arrays.clearRetainingCapacity();
-        if (stage != .compute and w.bindings.items.len > 0) return w.sink.fail(f.pos, "render storage bindings are not supported", .{});
+        w.used_bindings = 0;
+        if (stage != .compute) for (w.bindings.items) |b| {
+            if (b.kind == .storage) return w.sink.fail(f.pos, "render storage bindings are not supported", .{});
+        };
         var entry: Entry = .{ .name = f.name, .stage = stage };
         if (stage == .compute) {
             const size = f.attrs.workgroup_size orelse return w.sink.fail(f.pos, "compute requires workgroup_size", .{});
@@ -163,7 +197,6 @@ const Writer = struct {
             if (f.ret != null) return w.sink.fail(f.pos, "compute entry cannot return a value", .{});
         } else if (f.attrs.workgroup_size != null) return w.sink.fail(f.pos, "workgroup_size on a render entry", .{});
         for (w.entries.items) |old| if (eq(old.name, entry.name)) return w.sink.fail(f.pos, "duplicate entry point", .{});
-        try w.entries.append(w.a, entry);
         try w.put(switch (stage) {
             .compute => "kernel ",
             .vertex => "vertex ",
@@ -187,7 +220,10 @@ const Writer = struct {
         }
         for (w.bindings.items) |b| {
             if (count > 0) try w.put(", ");
-            try w.fmt("device {s}__element{d}* {s} [[buffer({d})]], constant uint& __len{d} [[buffer({d})]]", .{ if (b.writable) "" else "const ", b.slot, b.name, b.slot, b.slot, b.slot + 8 });
+            if (b.kind == .uniform)
+                try w.fmt("constant __element{d}& {s} [[buffer({d})]]", .{ b.slot, b.name, b.slot })
+            else
+                try w.fmt("device {s}__element{d}* {s} [[buffer({d})]], constant uint& __len{d} [[buffer({d})]]", .{ if (b.writable) "" else "const ", b.slot, b.name, b.slot, b.slot, b.slot + 8 });
             count += 1;
         }
         try w.put(")");
@@ -203,6 +239,8 @@ const Writer = struct {
             if (stage != .fragment or try w.integer(l) != 0) return w.sink.fail(f.pos, "only fragment return location 0 supported", .{});
         }
         try w.block(f.body);
+        entry.bindings = w.used_bindings;
+        try w.entries.append(w.a, entry);
     }
     fn block(w: *Writer, body: []const *ast.Stmt) E!void {
         try w.put("{\n");
@@ -291,7 +329,10 @@ const Writer = struct {
             .int => |n| try w.fmt("{d}{s}", .{ n.value, if (n.suffix == 'u') "u" else "" }),
             .float => |n| try w.fmt("float({d})", .{n.value}),
             .boolean => |b| try w.put(if (b) "true" else "false"),
-            .ident => |n| try w.put(n),
+            .ident => |n| {
+                w.useBinding(n);
+                try w.put(n);
+            },
             .tmpl => try w.ty(e),
             .member => |m| {
                 try w.expr(m.base);
@@ -302,7 +343,7 @@ const Writer = struct {
                 try w.put("[");
                 var binding: ?usize = null;
                 if (i.base.k == .ident) for (w.bindings.items) |b| {
-                    if (eq(b.name, i.base.k.ident)) {
+                    if (b.kind == .storage and eq(b.name, i.base.k.ident)) {
                         binding = b.slot;
                         break;
                     }
@@ -335,7 +376,10 @@ const Writer = struct {
             .call => |c| {
                 if (c.callee.k == .ident and eq(c.callee.k.ident, "arrayLength")) {
                     if (c.args.len == 1 and c.args[0].k == .unary and c.args[0].k.unary.op == .addr and c.args[0].k.unary.e.k == .ident) {
-                        for (w.bindings.items) |b| if (eq(b.name, c.args[0].k.unary.e.k.ident)) return w.fmt("__len{d}", .{b.slot});
+                        for (w.bindings.items) |b| if (b.kind == .storage and eq(b.name, c.args[0].k.unary.e.k.ident)) {
+                            w.useBinding(b.name);
+                            return w.fmt("__len{d}", .{b.slot});
+                        };
                     }
                     return w.sink.fail(e.pos, "arrayLength requires a storage array address", .{});
                 }
