@@ -125,12 +125,15 @@ pub fn updateCaretBlink(c: *Context, was_focused: bool, changed: bool, moved: bo
     if (!was_focused or changed or moved or c.input.pressed) c.caret_moved_at = c.time;
 }
 
+pub fn caretShown(c: *Context, e: *EditState, focused: bool, edited: bool, solid: bool) bool {
+    const f = e.blink.step(c.time, focused and c.input.window_active and c.window_focused, e.caret != e.anchor, solid or e.marked != null, edited);
+    if (f.next) |wait| c.frameIn(wait);
+    return f.visible;
+}
+
 pub fn caretVisible(c: *Context) bool {
-    if (!c.window_focused) return false;
-    const elapsed = @max(0.0, c.time - c.caret_moved_at);
-    const rem: f32 = 0.5 - @mod(@as(f32, @floatCast(elapsed)), 0.5);
-    c.frameIn(@max(0.01, rem));
-    return elapsed < 0.5 or @mod(elapsed, 1.0) < 0.5;
+    const e = c.edits.getPtr(c.focus) orelse return false;
+    return caretShown(c, e, true, c.caret_moved_at == c.time, false);
 }
 
 pub fn rehome(c: *Context, buffer: *tf.TextBuffer, id: u64) void {
@@ -146,6 +149,7 @@ pub fn editState(c: *Context, id: u64, buffer: *tf.TextBuffer) ?*EditState {
     const entry = c.edits.getOrPut(c.gpa, id) catch return null;
     if (!entry.found_existing) entry.value_ptr.* = .{ .caret = len, .anchor = len };
     const e = entry.value_ptr;
+    if (c.focus != id or !c.input.window_active or !c.window_focused or e.caret != e.anchor) e.blink = .{};
     if (buffer.want_caret) |at| {
         e.caret = at;
         e.anchor = at;

@@ -115,11 +115,17 @@ fn onKey(_: *anyopaque, keyval: c_uint, _: c_uint, state: c_uint, data: ?*anyopa
 }
 
 fn onFocusIn(_: *anyopaque, data: ?*anyopaque) callconv(.c) void {
-    gtk.api.gtk_im_context_focus_in(of(data).im);
+    const s = of(data);
+    gtk.api.gtk_im_context_focus_in(s.im);
+    s.ctx.input.window_active = s.window.isFocused();
+    s.frame();
 }
 
 fn onFocusOut(_: *anyopaque, data: ?*anyopaque) callconv(.c) void {
-    gtk.api.gtk_im_context_focus_out(of(data).im);
+    const s = of(data);
+    gtk.api.gtk_im_context_focus_out(s.im);
+    s.ctx.input.window_active = false;
+    s.frame();
 }
 
 /// Text typed (or composed by an input method): straight to the view.
