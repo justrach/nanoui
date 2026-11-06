@@ -20,6 +20,8 @@ pub const Options = struct {
     ctx: ?*anyopaque = null,
     on_open_urls: ?*const fn (ctx: ?*anyopaque, urls: []const []const u8) void = null,
     on_reopen: ?*const fn (ctx: ?*anyopaque) void = null,
+    /// A menu bar app with no Dock icon, on the Mac.
+    activation: enum { regular, accessory } = .regular,
     dock_menu: ?[]const menu_mod.MenuItem = null,
     on_terminate: ?*const fn (ctx: ?*anyopaque) void = null,
     on_continue_activity: ?*const fn (ctx: ?*anyopaque, url: []const u8) void = null,
