@@ -394,7 +394,8 @@ const Run = struct {
         }
         // `overflow` on the root, and on the body beside a root that leaves
         // it alone, is the viewport's: the page itself is what scrolls.
-        if (is_root or (r.node.isTag("body") and r.parent.overflow_x == .visible and r.parent.overflow_y == .visible)) {
+        if (is_root) s.root_overflow = s.overflow_x != .visible or s.overflow_y != .visible;
+        if (is_root or (r.node.isTag("body") and r.parent.overflow_x == .visible and r.parent.overflow_y == .visible and !r.parent.root_overflow)) {
             s.locks_viewport = s.overflow_y == .hidden or s.overflow_y == .clip;
             s.overflow_x = .visible;
             s.overflow_y = .visible;

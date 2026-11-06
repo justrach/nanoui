@@ -195,6 +195,10 @@ pub const Browser = struct {
         if (url) |u| t.go(u) else b.box.reset("");
     }
 
+    pub fn closeCurrentTab(b: *Browser) void {
+        b.closeTab(b.current);
+    }
+
     fn closeTab(b: *Browser, i: usize) void {
         const t = b.tabs.items[i];
         if (!t.isEmpty()) {

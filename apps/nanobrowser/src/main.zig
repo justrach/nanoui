@@ -4,6 +4,7 @@
 //!     nanobrowser https://en.wikipedia.org/wiki/Bird
 //!     nanobrowser --nanoui-snapshot=/tmp/bird.png --nanoui-wait=8 https://en.wikipedia.org/wiki/Bird
 const std = @import("std");
+const builtin = @import("builtin");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const Browser = @import("shell/browser.zig").Browser;
@@ -19,6 +20,7 @@ pub fn main(init: std.process.Init) !void {
     defer browser.deinit();
     try browser.init();
     try browser.connect();
+    if (builtin.os.tag == .macos) try @import("shell/menu_bar.zig").install(app, &browser);
 
     const window = try app.newWindow(.{
         .title = "nanobrowser",

@@ -363,13 +363,9 @@ fn canScroll(p: *Page, x: f32, y: f32, dx: f32, dy: f32) bool {
     if (n) |e| if (e.isTag("iframe")) if (frames.childPage(p, e)) |child| {
         if (child.list != null and canScroll(child, x, y, dx, dy)) return true;
     };
-    const i = l.scrollerAt(x, y);
-    const k = l.clips[i];
-    if (i == 1 and !k.scrolls) return false;
-    const m = l.maxScroll(i);
-    if (dy != 0 and ((dy < 0 and k.scroll_y < m[1]) or (dy > 0 and k.scroll_y > 0))) return true;
-    if (dx != 0 and ((dx < 0 and k.scroll_x < m[0]) or (dx > 0 and k.scroll_x > 0))) return true;
-    return false;
+    const i = l.scrollerAt(x, y, dx, dy);
+    if (i == 1 and !l.clips[1].scrolls) return false;
+    return l.canMove(i, dx, dy);
 }
 
 /// Draws the page in `rect` (window coordinates) and takes its input.
@@ -480,7 +476,7 @@ pub fn view(p: *Page, c: *ui.Context, rect: box.Rect) void {
 }
 
 fn wheel(p: *Page, c: *ui.Context, l: *display.List, x: f32, y: f32, dx: f32, dy: f32) void {
-    const i = l.scrollerAt(x, y);
+    const i = l.scrollerAt(x, y, dx, dy);
     if (i == 1 and !l.clips[1].scrolls) return;
     if (c.input.precise) scrollBy(p, l, i, -dx, -dy) else glide.by(p, c, l, i, -dx, -dy);
 }

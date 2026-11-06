@@ -120,7 +120,8 @@ pub const Omnibox = struct {
             ui.key(c, e.name());
             const on = e == in_use;
             const it = ui.pressable(c, .{ .padding = .xy(8, 3), .radius = 7, .control = true, .background = if (on) p.wash else null }, p.hover);
-            if (it.clicked and !on) clicked = e;
+            // The one in use too: either way the keys go back to the field.
+            if (it.clicked) clicked = e;
             _ = c.leaf(.{}, .{ .text = .{ .str = e.name(), .style = .{ .size = 11.5 }, .color = if (on) p.ink else p.muted } }, null);
             c.end();
         }

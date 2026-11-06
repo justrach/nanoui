@@ -140,3 +140,81 @@ test "a hidden element's animation is out of sight wherever its box would be" {
     try testing.expect(!r.t.ctx.animating);
     try testing.expect(p.engine.anim.states.count() == 0 or p.motion_unseen);
 }
+
+fn wheelAt(r: *Run, x: f32, y: f32, dx: f32, dy: f32) void {
+    const p = r.page();
+    r.t.ctx.input.mouse = .{ .x = p.origin[0] + x, .y = p.origin[1] + y };
+    r.t.ctx.input.precise = true;
+    r.t.ctx.input.scroll = .{ .x = dx, .y = dy };
+    r.t.frame();
+    r.t.ctx.input.scroll = .{};
+    r.t.frame();
+}
+
+test "a root with overflow of its own leaves the body's alone, and the page scrolls" {
+    // DuckDuckGo's: `hidden` on the body isn't the viewport's beside a root that said anything.
+    var r: Run = undefined;
+    try r.start();
+    defer r.stop();
+    try r.html("<!doctype html><style>html{overflow:hidden;overflow-y:auto}body{overflow:hidden;height:auto;margin:0}</style><div style='height:4000px'></div>");
+    r.settle();
+    r.t.frame();
+    wheelAt(&r, 50, 50, 0, -100);
+    try testing.expectEqual(@as(f32, 100), r.page().scrollY());
+}
+
+test "overflow hidden on the root or the body alone still holds the page" {
+    for ([_][]const u8{ "html{overflow:hidden}", "body{overflow:hidden}" }) |rule| {
+        var r: Run = undefined;
+        try r.start();
+        defer r.stop();
+        const src = try std.fmt.allocPrint(testing.allocator, "<!doctype html><style>{s}body{{margin:0}}</style><div style='height:4000px'></div>", .{rule});
+        defer testing.allocator.free(src);
+        try r.html(src);
+        r.settle();
+        r.t.frame();
+        wheelAt(&r, 50, 50, 0, -100);
+        try testing.expectEqual(@as(f32, 0), r.page().scrollY());
+    }
+}
+
+const carousel =
+    \\<div id=row style='overflow-x:auto;overflow-y:hidden;height:100px;white-space:nowrap'><div style='display:inline-block;width:3000px;height:300px'></div></div>
+    \\<div style='height:4000px'></div>
+;
+
+test "a scroll down over a sideways carousel moves the page" {
+    var r: Run = undefined;
+    try r.start();
+    defer r.stop();
+    try tests.page(&r, carousel);
+    wheelAt(&r, 50, 50, 0, -100);
+    try testing.expectEqual(@as(f32, 100), r.page().scrollY());
+    try r.expectJs("document.getElementById('row').scrollTop", "0");
+    // A trackpad is never quite straight: a little sideways doesn't take it.
+    wheelAt(&r, 50, 10, -3, -100);
+    try testing.expectEqual(@as(f32, 200), r.page().scrollY());
+}
+
+test "a scroll sideways over a carousel moves the carousel" {
+    var r: Run = undefined;
+    try r.start();
+    defer r.stop();
+    try tests.page(&r, carousel);
+    wheelAt(&r, 50, 50, -100, -3);
+    try r.expectJs("document.getElementById('row').scrollLeft", "100");
+    try testing.expectEqual(@as(f32, 0), r.page().scrollY());
+}
+
+test "a list at its end hands the scroll to the page" {
+    var r: Run = undefined;
+    try r.start();
+    defer r.stop();
+    try tests.page(&r, "<div id=l style='overflow:auto;height:100px'><div style='height:150px'></div></div><div style='height:4000px'></div>");
+    wheelAt(&r, 50, 50, 0, -30);
+    try r.expectJs("document.getElementById('l').scrollTop", "30");
+    try testing.expectEqual(@as(f32, 0), r.page().scrollY());
+    wheelAt(&r, 50, 50, 0, -40);
+    wheelAt(&r, 50, 20, 0, -40);
+    try testing.expect(r.page().scrollY() > 0);
+}

@@ -46,6 +46,9 @@ pub const Clip = struct {
     /// The transform it is in.
     xform: u32 = 0,
     scrolls: bool = false,
+    /// Which ways a person can scroll it: `hidden` is for scripts alone.
+    wheel_x: bool = true,
+    wheel_y: bool = true,
     /// How far its content reaches, from the padding box's top left.
     content_w: f32 = 0,
     content_h: f32 = 0,
@@ -260,18 +263,24 @@ pub const List = struct {
         return true;
     }
 
-    /// The innermost box that scrolls under a point, else the page (1).
-    pub fn scrollerAt(l: *const List, x: f32, y: f32) u32 {
+    /// The innermost scroller under a point that can still go the way the wheel says;
+    /// else the page. A carousel doesn't catch a scroll down, nor a list at its end.
+    pub fn scrollerAt(l: *const List, x: f32, y: f32, dx: f32, dy: f32) u32 {
         var i = l.clips.len;
         while (i > 2) {
             i -= 1;
             const c = l.clips[i];
-            if (c.scrolls and c.visible.contains(x, y)) {
-                const m = l.maxScroll(@intCast(i));
-                if (m[0] > 0 or m[1] > 0) return @intCast(i);
-            }
+            if (c.scrolls and c.visible.contains(x, y) and l.canMove(@intCast(i), dx, dy)) return @intCast(i);
         }
         return 1;
+    }
+
+    /// Whether it can go the way a wheel mostly points (negative: on down or right).
+    pub fn canMove(l: *const List, i: u32, dx: f32, dy: f32) bool {
+        const c = l.clips[i];
+        const m = l.maxScroll(i);
+        if (@abs(dy) >= @abs(dx)) return c.wheel_y and ((dy < 0 and c.scroll_y < m[1]) or (dy > 0 and c.scroll_y > 0));
+        return c.wheel_x and ((dx < 0 and c.scroll_x < m[0]) or (dx > 0 and c.scroll_x > 0));
     }
 };
 
@@ -438,6 +447,8 @@ pub const Builder = struct {
                 .corners = inner.mask(),
                 .xform = at.xform,
                 .scrolls = st.scrolls() or st.overflow_x == .scroll or st.overflow_x == .auto,
+                .wheel_x = st.overflow_x == .scroll or st.overflow_x == .auto,
+                .wheel_y = st.scrolls(),
                 .content_w = x.content_w,
                 .content_h = x.content_h,
                 .scroll_x = if (keep) |k| k[0] else 0,

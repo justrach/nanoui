@@ -14,6 +14,7 @@ test {
     _ = @import("shell/search.zig");
     _ = @import("shell/suggest.zig");
     _ = @import("shell/tests_search.zig");
+    _ = @import("shell/tests_menu.zig");
     _ = @import("css/effects.zig");
     _ = @import("css/transform.zig");
     _ = @import("css/animate.zig");

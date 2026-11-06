@@ -25,6 +25,7 @@ NANOBROWSER_LOG=1 zig-out/bin/...  # the page's console on stderr
 | ⌘S | Hide the tabs |
 | ⌘D | Two pages side by side; ⇧⌘D duplicates the tab |
 | ⌘T, ⌘W, ⇧⌘T | New tab, close it, bring it back |
+| ⇧⌘W | Close the window |
 | ⌘[, ⌘], ⌘R | Back, forward, reload |
 | ⌘F, ⌘G, ⇧⌘G | Find on the page |
 

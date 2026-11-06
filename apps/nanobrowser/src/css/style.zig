@@ -518,6 +518,9 @@ pub const Style = struct {
     scroll_padding_top: f32 = 0,
     /// `overflow: hidden` here is the viewport's: people can't scroll the page.
     locks_viewport: bool = false,
+    /// The root said `overflow` itself, so the body's stays the body's. Kept apart
+    /// because the root's own values are made `visible` once the viewport has them.
+    root_overflow: bool = false,
     /// In an `inert` subtree: takes no input and no focus.
     inert: bool = false,
     /// `content-visibility: hidden`.
