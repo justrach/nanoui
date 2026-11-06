@@ -6,6 +6,7 @@ const w = @import("win32.zig");
 const dev = @import("../dev.zig");
 const window_mod = @import("window.zig");
 const menu_mod = @import("../menu_accel.zig");
+const tray_mod = @import("tray.zig");
 const ui = @import("../ui/ui.zig");
 const tsgen = @import("../tsgen.zig");
 const ipc = @import("../ipc.zig").ipc(window_mod.Window, App);
@@ -28,7 +29,13 @@ pub const Options = struct {
     on_terminate: ?*const fn (ctx: ?*anyopaque) void = null,
     on_continue_activity: ?*const fn (ctx: ?*anyopaque, url: []const u8) void = null,
     on_active: ?*const fn (ctx: ?*anyopaque, active: bool) void = null,
+    /// The Mac's (a menu bar app with no Dock icon); every Windows app is
+    /// `.regular`, and one with `skip_taskbar` windows and a tray is the
+    /// accessory kind.
+    activation: Activation = .regular,
 };
+
+pub const Activation = enum { regular, accessory };
 
 const Timer = struct { id: usize, ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void };
 var timers: [64]?Timer = @splat(null);
@@ -56,6 +63,8 @@ pub const App = struct {
     options: Options,
     windows: std.ArrayList(*Window) = .empty,
     main_menu: ?*menu_mod.Menu = null,
+    /// Icons in the notification area (`newTray`), destroyed with the app.
+    trays: std.ArrayList(*tray_mod.Tray) = .empty,
     flags: dev.Flags = .{},
     /// `%LOCALAPPDATA%`, where WebView2 keeps its profile (`page_webview2.zig`).
     local_appdata: ?[]const u8 = null,
@@ -111,6 +120,8 @@ pub const App = struct {
         // No timer outlives the app: one that fired after this would call its
         // function with a context that is already gone.
         clearTimers();
+        while (self.trays.items.len > 0) self.trays.items[self.trays.items.len - 1].destroy();
+        self.trays.deinit(self.gpa);
         // `destroyNow`, not `close`: `close` only posts the request and waits for
         // a message loop that is not running any more, so this drained nothing
         // and spun forever.
@@ -312,10 +323,29 @@ pub const App = struct {
         return m.item(id);
     }
 
-    pub fn newTray(self: *App, opts: anytype) !noreturn {
-        _ = self;
-        _ = opts;
-        return error.TraysUnsupported;
+    /// Adds an icon to the notification area; it lives until removed with
+    /// `Tray.destroy` or the app ends. Not when the app runs hidden or
+    /// headless (snapshots, scripts, tests).
+    pub fn newTray(self: *App, opts: tray_mod.Options) !*tray_mod.Tray {
+        if (self.flags.hidden or !self.gui) return error.Hidden;
+        try self.trays.ensureUnusedCapacity(self.gpa, 1);
+        const t = try tray_mod.Tray.create(self.gpa, self.options.name, opts);
+        t.owner = .{ .ctx = self, .quit = trayQuit, .forget = trayForget };
+        self.trays.appendAssumeCapacity(t);
+        return t;
+    }
+
+    fn trayQuit(ctx: *anyopaque) void {
+        const self: *App = @ptrCast(@alignCast(ctx));
+        self.quit();
+    }
+
+    fn trayForget(ctx: *anyopaque, t: *tray_mod.Tray) void {
+        const self: *App = @ptrCast(@alignCast(ctx));
+        for (self.trays.items, 0..) |item, i| if (item == t) {
+            _ = self.trays.orderedRemove(i);
+            return;
+        };
     }
 
     pub fn accelerator(self: *App, sc: ui.Shortcut) bool {

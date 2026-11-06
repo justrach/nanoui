@@ -33,6 +33,8 @@ pub const Options = struct {
 
 pub const Tray = struct {
     gpa: std.mem.Allocator,
+    /// For `updateMenu`; the app's, which outlives its trays.
+    app_name: []const u8 = "",
     item: objc.Object,
     menu: ?*menu_mod.Menu = null,
     target: ?objc.Object = null,
@@ -46,13 +48,10 @@ pub const Tray = struct {
         const bar = objc.msg(objc.Object, objc.class("NSStatusBar"), "systemStatusBar", .{});
         // NSVariableStatusItemLength is -1.
         const item = objc.retain(objc.msg(objc.Object, bar, "statusItemWithLength:", .{@as(f64, -1)}));
-        self.* = .{ .gpa = gpa, .item = item, .on_click = opts.on_click };
+        self.* = .{ .gpa = gpa, .app_name = app_name, .item = item, .on_click = opts.on_click };
         self.setTitle(opts.title);
         if (opts.symbol.len > 0) self.setSymbol(opts.symbol);
-        if (opts.tooltip.len > 0) {
-            const button = objc.msg(objc.Object, item, "button", .{});
-            objc.msg(void, button, "setToolTip:", .{objc.nsString(opts.tooltip)});
-        }
+        if (opts.tooltip.len > 0) self.setTooltip(opts.tooltip);
         if (opts.menu.len > 0) try self.setMenu(app_name, opts.menu);
         if (opts.on_click != null) {
             const cls = objc.defineClass(.{ .name = "NanoUITrayTarget", .methods = &.{
@@ -85,6 +84,13 @@ pub const Tray = struct {
         defer pool.pop();
         const button = objc.msg(objc.Object, self.item, "button", .{});
         objc.msg(void, button, "setTitle:", .{objc.nsString(title)});
+    }
+
+    pub fn setTooltip(self: *Tray, tooltip: []const u8) void {
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        const button = objc.msg(objc.Object, self.item, "button", .{});
+        objc.msg(void, button, "setToolTip:", .{objc.nsString(tooltip)});
     }
 
     pub fn setSymbol(self: *Tray, name: []const u8) void {
@@ -140,5 +146,17 @@ pub const Tray = struct {
         if (self.menu) |old| old.destroy();
         self.menu = m;
         objc.msg(void, self.item, "setMenu:", .{m.ns});
+    }
+
+    /// Replaces the menu (`setMenu` under the app's name) while it runs:
+    /// a status line that changes, a Pause that becomes Resume.
+    pub fn updateMenu(self: *Tray, template: []const menu_mod.MenuItem) !void {
+        return self.setMenu(self.app_name, template);
+    }
+
+    /// The menu's item whose template had `id`, to check or disable.
+    pub fn menuItem(self: *Tray, id: []const u8) ?*menu_mod.Item {
+        const m = self.menu orelse return null;
+        return m.item(id);
     }
 };

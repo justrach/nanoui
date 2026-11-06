@@ -67,7 +67,7 @@ lib fixed (`tools/ios/zig-lib.sh`), Android the Android SDK and NDK.
 ```
 src/nanoui.zig        the public API
 src/objc.zig          Objective-C runtime, runtime classes, blocks, libdispatch
-src/app.zig           lifecycle, menu bar, trays, services, client generation
+src/app.zig           lifecycle, activation (regular, or accessory: a menu bar app), menu bar, trays, services, client generation
 src/dev.zig           --nanoui-* flags: generate, snapshot, script, eval, hidden
 src/window.zig        NSWindow showing a page or native UI, window controls
 src/window_lights.zig the traffic lights kept where a taller top bar wants them
@@ -82,7 +82,8 @@ src/ipc.zig           bound services, calls, typed events, page messages
 src/tsgen.zig         comptime TypeScript declarations and JS client
 src/bridge.js         the page runtime (window.nanoui)
 src/menu.zig          menus from templates: roles, accelerators, checkboxes
-src/tray.zig          status bar icons
+src/tray.zig          status bar icons (Windows: windows/tray.zig, the notification area;
+                      windows/tray_model.zig, its menu model, tested everywhere)
 src/dialog.zig        open/save panels, message boxes
 src/desktop.zig       clipboard, shell (open, reveal, trash), paths, appearance
 src/update.zig        updates from GitHub releases: check, verify, swap the bundle

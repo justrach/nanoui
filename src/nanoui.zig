@@ -64,7 +64,7 @@ const plat = switch (builtin.os.tag) {
         pub const app = @import("windows/app.zig");
         pub const window = @import("windows/window.zig");
         pub const menu = @import("menu_accel.zig");
-        pub const tray = @import("tray_none.zig");
+        pub const tray = @import("windows/tray.zig");
         pub const dialog = @import("windows/dialog.zig");
         pub const desktop = @import("windows/desktop.zig");
         pub const fdwatch = @import("windows/fdwatch.zig");
@@ -159,6 +159,8 @@ test {
     _ = kv;
     // The updater is for desktop apps; iOS updates through the App Store.
     if (builtin.os.tag != .ios) _ = @import("update_portable.zig");
+    // The Windows tray's menu model and callback decoding, platform-free.
+    if (builtin.os.tag != .ios) _ = @import("windows/tray_model.zig");
     if (is_android) {
         inline for (.{ plat.app, plat.window, plat.dialog, plat.desktop, plat.fdwatch, @import("android/surface.zig"), @import("android/keys.zig"), @import("android/touch.zig"), @import("android/activity.zig"), @import("android/bars.zig"), @import("android/egl.zig"), @import("android/jni.zig") }) |m| std.testing.refAllDecls(m);
         inline for (.{ plat.app.App, plat.window.Window, plat.desktop.clipboard, plat.desktop.shell, @import("android/surface.zig").Surface }) |T| std.testing.refAllDecls(T);
@@ -183,6 +185,9 @@ test {
             _ = @import("windows/tests_surface.zig");
             // The window's own: styles, sizes, the close veto, the timers.
             _ = @import("windows/tests_window.zig");
+            // The notification area's icon: the shell calls and the popup.
+            std.testing.refAllDecls(@import("windows/tray.zig").Tray);
+            std.testing.refAllDecls(@import("windows/app.zig").App);
             // File drops: path/URL conversion and one HDROP as one event.
             _ = @import("windows/drop_files.zig");
             _ = @import("windows/tests_drop_files.zig");
