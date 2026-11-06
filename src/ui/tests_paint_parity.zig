@@ -7,6 +7,8 @@ const text = @import("text.zig");
 const testing = std.testing;
 
 const Scene = struct {
+    // Paint runs after view returns; span storage must outlive that call.
+    const spans = [_]types.Span{.{ .start = 0, .end = 2, .background = .hex(0xff0000), .underline = true }};
     rule: types.BaselineRule = .font_line,
     snapping: types.GlyphSnap = .nearest,
     span_box: ?types.SpanBox = null,
@@ -25,7 +27,7 @@ const Scene = struct {
             (40 - f.lineHeight()) / 2 + f.leading / 2 + f.ascent;
         const box = ui.div(c).size(100, 40).offset(s.x, if (s.baseline) |b| b - natural else 10);
         defer box.end();
-        ui.richText(c, "Ig", &.{.{ .start = 0, .end = 2, .background = .hex(0xff0000), .underline = true }}, s.style());
+        ui.richText(c, "Ig", &spans, s.style());
     }
 };
 
