@@ -450,7 +450,7 @@ fn metalDisplayLinkNeedsUpdate(obj: objc.Object, _: objc.SEL, _: objc.Object, up
     if (s.dead or s.in_frame) return;
     const target = objc.msg(f64, update, "targetPresentationTimestamp", .{});
     const frame_in_due = s.ctx.frame_in != null and target >= s.frame_in_due - 0.001;
-    if (!s.full_pending and !frame_in_due and !s.ctx.animating and !s.in_live_resize and !s.geometry_changed and !s.retained_ready and !s.pending_sync and s.ctx.time_driven == .none) {
+    if (!s.full_pending and !frame_in_due and !s.ctx.animating and !s.ctx.live_resizing and !s.geometry_changed and !s.retained_ready and !s.pending_sync and s.ctx.time_driven == .none) {
         s.updatePacing(target, false);
         return;
     }
@@ -458,7 +458,7 @@ fn metalDisplayLinkNeedsUpdate(obj: objc.Object, _: objc.SEL, _: objc.Object, up
     const duration: f64 = if (s.link_fps > 0) 1.0 / @as(f64, s.link_fps) else 1.0 / @as(f64, @max(60.0, s.max_fps));
     s.renderer.given_drawable = drawable;
     defer s.renderer.given_drawable = null;
-    if (!s.full_pending and !frame_in_due and !s.ctx.animating and !s.in_live_resize and !s.geometry_changed and (s.retained_ready or (!s.pending_sync and s.ctx.time_driven != .none))) {
+    if (!s.full_pending and !frame_in_due and !s.ctx.animating and !s.ctx.live_resizing and !s.geometry_changed and (s.retained_ready or (!s.pending_sync and s.ctx.time_driven != .none))) {
         s.redrawRetained(target, duration);
         return;
     }
@@ -468,14 +468,14 @@ fn metalDisplayLinkNeedsUpdate(obj: objc.Object, _: objc.SEL, _: objc.Object, up
 fn liveResizeStart(obj: objc.Object, _: objc.SEL) callconv(.c) void {
     objc.msgSuper(void, obj, objc.class("NSView"), "viewWillStartLiveResize", .{});
     const s = surfaceOf(obj) orelse return;
-    s.in_live_resize = true;
+    s.ctx.live_resizing = true;
     s.renderer.setLiveResize(true);
 }
 
 fn liveResizeEnd(obj: objc.Object, _: objc.SEL) callconv(.c) void {
     objc.msgSuper(void, obj, objc.class("NSView"), "viewDidEndLiveResize", .{});
     const s = surfaceOf(obj) orelse return;
-    s.in_live_resize = false;
+    s.ctx.live_resizing = false;
     s.frame();
 }
 

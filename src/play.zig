@@ -14,6 +14,8 @@
 //!                 never posted to the system, so nothing else hears it
 //!   notch:LINES   (macOS) a mouse wheel's notches, the same way
 //!   menukey:K     (macOS) ⌘K, as an event offered to the menu bar first, as AppKit does
+//!   drag:WxH      (macOS) drag the window's size there, as a person does, a change a
+//!                 frame through AppKit's live resize; says on stderr what each change cost
 //!   wait:SECONDS  pause
 //!   ax:PATH       (macOS) write what VoiceOver reads to PATH; axpress:LABEL press it
 //!
@@ -83,6 +85,28 @@ fn wheelEvent(s: anytype, dy: f32, precise: bool) void {
     const event = objc.msg(objc.Object, objc.class("NSEvent"), "eventWithCGEvent:", .{ev});
     objc.msg(void, s.nsview, "scrollWheel:", .{event});
 }
+
+/// Thirty changes of size between where it is and `w` × `h`, one after another as a
+/// drag gives them, each one timed.
+fn dragWindow(s: anytype, w: f32, h: f32) void {
+    const from = s.size;
+    var ms: [30]f64 = undefined;
+    objc.msg(void, s.nsview, "viewWillStartLiveResize", .{});
+    for (&ms, 0..) |*m, i| {
+        const k = @as(f32, @floatFromInt(i + 1)) / ms.len;
+        const size: objc.CGSize = .{ .width = from.w + (w - from.w) * k, .height = from.h + (h - from.h) * k };
+        const t0 = CACurrentMediaTime();
+        objc.msg(void, s.window.nswindow, "setContentSize:", .{size});
+        m.* = (CACurrentMediaTime() - t0) * 1000;
+    }
+    objc.msg(void, s.nsview, "viewDidEndLiveResize", .{});
+    std.mem.sort(f64, &ms, {}, std.sort.asc(f64));
+    var total: f64 = 0;
+    for (ms) |m| total += m;
+    std.debug.print("nanoui-play: drag of {d} changes took {d:.0} ms: median {d:.1}, slowest {d:.1}\n", .{ ms.len, total, ms[ms.len / 2], ms[ms.len - 1] });
+}
+
+extern "c" fn CACurrentMediaTime() f64;
 
 /// ⌘ and a key as AppKit first offers it: to the menu bar. Not posted either.
 fn menuKey(key: []const u8) void {
@@ -166,6 +190,12 @@ fn Player(comptime App: type) type {
                 p.scroll_at = p.finger orelse .{ .x = s.ctx.size.w / 2, .y = s.ctx.size.h * 0.6 };
                 dot = .{ .at = p.scroll_at };
                 p.scrollStep();
+            } else if (mac and std.mem.eql(u8, op, "drag")) {
+                const x = std.mem.indexOfScalar(u8, arg, 'x') orelse return p.missing(step);
+                const w = std.fmt.parseFloat(f32, arg[0..x]) catch return p.missing(step);
+                const h = std.fmt.parseFloat(f32, arg[x + 1 ..]) catch return p.missing(step);
+                dragWindow(s, w, h);
+                after(0.2, p, next);
             } else if (mac and std.mem.eql(u8, op, "wheel")) {
                 wheelEvent(s, std.fmt.parseFloat(f32, arg) catch return p.missing(step), true);
                 after(0.05, p, next);

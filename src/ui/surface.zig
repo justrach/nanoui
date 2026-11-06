@@ -71,7 +71,6 @@ pub const Surface = struct {
     reduce_motion: bool = false,
     is_visible: bool = false,
     released: bool = false,
-    in_live_resize: bool = false,
     geometry_changed: bool = false,
     transparent: bool = false,
     after_frame_ctx: ?*anyopaque = null,
@@ -314,7 +313,7 @@ pub const Surface = struct {
         const native_changed = if (self.after_frame) |af| af(self.after_frame_ctx, self) else false;
         if (self.dead) return;
         const after_frame_ms = if (self.frame_log != null) (cf.CACurrentMediaTime() - t_af0) * 1000 else 0;
-        const sync = native_changed or self.in_live_resize or self.geometry_changed or self.pending_sync;
+        const sync = native_changed or self.ctx.live_resizing or self.geometry_changed or self.pending_sync;
         self.geometry_changed = false;
         self.pending_sync = false;
         self.afterFocus();
