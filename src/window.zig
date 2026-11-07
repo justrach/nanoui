@@ -395,7 +395,25 @@ fn screenChanged(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c
 /// The title bar's views moved, or are about to be left where AppKit put them.
 fn lightsMoved(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
     const w = objc.getZig(Window, self_obj) orelse return;
-    if (w.lights) |*l| l.place(w.nswindow);
+    const l = if (w.lights) |*l| l else return;
+    if (l.placing or l.pending) return;
+    l.pending = true;
+    l.place(w.nswindow);
+    // Frame notifications can arrive halfway through AppKit's layout; its
+    // remaining writes can undo the synchronous placement of the last button.
+    // Retain the delegate, not Window: teardown clears its Zig pointer.
+    _ = objc.retain(self_obj);
+    objc.dispatchMain(self_obj, finishLightsLayout);
+}
+
+fn finishLightsLayout(ctx: ?*anyopaque) callconv(.c) void {
+    const delegate: objc.Object = @ptrCast(ctx orelse return);
+    defer objc.release(delegate);
+    const w = objc.getZig(Window, delegate) orelse return;
+    if (w.lights) |*l| {
+        l.pending = false;
+        l.place(w.nswindow);
+    }
 }
 
 fn didResize(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {

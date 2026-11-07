@@ -22,6 +22,8 @@ pub const Lights = struct {
     spacing: f64,
     /// Moving them is what tells us they moved.
     placing: bool = false,
+    /// One final placement after AppKit finishes the current layout stack.
+    pending: bool = false,
 
     pub fn init(window: objc.Object, x: f64, y: f64) Lights {
         var spacing: f64 = 20;

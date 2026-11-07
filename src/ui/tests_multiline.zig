@@ -6,6 +6,7 @@
 const std = @import("std");
 const testing = std.testing;
 const ui = @import("ui.zig");
+const gpu = @import("gpu.zig");
 
 const Composer = struct {
     buf: ui.TextBuffer = .{},
@@ -19,6 +20,26 @@ const Composer = struct {
         if (k.last.submitted) k.submitted += 1;
     }
 };
+
+/// A field with no box of its own, as a chat composer's: its app draws the
+/// frame, so its caret sits at the very edge of its content.
+const Bare = struct {
+    buf: ui.TextBuffer = .{},
+    fn view(k: *@This(), c: *ui.Context) void {
+        c.focus = c.peekId(null);
+        _ = ui.textField(c, &k.buf, .{ .width = .{ .px = 220 }, .multiline = true, .max_lines = 4, .bare = true });
+    }
+};
+
+/// The caret's quad: a thin, line-high rectangle. Text comes as glyphs, so
+/// it is the only quad this narrow.
+fn carets(t: *ui.Tester) usize {
+    var n: usize = 0;
+    for (t.instances.items) |inst| {
+        if (inst.kind == gpu.Kind.quad and inst.rect[2] > 0 and inst.rect[2] <= 3 and inst.rect[3] > 5) n += 1;
+    }
+    return n;
+}
 
 fn fieldHeight(t: *ui.Tester) f32 {
     // The field: the column's first child.
@@ -128,4 +149,31 @@ test "the caret moves as a space is typed, and the next character after it" {
     const three = t.ctx.focused_text.?.caret_rect.x;
     try testing.expect(three > spaced + 1);
     try testing.expectEqualStrings("ab c", k.buf.text());
+}
+
+test "a bare multiline field clips nothing, so its caret shows whole" {
+    var k: Bare = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&k, Bare.view), .{ .width = 400, .height = 300 });
+    defer t.deinit();
+    t.frame();
+    try testing.expectEqual(@as(usize, 1), carets(&t));
+    for (t.instances.items) |inst| {
+        if (inst.kind == gpu.Kind.quad and inst.rect[2] > 0 and inst.rect[2] <= 3 and inst.rect[3] > 5)
+            try testing.expectEqual(@as(f32, 0), inst.clip_round);
+    }
+}
+
+test "a multiline field's caret blinks while it has focus" {
+    var k: Composer = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&k, Composer.view), .{ .width = 400, .height = 300 });
+    defer t.deinit();
+    t.typeText("x");
+    t.frame();
+    try testing.expectEqual(@as(usize, 1), carets(&t));
+    t.advance(0.6);
+    try testing.expectEqual(@as(usize, 0), carets(&t));
+    t.advance(0.5);
+    try testing.expectEqual(@as(usize, 1), carets(&t));
 }

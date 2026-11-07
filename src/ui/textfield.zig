@@ -290,7 +290,9 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
         .direction = if (multi) .column else .row,
         .width = opts.width,
         .padding = .xy(pad_x, pad_y),
-        .radius = 8,
+        // A bare field sits in its app's frame: with no box of its own, a
+        // rounded clip would only cut the caret at its first and last line.
+        .radius = if (opts.bare) 0 else 8,
         .background = if (opts.bare) null else th.surface,
         .border = if (opts.bare) null else th.border,
         .align_items = if (multi) .start else .center,
