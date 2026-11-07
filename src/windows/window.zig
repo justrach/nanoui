@@ -41,10 +41,50 @@ pub const Frame = struct { x: f64, y: f64, width: f64, height: f64 };
 const class_name = std.unicode.utf8ToUtf16LeStringLiteral("NanoUIWindow");
 var registered = false;
 
+/// An `HICON` from an ICO's bytes, at the frame nearest `cx` × `cy`.
+fn iconFrame(ico: []const u8, cx: i32, cy: i32) ?w.HICON {
+    if (ico.len < 6) return null;
+    const count = readU16(ico, 4);
+    var best: ?struct { offset: u32, size: u32 } = null;
+    var best_score: u32 = std.math.maxInt(u32);
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        const entry = 6 + i * 16;
+        if (entry + 16 > ico.len) break;
+        const width: i32 = if (ico[entry] == 0) 256 else ico[entry];
+        const height: i32 = if (ico[entry + 1] == 0) 256 else ico[entry + 1];
+        const size = readU32(ico, entry + 8);
+        const offset = readU32(ico, entry + 12);
+        if (offset > ico.len or size > ico.len - offset) continue;
+        const score: u32 = @abs(width - cx) + @abs(height - cy);
+        if (score < best_score) {
+            best_score = score;
+            best = .{ .offset = offset, .size = size };
+        }
+    }
+    const frame = best orelse return null;
+    const data: *const anyopaque = @ptrCast(ico.ptr + @as(usize, frame.offset));
+    return w.CreateIconFromResourceEx(data, frame.size, 1, 0x00030000, cx, cy, 0);
+}
+
+fn readU16(bytes: []const u8, at: usize) u16 {
+    return @as(u16, bytes[at]) | (@as(u16, bytes[at + 1]) << 8);
+}
+
+fn readU32(bytes: []const u8, at: usize) u32 {
+    return @as(u32, bytes[at]) |
+        (@as(u32, bytes[at + 1]) << 8) |
+        (@as(u32, bytes[at + 2]) << 16) |
+        (@as(u32, bytes[at + 3]) << 24);
+}
+
 pub const Window = struct {
     app: *App,
     /// Null when headless (snapshots).
     hwnd: ?w.HWND = null,
+    /// `Options.icon`'s frames, owned by the window and freed in `finish`.
+    icon_big: ?w.HICON = null,
+    icon_small: ?w.HICON = null,
     surface: ?*Surface = null,
     title_bar: TitleBar = .default,
     on_close: ?Callback = null,
@@ -108,6 +148,7 @@ pub const Window = struct {
         const hwnd = w.CreateWindowExW(ex, class_name, w.wide(&title, options.title), style, w.CW_USEDEFAULT, w.CW_USEDEFAULT, 100, 100, null, null, inst, null) orelse return error.CreateWindow;
         self.hwnd = hwnd;
         _ = w.SetWindowLongPtrW(hwnd, w.GWLP_USERDATA, @bitCast(@intFromPtr(self)));
+        self.setIcon(options.icon);
         w.DragAcceptFiles(hwnd, 1);
         self.setSize(options.width, options.height);
         if (options.x != null and options.y != null) self.setPosition(options.x.?, options.y.?) else self.center();
@@ -293,6 +334,17 @@ pub const Window = struct {
         return if (dpi > 0) @as(f64, @floatFromInt(dpi)) / 96 else 1;
     }
 
+    /// The title-bar and taskbar icons, from an ICO's bytes: the frame
+    /// nearest the size the system asks for.
+    fn setIcon(self: *Window, icon: ?[]const u8) void {
+        const ico = icon orelse return;
+        const hwnd = self.hwnd orelse return;
+        self.icon_big = iconFrame(ico, w.GetSystemMetrics(w.SM_CXICON), w.GetSystemMetrics(w.SM_CYICON));
+        self.icon_small = iconFrame(ico, w.GetSystemMetrics(w.SM_CXSMICON), w.GetSystemMetrics(w.SM_CYSMICON));
+        if (self.icon_big) |h| _ = w.SendMessageW(hwnd, w.WM_SETICON, w.ICON_BIG, @bitCast(@as(usize, @intFromPtr(h))));
+        if (self.icon_small) |h| _ = w.SendMessageW(hwnd, w.WM_SETICON, w.ICON_SMALL, @bitCast(@as(usize, @intFromPtr(h))));
+    }
+
     fn finish(self: *Window) void {
         if (self.closed) return;
         self.closed = true;
@@ -303,6 +355,10 @@ pub const Window = struct {
         self.page = null;
         if (self.surface) |s| s.destroy();
         self.surface = null;
+        if (self.icon_big) |h| _ = w.DestroyIcon(h);
+        self.icon_big = null;
+        if (self.icon_small) |h| _ = w.DestroyIcon(h);
+        self.icon_small = null;
         const app = self.app;
         app.removeWindow(self);
         app.gpa.destroy(self);

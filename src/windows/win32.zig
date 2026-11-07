@@ -107,6 +107,20 @@ pub extern "user32" fn SetWindowTextW(hwnd: HWND, text: [*:0]const u16) callconv
 pub extern "user32" fn SetWindowLongPtrW(hwnd: HWND, index: i32, value: isize) callconv(.winapi) isize;
 pub extern "user32" fn GetWindowLongPtrW(hwnd: HWND, index: i32) callconv(.winapi) isize;
 pub extern "user32" fn AdjustWindowRectEx(rect: *RECT, style: u32, menu: BOOL, ex: u32) callconv(.winapi) BOOL;
+pub const HICON = *opaque {};
+
+/// Window icons: `WM_SETICON`'s slots, and the system's icon sizes.
+pub const WM_SETICON = 0x0080;
+pub const ICON_SMALL: WPARAM = 0;
+pub const ICON_BIG: WPARAM = 1;
+pub const SM_CXICON = 11;
+pub const SM_CYICON = 12;
+pub const SM_CXSMICON = 49;
+pub const SM_CYSMICON = 50;
+
+pub extern "user32" fn CreateIconFromResourceEx(presbits: ?*const anyopaque, dwResSize: u32, fIcon: BOOL, dwVer: u32, cxDesired: i32, cyDesired: i32, flags: u32) callconv(.winapi) ?HICON;
+pub extern "user32" fn DestroyIcon(hicon: HICON) callconv(.winapi) BOOL;
+
 pub extern "user32" fn GetSystemMetrics(index: i32) callconv(.winapi) i32;
 pub extern "user32" fn SetCapture(hwnd: HWND) callconv(.winapi) ?HWND;
 pub extern "user32" fn ReleaseCapture() callconv(.winapi) BOOL;

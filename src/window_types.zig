@@ -65,6 +65,13 @@ pub const Kind = enum { window, panel };
 pub fn Options(comptime Window: type) type {
     return struct {
         title: []const u8 = "",
+        /// The window's icon, in the platform's own container: ICO on
+        /// Windows, ICNS or PNG on macOS, PNG on GTK 3. Windows draws it in
+        /// the title bar and the taskbar; macOS sets the Dock icon (a
+        /// bundled .app's own `CFBundleIconFile` wins); GTK 3 sets the window
+        /// icon its window manager draws (GTK 4 dropped window icons, and on
+        /// Wayland the shell takes it from the .desktop file).
+        icon: ?[]const u8 = null,
         width: f64 = 800,
         height: f64 = 600,
         min_width: f64 = 200,
