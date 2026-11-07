@@ -180,6 +180,75 @@ pub const Api4 = struct {
 pub const DrawFn = *const fn (area: *Widget, cr: *anyopaque, width: c_int, height: c_int, data: ?*anyopaque) callconv(.c) void;
 pub const AsyncFn = *const fn (source: *anyopaque, result: *anyopaque, data: ?*anyopaque) callconv(.c) void;
 
+/// gtk4-layer-shell (`libgtk4-layer-shell.so.0`): GTK 4 turns a window into
+/// a Wayland layer surface (a panel, a bar, a launcher) instead of a window
+/// among windows. Built for GTK 4: with GTK 3 there is none. Loaded ahead
+/// of GTK 4 when a window asks for a layer surface (`wants_layer_shell`),
+/// because that order is what makes the library work at all
+/// (`layerShellLib`).
+pub const LayerShell = struct {
+    gtk_layer_is_supported: *const fn () callconv(.c) c_int,
+    gtk_layer_init_for_window: *const fn (w: *Widget) callconv(.c) void,
+    gtk_layer_set_namespace: *const fn (w: *Widget, name: [*:0]const u8) callconv(.c) void,
+    gtk_layer_set_layer: *const fn (w: *Widget, layer: c_int) callconv(.c) void,
+    gtk_layer_set_anchor: *const fn (w: *Widget, edge: c_int, anchor: c_int) callconv(.c) void,
+    gtk_layer_set_margin: *const fn (w: *Widget, edge: c_int, margin: c_int) callconv(.c) void,
+    gtk_layer_set_exclusive_zone: *const fn (w: *Widget, zone: c_int) callconv(.c) void,
+    gtk_layer_auto_exclusive_zone_enable: *const fn (w: *Widget) callconv(.c) void,
+    gtk_layer_set_keyboard_mode: *const fn (w: *Widget, mode: c_int) callconv(.c) void,
+};
+
+pub var layer_shell: LayerShell = undefined;
+var layer_shell_state: enum { unknown, loaded, missing } = .unknown;
+var layer_shell_lib: ?*anyopaque = null;
+var layer_shell_lib_tried = false;
+
+/// Set before GTK is first loaded, by a window that asks for one: whether
+/// gtk4-layer-shell should be loaded ahead of GTK 4.
+pub var wants_layer_shell = false;
+
+/// The gtk4-layer-shell handle. Loaded into the global scope *before* GTK 4
+/// where a layer surface is wanted, and that order is the whole point:
+/// gtk4-layer-shell hooks libwayland's proxy calls with a shim of its own
+/// (that is how the library is built), and the shim only wins the symbol
+/// lookups if it is in the global scope ahead of libwayland, which GTK 4's
+/// GDK links. Loaded after GTK 4 (nanoui's usual way with libraries), the
+/// shim is never called, and `gtk_layer_is_supported` says no.
+fn layerShellLib() ?*anyopaque {
+    if (!layer_shell_lib_tried) {
+        layer_shell_lib_tried = true;
+        const libs = [_][*:0]const u8{ "libgtk4-layer-shell.so.0", "libgtk4-layer-shell.so.1", "libgtk4-layer-shell.so" };
+        layer_shell_lib = for (libs) |name| {
+            if (std.c.dlopen(name, .{ .NOW = true, .GLOBAL = true })) |h| break h;
+        } else null;
+    }
+    return layer_shell_lib;
+}
+
+/// Loads gtk4-layer-shell where it is installed; false when it isn't (the
+/// window stays ordinary). Looked up once.
+pub fn loadLayerShell() bool {
+    if (layer_shell_state == .unknown) layer_shell_state = blk: {
+        const lib = layerShellLib() orelse break :blk .missing;
+        if (!table(LayerShell, lib, &layer_shell)) break :blk .missing;
+        break :blk .loaded;
+    };
+    return layer_shell_state == .loaded;
+}
+
+// gtk4-layer-shell's enums.
+pub const layer_background = 0;
+pub const layer_bottom = 1;
+pub const layer_top = 2;
+pub const layer_overlay = 3;
+pub const edge_left = 0;
+pub const edge_right = 1;
+pub const edge_top = 2;
+pub const edge_bottom = 3;
+pub const keyboard_none = 0;
+pub const keyboard_exclusive = 1;
+pub const keyboard_on_demand = 2;
+
 pub const SList = extern struct { data: ?*anyopaque, next: ?*SList };
 
 pub var api: Api = undefined;
@@ -213,13 +282,17 @@ pub fn ready() bool {
 /// Enough for GLib's timers and watches: `ready` starts it for windows.
 pub fn load() bool {
     if (loaded) return true;
-    if (!wantsThree() and !force3) if (std.c.dlopen("libgtk-4.so.1", .{ .NOW = true, .GLOBAL = true })) |lib| {
-        if (table(Api, lib, &api) and table(Api4, lib, &v4api)) {
-            v4 = true;
-            loaded = true;
-            return true;
+    if (!wantsThree() and !force3) {
+        // Ahead of GTK 4, when a layer surface is coming: see `layerShellLib`.
+        if (wants_layer_shell) _ = layerShellLib();
+        if (std.c.dlopen("libgtk-4.so.1", .{ .NOW = true, .GLOBAL = true })) |lib| {
+            if (table(Api, lib, &api) and table(Api4, lib, &v4api)) {
+                v4 = true;
+                loaded = true;
+                return true;
+            }
         }
-    };
+    }
     const lib = std.c.dlopen("libgtk-3.so.0", .{ .NOW = true, .GLOBAL = true }) orelse return false;
     if (!table(Api, lib, &api) or !table(Api3, lib, &v3)) return false;
     loaded = true;

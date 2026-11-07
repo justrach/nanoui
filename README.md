@@ -338,7 +338,7 @@ Android's SDK and NDK). On a Mac, `zig build -Dtarget=x86_64-linux-gnu` or
 
 | | macOS | iOS | Android | Linux | Windows |
 |---|---|---|---|---|---|
-| windows, input, timers | AppKit | UIKit: screens over each other, touch, keyboards | NativeActivity: screens over each other, touch, keyboards, Back | GTK 4, else GTK 3 (loaded with `dlopen`) | Win32 |
+| windows, input, timers | AppKit | UIKit: screens over each other, touch, keyboards | NativeActivity: screens over each other, touch, keyboards, Back | GTK 4, else GTK 3 (loaded with `dlopen`); `layer_shell` windows are Wayland layer surfaces (gtk4-layer-shell) | Win32 |
 | text | CoreText | CoreText | nanoui's TrueType reader, Android's fonts | nanoui's TrueType reader (`src/ui/tt/`) | the same |
 | rendering | Metal | Metal | OpenGL ES 3; CPU without it | OpenGL 3.3 in a GtkGLArea; CPU (`src/ui/raster.zig`) without one | CPU, shown by Direct3D 11 (a DXGI flip swap chain; GDI without it) |
 | icons | SF Symbols | SF Symbols | line icons drawn by nanoui (`src/ui/icons.zig`) | the same | the same |
@@ -358,8 +358,13 @@ renderer on a Mac. Linux is also tested in a container
 On Linux nanoui loads GTK 4 when it's installed and GTK 3 otherwise;
 `NANOUI_GTK=3` asks for GTK 3. Both work the same: GTK 4's event
 controllers, draw function, clipboard and dialogs stand in for GTK 3's
-event signals and waiting calls (`src/linux/surface_gtk4.zig`). On Windows,
-frames reach the screen through a Direct3D 11 device (hardware, else WARP)
+event signals and waiting calls (`src/linux/surface_gtk4.zig`). A window
+made with `layer_shell` is not a window among windows but a Wayland layer
+surface — a panel, a bar or a launcher, in a layer above (or below) them,
+placed by its anchors — through gtk4-layer-shell, installed separately,
+which nanoui loads ahead of GTK 4 so the library's libwayland shim is the
+one the symbol lookups find (`Options.layer_shell`, `src/linux/gtk.zig`).
+On Windows, frames reach the screen through a Direct3D 11 device (hardware, else WARP)
 and a flip-sequential swap chain, so resizing stays smooth and content
 stays anchored (`src/windows/d3d.zig`).
 

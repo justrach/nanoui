@@ -78,6 +78,15 @@ pub const App = struct {
         return self;
     }
 
+    /// Says that a window of this app will ask for a layer surface
+    /// (`Options.layer_shell`), before GTK is loaded. gtk4-layer-shell has to
+    /// be in the global scope ahead of libwayland for its shim to work, and
+    /// that order only exists while GTK is being loaded. `Window.create`
+    /// says it itself; an app that starts GTK on its own says it here first.
+    pub fn wantLayerShell() void {
+        @import("gtk.zig").wants_layer_shell = true;
+    }
+
     /// Brings GTK up, once, for a window that is about to be made. A page
     /// needs the GTK its WebKitGTK is built for, so it has the first say.
     pub fn startGtk(self: *App, for_page: bool) !void {
