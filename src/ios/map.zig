@@ -28,6 +28,7 @@ pub const Native = struct {
     shown: bool = false,
     user: bool = false,
     muted: ?bool = null,
+    dark: ?bool = null,
     frame: types.Rect = .{},
 
     pub fn deinit(n: *Native) void {
@@ -123,6 +124,11 @@ fn apply(m: *api.Map, v: objc.Object) void {
         defer objc.release(cfg);
         if (m.muted) objc.msg(void, cfg, "setPointOfInterestFilter:", .{objc.msg(objc.Object, objc.class("MKPointOfInterestFilter"), "filterExcludingAllCategories", .{})});
         objc.msg(void, v, "setPreferredConfiguration:", .{cfg});
+    }
+    if (n.dark != m.dark) {
+        n.dark = m.dark;
+        // UIUserInterfaceStyle: dark (2) or as the system has it (0).
+        objc.msg(void, v, "setOverrideUserInterfaceStyle:", .{@as(objc.NSInteger, if (m.dark) 2 else 0)});
     }
     if (n.user != m.user) {
         n.user = m.user;

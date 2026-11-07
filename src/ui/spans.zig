@@ -15,11 +15,17 @@ pub fn styled(spans: []const types.Span) bool {
 /// The style of a span's text in a paragraph of `base`.
 pub fn spanStyle(base: types.TextStyle, s: types.Span) types.TextStyle {
     var st = base;
-    if (s.weight) |w| st.weight = w;
+    if (s.weight) |w| {
+        st.weight = w;
+        st.css_weight = 0;
+    }
     if (s.italic) st.italic = true;
+    if (s.family) |f| st.family = f;
     if (s.mono and !base.mono) {
         st.mono = true;
         st.size = base.size * base.mono_scale;
+        // Inline code is the monospaced font, whatever the paragraph's family.
+        if (s.family == null) st.family = null;
     }
     return st;
 }
@@ -34,6 +40,7 @@ pub fn spansHash(spans: []const types.Span, start: usize, end: usize) u64 {
         h.update(std.mem.asBytes(&a));
         h.update(std.mem.asBytes(&b));
         h.update(&.{ if (s.weight) |w| @as(u8, @backingInt(w)) + 1 else 0, @intFromBool(s.italic), @intFromBool(s.mono) });
+        if (s.family) |f| h.update(f);
     }
     return h.final();
 }

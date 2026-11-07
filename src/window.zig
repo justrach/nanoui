@@ -6,6 +6,7 @@ const App = @import("app.zig").App;
 const Page = @import("page_webkit.zig").Page;
 const ui = @import("ui/ui.zig");
 const Surface = @import("ui/surface.zig").Surface;
+const Lights = @import("window_lights.zig").Lights;
 
 const window_types = @import("window_types.zig");
 pub const Asset = window_types.Asset;
@@ -16,6 +17,15 @@ pub const Callback = window_types.Callback(Window);
 pub const ShouldClose = window_types.ShouldClose(Window);
 pub const Options = window_types.Options(Window);
 pub const NativeView = window_types.NativeView;
+
+/// The Dock icon, from ICNS or PNG bytes.
+fn setAppIcon(icon: []const u8) void {
+    const data = objc.msg(objc.Object, objc.class("NSData"), "dataWithBytes:length:", .{ icon.ptr, icon.len });
+    const image = objc.msg(objc.Object, objc.msg(objc.Object, objc.class("NSImage"), "alloc", .{}), "initWithData:", .{data});
+    const app = objc.msg(objc.Object, objc.class("NSApplication"), "sharedApplication", .{});
+    objc.msg(void, app, "setApplicationIconImage:", .{image});
+    objc.release(image);
+}
 
 pub const Window = struct {
     app: *App,
@@ -29,6 +39,8 @@ pub const Window = struct {
     on_fullscreen: ?Callback = null,
     on_key: ?Callback = null,
     should_close: ?ShouldClose = null,
+    /// The traffic lights kept where `Options.traffic_lights` put them.
+    lights: ?Lights = null,
     closed: bool = false,
     /// When a popover last hid itself, losing the keys.
     resigned_at: f64 = 0,
@@ -62,6 +74,9 @@ pub const Window = struct {
         const nswindow = objc.msg(objc.Object, objc.msg(objc.Object, window_class, "alloc", .{}), "initWithContentRect:styleMask:backing:defer:", .{
             rect, style, @as(objc.NSUInteger, 2), objc.NO,
         });
+        // The Dock's icon: a bundled .app's own wins, so this is for a binary
+        // run from a checkout or a tarball.
+        if (options.icon) |icon| setAppIcon(icon);
         if (options.tabbing_disallowed) objc.msg(void, nswindow, "setTabbingMode:", .{@as(objc.NSInteger, 2)}); // NSWindowTabbingModeDisallowed
         var behavior: objc.NSUInteger = 0;
         // NSWindowCollectionBehaviorCanJoinAllSpaces | FullScreenAuxiliary.
@@ -94,6 +109,7 @@ pub const Window = struct {
                 .{ .name = "windowDidBecomeKey:", .imp = &keyChanged, .types = "v@:@" },
                 .{ .name = "windowDidResignKey:", .imp = &keyChanged, .types = "v@:@" },
                 .{ .name = "windowShouldClose:", .imp = &shouldClose, .types = "c@:@" },
+                .{ .name = "lightsMoved:", .imp = &lightsMoved, .types = "v@:@" },
             },
         });
         const delegate = objc.msg(objc.Object, delegate_class, "new", .{});
@@ -116,6 +132,11 @@ pub const Window = struct {
             .page => |p| self.page = try Page.create(self, p),
             .view => |v| self.surface = try Surface.create(self, v, options.theme),
         }
+        if (options.traffic_lights) |p| if (options.title_bar == .hidden and !borderless) {
+            self.lights = Lights.init(nswindow, p.x, p.y);
+            Lights.observe(nswindow, delegate);
+            self.lights.?.place(nswindow);
+        };
         if (popover) {
             objc.msg(void, nswindow, "setOpaque:", .{objc.NO});
             objc.msg(void, nswindow, "setBackgroundColor:", .{objc.msg(objc.Object, objc.class("NSColor"), "clearColor", .{})});
@@ -341,6 +362,7 @@ pub const Window = struct {
         if (self.surface) |s| s.destroy();
         self.page = null;
         self.surface = null;
+        if (self.lights != null) Lights.stopObserving(self.delegate);
         objc.setZig(self.delegate, null);
         objc.msg(void, self.nswindow, "setDelegate:", .{@as(?objc.Object, null)});
         // AppKit still uses both while closing.
@@ -370,8 +392,15 @@ fn screenChanged(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c
     if (w.surface) |s| s.screenChanged();
 }
 
+/// The title bar's views moved, or are about to be left where AppKit put them.
+fn lightsMoved(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
+    const w = objc.getZig(Window, self_obj) orelse return;
+    if (w.lights) |*l| l.place(w.nswindow);
+}
+
 fn didResize(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
     const w = objc.getZig(Window, self_obj) orelse return;
+    if (w.lights) |*l| l.place(w.nswindow);
     if (w.on_resize) |cb| cb.func(cb.ctx, w);
 }
 
@@ -387,6 +416,7 @@ fn fullScreenChanged(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callcon
     const w = objc.getZig(Window, self_obj) orelse return;
     if (w.on_fullscreen) |cb| cb.func(cb.ctx, w);
     const w2 = objc.getZig(Window, self_obj) orelse return;
+    if (w2.lights) |*l| l.place(w2.nswindow);
     if (w2.surface) |s| {
         s.updateGeometry();
         s.frame();
@@ -395,6 +425,7 @@ fn fullScreenChanged(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callcon
 
 fn keyChanged(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
     const w = objc.getZig(Window, self_obj) orelse return;
+    if (w.lights) |*l| l.place(w.nswindow);
     if (w.title_bar == .popover and !w.isFocused()) {
         w.hide();
         w.resigned_at = CACurrentMediaTime();

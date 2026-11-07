@@ -178,6 +178,9 @@ pub const Context = struct {
     text_menu: bool = false,
     caret_moved_at: f64 = 0,
     window_focused: bool = true,
+    /// A person is dragging the window to a new size (macOS): a frame should be quick,
+    /// and a view can leave what's dear until the drag lets up.
+    live_resizing: bool = false,
     select_granularity: @import("textedit.zig").Granularity = .char,
     select_origin: [2]usize = .{ 0, 0 },
     undo_op: @import("textedit.zig").UndoOp = .none,

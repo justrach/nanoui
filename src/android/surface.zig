@@ -77,6 +77,7 @@ pub const Surface = struct {
             .start_time = clock.now(),
             .keys = .init(gpa),
         };
+        if (!window.app.headless and !window.app.flags.hidden) self.text.enablePersistence(window.app.options.name);
         self.ctx = .init(gpa, &self.text);
         self.ctx.reduced_motion = window.app.reduced_motion;
         self.updateGeometry();
@@ -224,6 +225,7 @@ pub const Surface = struct {
                 self.ctx.renderer = "OpenGL ES";
             }
             const r = &self.renderer.?;
+            self.text.images.device_side = opengl.Renderer.maxTextureSide();
             r.sync(self.text.atlas.mask(), self.text.atlas.generation, self.text.images.pictures(), self.text.images.generation);
             r.draw(self.instances.items, self.size, self.scale, self.ctx.theme.background, 0, self.ctx.time);
             if (g.swap()) return;

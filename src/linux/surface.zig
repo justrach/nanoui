@@ -75,6 +75,7 @@ pub const Surface = struct {
             .theme_override = theme_override,
             .start_time = clock.now(),
         };
+        if (window.app.gui and !window.app.flags.hidden) self.text.enablePersistence(window.app.options.name);
         self.ctx = .init(gpa, &self.text);
         // No theme background under a transparent window's view.
         self.ctx.transparent_root = window.transparent != .none;
@@ -304,6 +305,7 @@ fn onRender(_: *gtk.Widget, _: *anyopaque, data: ?*anyopaque) callconv(.c) c_int
 /// Draws the frame with OpenGL into the framebuffer GTK bound.
 pub fn glRender(s: *Surface) bool {
     if (s.renderer) |*r| {
+        s.text.images.device_side = opengl.Renderer.maxTextureSide();
         r.sync(s.text.atlas.mask(), s.text.atlas.generation, s.text.images.pictures(), s.text.images.generation);
         r.draw(s.instances.items, s.size, s.scale, s.clearColor(), glarea.target(), s.ctx.time);
         return true;

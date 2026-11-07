@@ -5,7 +5,7 @@ pub const ios = @import("tools/ios/bundle.zig");
 /// Android APKs, likewise: `@import("nanoui").android.apk(b, lib, .{ .name = "Notes", .id = "com.example.notes" })`.
 pub const android = @import("tools/android/apk.zig");
 
-const examples = [_][]const u8{ "hello", "counter", "gallery", "duo", "board", "basics", "map", "turn", "access", "todo", "sgbus", "browser", "drop", "scenes" };
+const examples = [_][]const u8{ "hello", "counter", "gallery", "ruler", "duo", "board", "basics", "map", "turn", "access", "todo", "sgbus", "browser", "drop", "scenes" };
 const frameworks = [_][]const u8{ "AppKit", "WebKit", "Metal", "QuartzCore", "CoreText", "CoreGraphics", "CoreFoundation", "Foundation", "ImageIO", "UniformTypeIdentifiers", "CoreVideo" };
 const ios_frameworks = [_][]const u8{ "UIKit", "CoreLocation", "MapKit", "Metal", "QuartzCore", "CoreText", "CoreGraphics", "CoreFoundation", "Foundation", "ImageIO", "UniformTypeIdentifiers", "CoreVideo" };
 
@@ -134,6 +134,8 @@ pub fn build(b: *std.Build) void {
             }),
         });
         b.installArtifact(exe);
+        if (std.mem.eql(u8, name, "ruler"))
+            b.step("ruler", "Build the native ruler example").dependOn(&b.addInstallArtifact(exe, .{}).step);
         const run = b.addRunArtifact(exe);
         run.addPassthruArgs();
         b.step(b.fmt("run-{s}", .{name}), b.fmt("Run the {s} example", .{name})).dependOn(&run.step);
@@ -156,6 +158,18 @@ pub fn build(b: *std.Build) void {
         }),
     });
     b.step("reel", "Build the motion reel (zig-out/bin/nanoui-reel)").dependOn(&b.addInstallArtifact(reel, .{}).step);
+
+    // Deterministic input replay through the same native view and CPU renderer.
+    const ruler_replay = b.addExecutable(.{
+        .name = "ruler-replay",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/ruler/replay.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "nanoui", .module = nanoui }},
+        }),
+    });
+    b.step("ruler-replay", "Build the offscreen ruler replay").dependOn(&b.addInstallArtifact(ruler_replay, .{}).step);
 
     const tests = b.addTest(.{ .root_module = nanoui });
     // On Android, the tests are a program for a device (`adb push`, run in `adb shell`).
@@ -189,6 +203,29 @@ pub fn build(b: *std.Build) void {
         const t = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path(path), .target = b.graph.host }) });
         tools_step.dependOn(&b.addRunArtifact(t).step);
     }
+
+    const font_bench = b.addExecutable(.{
+        .name = "font-bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/font_bench.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "build_options", .module = options.createModule() }},
+        }),
+    });
+    if (os == .windows) {
+        font_bench.root_module.linkSystemLibrary("dwrite", .{});
+        font_bench.root_module.linkSystemLibrary("psapi", .{});
+    } else if (os == .macos) {
+        for (frameworks) |f| font_bench.root_module.linkFramework(f, .{});
+        font_bench.root_module.linkSystemLibrary("objc", .{});
+    } else if (os == .ios) {
+        for (ios_frameworks) |f| font_bench.root_module.linkFramework(f, .{});
+        font_bench.root_module.linkSystemLibrary("objc", .{});
+    }
+    const run_font_bench = b.addRunArtifact(font_bench);
+    run_font_bench.addPassthruArgs();
+    b.step("font-bench", "Measure font scanning and private memory headlessly").dependOn(&run_font_bench.step);
 
     const lines = b.addExecutable(.{
         .name = "lines",

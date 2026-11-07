@@ -84,6 +84,36 @@ repositories with their own licenses and notices. Both use CodeGraff's
 colors and run graff as a separate program; CodeGraff is distributed under
 its modified AGPLv3 terms, as their notices say.
 
+### nanocua
+
+[`apps/nanocua`](apps/nanocua) is copied here from
+[CodeGraff](https://github.com/justrach/codegraff), which holds the original,
+Copyright (C) 2026 Rach Pradhan and Yu Xi Lim. **It is not under nanoui's MIT
+license.** It keeps CodeGraff's modified AGPLv3 terms, kept verbatim in
+[`third_party/licenses/codegraff-LICENSE.txt`](third_party/licenses/codegraff-LICENSE.txt).
+`apps/nanocua/VENDORED.md` says which commit it came from. It uses nanoui;
+nanoui uses nothing of it, and it isn't part of the nanoui package other programs
+depend on (`build.zig.zon`'s `paths`), so nanoui itself stays MIT.
+
 ## Stageshow (.agents/skills/stageshow)
 
 Agent skill by Benji Taylor, MIT. Source: https://github.com/benjitaylor/skills/tree/802057409787133703c56001080169e347305572/stageshow. App icons and brand assets inside keep their own licenses; see that folder's NOTICE.md and kit/brands/SOURCES.md.
+
+## brotli
+
+The brotli decoder (`src/ui/tt/brotli*.zig`) embeds the static dictionary of
+[google/brotli](https://github.com/google/brotli), `c/common/dictionary.bin`
+(`src/ui/tt/data/brotli-dictionary.bin`, 122,784 bytes, RFC 7932 appendix A),
+and takes its word transforms and context lookup tables from the same
+repository's `c/common/transform.c` and `c/common/context.c`, Copyright (c) 2009,
+2010, 2013-2016 by the Brotli Authors. Its MIT license is kept verbatim in
+[`third_party/licenses/brotli-MIT.txt`](third_party/licenses/brotli-MIT.txt).
+
+## Lato
+
+`src/ui/tt/data/lato-subset.woff2`, a few glyphs of
+[Lato](https://www.latofonts.com) as Google Fonts serves them, is a test fixture
+and isn't shipped in any program. Copyright (c) 2010-2014 by tyPoland Lukasz
+Dziedzic with Reserved Font Name "Lato", licensed under the SIL Open Font License
+1.1, kept verbatim in
+[`third_party/licenses/Lato-OFL.txt`](third_party/licenses/Lato-OFL.txt).

@@ -134,10 +134,12 @@ pub const Atlas = struct {
     /// The sprite of `glyph` of `font` (whose id is `font_id`) drawn at
     /// `bin` quarters of a pixel right of a pixel boundary, its strokes
     /// thickened `dilation` levels; null for blank glyphs (spaces).
-    pub fn glyph(a: *Atlas, font_id: u16, font: cf.CTFontRef, g: u16, bin: u8, dilation: u8) ?Sprite {
+    /// `stroke`: points of outline added, for a bold the font lacks (a font id
+    /// always has the same one).
+    pub fn glyph(a: *Atlas, font_id: u16, font: cf.CTFontRef, g: u16, bin: u8, dilation: u8, stroke: f32) ?Sprite {
         const key: Key = .{ .font = font_id, .glyph = g, .bin = bin, .dilation = dilation };
         if (a.sprites.get(key)) |sp| return sp;
-        const sp = a.rasterize(font, g, bin, dilation);
+        const sp = a.rasterize(font, g, bin, dilation, stroke);
         a.sprites.put(a.gpa, key, sp) catch {};
         return sp;
     }
@@ -154,11 +156,18 @@ pub const Atlas = struct {
     }
 
 
-    fn rasterize(a: *Atlas, font: cf.CTFontRef, g: u16, bin: u8, dilation: u8) ?Sprite {
+    fn rasterize(a: *Atlas, font: cf.CTFontRef, g: u16, bin: u8, dilation: u8, stroke: f32) ?Sprite {
         const scale = a.scale;
         var glyphs = [1]u16{g};
-        const bounds = CTFontGetBoundingRectsForGlyphs(font, 0, &glyphs, null, 1);
+        var bounds = CTFontGetBoundingRectsForGlyphs(font, 0, &glyphs, null, 1);
         if (bounds.size.width <= 0 or bounds.size.height <= 0) return null;
+        if (stroke > 0) {
+            const grow: f64 = stroke;
+            bounds.origin.x -= grow;
+            bounds.origin.y -= grow;
+            bounds.size.width += 2 * grow;
+            bounds.size.height += 2 * grow;
+        }
         const sub: f64 = @as(f64, @floatFromInt(bin)) / subpixel_bins;
         const s: f64 = scale;
         const x0 = @floor(bounds.origin.x * s + sub);
@@ -193,6 +202,11 @@ pub const Atlas = struct {
         CGContextTranslateCTM(ctx, @as(f64, pad) - x0 + sub, @as(f64, pad) - y0);
         cf.CGContextScaleCTM(ctx, s, s);
         const at = [1]objc.CGPoint{.{}};
+        if (stroke > 0) {
+            cf.CGContextSetTextDrawingMode(ctx, cf.text_fill_stroke);
+            cf.CGContextSetLineWidth(ctx, stroke);
+            cf.CGContextSetGrayStrokeColor(ctx, @as(f64, @floatFromInt(dilation)) * 0.25, 1);
+        }
         CTFontDrawGlyphs(font, &glyphs, &at, 1, ctx);
         a.upload(origin, w, h);
 
@@ -210,6 +224,11 @@ pub const Atlas = struct {
                 cf.CGContextSetGrayFillColor(lctx, 0, 1);
                 CGContextTranslateCTM(lctx, @as(f64, pad) - x0 + sub, @as(f64, pad) - y0);
                 cf.CGContextScaleCTM(lctx, s, s);
+                if (stroke > 0) {
+                    cf.CGContextSetTextDrawingMode(lctx, cf.text_fill_stroke);
+                    cf.CGContextSetLineWidth(lctx, stroke);
+                    cf.CGContextSetGrayStrokeColor(lctx, 0, 1);
+                }
                 CTFontDrawGlyphs(font, &glyphs, &at, 1, lctx);
                 for (a.pixels.items) |*px| px.* = 255 - px.*;
                 a.upload(.{ origin[0] + w, origin[1] }, w, h);
@@ -341,19 +360,20 @@ pub const Atlas = struct {
 /// semibold, bold): an NSImage on macOS, a UIImage on iOS.
 fn symbolImage(name: []const u8, point_size: f32, weight: u8) ?objc.Object {
     if (objc.uikit) {
-        // UIImageSymbolWeight: regular is 4, then medium, semibold, bold.
+        // UIImageSymbolWeight, by `types.Weight`'s order.
+        const ios = [_]objc.NSInteger{ 4, 5, 6, 7, 1, 2, 3, 8, 9 };
         const config = objc.msg(objc.Object, objc.class("UIImageSymbolConfiguration"), "configurationWithPointSize:weight:", .{
-            @as(f64, point_size), @as(objc.NSInteger, 4 + @as(objc.NSInteger, @min(weight, 3))),
+            @as(f64, point_size), ios[@min(weight, ios.len - 1)],
         });
         return objc.msg(?objc.Object, objc.class("UIImage"), "systemImageNamed:withConfiguration:", .{ objc.nsString(name), config });
     }
     const base = objc.msg(?objc.Object, objc.class("NSImage"), "imageWithSystemSymbolName:accessibilityDescription:", .{
         objc.nsString(name), @as(?objc.Object, null),
     }) orelse return null;
-    // NSFontWeight: regular, medium, semibold, bold.
-    const weights = [_]f64{ 0, 0.23, 0.3, 0.4 };
+    // NSFontWeight, by `types.Weight`'s order.
+    const weights = [_]f64{ 0, 0.23, 0.3, 0.4, -0.8, -0.6, -0.4, 0.56, 0.62 };
     const config = objc.msg(objc.Object, objc.class("NSImageSymbolConfiguration"), "configurationWithPointSize:weight:", .{
-        @as(f64, point_size), weights[@min(weight, 3)],
+        @as(f64, point_size), weights[@min(weight, weights.len - 1)],
     });
     return objc.msg(?objc.Object, base, "imageWithSymbolConfiguration:", .{config});
 }

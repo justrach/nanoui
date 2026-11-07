@@ -71,7 +71,6 @@ pub const Surface = struct {
     reduce_motion: bool = false,
     is_visible: bool = false,
     released: bool = false,
-    in_live_resize: bool = false,
     geometry_changed: bool = false,
     transparent: bool = false,
     after_frame_ctx: ?*anyopaque = null,
@@ -119,6 +118,7 @@ pub const Surface = struct {
             // Before anything can run a frame: setContentView: resizes the view.
             .start_time = cf.CACurrentMediaTime(),
         };
+        if (text.portable and !window.app.flags.hidden) self.text.enablePersistence(window.app.options.name);
         self.ctx = .init(gpa, &self.text);
         // Pictures go straight to the GPU before any view callback can run a frame.
         self.text.images.sink = .{ .ctx = &self.renderer, .upload = @import("metal.zig").Renderer.uploadImage };
@@ -155,9 +155,7 @@ pub const Surface = struct {
             const ws = objc.msg(objc.Object, objc.class("NSWorkspace"), "sharedWorkspace", .{});
             self.reduce_motion = objc.msg(objc.BOOL, ws, "accessibilityDisplayShouldReduceMotion", .{});
             const center = objc.msg(objc.Object, ws, "notificationCenter", .{});
-            objc.msg(void, center, "addObserver:selector:name:object:", .{
-                nsview, objc.sel("accessibilityChanged:"), objc.nsString("NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification"), @as(?objc.Object, null),
-            });
+            objc.msg(void, center, "addObserver:selector:name:object:", .{ nsview, objc.sel("accessibilityChanged:"), objc.nsString("NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification"), @as(?objc.Object, null) });
         }
         self.refreshAppearance();
         self.is_visible = objc.msg(objc.BOOL, window.nswindow, "isVisible", .{}) and (objc.msg(objc.NSUInteger, window.nswindow, "occlusionState", .{}) & 2 != 0);
@@ -304,7 +302,7 @@ pub const Surface = struct {
         self.pacing_log.note(now);
         // What scrolling gathered since the last frame, applied at once.
         const dy = self.scroll.take();
-        if (dy != 0 and !c.applyScroll(dy) and c.wants_wheel) c.input.scroll = .{ .y = dy };
+        if (dy != 0 and !c.applyScroll(dy) and c.wants_wheel) c.input.scroll.y += dy;
         const r = frame_mod.run(c, self.view, &self.text, &self.instances, self.size, self.scale, a11y.themed(self, self.theme()), dt, now - self.start_time);
         if (self.dead) return;
         a11y.afterFrame(self);
@@ -314,7 +312,7 @@ pub const Surface = struct {
         const native_changed = if (self.after_frame) |af| af(self.after_frame_ctx, self) else false;
         if (self.dead) return;
         const after_frame_ms = if (self.frame_log != null) (cf.CACurrentMediaTime() - t_af0) * 1000 else 0;
-        const sync = native_changed or self.in_live_resize or self.geometry_changed or self.pending_sync;
+        const sync = native_changed or self.ctx.live_resizing or self.geometry_changed or self.pending_sync;
         self.geometry_changed = false;
         self.pending_sync = false;
         self.afterFocus();

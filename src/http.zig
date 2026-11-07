@@ -10,6 +10,9 @@
 //!         if (r.status == 200) s.parse(r.body);
 //!         s.window.redraw();
 //!     }
+//!
+//! Redirects are followed everywhere; `Response.url` says where they led and
+//! `Response.headers` what the server said.
 const std = @import("std");
 const builtin = @import("builtin");
 const apple = builtin.os.tag == .macos or builtin.os.tag == .ios;
@@ -35,7 +38,26 @@ pub const Response = struct {
     body: []const u8,
     /// Why there was no answer (offline, a bad certificate, a timeout).
     err: []const u8 = "",
+    /// The answer's headers, their names in lower case; as the body, valid
+    /// until the callback returns. On Apple's systems repeated headers come
+    /// folded into one, and cookies are the system's to keep.
+    headers: []const Header = &.{},
+    /// Where the answer came from: the URL asked for, or where its redirects
+    /// led, which is what a page's relative links resolve against.
+    url: []const u8 = "",
+
+    /// The value of the first header called `name`, in any case.
+    pub fn header(r: Response, name: []const u8) ?[]const u8 {
+        for (r.headers) |h| if (std.ascii.eqlIgnoreCase(h.name, name)) return h.value;
+        return null;
+    }
 };
+
+/// A `data:` URL's bytes, owned by `gpa`.
+pub const decodeData = portable.decodeData;
+
+/// Where a link leads from the URL it is on (`http_url.zig`).
+pub const resolve = @import("http_url.zig").resolve;
 
 /// Sends `req` and calls `done(ctx, response)` on the main thread when it
 /// is answered or fails. `req`'s bytes are copied: they need not outlive
@@ -77,6 +99,28 @@ pub const Answer = struct {
     body: []u8 = &.{},
     err: []const u8 = "",
     err_owned: bool = false,
+    /// Names in lower case, and every string, owned by the allocator.
+    headers: std.ArrayList(Header) = .empty,
+    url: []const u8 = "",
+
+    pub fn addHeader(a: *Answer, gpa: std.mem.Allocator, name: []const u8, value: []const u8) !void {
+        const n = try std.ascii.allocLowerString(gpa, name);
+        errdefer gpa.free(n);
+        const v = try gpa.dupe(u8, value);
+        errdefer gpa.free(v);
+        try a.headers.append(gpa, .{ .name = n, .value = v });
+    }
+
+    pub fn freeHead(a: *Answer, gpa: std.mem.Allocator) void {
+        for (a.headers.items) |h| {
+            gpa.free(h.name);
+            gpa.free(h.value);
+        }
+        a.headers.deinit(gpa);
+        a.headers = .empty;
+        gpa.free(a.url);
+        a.url = "";
+    }
 };
 
 fn Pending(comptime Ctx: type, comptime done: fn (Ctx, Response) void) type {
@@ -94,7 +138,12 @@ fn Pending(comptime Ctx: type, comptime done: fn (Ctx, Response) void) type {
             const p = &s.answer;
             if (response) |res| {
                 if (objc.msg(objc.BOOL, res, "isKindOfClass:", .{objc.class("NSHTTPURLResponse")}) != objc.NO)
+                {
                     p.status = @intCast(std.math.clamp(objc.msg(objc.NSInteger, res, "statusCode", .{}), 0, 999));
+                    s.keepHeaders(res);
+                } else p.status = 200; // A `data:` address has no HTTP in it, as on the portable path.
+                if (objc.msg(?objc.Object, res, "URL", .{})) |u|
+                    p.url = s.gpa.dupe(u8, objc.fromNSString(objc.msg(?objc.Object, u, "absoluteString", .{}))) catch "";
             }
             if (data) |d| {
                 const len = objc.msg(objc.NSUInteger, d, "length", .{});
@@ -117,14 +166,26 @@ fn Pending(comptime Ctx: type, comptime done: fn (Ctx, Response) void) type {
             objc.dispatchMain(s, deliverC);
         }
 
+        /// An NSHTTPURLResponse's headers, copied. Out of memory leaves the rest out.
+        fn keepHeaders(s: *Self, res: objc.Object) void {
+            const fields = objc.msg(objc.Object, res, "allHeaderFields", .{});
+            const names = objc.msg(objc.Object, fields, "allKeys", .{});
+            for (0..objc.msg(objc.NSUInteger, names, "count", .{})) |i| {
+                const name = objc.msg(objc.Object, names, "objectAtIndex:", .{@as(objc.NSUInteger, i)});
+                const value = objc.msg(?objc.Object, fields, "objectForKey:", .{name});
+                s.answer.addHeader(s.gpa, objc.fromNSString(name), objc.fromNSString(value)) catch return;
+            }
+        }
+
         fn deliverC(context: ?*anyopaque) callconv(.c) void {
             deliver(@ptrCast(@alignCast(context.?)));
         }
 
         fn deliver(s: *Self) void {
             const p = &s.answer;
-            done(s.ctx, .{ .status = p.status, .body = p.body, .err = p.err });
+            done(s.ctx, .{ .status = p.status, .body = p.body, .err = p.err, .headers = p.headers.items, .url = p.url });
             s.gpa.free(p.body);
+            p.freeHead(s.gpa);
             if (p.err_owned) s.gpa.free(p.err);
             s.gpa.destroy(s);
         }
@@ -133,6 +194,7 @@ fn Pending(comptime Ctx: type, comptime done: fn (Ctx, Response) void) type {
 
 test {
     _ = portable;
+    _ = @import("http_url.zig");
 }
 
 test "a request is answered on the main thread, its body copied" {
@@ -156,4 +218,26 @@ test "a request is answered on the main thread, its body copied" {
     try std.testing.expect(s.answered);
     try std.testing.expect(s.on_main);
     try std.testing.expectEqualStrings("hello zig", s.body[0..s.len]);
+}
+
+test "an answer says where it came from" {
+    const State = struct {
+        answered: bool = false,
+        url_ok: bool = false,
+        fn done(s: *@This(), r: Response) void {
+            s.answered = true;
+            s.url_ok = r.status == 200 and std.mem.startsWith(u8, r.url, "data:text/plain");
+        }
+    };
+    var s: State = .{};
+    fetch(std.testing.allocator, .{ .url = "data:text/plain,x" }, &s, State.done);
+    var waited: f64 = 0;
+    while (!s.answered and waited < 5) : (waited += 0.01) @import("platform.zig").runFor(0.01);
+    try std.testing.expect(s.answered and s.url_ok);
+}
+
+test "headers are found in any case" {
+    const r: Response = .{ .status = 200, .body = "", .headers = &.{.{ .name = "content-type", .value = "text/html" }} };
+    try std.testing.expectEqualStrings("text/html", r.header("Content-Type").?);
+    try std.testing.expect(r.header("location") == null);
 }

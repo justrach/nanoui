@@ -1,9 +1,10 @@
 //! TrueType fonts read directly: the tables a text system needs from a
 //! `.ttf` file or one face of a `.ttc` collection — metrics, the character
 //! map, advances, kerning, the family's name and style, and glyph outlines
-//! (simple and composite) — so text needs no system library on Linux or
-//! Windows. Fonts with CFF outlines (most `.otf`) are not read.
+//! (simple and composite, or CFF's in `cff.zig`) — so text needs no system
+//! library on Linux or Windows.
 const std = @import("std");
+const cff = @import("cff.zig");
 
 pub const Error = error{ NotAFont, Unsupported, Truncated };
 
@@ -27,7 +28,7 @@ fn tag(s: *const [4]u8) u32 {
 
 /// The number of faces in a font file: one, or a collection's count.
 pub fn faces(data: []const u8) usize {
-    if (data.len >= 12 and be32(data, 0) == tag("ttcf")) return be32(data, 8);
+    if (data.len >= 12 and be32(data, 0) == tag("ttcf")) return @min(be32(data, 8), 256);
     return 1;
 }
 
@@ -55,12 +56,13 @@ pub const Tables = struct {
     name: u32 = 0,
     os2: u32 = 0,
     name_len: u32 = 0,
+    cff: u32 = 0,
+    cff_len: u32 = 0,
 
     pub fn read(data: []const u8, index: usize) Error!Tables {
         const at = try faceOffset(data, index);
         const version = be32(data, at);
-        if (version == tag("OTTO")) return error.Unsupported;
-        if (version != 0x00010000 and version != tag("true")) return error.NotAFont;
+        if (version != 0x00010000 and version != tag("true") and version != tag("OTTO")) return error.NotAFont;
         const n = be16(data, at + 4);
         var t: Tables = .{};
         for (0..n) |i| {
@@ -77,6 +79,10 @@ pub const Tables = struct {
                 tag("glyf") => t.glyf = off,
                 tag("kern") => t.kern = off,
                 tag("OS/2") => t.os2 = off,
+                tag("CFF ") => {
+                    t.cff = off;
+                    t.cff_len = be32(data, rec + 12);
+                },
                 tag("name") => {
                     t.name = off;
                     t.name_len = be32(data, rec + 12);
@@ -85,7 +91,7 @@ pub const Tables = struct {
             }
         }
         if (t.head == 0 or t.hhea == 0 or t.hmtx == 0 or t.maxp == 0 or t.cmap == 0) return error.NotAFont;
-        if (t.glyf == 0 or t.loca == 0) return error.Unsupported;
+        if ((t.glyf == 0 or t.loca == 0) and t.cff == 0) return error.Unsupported;
         return t;
     }
 };
@@ -99,6 +105,8 @@ pub const Style = struct {
     italic: bool = false,
     /// Every glyph as wide as every other.
     mono: bool = false,
+    /// OS/2's width class: 1 ultra-condensed … 5 normal … 9 ultra-expanded.
+    width: u16 = 5,
 
     pub fn name(s: *const Style) []const u8 {
         return s.family[0..s.family_len];
@@ -109,6 +117,7 @@ pub const Style = struct {
         var s: Style = .{};
         if (t.os2 != 0) {
             s.weight = be16(data, t.os2 + 4);
+            s.width = be16(data, t.os2 + 6);
             const sel = be16(data, t.os2 + 62);
             s.italic = sel & 1 != 0;
             // PANOSE proportion 9 is monospaced.
@@ -182,6 +191,8 @@ pub const Font = struct {
     cmap: u32 = 0,
     cmap_format: u16 = 0,
     style: Style,
+    /// The outlines, when they are CFF's.
+    cff: ?cff.Cff = null,
 
     pub fn init(data: []const u8, index: usize) Error!Font {
         const t = try Tables.read(data, index);
@@ -199,6 +210,10 @@ pub const Font = struct {
         };
         f.pickCmap();
         if (f.cmap == 0) return error.Unsupported;
+        if (t.glyf == 0) {
+            if (t.cff >= data.len or t.cff_len > data.len - t.cff) return error.Truncated;
+            f.cff = cff.Cff.init(data[t.cff..][0..t.cff_len]) orelse return error.Unsupported;
+        }
         return f;
     }
 
@@ -266,6 +281,20 @@ pub const Font = struct {
         return if (g == 0) 0 else g +% delta;
     }
 
+    /// The height of lowercase letters, in font units: OS/2's, else `x`'s own.
+    pub fn xHeight(f: *const Font) f32 {
+        if (f.t.os2 != 0 and be16(f.data, f.t.os2) >= 2 and bei16(f.data, f.t.os2 + 86) > 0) return @floatFromInt(bei16(f.data, f.t.os2 + 86));
+        if (f.bounds(f.glyphIndex('x'))) |b| return b[3];
+        return f.units_per_em * 0.5;
+    }
+
+    /// The height of capitals, in font units: OS/2's, else `H`'s own.
+    pub fn capHeight(f: *const Font) f32 {
+        if (f.t.os2 != 0 and be16(f.data, f.t.os2) >= 2 and bei16(f.data, f.t.os2 + 88) > 0) return @floatFromInt(bei16(f.data, f.t.os2 + 88));
+        if (f.bounds(f.glyphIndex('H'))) |b| return b[3];
+        return f.units_per_em * 0.7;
+    }
+
     /// A glyph's advance, in font units.
     pub fn advance(f: *const Font, g: u16) f32 {
         const i = @min(g, f.num_hmetrics - 1);
@@ -304,6 +333,7 @@ pub const Font = struct {
 
     /// A glyph's bounds in font units: x0, y0, x1, y1 (null when blank).
     pub fn bounds(f: *const Font, g: u16) ?[4]f32 {
+        if (f.cff) |*c| return c.bounds(g);
         const r = f.glyphRange(g) orelse return null;
         const d = f.data;
         return .{ @floatFromInt(bei16(d, r[0] + 2)), @floatFromInt(bei16(d, r[0] + 4)), @floatFromInt(bei16(d, r[0] + 6)), @floatFromInt(bei16(d, r[0] + 8)) };
@@ -312,14 +342,18 @@ pub const Font = struct {
     /// Sends a glyph's outline to `sink`, transformed by `m` (a, b, c, d,
     /// e, f: x' = a x + c y + e, y' = b x + d y + f).
     pub fn outline(f: *const Font, g: u16, m: [6]f32, sink: Sink) void {
-        f.outlineDepth(g, m, sink, 0);
+        if (f.cff) |*c| return c.outline(g, m, sink);
+        // Components nest and repeat; a font from the web may have them do so
+        // without end.
+        var budget: u32 = 512;
+        f.outlineDepth(g, m, sink, 0, &budget);
     }
 
-    fn outlineDepth(f: *const Font, g: u16, m: [6]f32, sink: Sink, depth: u8) void {
+    fn outlineDepth(f: *const Font, g: u16, m: [6]f32, sink: Sink, depth: u8, budget: *u32) void {
         const r = f.glyphRange(g) orelse return;
         const contours = bei16(f.data, r[0]);
         if (contours >= 0) return f.simple(r[0], @intCast(contours), m, sink);
-        if (depth < 8) f.composite(r[0] + 10, m, sink, depth);
+        if (depth < 8) f.composite(r[0] + 10, m, sink, depth, budget);
     }
 
     fn simple(f: *const Font, at: usize, contours: usize, m: [6]f32, sink: Sink) void {
@@ -375,10 +409,12 @@ pub const Font = struct {
         }
     }
 
-    fn composite(f: *const Font, at_in: usize, m: [6]f32, sink: Sink, depth: u8) void {
+    fn composite(f: *const Font, at_in: usize, m: [6]f32, sink: Sink, depth: u8, budget: *u32) void {
         const d = f.data;
         var at = at_in;
         while (true) {
+            if (budget.* == 0 or at + 6 > d.len) return;
+            budget.* -= 1;
             const flags = be16(d, at);
             const g = be16(d, at + 2);
             at += 4;
@@ -425,7 +461,7 @@ pub const Font = struct {
                 m[0] * dx + m[2] * dy + m[4],
                 m[1] * dx + m[3] * dy + m[5],
             };
-            f.outlineDepth(g, cm, sink, depth + 1);
+            f.outlineDepth(g, cm, sink, depth + 1, budget);
             if (flags & 0x20 == 0) break;
         }
     }

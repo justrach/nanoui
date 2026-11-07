@@ -2,7 +2,7 @@
 const std = @import("std");
 
 const limit = 600;
-const roots = [_][]const u8{ "src", "examples", "tools", "hillclimb/src", "hillclimb/mygo", "hillclimb/build.zig", "apps/nanoterm/src", "apps/nanoterm/build.zig", "apps/nanomon/src", "apps/nanomon/build.zig", "apps/nanomon/README.md", "apps/nanoterm/README.md", "build.zig", "AGENTS.md", "README.md" };
+const roots = [_][]const u8{ "src", "examples", "tools", "hillclimb/src", "hillclimb/mygo", "hillclimb/build.zig", "apps/nanoterm/src", "apps/nanoterm/build.zig", "apps/nanomon/src", "apps/nanomon/build.zig", "apps/nanomon/README.md", "apps/nanoterm/README.md", "apps/nanocua/src", "apps/nanocua/build.zig", "apps/nanocua/README.md", "build.zig", "AGENTS.md", "README.md" };
 const skip = [_][]const u8{ ".zig-cache", "zig-out", "node_modules", ".git" };
 
 pub fn main(init: std.process.Init) !void {

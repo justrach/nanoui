@@ -67,6 +67,8 @@ pub const Options = struct {
     user: bool = false,
     /// MapKit's muted style, without points of interest.
     muted: bool = true,
+    /// MapKit's dark appearance, whatever the system's.
+    dark: bool = false,
     radius: f32 = 0,
     key: []const u8 = "map",
 };
@@ -99,6 +101,7 @@ pub const Map = struct {
     camera: ?Camera = null,
     user: bool = false,
     muted: bool = true,
+    dark: bool = false,
     radius: f32 = 0,
     /// The hole's box id this frame, and whether it was drawn.
     id: u64 = 0,
@@ -132,6 +135,7 @@ pub const Map = struct {
         if (opts.camera) |cam| m.camera = cam;
         m.user = opts.user;
         m.muted = opts.muted;
+        m.dark = opts.dark;
         m.radius = opts.radius;
         if (ios) {
             m.id = ui.hole(c, opts.key, opts.radius);

@@ -21,7 +21,9 @@ fn styleAt(base: types.TextStyle, spans: []const types.Span, at: usize) types.Te
 }
 
 fn sameFont(a: types.TextStyle, b: types.TextStyle) bool {
-    return a.size == b.size and a.weight == b.weight and a.mono == b.mono and a.italic == b.italic;
+    if ((a.family == null) != (b.family == null)) return false;
+    if (a.family) |f| if (!std.mem.eql(u8, f, b.family.?)) return false;
+    return a.size == b.size and a.weight == b.weight and a.css_weight == b.css_weight and a.stretch == b.stretch and a.mono == b.mono and a.italic == b.italic;
 }
 
 /// `s` shaped on one line, with the spans of the paragraph it starts at
