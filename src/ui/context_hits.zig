@@ -34,7 +34,7 @@ pub fn computeHot(c: *Context) void {
     while (i > 0) {
         i -= 1;
         const h = c.hits.items[i];
-        if (!h.scroll and h.rect.contains(c.input.mouse)) {
+        if (!h.scroll and !h.scroll_x and h.rect.contains(c.input.mouse)) {
             c.hot = h.id;
             c.hot_index = h.index;
             hotPath(c, h);
