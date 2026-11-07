@@ -67,3 +67,19 @@ Linux uses the installed font; `rounded = true` is SF Rounded only on Apple
 systems. Thus glyph design differs on Linux. Pointer artwork from the post
 is deliberately not copied. Shadow falloff is nanoui's native implementation.
 This work makes no display FPS, latency or GPU-throughput claims.
+
+
+## Pixel clipping audit
+
+`zig-out/bin/ruler-replay --audit-clip --stills=/tmp/ruler` replays all 480
+frames. Each frame is rendered normally and again with numeral glyph alpha
+zeroed. The instances are restored before any screenshot/video output.
+Every differing pixel must lie in the native inset [400,233] to [560,329] (max edges exclusive) at
+960 square and over solid black, not the shadow or off-white background.
+The audit also requires changed pixels on BOTH the top/bottom clip rows,
+so an invisible or removed roll cannot pass. `tests_ruler.zig` separately
+sweeps outgoing/incoming phases in both directions and includes a negative
+control: removing glyph clipping must produce detectable overflow.
+This diagnoses actual native pixels; lossy video frames are not pixel
+identical to their renderer inputs. No renderer or animation changes were
+needed for the reported clipping concern: the original clip held.

@@ -156,3 +156,71 @@ test "ruler sanitizes reversed bounds and invalid width on the first frame" {
     try expect(t.hasText("20"));
     try expect(!t.ctx.animating);
 }
+
+test "ruler outgoing and incoming glyph pixels never escape inset or pill" {
+    const gpu = @import("gpu.zig");
+    var v: View = .{};
+    var t: ui.Tester = undefined;
+    try t.init(std.testing.allocator, .init(&v, View.draw), .{ .width = 480, .height = 480, .scale = 2 });
+    defer t.deinit();
+    t.dt = 0;
+    t.time = 0;
+    var top: usize = 0;
+    var bottom: usize = 0;
+    var changed: usize = 0;
+    var negative_outside: usize = 0;
+    var negative_shadow: usize = 0;
+    // Both directions, including near-edge outgoing glyphs at high opacity.
+    // Direct phases hold the exact control's rolling coordinate for a
+    // deterministic strongest-edge sweep, independent of spring timing.
+    const phases = [_]f64{ 16.05, 16.2, 16.4, 16.6, 16.8, 16.95, 16.8, 16.6, 16.4, 16.2, 16.05 };
+    for (phases) |phase| {
+        v.picker.model.position = 17;
+        v.picker.model.target = 17;
+        v.picker.model.rolling = phase;
+        v.picker.model.rolling_velocity = 0;
+        t.frame();
+        const full = try t.render(std.testing.allocator);
+        defer full.deinit(std.testing.allocator);
+        const saved = try std.testing.allocator.dupe(gpu.Instance, t.instances.items);
+        defer std.testing.allocator.free(saved);
+        defer @memcpy(t.instances.items, saved);
+        for (t.instances.items) |*inst| if (inst.kind == gpu.Kind.text) {
+            try eq(@as([4]f32, .{ 200, 116.5, 280, 164.5 }), inst.clip);
+            inst.color[3] = 0;
+        };
+        const bare = try t.render(std.testing.allocator);
+        defer bare.deinit(std.testing.allocator);
+        for (0..full.height) |y| for (0..full.width) |x| {
+            const at = (y * full.width + x) * 4;
+            const with = full.bytes[at..][0..4];
+            const without = bare.bytes[at..][0..4];
+            if (std.mem.eql(u8, with, without)) continue;
+            try expect(x >= 400 and x < 560 and y >= 233 and y < 329);
+            try eq(@as(u8, 0), without[0]);
+            try eq(@as(u8, 0), without[1]);
+            try eq(@as(u8, 0), without[2]);
+            changed += 1;
+            if (y == 233) top += 1;
+            if (y == 328) bottom += 1;
+        };
+        // Negative control: expand ONLY the rendered glyph instances' clip.
+        // The same audit must now detect both inset and real pill overflow.
+        @memcpy(t.instances.items, saved);
+        for (t.instances.items) |*inst| if (inst.kind == gpu.Kind.text) {
+            inst.clip = .{ 0, 0, 480, 480 };
+        };
+        const unclipped = try t.render(std.testing.allocator);
+        defer unclipped.deinit(std.testing.allocator);
+        for (0..unclipped.height) |y| for (0..unclipped.width) |x| {
+            const at = (y * unclipped.width + x) * 4;
+            if (std.mem.eql(u8, unclipped.bytes[at..][0..4], bare.bytes[at..][0..4])) continue;
+            if (x < 400 or x >= 560 or y < 233 or y >= 329) negative_outside += 1;
+            if (bare.bytes[at] != 0 or bare.bytes[at + 1] != 0 or bare.bytes[at + 2] != 0) negative_shadow += 1;
+        };
+    }
+    // Nonvacuous: visible glyph coverage really reaches BOTH clip edges,
+    // and the comparator detects the deliberately broken clipping control.
+    try expect(changed > 0 and top > 0 and bottom > 0);
+    try expect(negative_outside > 0 and negative_shadow > 0);
+}

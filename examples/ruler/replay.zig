@@ -4,6 +4,7 @@
 //! Pass --stills=DIR to write comparison frames instead of raw video.
 const std = @import("std");
 const ui = @import("nanoui").ui;
+const Audit = @import("audit.zig").Audit;
 const Demo = @import("view.zig").Demo;
 
 const Gesture = struct { start: f32, end: f32, from: f32, to: f32 };
@@ -19,8 +20,14 @@ const gestures = [_]Gesture{
 
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
+    var audit = false;
+    var clip_audit: Audit = .{};
     var stills: ?[]const u8 = null;
     for (args[1..]) |arg| {
+        if (std.mem.eql(u8, arg, "--audit-clip")) {
+            audit = true;
+            continue;
+        }
         if (!std.mem.startsWith(u8, arg, "--stills=")) return error.UnknownArgument;
         stills = arg[9..];
     }
@@ -53,9 +60,10 @@ pub fn main(init: std.process.Init) !void {
             }
         }
         t.frame();
+        if (audit) try clip_audit.frame(&t);
         if (stills) |dir| {
-            if (frame == 48 or frame == 132 or frame == 180 or frame == 264 or frame == 450) {
-                const path = try std.fmt.allocPrint(init.gpa, "{s}/native-{d:0>3}.png", .{ dir, frame });
+            if (frame == 48 or frame == 57 or frame == 60 or frame == 63 or frame == 132 or frame == 180 or frame == 264 or frame == 297 or frame == 300 or frame == 303 or frame == 450) {
+                const path = try std.fmt.allocPrint(init.gpa, "{s}/native-v2-{d:0>3}.png", .{ dir, frame });
                 defer init.gpa.free(path);
                 try t.screenshot(path);
                 std.debug.print("frame {d}: value={d}, position={d:.4}, moving={}\n", .{ frame, demo.ruler.value(), demo.ruler.model.position, demo.ruler.model.moving() });
@@ -66,4 +74,5 @@ pub fn main(init: std.process.Init) !void {
             try std.Io.File.stdout().writeStreamingAll(init.io, pixels.bytes);
         }
     }
+    if (audit) try clip_audit.report();
 }
