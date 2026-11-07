@@ -18,12 +18,23 @@
 //! word typed showed only 1.25 s later, once another key's nudge came. So every
 //! present is followed by the same nudge (`presented`), and with it neither
 //! has been seen on macOS 14, 15 or 26.
+//!
+//! Ticks and wakes are queued with `dispatch_after`, which can't take back
+//! what it was given: they carry a surface's id, not the surface, and find
+//! it among the surfaces open (`register`, `find`). A surface closed with
+//! some still queued waits for them to free it (`Surface.finishDestroy`);
+//! if the app stops first they never run, and `sweep` frees it. Any that
+//! do run after a surface was freed find nothing.
 const std = @import("std");
 const objc = @import("../objc.zig");
 const cf = @import("cf.zig");
 const Surface = @import("surface.zig").Surface;
 
 pub const Wake = struct {
+    /// What a tick or a wake queued for the surface carries (`token`).
+    id: usize = 0,
+    /// The next surface in `open`.
+    next: ?*Surface = null,
     /// When the link is to run again (`CACurrentMediaTime`); 0: never.
     due: f64 = 0,
     /// Wakes still to fire: the surface outlives them (`finishDestroy`).
@@ -35,6 +46,55 @@ pub const Wake = struct {
     watched_from: f64 = 0,
     nudges: u8 = 0,
 };
+
+/// The surfaces made and not yet freed, newest first. All on the main
+/// thread, as the ticks and wakes that look in it.
+var open: ?*Surface = null;
+var last_id: usize = 0;
+
+pub fn register(s: *Surface) void {
+    last_id += 1;
+    s.wake.id = last_id;
+    s.wake.next = open;
+    open = s;
+}
+
+pub fn unregister(s: *Surface) void {
+    var link = &open;
+    while (link.*) |o| : (link = &o.wake.next) if (o == s) {
+        link.* = s.wake.next;
+        return;
+    };
+}
+
+/// Frees `s`, torn down (`Surface.finishDestroy`).
+pub fn free(s: *Surface) void {
+    unregister(s);
+    s.gpa.destroy(s);
+}
+
+/// What to queue for `s`: its id, never 0.
+pub fn token(s: *const Surface) ?*anyopaque {
+    return @ptrFromInt(s.wake.id);
+}
+
+/// The surface a queued `token` names, if it hasn't been freed.
+pub fn find(ptr: ?*anyopaque) ?*Surface {
+    const id = @intFromPtr(ptr);
+    var it = open;
+    while (it) |s| : (it = s.wake.next) if (s.wake.id == id) return s;
+    return null;
+}
+
+/// Frees the surfaces closed while ticks or wakes were still queued for
+/// them, which won't run now that the app has stopped (`App.destroy`).
+pub fn sweep() void {
+    var it = open;
+    while (it) |s| {
+        it = s.wake.next;
+        if (s.torn_down) free(s);
+    }
+}
 
 /// How long a running link may give no frame: more than one interval at its
 /// slowest pace (1/24 s), and a healthy link's start takes about 20 ms.
@@ -49,7 +109,7 @@ pub fn at(s: *Surface, due: f64) void {
     s.wake.due = due;
     const wait = @max(0, due - lead(s) - cf.CACurrentMediaTime());
     s.wake.pending += 1;
-    objc.dispatchAfter(@intFromFloat(wait * std.time.ns_per_s), s, fire);
+    objc.dispatchAfter(@intFromFloat(wait * std.time.ns_per_s), token(s), fire);
 }
 
 /// A refresh: the link's next target then lands on the frame's due time.
@@ -58,7 +118,7 @@ fn lead(s: *const Surface) f64 {
 }
 
 fn fire(ptr: ?*anyopaque) callconv(.c) void {
-    const s: *Surface = @ptrCast(@alignCast(ptr));
+    const s = find(ptr) orelse return;
     s.wake.pending -= 1;
     if (s.dead) return s.finishDestroy();
     // None wanted, or this one was overtaken by a later wake.
@@ -95,7 +155,7 @@ fn arm(s: *Surface) void {
     s.wake.watching = true;
     s.wake.watched_from = cf.CACurrentMediaTime();
     s.wake.pending += 1;
-    objc.dispatchAfter(@intFromFloat(patience * std.time.ns_per_s), s, check);
+    objc.dispatchAfter(@intFromFloat(patience * std.time.ns_per_s), token(s), check);
 }
 
 const Look = enum { stop, again, nudge };
@@ -107,7 +167,7 @@ fn look(wanted: bool, ticked: bool, nudges: u8) Look {
 }
 
 fn check(ptr: ?*anyopaque) callconv(.c) void {
-    const s: *Surface = @ptrCast(@alignCast(ptr));
+    const s = find(ptr) orelse return;
     s.wake.pending -= 1;
     s.wake.watching = false;
     if (s.dead) return s.finishDestroy();

@@ -58,7 +58,10 @@ lib fixed (`tools/ios/zig-lib.sh`), Android the Android SDK and NDK.
 - **Objective-C memory:** `alloc`/`new` objects are owned and must be
   released; wrap code that makes temporary objects in `objc.Pool`. Objects
   a callback may still reach after teardown (a scheduled flush or frame)
-  free themselves when it runs (`dead` flags in `Page` and `Surface`).
+  free themselves when it runs (`dead` flags in `Page` and `Surface`). A
+  `Surface`'s ticks and wakes carry its id, not the surface
+  (`surface_wake.find`); those still queued when the app stops never run,
+  and `App.destroy` frees what they would have (`surface_wake.sweep`).
 - **Heavy builds:** never build with Zig's self-hosted backend
   (`-fno-llvm`/`-fno-lld`); one heavy build at a time.
 
