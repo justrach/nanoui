@@ -15,7 +15,7 @@ const gray = cards.gray;
 pub fn view(s: *App, c: *ui.Context) void {
     const j = &s.journey;
     if (j.omTrip()) |it| {
-        backRow(s, c, "‹ Ways there", false);
+        if (backRow(s, c, "‹ Ways there", false)) return;
         return omv.legs(s, c, it);
     }
     j.keep();
@@ -75,22 +75,25 @@ fn form(s: *App, c: *ui.Context) void {
     if (j.inflight) label(c, "Searching OneMap...");
 }
 
-fn backRow(s: *App, c: *ui.Context, t: []const u8, to_form: bool) void {
+/// True when tapped: the screen it was on is gone (the place, or the
+/// way, now null), so the caller must stop building it. The tap makes
+/// nanoui build the frame again, and that pass draws the screen backed to.
+fn backRow(s: *App, c: *ui.Context, t: []const u8, to_form: bool) bool {
     const row = ui.div(c).row().gap(8).itemsCenter().px(14).py(8).rounded(18).bg(.white);
+    defer row.end();
     ui.text(c, t, .{ .size = 15, .weight = .semibold, .color = ink });
-    if (row.clicked()) {
-        if (to_form) s.journey.dest = null else {
-            s.journey.chosen = null;
-            s.journey.om_chosen = null;
-        }
-        s.journey.going = false;
+    if (!row.clicked()) return false;
+    if (to_form) s.journey.dest = null else {
+        s.journey.chosen = null;
+        s.journey.om_chosen = null;
     }
-    row.end();
+    s.journey.going = false;
+    return true;
 }
 
 fn options(s: *App, c: *ui.Context) void {
     const j = &s.journey;
-    backRow(s, c, "‹ Go where?", true);
+    if (backRow(s, c, "‹ Go where?", true)) return;
     ui.text(c, c.print("To {s}", .{j.dest.?.name()}), .{ .size = 28, .weight = .semibold, .color = ink, .wrap = true });
     var buf: [12]journey.Way = undefined;
     const ways = j.ways(&buf);
@@ -147,7 +150,7 @@ fn ours(s: *App, c: *ui.Context, ti: usize, tag: ?[]const u8) void {
 
 fn legs(s: *App, c: *ui.Context, t: raptor.Option) void {
     const j = &s.journey;
-    backRow(s, c, "‹ Ways there", false);
+    if (backRow(s, c, "‹ Ways there", false)) return;
     {
         const top = ui.div(c).row().wFull().gap(8).itemsCenter();
         defer top.end();
