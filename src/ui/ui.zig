@@ -122,6 +122,9 @@ pub const TextFieldOptions = textfield.Options;
 pub const TextBuffer = textfield.TextBuffer;
 pub const TextFieldResult = textfield.Result;
 pub const TextFieldCaret = textfield.Caret;
+/// A bounded, inertial ruler with clipped rolling numerals.
+pub const RulerPicker = @import("ruler.zig").RulerPicker;
+pub const RulerOptions = @import("ruler.zig").Options;
 /// Declarative, interruptible animation (springs, tweens, presence).
 pub const motion = @import("motion/motion.zig");
 pub const div = @import("div.zig").div;
@@ -164,6 +167,7 @@ pub const View = struct {
 };
 
 test {
+    _ = @import("tests_ruler.zig");
     _ = @import("tests_motion.zig");
     _ = frame_log;
     _ = @import("tests_effects.zig");
