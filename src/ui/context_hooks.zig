@@ -151,7 +151,7 @@ pub fn hitAt(c: *const Context, p: types.Point) bool {
     while (i > 0) {
         i -= 1;
         const h = c.hits.items[i];
-        if (!h.scroll and h.rect.contains(p)) return true;
+        if (!h.scroll and !h.scroll_x and h.rect.contains(p)) return true;
     }
     return false;
 }
@@ -181,7 +181,7 @@ pub fn updateHot(c: *Context) void {
     while (i > 0) {
         i -= 1;
         const h = c.hits.items[i];
-        if (!h.scroll and h.rect.contains(c.input.mouse)) {
+        if (!h.scroll and !h.scroll_x and h.rect.contains(c.input.mouse)) {
             c.hot = h.id;
             c.hot_index = h.index;
             hotPath(c, h);

@@ -14,17 +14,20 @@ pub fn setScroll(c: *Context, id: u64, axis: Axis, value: f32) void {
 
 /// Moves the innermost `scroll_x` box under the pointer in the last frame
 /// by the wheel's x. Run before the view is built: a rebuild clears the
-/// input, and the last frame's tree is still there.
+/// input. Painted hits preserve clipping, layers and wheel ownership.
 pub fn takeScrollX(c: *Context) void {
     const dx = c.input.scroll.x;
     if (dx == 0) return;
-    var id: u64 = 0;
-    for (c.nodes.items) |nd| {
-        if (!nd.style.scroll_x) continue;
-        const r = c.rects.get(nd.id) orelse continue;
-        if (r.contains(c.input.mouse)) id = nd.id;
+    var i = c.hits.items.len;
+    while (i > 0) {
+        i -= 1;
+        const h = c.hits.items[i];
+        if (!h.rect.contains(c.input.mouse)) continue;
+        // Leave the delta for the view, not a scroller behind its wheel box.
+        if (h.wheel) return;
+        if (!h.scroll_x) continue;
+        const g = c.scroll_x.getOrPut(c.gpa, h.id) catch return;
+        g.value_ptr.* = @max(0, (if (g.found_existing) g.value_ptr.* else 0) - dx);
+        return;
     }
-    if (id == 0) return;
-    const g = c.scroll_x.getOrPut(c.gpa, id) catch return;
-    g.value_ptr.* = @max(0, (if (g.found_existing) g.value_ptr.* else 0) - dx);
 }

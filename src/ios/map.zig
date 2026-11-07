@@ -355,7 +355,7 @@ fn hitTest(obj: objc.Object, _: objc.SEL, point: objc.CGPoint, event: ?objc.Obje
         while (i > 0) {
             i -= 1;
             const h = s.ctx.hits.items[i];
-            if (h.scroll or !h.rect.contains(p)) continue;
+            if (h.scroll or h.scroll_x or !h.rect.contains(p)) continue;
             return if (h.id == m.id) hit else obj;
         }
         return hit;

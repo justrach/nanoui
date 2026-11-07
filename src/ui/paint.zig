@@ -203,6 +203,8 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip_
         }
     }
     if (n.interactive and visible.w > 0 and visible.h > 0) c.addHit(n.id, index, visible, false);
+    // Each axis routes through the same clipped, paint-ordered regions.
+    if (st.scroll_x and visible.w > 0 and visible.h > 0) c.next_hits.append(c.gpa, .{ .id = n.id, .index = index, .rect = visible, .scroll = false, .scroll_x = true }) catch {};
     // Over the scrolling boxes behind it, never hot itself.
     if (st.wheel and visible.w > 0 and visible.h > 0) c.next_hits.append(c.gpa, .{ .id = n.id, .index = index, .rect = visible, .scroll = true, .wheel = true }) catch {};
 
