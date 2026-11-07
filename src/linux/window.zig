@@ -56,6 +56,17 @@ pub const Window = struct {
         const win = if (gtk.v4) gtk.v4api.gtk_window_new() else gtk.v3.gtk_window_new(0);
         self.gtkwindow = win;
         self.setTitle(options.title);
+        // The window icon its manager draws. GTK 4 dropped window icons, and
+        // on Wayland the shell takes it from the .desktop file anyway.
+        if (options.icon) |icon| {
+            if (!gtk.v4) {
+                if (gtk.v3.gdk_pixbuf_loader_new()) |loader| {
+                    _ = gtk.v3.gdk_pixbuf_loader_write(loader, icon.ptr, icon.len, null);
+                    _ = gtk.v3.gdk_pixbuf_loader_close(loader, null);
+                    if (gtk.v3.gdk_pixbuf_loader_get_pixbuf(loader)) |pixbuf| gtk.v3.gtk_window_set_icon(win, pixbuf);
+                }
+            }
+        }
         g.gtk_window_set_default_size(win, @intFromFloat(options.width), @intFromFloat(options.height));
         g.gtk_window_set_resizable(win, @intFromBool(options.resizable));
         if (!options.decorations) g.gtk_window_set_decorated(win, 0);

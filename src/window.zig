@@ -17,6 +17,15 @@ pub const ShouldClose = window_types.ShouldClose(Window);
 pub const Options = window_types.Options(Window);
 pub const NativeView = window_types.NativeView;
 
+/// The Dock icon, from ICNS or PNG bytes.
+fn setAppIcon(icon: []const u8) void {
+    const data = objc.msg(objc.Object, objc.class("NSData"), "dataWithBytes:length:", .{ icon.ptr, icon.len });
+    const image = objc.msg(objc.Object, objc.msg(objc.Object, objc.class("NSImage"), "alloc", .{}), "initWithData:", .{data});
+    const app = objc.msg(objc.Object, objc.class("NSApplication"), "sharedApplication", .{});
+    objc.msg(void, app, "setApplicationIconImage:", .{image});
+    objc.release(image);
+}
+
 pub const Window = struct {
     app: *App,
     nswindow: objc.Object,
@@ -62,6 +71,9 @@ pub const Window = struct {
         const nswindow = objc.msg(objc.Object, objc.msg(objc.Object, window_class, "alloc", .{}), "initWithContentRect:styleMask:backing:defer:", .{
             rect, style, @as(objc.NSUInteger, 2), objc.NO,
         });
+        // The Dock's icon: a bundled .app's own wins, so this is for a binary
+        // run from a checkout or a tarball.
+        if (options.icon) |icon| setAppIcon(icon);
         if (options.tabbing_disallowed) objc.msg(void, nswindow, "setTabbingMode:", .{@as(objc.NSInteger, 2)}); // NSWindowTabbingModeDisallowed
         var behavior: objc.NSUInteger = 0;
         // NSWindowCollectionBehaviorCanJoinAllSpaces | FullScreenAuxiliary.
