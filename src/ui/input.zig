@@ -250,6 +250,11 @@ pub const Input = struct {
         return if (comptime @import("keys.zig").mac) i.cmd else i.ctrl;
     }
 
+    /// Keyboard activity, including IME text operations and offered shortcuts.
+    pub fn hasKeyboardInput(i: Input) bool {
+        return i.key != null or i.chars.len > 0 or i.ops.len > 0 or i.shortcut != null;
+    }
+
     pub fn clearEdges(i: *Input) void {
         i.pressed = false;
         i.released = false;

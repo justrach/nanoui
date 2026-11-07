@@ -271,6 +271,22 @@ pub const Tester = struct {
         return false;
     }
 
+    /// Puts the pointer on the middle of text `s`, without a click.
+    pub fn hoverText(t: *Tester, s: []const u8) !void {
+        const r = t.findText(s) orelse return error.TextNotFound;
+        t.moveTo(r.x + r.w / 2, r.y + r.h / 2);
+    }
+
+    /// The tooltip in the last frame (empty text for custom drawn content).
+    pub fn tooltipText(t: *Tester) ?[]const u8 {
+        return if (t.ctx.tooltip.shown) |s| s.text else null;
+    }
+
+    pub fn tooltipRect(t: *Tester) ?types.Rect {
+        const s = t.ctx.tooltip.shown orelse return null;
+        return t.ctx.rects.get(s.id);
+    }
+
     /// Clicks the middle of the text `s`.
     pub fn clickText(t: *Tester, s: []const u8) !void {
         const r = t.findText(s) orelse return error.TextNotFound;
@@ -290,13 +306,13 @@ pub const Tester = struct {
     pub fn render(t: *Tester, gpa: std.mem.Allocator) !gpu.Pixels {
         if (!portable) t.renderer.syncImages(&t.text.images);
         if (!portable) t.renderer.textures = t.ctx.textures.items;
-        if (!portable) return t.renderer.drawOffscreen(gpa, t.instances.items, t.text.texture(), t.size, t.scale, t.theme.background);
+        if (!portable) return t.renderer.drawOffscreen(gpa, t.instances.items, t.text.texture(), t.size, t.scale, t.ctx.theme.background);
         const w: usize = @intFromFloat(@max(1, @round(t.size.w * t.scale)));
         const h: usize = @intFromFloat(@max(1, @round(t.size.h * t.scale)));
         const out: gpu.Pixels = .{ .bytes = try gpa.alloc(u8, w * h * 4), .width = w, .height = h };
         var pictures = t.text.images.pictures();
         pictures.textures = t.ctx.textures.items;
-        raster.draw(out, t.instances.items, t.text.atlas.mask(), pictures, t.scale, t.theme.background);
+        raster.draw(out, t.instances.items, t.text.atlas.mask(), pictures, t.scale, t.ctx.theme.background);
         return out;
     }
 

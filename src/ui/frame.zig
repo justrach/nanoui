@@ -44,6 +44,7 @@ pub fn run(c: *Context, view: View, ts: *text.TextSystem, instances: *std.ArrayL
     var passes: u32 = 0;
     while (true) : (passes += 1) {
         view.build(view.ptr, c);
+        @import("tooltip.zig").flush(c);
         if (c.stack.items.len != 1)
             std.debug.panic("nanoui: {d} box(es) left open: every column, row, card, scroll and pressable needs an end", .{c.stack.items.len - 1});
         if (!c.changed or passes >= 3) break;
@@ -57,9 +58,16 @@ pub fn run(c: *Context, view: View, ts: *text.TextSystem, instances: *std.ArrayL
     c.scroll_moved.clearRetainingCapacity();
     _ = layout.measure(c, 0, size.w);
     layout.arrange(c, 0, .{ .w = size.w, .h = size.h });
+    if (c.pixel_snap) layout.snapToPixels(c);
     std.mem.swap(std.AutoHashMapUnmanaged(u64, types.Rect), &c.prev_rects, &c.rects);
     c.rects.clearRetainingCapacity();
-    for (c.nodes.items) |n| c.rects.put(c.gpa, n.id, n.rect) catch {};
+    for (c.nodes.items) |n| {
+        if (n.layout_dependent) {
+            const previous = c.prev_rects.get(n.id);
+            if (previous == null or previous.?.w != n.rect.w or previous.?.h != n.rect.h) c.animating = true;
+        }
+        c.rects.put(c.gpa, n.id, n.rect) catch {};
+    }
     for (c.stage_nodes[0..c.stage_count], 0..) |nidx, si| {
         if (nidx < c.nodes.items.len) c.stage_rects[si] = c.nodes.items[nidx].rect;
     }

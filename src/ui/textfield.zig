@@ -96,6 +96,8 @@ pub const Options = struct {
     placeholder: []const u8 = "",
     width: types.Length = .{ .px = 240 },
     size: f32 = 14,
+    weight: types.Weight = .regular,
+    mono: bool = false,
     /// Shows bullets instead of the text, and keeps it off the clipboard.
     password: bool = false,
     /// Text that would follow what is typed, drawn faintly after it, as a
@@ -280,7 +282,7 @@ const bullets = "•••••••••••••••••••••
 
 pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
     const th = c.theme;
-    const style: types.TextStyle = .{ .size = opts.size, .line_height = opts.line_height };
+    const style: types.TextStyle = .{ .size = opts.size, .weight = opts.weight, .line_height = opts.line_height, .mono = opts.mono };
     const pad_x: f32 = if (opts.bare) 0 else 10;
     const pad_y: f32 = if (opts.bare) 2 else 7;
     const multi = opts.multiline and !opts.password;
@@ -312,6 +314,7 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
     }
     const focus_t = c.animate(it.id, 0, if (it.focused) 1 else 0, 20);
     const n = c.node(i);
+    n.layout_dependent = multi and buffer.text().len > 0;
     if (!opts.bare) {
         n.style.border = th.border.mix(th.accent, focus_t);
         n.style.border_width = 1 + focus_t;
@@ -337,12 +340,7 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
             return buf[0..@min(count * 3, buf.len)];
         }
     }.f;
-    const shownIndex = struct {
-        fn f(s: []const u8, password: bool, i_: usize) usize {
-            if (!password) return i_;
-            return (std.unicode.utf8CountCodepoints(s[0..i_]) catch i_) * 3;
-        }
-    }.f;
+    const shownIndex = lines_mod.shownIndex;
 
     if (it.right_clicked) c.text_menu = true;
     if (it.focused) {

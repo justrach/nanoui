@@ -22,6 +22,12 @@ pub const Caret = struct {
 /// to `stop` (the next line's start, or the newline) belonging to it.
 pub const Line = struct { start: usize, end: usize, stop: usize };
 
+/// A byte index in the displayed text (one three-byte bullet per codepoint).
+pub fn shownIndex(s: []const u8, password: bool, index: usize) usize {
+    if (!password) return index;
+    return (std.unicode.utf8CountCodepoints(s[0..index]) catch index) * 3;
+}
+
 /// `s` in lines no wider than `width`, in the frame's memory.
 pub fn layout(c: *Context, s: []const u8, style: types.TextStyle, width: f32) []const Line {
     var out: std.ArrayList(Line) = .empty;

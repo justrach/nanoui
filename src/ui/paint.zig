@@ -40,6 +40,10 @@ fn snap(v: f32, scale: f32) f32 {
     return @round(v * scale) / scale;
 }
 
+fn halfTowardZero(v: f32) f32 {
+    return if (v >= 0) @ceil(v - 0.5) else @floor(v + 0.5);
+}
+
 fn push(c: *Context, out: *std.ArrayList(metal.Instance), inst: metal.Instance) void {
     out.append(c.gpa, inst) catch {};
 }
@@ -406,21 +410,26 @@ fn textRunLimit(c: *Context, out: *std.ArrayList(metal.Instance), t: ctx_mod.Con
     if (lay.glyphs.len == 0 or x + lay.width < clip4[0]) return;
     const scale = c.scale;
     // The line's extra height (its leading) goes half above, half below.
-    const raw_baseline = y + (lh - f.lineHeight()) / 2 + f.leading / 2 + f.ascent;
-    const baseline = if (moving) raw_baseline else snap(raw_baseline, scale);
+    const gpui_snap = c.text.glyph_snap == .half_toward_zero;
+    const raw_baseline = if (c.text.baseline_rule == .glyph_box and lh != f.lineHeight())
+        y + (lh - f.ascent - f.descent) / 2 + f.ascent
+    else
+        y + (lh - f.lineHeight()) / 2 + f.leading / 2 + f.ascent;
+    const baseline = if (gpui_snap) halfTowardZero(raw_baseline * scale) / scale else if (moving) raw_baseline else snap(raw_baseline, scale);
     const base = metal.color4(t.color.alpha(opacity));
     if (sel) |s| @import("selection.zig").line(c, out, s.id, s.index, t.str, start, end, lay, x, y, lh, s.x0, s.x1, clip4);
-    if (t.spans.len > 0) decorations(c, out, &t, lay, start, end, x, baseline, f, clip4, opacity);
+    if (t.spans.len > 0) @import("paint_decor.zig").decorations(c, out, &t, lay, start, end, x, .{ .top = y, .h = lh, .baseline = baseline }, f, clip4, opacity);
     var span_i: usize = 0;
     for (lay.glyphs) |g| {
         const pen = (x + g.x) * scale;
         if (pen / scale > clip4[2]) break;
         if (limit) |l| if (pen / scale >= l.end) break;
         const positions: f32 = if (native_windows) @floatFromInt(c.text.positions(g)) else text_mod.subpixel_bins;
-        const quantized = if (native_windows) @round(pen * positions) / positions else pen;
+        // DirectWrite keeps its per-face phase count (including grid fitting).
+        const quantized = if (gpui_snap) halfTowardZero(pen * positions) / positions else if (native_windows) @round(pen * positions) / positions else pen;
         const px = @floor(quantized);
         const phase = (quantized - px) * text_mod.subpixel_bins;
-        const bin: u8 = @intFromFloat(@min(text_mod.subpixel_bins - 1, if (native_windows) @round(phase) else @floor(phase)));
+        const bin: u8 = @intFromFloat(@min(text_mod.subpixel_bins - 1, if (native_windows) @round(phase) else @floor(phase + if (gpui_snap) @as(f32, 0.001) else 0)));
         var color = base;
         var tone = t.color;
         if (t.spans.len > 0) {
@@ -458,43 +467,6 @@ fn textRunLimit(c: *Context, out: *std.ArrayList(metal.Instance), t: ctx_mod.Con
             .radius = if (limit) |l| l.end else 0,
             .border_width = if (limit) |l| l.fade else 0,
             .clip = if (limit) |l| .{ clip4[0], clip4[1], @min(clip4[2], l.end), clip4[3] } else clip4,
-        });
-    }
-}
-
-/// The x of the first glyph at or after byte `at` of the line, else its end.
-fn xAt(lay: text_mod.Layout, at: usize) f32 {
-    for (lay.glyphs) |g| if (g.index >= at) return g.x;
-    return lay.width;
-}
-
-/// What spans draw besides their glyphs: backgrounds (inline code, marks)
-/// behind the text, underlines (links) and lines through.
-fn decorations(c: *Context, out: *std.ArrayList(metal.Instance), t: *const ctx_mod.Content.Text, lay: text_mod.Layout, start: usize, end: usize, x: f32, baseline: f32, f: text_mod.Font, clip4: [4]f32, opacity: f32) void {
-    for (t.spans) |sp| {
-        if (sp.end <= start or sp.start >= end) continue;
-        if (sp.background == null and !sp.underline and !sp.strike) continue;
-        const a = @max(sp.start, start) - start;
-        const b = @min(sp.end, end) - start;
-        const x0 = x + xAt(lay, a);
-        const x1 = x + xAt(lay, b);
-        if (x1 <= x0) continue;
-        const color = sp.color orelse t.color;
-        if (sp.background) |bg| push(c, out, .{
-            .rect = .{ x0 - 3, baseline - f.ascent * 0.92 - 2, x1 - x0 + 6, (f.ascent + f.descent) * 0.92 + 4 },
-            .color = metal.color4(bg.alpha(opacity)),
-            .radius = 4,
-            .clip = clip4,
-        });
-        if (sp.underline) push(c, out, .{
-            .rect = .{ x0, baseline + 2, x1 - x0, 1 },
-            .color = metal.color4(color.alpha(0.6 * opacity)),
-            .clip = clip4,
-        });
-        if (sp.strike) push(c, out, .{
-            .rect = .{ x0, baseline - f.ascent * 0.32, x1 - x0, 1 },
-            .color = metal.color4(color.alpha(opacity)),
-            .clip = clip4,
         });
     }
 }

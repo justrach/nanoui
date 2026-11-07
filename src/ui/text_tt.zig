@@ -48,7 +48,7 @@ pub const Glyph = struct { font: u16, glyph: u16, x: f32, y: f32, index: u32 = 0
 pub const Layout = struct { width: f32, glyphs: []const Glyph };
 pub const Line = struct { start: usize, end: usize, width: f32 };
 
-const FontKey = struct { size_bits: u32, weight: types.Weight, mono: bool, italic: bool, family: u64, css_weight: u16, stretch: u16 };
+const FontKey = struct { size_bits: u32, weight: types.Weight, mono: bool, italic: bool, system: bool, family: u64, css_weight: u16, stretch: u16 };
 
 fn fontKey(style: types.TextStyle) FontKey {
     return .{
@@ -56,6 +56,7 @@ fn fontKey(style: types.TextStyle) FontKey {
         .weight = style.weight,
         .mono = style.mono,
         .italic = style.italic,
+        .system = style.system_font,
         .family = if (style.family) |f| std.hash.Wyhash.hash(0x66, f) else 0,
         .css_weight = style.css_weight,
         .stretch = style.stretch,
@@ -84,6 +85,12 @@ pub const TextSystem = struct {
     mono_family: ?[]const u8 = null,
     /// Every size times this (`Context.setZoom`).
     zoom: f32 = 1,
+    /// The portable typesetter currently uses its own line breaks for both.
+    wrap_rule: types.WrapRule = .typesetter,
+    /// What is centered in a line given its own height.
+    baseline_rule: types.BaselineRule = .font_line,
+    /// How glyph origins land on device pixels.
+    glyph_snap: types.GlyphSnap = .nearest,
 
     pub fn init(gpa: std.mem.Allocator) TextSystem {
         return .{ .gpa = gpa, .db = .init(gpa, std.Io.Threaded.global_single_threaded.io()), .atlas = .init(gpa), .images = .{ .gpa = gpa } };
@@ -259,7 +266,7 @@ pub const TextSystem = struct {
             f.id = st.entries[st.primary].id;
             tf = self.run_fonts.items[f.id].font;
         } else {
-            const face = self.db.match(if (style.mono) self.mono_family else self.family, weight, style.italic, style.mono);
+            const face = self.db.match(if (style.mono) self.mono_family else if (style.system_font) null else self.family, weight, style.italic, style.mono);
             if (face) |fc| if (self.db.load(fc)) |loaded| {
                 f.id = self.runFont(fc, size, style.italic, weight);
                 tf = loaded;
@@ -283,7 +290,7 @@ pub const TextSystem = struct {
         h.update(s);
         h.update(std.mem.asBytes(&style.size));
         h.update(std.mem.asBytes(&style.mono_scale));
-        h.update(&.{ @backingInt(style.weight), @intFromBool(style.mono), @intFromBool(style.italic), @intFromBool(style.tabular) });
+        h.update(&.{ @backingInt(style.weight), @intFromBool(style.mono), @intFromBool(style.italic), @intFromBool(style.system_font), @intFromBool(style.tabular) });
         h.update(std.mem.asBytes(&style.tracking));
         if (style.family) |f| h.update(f);
         h.update(std.mem.asBytes(&style.css_weight));

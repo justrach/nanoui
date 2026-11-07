@@ -16,6 +16,7 @@ const utf8 = @import("utf8.zig");
 const stacks = @import("text_stack_mac.zig");
 const registry = @import("font_registry.zig");
 pub const rich = @import("rich.zig");
+const glyph_wrap = @import("text_mac_wrap.zig");
 
 pub const Atlas = atlas_mod.Atlas;
 pub const Sprite = atlas_mod.Sprite;
@@ -65,7 +66,7 @@ pub const Layout = struct { width: f32, glyphs: []const Glyph };
 /// A line of wrapped text: a byte range and its width.
 pub const Line = struct { start: usize, end: usize, width: f32 };
 
-const FontKey = struct { size_bits: u32, weight: types.Weight, mono: bool, italic: bool, tabular: bool, rounded: bool, serif: bool, family: u64, css_weight: u16, stretch: u16 };
+const FontKey = struct { size_bits: u32, weight: types.Weight, mono: bool, italic: bool, system: bool, tabular: bool, rounded: bool, serif: bool, family: u64, css_weight: u16, stretch: u16 };
 
 fn fontKey(style: types.TextStyle) FontKey {
     return .{
@@ -73,6 +74,7 @@ fn fontKey(style: types.TextStyle) FontKey {
         .weight = style.weight,
         .mono = style.mono,
         .italic = style.italic,
+        .system = style.system_font,
         .tabular = style.tabular,
         .rounded = style.rounded and !style.mono,
         .serif = style.serif and !style.mono,
@@ -115,6 +117,12 @@ pub const TextSystem = struct {
     mono_family: ?[]const u8 = null,
     /// Every size times this (`Context.setZoom`).
     zoom: f32 = 1,
+    /// Where text breaks into lines.
+    wrap_rule: types.WrapRule = .typesetter,
+    /// What is centered in a line given its own height.
+    baseline_rule: types.BaselineRule = .font_line,
+    /// How glyph origins land on device pixels.
+    glyph_snap: types.GlyphSnap = .nearest,
 
     pub fn init(gpa: std.mem.Allocator, device: objc.Object) TextSystem {
         return .{ .gpa = gpa, .atlas = .init(gpa, device), .images = .{ .gpa = gpa }, .installed = .{ .gpa = gpa } };
@@ -287,7 +295,7 @@ pub const TextSystem = struct {
         if (self.stackOf(style)) |st| {
             ref = @ptrCast(cf.CFRetain(st.entries[st.primary].ref));
         } else {
-            ref = fonts.create(if (style.mono) self.mono_family else self.family, style.size * self.zoom, types.Weight.of(style.weightValue()), style.italic, style.mono);
+            ref = fonts.create(if (style.mono) self.mono_family else if (style.system_font) null else self.family, style.size * self.zoom, types.Weight.of(style.weightValue()), style.italic, style.mono);
             if (style.tabular) ref = fonts.tabular(ref);
             if (fontKey(style).rounded) ref = fonts.rounded(ref);
             if (fontKey(style).serif) ref = fonts.serif(ref);
@@ -313,7 +321,7 @@ pub const TextSystem = struct {
         h.update(s);
         h.update(std.mem.asBytes(&style.size));
         h.update(std.mem.asBytes(&style.mono_scale));
-        h.update(&.{ @backingInt(style.weight), @intFromBool(style.mono), @intFromBool(style.italic), @intFromBool(style.tabular), @intFromBool(style.rounded), @intFromBool(style.serif) });
+        h.update(&.{ @backingInt(style.weight), @intFromBool(style.mono), @intFromBool(style.italic), @intFromBool(style.system_font), @intFromBool(style.tabular), @intFromBool(style.rounded), @intFromBool(style.serif) });
         h.update(std.mem.asBytes(&style.tracking));
         if (style.family) |f| h.update(f);
         h.update(std.mem.asBytes(&style.css_weight));
@@ -491,15 +499,26 @@ pub const TextSystem = struct {
     /// `s` with its spans broken into lines no wider than `max_width`.
     pub fn wrapAttributed(self: *TextSystem, s: []const u8, style: types.TextStyle, spans: []const types.Span, max_width: f32) []const Line {
         const styled = rich.styled(spans);
-        const k = key(s, style, (@as(u64, @intFromFloat(@max(0, @min(max_width, 1e6)))) + 2) ^ (if (styled) rich.spansHash(spans, 0, s.len) else 0));
+        const k = key(s, style, (@as(u64, @intFromFloat(@max(0, @min(max_width, 1e6)))) + 2) ^ (if (styled) rich.spansHash(spans, 0, s.len) else 0) ^ (@as(u64, @backingInt(self.wrap_rule)) << 60));
         if (self.wraps.get(self.gpa, k)) |lines| return lines;
         if (self.oneLine(s, style, spans, max_width)) |line_| {
             const one = self.gpa.alloc(Line, 1) catch return &.{};
             one[0] = line_;
             return self.wraps.put(self.gpa, k, one);
         }
-        return self.wraps.put(self.gpa, k, self.breakLines(s, style, spans, max_width) catch return &.{});
+        const lines = switch (self.wrap_rule) {
+            .typesetter => self.breakLines(s, style, spans, max_width),
+            .glyph_positions => self.breakAtGlyphs(s, style, spans, max_width),
+        };
+        return self.wraps.put(self.gpa, k, lines catch return &.{});
     }
+
+    /// `s` broken as GPUI breaks it, each newline-delimited paragraph alone.
+    pub fn breakAtGlyphs(self: *TextSystem, s: []const u8, style: types.TextStyle, spans: []const types.Span, max_width: f32) ![]Line {
+        return glyph_wrap.breakAtGlyphs(self, s, style, spans, max_width);
+    }
+
+    pub const isWordChar = glyph_wrap.isWordChar;
 
     /// `s` as one line, when it has no line breaks and fits: what CoreText
     /// would answer, without a typesetter (a resize asks for every line of
