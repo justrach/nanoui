@@ -1,6 +1,7 @@
 //! The desktop around the app on Linux: the clipboard (GTK's), opening
 //! URLs and files with `xdg-open`, the XDG directories, and the theme.
 const std = @import("std");
+const appearance = @import("appearance.zig");
 const gtk = @import("gtk.zig");
 
 extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
@@ -132,6 +133,11 @@ pub fn path(gpa: std.mem.Allocator, dir: Directory, app_name: []const u8) ![]u8 
 /// named dark.
 pub fn isDark() bool {
     if (env("GTK_THEME")) |theme| return containsDark(theme);
+    switch (appearance.scheme()) {
+        .dark => return true,
+        .light => return false,
+        .unset => {},
+    }
     const settings = gtkSettings() orelse return false;
     var prefer: c_int = 0;
     gtk.api.g_object_get(settings, "gtk-application-prefer-dark-theme", &prefer, @as(?*anyopaque, null));

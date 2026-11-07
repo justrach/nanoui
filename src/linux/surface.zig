@@ -11,6 +11,7 @@ const ui = @import("../ui/ui.zig");
 const types = @import("../ui/types.zig");
 const gpu = @import("../ui/gpu.zig");
 const canvas = @import("../ui/canvas.zig");
+const appearance = @import("appearance.zig");
 const glarea = @import("glarea.zig");
 const transparent = @import("transparent.zig");
 const opengl = @import("../ui/opengl.zig");
@@ -46,9 +47,8 @@ pub const Surface = struct {
     /// A frame asked for later (`frameIn`).
     later: c_uint = 0,
     theme_override: ?Theme = null,
-    /// Heard for appearance changes, and the handlers on GtkSettings.
-    settings: ?*anyopaque = null,
-    settings_handlers: [2]c_ulong = .{ 0, 0 },
+    /// Follows the system's appearance (`appearance.zig`).
+    watches: appearance.Watch = .{},
     cursor: ctx_mod.Cursor = .arrow,
     /// Text the input method committed during this key event.
     committed: std.ArrayList(u8) = .empty,
@@ -82,9 +82,7 @@ pub const Surface = struct {
         self.ctx = .init(gpa, &self.text);
         // No theme background under a transparent window's view.
         self.ctx.transparent_root = window.transparent != .none;
-        // GTK says the system's appearance changed through its settings.
-        self.settings = g.gtk_settings_get_default();
-        if (self.settings) |settings| self.settings_handlers = gtk.watchAppearance(settings, @ptrCast(&appearanceChanged), self);
+        self.watches.start(self, &appearanceChanged);
         if (gtk.v4) {
             @import("surface_gtk4.zig").attach(self);
             return self;
@@ -116,7 +114,7 @@ pub const Surface = struct {
 
     pub fn destroy(self: *Surface) void {
         const g = &gtk.api;
-        if (self.settings) |settings| for (self.settings_handlers) |id| if (id != 0) g.g_signal_handler_disconnect(settings, id);
+        self.watches.stop();
         if (self.tick != 0) g.gtk_widget_remove_tick_callback(self.area, self.tick);
         if (self.idle != 0) _ = g.g_source_remove(self.idle);
         if (self.later != 0) _ = g.g_source_remove(self.later);
@@ -188,9 +186,9 @@ pub const Surface = struct {
         if (self.idle == 0) self.idle = gtk.api.g_idle_add(onIdle, self);
     }
 
-    /// GtkSettings changed: the next frame draws the system's new appearance.
-    fn appearanceChanged(_: ?*anyopaque, _: ?*anyopaque, data: ?*anyopaque) callconv(.c) void {
-        const self: *Surface = @ptrCast(@alignCast(data.?));
+    /// The system's appearance may have changed: the next frame draws it.
+    fn appearanceChanged(ctx: ?*anyopaque) callconv(.c) void {
+        const self: *Surface = @ptrCast(@alignCast(ctx.?));
         self.requestFrame();
     }
 
@@ -502,7 +500,7 @@ fn keyOf(keyval: c_uint) ?ctx_mod.Key {
         0xff1b => .escape,
         0xff55 => .page_up,
         0xff56 => .page_down,
-        0xffbe...0xffc9 => @enumFromInt(@intFromEnum(ctx_mod.Key.f1) + (keyval - 0xffbe)),
+        0xffbe...0xffc9 => @fromBackingInt(@intCast(@backingInt(ctx_mod.Key.f1) + (keyval - 0xffbe))),
         else => null,
     };
 }
