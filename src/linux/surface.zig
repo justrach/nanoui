@@ -46,6 +46,9 @@ pub const Surface = struct {
     /// A frame asked for later (`frameIn`).
     later: c_uint = 0,
     theme_override: ?Theme = null,
+    /// Heard for appearance changes, and the handlers on GtkSettings.
+    settings: ?*anyopaque = null,
+    settings_handlers: [2]c_ulong = .{ 0, 0 },
     cursor: ctx_mod.Cursor = .arrow,
     /// Text the input method committed during this key event.
     committed: std.ArrayList(u8) = .empty,
@@ -79,6 +82,9 @@ pub const Surface = struct {
         self.ctx = .init(gpa, &self.text);
         // No theme background under a transparent window's view.
         self.ctx.transparent_root = window.transparent != .none;
+        // GTK says the system's appearance changed through its settings.
+        self.settings = g.gtk_settings_get_default();
+        if (self.settings) |settings| self.settings_handlers = gtk.watchAppearance(settings, @ptrCast(&appearanceChanged), self);
         if (gtk.v4) {
             @import("surface_gtk4.zig").attach(self);
             return self;
@@ -110,6 +116,7 @@ pub const Surface = struct {
 
     pub fn destroy(self: *Surface) void {
         const g = &gtk.api;
+        if (self.settings) |settings| for (self.settings_handlers) |id| if (id != 0) g.g_signal_handler_disconnect(settings, id);
         if (self.tick != 0) g.gtk_widget_remove_tick_callback(self.area, self.tick);
         if (self.idle != 0) _ = g.g_source_remove(self.idle);
         if (self.later != 0) _ = g.g_source_remove(self.later);
@@ -179,6 +186,12 @@ pub const Surface = struct {
     /// A frame soon, for changes from outside the view (a process's output).
     pub fn requestFrame(self: *Surface) void {
         if (self.idle == 0) self.idle = gtk.api.g_idle_add(onIdle, self);
+    }
+
+    /// GtkSettings changed: the next frame draws the system's new appearance.
+    fn appearanceChanged(_: ?*anyopaque, _: ?*anyopaque, data: ?*anyopaque) callconv(.c) void {
+        const self: *Surface = @ptrCast(@alignCast(data.?));
+        self.requestFrame();
     }
 
     fn onLater(data: ?*anyopaque) callconv(.c) c_int {

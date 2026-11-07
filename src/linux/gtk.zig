@@ -249,6 +249,15 @@ pub fn connect(instance: *anyopaque, signal: [*:0]const u8, handler: Callback, d
     _ = api.g_signal_connect_data(instance, signal, handler, data, null, 0);
 }
 
+/// Calls `handler` with `data` when GtkSettings' appearance changes: the dark
+/// preference, or the theme name. Returns the handlers, for disconnecting.
+pub fn watchAppearance(settings: *anyopaque, handler: Callback, data: ?*anyopaque) [2]c_ulong {
+    return .{
+        api.g_signal_connect_data(settings, "notify::gtk-application-prefer-dark-theme", handler, data, null, 0),
+        api.g_signal_connect_data(settings, "notify::gtk-theme-name", handler, data, null, 0),
+    };
+}
+
 // Event masks.
 pub const pointer_motion_mask = 1 << 2;
 pub const button_press_mask = 1 << 8;
