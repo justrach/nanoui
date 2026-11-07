@@ -72,6 +72,8 @@ pub const Window = struct {
     /// `Options.transparent`: the frame is the window, alpha and all
     /// (`layered.zig`).
     transparent: bool = false,
+    /// Whether the title bar was last made dark; null until it is set.
+    title_bar_dark: ?bool = null,
 
     /// Resizing changes geometry only, never the foreground window.
     pub const set_size_flags: u32 = w.SWP_NOMOVE | w.SWP_NOZORDER | w.SWP_NOACTIVATE;
@@ -111,6 +113,9 @@ pub const Window = struct {
         if (options.opacity < 1 or self.transparent) ex |= w.WS_EX_LAYERED;
         const hwnd = w.CreateWindowExW(ex, class_name, w.wide(&title, options.title), style, w.CW_USEDEFAULT, w.CW_USEDEFAULT, 100, 100, null, null, inst, null) orelse return error.CreateWindow;
         self.hwnd = hwnd;
+        // The title bar matches the theme before the window is first shown; a
+        // surface keeps it matching the theme each frame is drawn with.
+        self.setTitleBarDark(if (options.theme) |t| t.dark else @import("desktop.zig").isDark());
         _ = w.SetWindowLongPtrW(hwnd, w.GWLP_USERDATA, @bitCast(@intFromPtr(self)));
         self.setIcon(options.icon);
         w.DragAcceptFiles(hwnd, 1);
@@ -168,6 +173,16 @@ pub const Window = struct {
         _ = w.SetLayeredWindowAttributes(h, 0, alpha, w.LWA_ALPHA);
         // A frame with the new mode: GDI when translucent, the GPU at 1.
         if (self.surface) |s| s.requestFrame();
+    }
+
+    /// A dark title bar for a dark theme, as the system draws its own windows
+    /// in dark mode. Versions of Windows without it keep a light one.
+    pub fn setTitleBarDark(self: *Window, dark: bool) void {
+        if (self.title_bar_dark == dark) return;
+        const h = self.hwnd orelse return;
+        const value: w.BOOL = @intFromBool(dark);
+        _ = w.DwmSetWindowAttribute(h, w.DWMWA_USE_IMMERSIVE_DARK_MODE, &value, @sizeOf(w.BOOL));
+        self.title_bar_dark = dark;
     }
 
     fn of(hwnd: w.HWND) ?*Window {
@@ -253,6 +268,8 @@ pub const Window = struct {
             if (self.page) |p| p.enqueue(job.msg, true);
             return 0;
         }
+        // A page has no surface to follow the system's appearance: its title bar does here.
+        if (msg == w.WM_SETTINGCHANGE and self.surface == null and self.theme == null) self.setTitleBarDark(@import("desktop.zig").isDark());
         if (self.page) |p| {
             // The window moved or changed size, or the monitor's scale did:
             // the webview covers the client area as it now is.
