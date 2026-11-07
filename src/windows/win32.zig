@@ -75,6 +75,7 @@ pub const OPENFILENAMEW = extern struct {
 };
 
 pub extern "user32" fn RegisterClassExW(wc: *const WNDCLASSEXW) callconv(.winapi) u16;
+pub extern "dwmapi" fn DwmSetWindowAttribute(hwnd: HWND, attr: u32, value: *const anyopaque, size: u32) callconv(.winapi) c_long;
 pub extern "user32" fn CreateWindowExW(ex: u32, class: [*:0]const u16, title: [*:0]const u16, style: u32, x: i32, y: i32, w: i32, h: i32, parent: ?HWND, menu: ?*anyopaque, inst: ?HINSTANCE, param: ?*anyopaque) callconv(.winapi) ?HWND;
 pub extern "user32" fn DefWindowProcW(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) callconv(.winapi) LRESULT;
 pub extern "user32" fn DestroyWindow(hwnd: HWND) callconv(.winapi) BOOL;

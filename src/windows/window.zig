@@ -7,6 +7,7 @@ const Surface = @import("surface.zig").Surface;
 const window_types = @import("../window_types.zig");
 const Page = @import("../page_webview2.zig").Page;
 const drop_files = @import("drop_files.zig");
+const caption = @import("caption.zig");
 
 /// The window message a page's queued messages go out on (`Page.flush`):
 /// after the app's own (`WM_APP` onwards, as `fdwatch.zig` allocates them).
@@ -148,6 +149,7 @@ pub const Window = struct {
         const hwnd = w.CreateWindowExW(ex, class_name, w.wide(&title, options.title), style, w.CW_USEDEFAULT, w.CW_USEDEFAULT, 100, 100, null, null, inst, null) orelse return error.CreateWindow;
         self.hwnd = hwnd;
         _ = w.SetWindowLongPtrW(hwnd, w.GWLP_USERDATA, @bitCast(@intFromPtr(self)));
+        caption.followSystem(hwnd);
         self.setIcon(options.icon);
         w.DragAcceptFiles(hwnd, 1);
         self.setSize(options.width, options.height);
@@ -236,6 +238,8 @@ pub const Window = struct {
             if (wp != 0) drop_files.handle(self.surface, hwnd, @ptrFromInt(wp));
             return 0;
         }
+        // Personalization > Colors changed: the native caption follows.
+        if (msg == w.WM_SETTINGCHANGE) caption.followSystem(hwnd);
         if (msg == w.WM_GETMINMAXINFO) {
             const mm: *w.MINMAXINFO = @ptrFromInt(@as(usize, @bitCast(lp)));
             const s = self.dpiScale();
