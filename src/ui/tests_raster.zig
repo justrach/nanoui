@@ -123,7 +123,8 @@ test "nanoui's PNG decoder reads what ImageIO writes (compressed), pixel for pix
     try t.init(gpa, .init(&s, Scene.view), .{ .width = 200, .height = 120 });
     defer t.deinit();
     t.settle(1);
-    const path = "/tmp/nanoui-test-imageio.png";
+    var path_buf: [256]u8 = undefined;
+    const path = try @import("../temp_path.zig").tempPath(&path_buf, "nanoui-test-imageio.png");
     try t.screenshot(path);
     const bytes = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, gpa, .limited(8 << 20));
     defer gpa.free(bytes);
@@ -396,4 +397,40 @@ test "a clip's rounded corners cut what it clips, only where asked" {
 test {
     _ = @import("tests_corners.zig");
     _ = @import("tests_text_weight.zig");
+}
+
+test "over a clear of nothing, only the rounded box has alpha (a transparent window)" {
+    const Rounded = struct {
+        fn view(_: *@This(), c: *ui.Context) void {
+            _ = c.leaf(.{ .width = .fill, .height = .fill, .background = .hex(0x808080), .radius = 12 }, .none, null);
+        }
+    };
+    const gpa = testing.allocator;
+    var s: Rounded = .{};
+    var t: ui.Tester = undefined;
+    try t.init(gpa, .init(&s, Rounded.view), .{ .width = 60, .height = 40 });
+    defer t.deinit();
+    // As a transparent window's surface has it: no theme background.
+    t.ctx.transparent_root = true;
+    t.settle(1);
+    const w: usize = @intFromFloat(t.size.w * t.scale);
+    const h: usize = @intFromFloat(t.size.h * t.scale);
+    const bytes = try gpa.alloc(u8, w * h * 4);
+    defer gpa.free(bytes);
+    const out: @import("gpu.zig").Pixels = .{ .bytes = bytes, .width = w, .height = h };
+    raster.draw(out, t.instances.items, .{ .pixels = &.{}, .size = 0 }, .{}, t.scale, .transparent);
+    // The corner is nothing at all; the middle is the box, opaque.
+    try testing.expectEqual([4]u8{ 0, 0, 0, 0 }, out.bytes[0..4].*);
+    try testing.expectEqual(@as(u8, 255), out.bytes[((h / 2) * w + w / 2) * 4 + 3]);
+    // The curve between is partly covered, premultiplied: no channel above alpha.
+    var edge: usize = 0;
+    for (0..24) |y| for (0..24) |x| {
+        const p = out.bytes[(y * w + x) * 4 ..][0..4];
+        if (p[3] > 0 and p[3] < 255) edge += 1;
+        try testing.expect(p[0] <= p[3] and p[1] <= p[3] and p[2] <= p[3]);
+    };
+    try testing.expect(edge > 0);
+    // An opaque clear is still opaque everywhere.
+    raster.draw(out, t.instances.items, .{ .pixels = &.{}, .size = 0 }, .{}, t.scale, .white);
+    try testing.expectEqual(@as(u8, 255), out.bytes[3]);
 }

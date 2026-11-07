@@ -3,7 +3,7 @@
 const std = @import("std");
 const objc = @import("objc.zig");
 const App = @import("app.zig").App;
-const Page = @import("page.zig").Page;
+const Page = @import("page_webkit.zig").Page;
 const ui = @import("ui/ui.zig");
 const Surface = @import("ui/surface.zig").Surface;
 
@@ -45,21 +45,36 @@ pub const Window = struct {
         if (options.title_bar == .hidden) style |= 1 << 15; // full size content view
         if (popover) style = 1 << 7; // borderless, non-activating panel
         if (options.non_activating) style |= 1 << 7;
+        // No title bar, no frame, no resizing edges (`decorations`): the
+        // app draws it and moves it (`window_drag`). Only the panel's
+        // non-activating bit stays.
+        const borderless = !options.decorations and !popover;
+        if (borderless) style &= 1 << 7;
         const rect: objc.CGRect = .{ .size = .{ .width = options.width, .height = options.height } };
-        // A borderless panel takes keys only if its class says it can.
+        // A borderless window or panel takes keys only if its class says it can.
         const window_class = if (popover) objc.defineClass(.{ .name = "NanoUIPopover", .superclass = "NSPanel", .methods = &.{
             .{ .name = "canBecomeKeyWindow", .imp = &yes, .types = "B@:" },
-        } }) else if (options.kind == .panel) objc.class("NSPanel") else objc.class("NSWindow");
+        } }) else if (borderless and options.kind == .panel)
+            objc.defineClass(.{ .name = "NanoUIBorderlessPanel", .superclass = "NSPanel", .methods = &borderless_methods })
+        else if (borderless)
+            objc.defineClass(.{ .name = "NanoUIBorderlessWindow", .superclass = "NSWindow", .methods = &borderless_methods })
+        else if (options.kind == .panel) objc.class("NSPanel") else objc.class("NSWindow");
         const nswindow = objc.msg(objc.Object, objc.msg(objc.Object, window_class, "alloc", .{}), "initWithContentRect:styleMask:backing:defer:", .{
             rect, style, @as(objc.NSUInteger, 2), objc.NO,
         });
         if (options.tabbing_disallowed) objc.msg(void, nswindow, "setTabbingMode:", .{@as(objc.NSInteger, 2)}); // NSWindowTabbingModeDisallowed
+        var behavior: objc.NSUInteger = 0;
         // NSWindowCollectionBehaviorCanJoinAllSpaces | FullScreenAuxiliary.
-        if (options.all_spaces) objc.msg(void, nswindow, "setCollectionBehavior:", .{@as(objc.NSUInteger, (1 << 0) | (1 << 8))});
+        if (options.all_spaces) behavior |= (1 << 0) | (1 << 8);
+        // The Mac has no taskbar, and the Dock and Command-Tab list apps, not
+        // windows: what a window can leave is Command-` and the Window menu.
+        if (options.skip_taskbar) behavior |= 1 << 6; // IgnoresCycle
+        if (behavior != 0) objc.msg(void, nswindow, "setCollectionBehavior:", .{behavior});
+        if (options.skip_taskbar) objc.msg(void, nswindow, "setExcludedFromWindowsMenu:", .{objc.YES});
         objc.msg(void, nswindow, "setReleasedWhenClosed:", .{objc.NO});
         objc.msg(void, nswindow, "setTitle:", .{objc.nsString(options.title)});
         objc.msg(void, nswindow, "setContentMinSize:", .{objc.CGSize{ .width = options.min_width, .height = options.min_height }});
-        if (options.title_bar == .hidden) {
+        if (options.title_bar == .hidden and !borderless) {
             objc.msg(void, nswindow, "setTitlebarAppearsTransparent:", .{objc.YES});
             objc.msg(void, nswindow, "setTitleVisibility:", .{@as(objc.NSInteger, 1)});
         }
@@ -124,7 +139,12 @@ pub const Window = struct {
             _ = objc.msg(objc.BOOL, nswindow, "setFrameAutosaveName:", .{objc.nsString(name)});
         }
         if (options.always_on_top or options.floating) self.setAlwaysOnTop(true);
-        if (!app.flags.hidden and options.visible) objc.msg(void, nswindow, "makeKeyAndOrderFront:", .{@as(?objc.Object, null)});
+        if (options.opacity < 1) self.setOpacity(options.opacity);
+        // Opened quietly by an update's restart: behind, not key, until the
+        // updater puts it back as it was (update_auto.zig).
+        if (!app.flags.hidden and options.visible) {
+            if (app.quiet) objc.msg(void, nswindow, "orderBack:", .{@as(?objc.Object, null)}) else objc.msg(void, nswindow, "makeKeyAndOrderFront:", .{@as(?objc.Object, null)});
+        }
         if (app.debug) self.logFrame();
         return self;
     }
@@ -204,6 +224,19 @@ pub const Window = struct {
         objc.msg(void, self.nswindow, "setLevel:", .{@as(objc.NSInteger, if (on) 3 else 0)}); // NSFloatingWindowLevel
     }
 
+    /// The window's opacity, 0 to 1 (NSWindow's alpha value).
+    pub fn setOpacity(self: *Window, opacity: f64) void {
+        objc.msg(void, self.nswindow, "setAlphaValue:", .{std.math.clamp(opacity, 0, 1)});
+    }
+
+    /// The visible frame of the screen the window is on, in points: the menu
+    /// bar and the Dock left out, so it is the room there is for a window.
+    pub fn monitorSize(self: *Window) [2]f64 {
+        const screen = objc.msg(?objc.Object, self.nswindow, "screen", .{}) orelse objc.msg(?objc.Object, objc.class("NSScreen"), "mainScreen", .{}) orelse return .{ 0, 0 };
+        const f = objc.msg(objc.CGRect, screen, "visibleFrame", .{});
+        return .{ f.size.width, f.size.height };
+    }
+
     pub fn isFullScreen(self: *Window) bool {
         return objc.msg(objc.NSUInteger, self.nswindow, "styleMask", .{}) & (1 << 14) != 0;
     }
@@ -220,6 +253,7 @@ pub const Window = struct {
     pub fn hide(self: *Window) void {
         objc.msg(void, self.nswindow, "orderOut:", .{@as(?objc.Object, null)});
         if (self.surface) |s| s.is_visible = false;
+        self.app.wentAway();
     }
 
     /// Whether a popover just hid itself (a click on what opens it, which
@@ -258,6 +292,19 @@ pub const Window = struct {
         const pool = objc.Pool.push();
         defer pool.pop();
         objc.msg(void, self.nswindow, "setTitle:", .{objc.nsString(title)});
+    }
+
+    /// Points a page's window at `url`: a path from the app's assets, or an
+    /// absolute `http(s)://` one. No effect on a native-UI window.
+    pub fn setPageUrl(self: *Window, url: []const u8) void {
+        if (self.page) |p| p.load(url);
+    }
+
+    /// Shows entry `i` of `PageOptions.pages` (the bar's buttons).
+    pub fn showPage(self: *Window, i: usize) void {
+        const p = self.page orelse return;
+        if (i >= p.queue.options.pages.len) return;
+        p.load(p.queue.options.pages[i].url);
     }
 
     /// Queues an encoded message for the page and takes ownership of it.
@@ -315,6 +362,7 @@ fn primaryHeight() f64 {
 fn occlusionChanged(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
     const w = objc.getZig(Window, self_obj) orelse return;
     if (w.surface) |s| s.occlusionChanged();
+    if (objc.msg(objc.NSUInteger, w.nswindow, "occlusionState", .{}) & 2 == 0) w.app.wentAway();
 }
 
 fn screenChanged(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
@@ -365,6 +413,13 @@ fn shouldClose(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) 
 fn yes(_: objc.Object, _: objc.SEL) callconv(.c) bool {
     return true;
 }
+
+/// A borderless NSWindow can't become key or main unless its class says
+/// so, and then it would take no keys.
+const borderless_methods = [_]objc.Method{
+    .{ .name = "canBecomeKeyWindow", .imp = &yes, .types = "B@:" },
+    .{ .name = "canBecomeMainWindow", .imp = &yes, .types = "B@:" },
+};
 
 extern "c" fn CACurrentMediaTime() f64;
 

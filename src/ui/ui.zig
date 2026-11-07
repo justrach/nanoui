@@ -42,6 +42,8 @@ pub const Cursor = ctx_mod.Cursor;
 pub const Theme = @import("theme.zig").Theme;
 pub const A11yRole = ctx_mod.A11yRole;
 pub const A11yItem = ctx_mod.A11yItem;
+/// Accessibility: labels, headings, announcements, Dynamic Type (`access.zig`).
+pub const access = @import("access.zig");
 /// Key combinations as the platform writes them: `ui.keys.label("⌘P")`.
 pub const keys = @import("keys.zig");
 /// A monotonic clock in seconds.
@@ -119,6 +121,7 @@ pub const textField = textfield.textField;
 pub const TextFieldOptions = textfield.Options;
 pub const TextBuffer = textfield.TextBuffer;
 pub const TextFieldResult = textfield.Result;
+pub const TextFieldCaret = textfield.Caret;
 /// Declarative, interruptible animation (springs, tweens, presence).
 pub const motion = @import("motion/motion.zig");
 pub const div = @import("div.zig").div;
@@ -162,10 +165,14 @@ pub const View = struct {
 
 test {
     _ = @import("tests_motion.zig");
+    _ = @import("motion/tests_catalog.zig");
+    _ = @import("motion/tests_reduced_motion.zig");
     _ = frame_log;
     _ = @import("tests_effects.zig");
     _ = @import("tests_scroll_x.zig");
     _ = @import("tests_a11y_adjust.zig");
+    _ = @import("tests_access.zig");
+    _ = @import("tests_text_select.zig");
     _ = @import("tests_shadow_x.zig");
     _ = @import("tests_text_style.zig");
     _ = @import("tests_text_extras.zig");
@@ -179,6 +186,7 @@ test {
     _ = @import("tests.zig");
     _ = @import("tests_keymap.zig");
     _ = @import("tests_multiline.zig");
+    _ = @import("tests_handles.zig");
     _ = @import("tests_texture.zig");
     _ = @import("tests_hole.zig");
     _ = @import("tests_canvas.zig");
@@ -186,6 +194,7 @@ test {
     _ = @import("tests_motion_more.zig");
     _ = @import("tests_roll.zig");
     _ = @import("tests_layer.zig");
+    _ = @import("tests_wheel.zig");
     _ = @import("tests_safe_area.zig");
     _ = @import("motion/motion.zig");
     _ = @import("keymap.zig");
@@ -215,6 +224,7 @@ test {
     _ = @import("tests_svg.zig");
     _ = @import("tests_truncate.zig");
     if (@import("dwrite.zig").enabled) _ = @import("tests_dwrite.zig");
+    if (@import("builtin").os.tag == .windows) _ = @import("tests_d3d11.zig");
     _ = @import("icons.zig");
     _ = keys;
     _ = @import("tests_textedit.zig");

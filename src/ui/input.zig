@@ -77,6 +77,8 @@ pub const TextOp = union(enum) {
     /// Text being composed (underlined), with the selection inside it.
     set_marked: struct { text: []const u8, sel_start: usize, sel_len: usize },
     unmark,
+    /// A selection set from outside (iOS's text input): byte offsets.
+    select: struct { anchor: usize, caret: usize },
     command: Command,
 };
 
@@ -124,6 +126,8 @@ pub const FocusedText = struct {
     marked: ?[2]usize,
     /// Where the caret is drawn, in view points.
     caret_rect: types.Rect,
+    /// The selection's two ends in order, line-tall, when it has one.
+    ends: ?[2]types.Rect = null,
 };
 
 /// Where copied text goes: the system's clipboard, or the Tester's own.
@@ -219,6 +223,9 @@ pub const Input = struct {
     drop: ?Drop = null,
     /// VoiceOver's AXIncrement (+1) / AXDecrement (−1) on box `id`.
     a11y_step: ?struct { id: u64, dir: i8 } = null,
+    /// VoiceOver activated box `id` (a double tap): its `interact` reports
+    /// a click wherever the pointer is.
+    a11y_press: u64 = 0,
     /// A pinch in this event (two fingers on a touch screen, a trackpad's
     /// magnify): how much it scaled by (1: none), about `mouse`.
     zoom: f32 = 1,
@@ -252,6 +259,7 @@ pub const Input = struct {
         i.mods_changed = false;
         i.drop = null;
         i.a11y_step = null;
+        i.a11y_press = 0;
         i.zoom = 1;
         i.pan = .{};
         i.key = null;

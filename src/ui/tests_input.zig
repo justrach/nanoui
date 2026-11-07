@@ -166,16 +166,27 @@ test "right_clicked fires on right press and Ctrl+left press and clears down" {
     try testing.expectEqual(@as(u32, 1), s.right);
     try testing.expect(!t.ctx.input.down);
     try testing.expectEqual(@as(u64, 0), t.ctx.active);
-    // Ctrl+left press triggers right_clicked, not left click or pressed.
+    // On the Mac, Ctrl+left is the secondary click: right_clicked, not left
+    // click or pressed. Elsewhere it is a left click with Ctrl held, the way
+    // lists are multi-selected on Windows and Linux.
     t.ctx.input.button = .left;
     t.ctx.input.ctrl = true;
     t.ctx.pointerDown();
     t.frame();
     t.ctx.input.ctrl = false;
-    try testing.expectEqual(@as(u32, 2), s.right);
-    try testing.expectEqual(@as(u32, 0), s.left);
-    try testing.expect(!s.pressed);
-    try testing.expect(!t.ctx.input.down);
+    if (@import("keys.zig").mac) {
+        try testing.expectEqual(@as(u32, 2), s.right);
+        try testing.expectEqual(@as(u32, 0), s.left);
+        try testing.expect(!s.pressed);
+        try testing.expect(!t.ctx.input.down);
+    } else {
+        try testing.expectEqual(@as(u32, 1), s.right);
+        try testing.expectEqual(@as(u32, 0), s.left);
+        try testing.expect(s.pressed);
+        try testing.expect(t.ctx.input.down);
+        t.ctx.pointerUp();
+        t.frame();
+    }
 }
 
 const ScrollBox = struct {
@@ -222,4 +233,30 @@ test "button flush against the right edge of a scroll box gets its click" {
     defer t.deinit();
     t.click(95, 8);
     try testing.expectEqual(@as(u32, 1), s.edge_clicks);
+}
+
+const CloseOnce = struct {
+    builds: u32 = 0,
+
+    fn view(r: *CloseOnce, c: *ui.Context) void {
+        r.builds += 1;
+        const root = ui.div(c).p(10);
+        defer root.end();
+        ui.text(c, "close me", .{});
+        // A one-shot ask, the way a click action makes it. The rebuild the ask
+        // causes must not take the request back out: that was a window that
+        // never closed no matter how often the button was pressed.
+        if (r.builds == 1) c.requestClose();
+    }
+};
+
+test "a one-shot requestClose survives the rebuild it asked for" {
+    var s: CloseOnce = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&s, CloseOnce.view), .{});
+    defer t.deinit();
+    // The first build asked; the rebuild it caused ran the view again (a
+    // window that did close on this path built twice and closed never).
+    try testing.expect(s.builds >= 2);
+    try testing.expect(t.ctx.close_request);
 }

@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Browser</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f5f5f7;
+        --card: #fff;
+        --text: #1d1d1f;
+        --muted: #6e6e73;
+        --accent: #0071e3;
+        --line: #e5e5e7;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #1c1c1e;
+          --card: #2c2c2e;
+          --text: #f5f5f7;
+          --muted: #98989d;
+          --line: #3a3a3c;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font: 15px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 16px;
+        background: var(--card);
+        border-bottom: 1px solid var(--line);
+        -webkit-app-region: drag;
+      }
+      header .name { font-weight: 600; -webkit-app-region: no-drag; }
+      .spacer { flex: 1; }
+      nav { display: flex; gap: 6px; -webkit-app-region: no-drag; }
+      nav button {
+        font: inherit;
+        font-size: 13px;
+        padding: 5px 13px;
+        border-radius: 7px;
+        border: 1px solid var(--line);
+        background: transparent;
+        color: var(--text);
+        cursor: pointer;
+      }
+      nav button.on {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+      }
+      main { padding: 22px; display: grid; gap: 14px; max-width: 860px; }
+      h1 { margin: 0 0 4px; font-size: 22px; letter-spacing: -0.2px; }
+      p { margin: 0; color: var(--muted); }
+      .card {
+        background: var(--card);
+        border-radius: 12px;
+        padding: 18px;
+        border: 1px solid var(--line);
+      }
+      ul { margin: 8px 0 0; padding-left: 20px; }
+      li { margin: 4px 0; }
+      code {
+        font: 13px ui-monospace, "SF Mono", Consolas, monospace;
+        background: var(--bg);
+        padding: 2px 6px;
+        border-radius: 5px;
+      }
+      .pill {
+        font-size: 12px;
+        padding: 2px 9px;
+        border-radius: 20px;
+        background: var(--bg);
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <span class="name">nanoui · webview</span>
+      <span id="uptime" class="pill">0s</span>
+      <span class="spacer"></span>
+    </header>
+    <main>
+      <h1>This page is served by Zig</h1>
+      <p>
+        Every byte here came from the app: <code>nanoui://</code> on macOS,
+        <code>https://nanoui.local</code> on Windows, answered by nanoui's own
+        asset table. Switch to <b>WebView2 docs</b> to load a real remote page
+        from Microsoft in the same window.
+      </p>
+
+      <div class="card">
+        <p><b>Typed IPC</b> — JavaScript calls Zig, Zig calls back.</p>
+        <ul id="todos"></ul>
+      </div>
+
+      <div class="card">
+        <p><b>Typed events</b> — Zig pushes to the page once a second.</p>
+        <p id="tick" style="margin-top: 8px">waiting…</p>
+      </div>
+    </main>
+    <script type="module" src="/main.js"></script>
+  </body>
+</html>

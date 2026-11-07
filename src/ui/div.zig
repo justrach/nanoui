@@ -149,6 +149,11 @@ pub const Div = struct {
     pub fn roundedFull(d: Div) Div {
         return d.set("radius", 1e4);
     }
+    /// Circular corners rather than Apple's continuous ones: with
+    /// `roundedFull`, a true circle or capsule, not a squircle.
+    pub fn circular(d: Div) Div {
+        return d.set("corner_circular", true);
+    }
     pub fn shadow(d: Div, s: types.Shadow) Div {
         return d.set("shadow", @as(?types.Shadow, s));
     }
@@ -184,6 +189,16 @@ pub const Div = struct {
     }
     pub fn scrollY(d: Div) Div {
         return d.set("scroll", true);
+    }
+    /// Takes the wheel over it, read with `wants_wheel` (a strip of tabs
+    /// that pans): a scrolling box behind it doesn't scroll instead.
+    pub fn wheel(d: Div) Div {
+        return d.set("wheel", true);
+    }
+    /// How a scrolling box shows its bar: `.always`, or `.{ .overlay = color }`
+    /// to show it only while the box scrolls, as touch platforms do.
+    pub fn scrollbar(d: Div, v: types.Scrollbar) Div {
+        return d.set("scrollbar", v);
     }
     pub fn absolute(d: Div) Div {
         return d.set("absolute", true);

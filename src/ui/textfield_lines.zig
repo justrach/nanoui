@@ -4,8 +4,18 @@
 //! them up to its most lines, then scrolling inside.
 const std = @import("std");
 const types = @import("types.zig");
+const utf8 = @import("utf8.zig");
 const Context = @import("context.zig").Context;
 const EditState = @import("context.zig").EditState;
+
+/// The caret's bar: `width` points wide, `inset` points short of the line
+/// box at its top and bottom, its corners rounded `radius`. A chat composer
+/// draws a thicker rounded bar.
+pub const Caret = struct {
+    width: f32 = 1.5,
+    inset: f32 = 0,
+    radius: f32 = 0,
+};
 
 /// One line as drawn: bytes [start, end) shown, and the caret positions up
 /// to `stop` (the next line's start, or the newline) belonging to it.
@@ -36,10 +46,12 @@ pub fn lineOf(lines: []const Line, at: usize) usize {
     return k;
 }
 
-/// The caret's x in its line.
+/// The caret's x in its line. A line's `end` leaves its trailing spaces out
+/// (nothing of them is drawn), but the caret can sit among and after them, up
+/// to `stop`: measure through them to it.
 pub fn caretX(c: *Context, s: []const u8, style: types.TextStyle, l: Line, at: usize) f32 {
-    const to = @min(@max(at, l.start), l.end);
-    return c.text.caretX(s[l.start..l.end], style, to - l.start);
+    const to = @min(@max(at, l.start), l.stop);
+    return c.text.caretX(s[l.start..to], style, to - l.start);
 }
 
 /// The byte nearest to `x` on line `l`.
@@ -62,6 +74,25 @@ pub fn indexAtPoint(c: *Context, s: []const u8, style: types.TextStyle, lines: [
     return indexAt(c, s, style, lines[row], x);
 }
 
+/// The selection's ends, for a field whose lines start at (x, y): the text's
+/// own place on the screen, its scroll taken off.
+pub fn ends(c: *Context, s: []const u8, style: types.TextStyle, lines: []const Line, lo: usize, hi: usize, x: f32, y: f32, lh: f32) [2]types.Rect {
+    var out: [2]types.Rect = undefined;
+    for ([2]usize{ lo, hi }, &out) |at, *r| {
+        const k = lineOf(lines, at);
+        r.* = .{ .x = x + caretX(c, s, style, lines[k], at), .y = y + @as(f32, @floatFromInt(k)) * lh, .w = 0, .h = lh };
+    }
+    return out;
+}
+
+/// The byte of a password's `n`th bullet.
+pub fn byteOfCodepoint(s: []const u8, n: usize) usize {
+    var i: usize = 0;
+    var k: usize = 0;
+    while (i < s.len and k < n) : (k += 1) i += utf8.seqLen(s[i]);
+    return @min(i, s.len);
+}
+
 pub const Drawn = struct {
     /// The caret's place in the field's content, scrolled.
     caret: types.Point,
@@ -74,7 +105,7 @@ pub const Drawn = struct {
 /// over a spacer as tall as the lines): selection, text, composition and
 /// caret. When `follow` (the caret moved, the text changed), scrolled to
 /// keep the caret in view within `view_h`; else where the wheel left it.
-pub fn draw(c: *Context, s: []const u8, e: *EditState, style: types.TextStyle, lines: []const Line, view_h: f32, focused: bool, follow: bool, block: bool, placeholder: []const u8, placeholder_color: types.Color, suggestion: []const u8) Drawn {
+pub fn draw(c: *Context, s: []const u8, e: *EditState, style: types.TextStyle, lines: []const Line, view_h: f32, focused: bool, follow: bool, block: bool, placeholder: []const u8, placeholder_color: types.Color, suggestion: []const u8, caret: Caret, caret_color: types.Color) Drawn {
     const th = c.theme;
     const lh = c.text.lineHeight(style);
     const k = lineOf(lines, e.caret);
@@ -111,8 +142,9 @@ pub fn draw(c: *Context, s: []const u8, e: *EditState, style: types.TextStyle, l
         _ = c.leaf(.{ .absolute = true, .offset = .{ .x = cx, .y = cy } }, .{ .text = .{ .str = suggestion, .style = style, .color = th.muted.alpha(0.8) } }, null);
     if (focused and hi == lo) {
         const l = lines[k];
-        const w: f32 = if (!block) 1.5 else if (e.caret < l.end) @max(4, caretX(c, s, style, l, e.caret + 1) - cx) else c.text.width("m", style);
-        _ = c.leaf(.{ .absolute = true, .width = .{ .px = w }, .height = .{ .px = lh }, .background = if (block) th.accent.alpha(0.45) else th.accent, .offset = .{ .x = cx, .y = cy } }, .none, null);
+        const w: f32 = if (!block) caret.width else if (e.caret < l.end) @max(4, caretX(c, s, style, l, e.caret + 1) - cx) else c.text.width("m", style);
+        const inset: f32 = if (block) 0 else caret.inset;
+        _ = c.leaf(.{ .absolute = true, .width = .{ .px = w }, .height = .{ .px = @max(1, lh - 2 * inset) }, .radius = if (block) 0 else caret.radius, .background = if (block) th.accent.alpha(0.45) else caret_color, .offset = .{ .x = cx, .y = cy + inset } }, .none, null);
     }
     return .{ .caret = .{ .x = cx, .y = cy - e.scroll_y }, .line = k, .lines = lines.len };
 }

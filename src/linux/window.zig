@@ -1,11 +1,12 @@
 //! Windows on Linux: a GtkWindow (GTK 4's, else GTK 3's) showing native UI
-//! drawn by nanoui. GTK 4 doesn't place windows (Wayland leaves that to
-//! the compositor): positions are GTK 3's. Pages (WebKitGTK) are not
-//! supported yet.
+//! drawn by nanoui, or a page drawn by WebKitGTK (`page_webkitgtk.zig`). GTK 4
+//! doesn't place windows (Wayland leaves that to the compositor): positions
+//! are GTK 3's.
 const std = @import("std");
 const gtk = @import("gtk.zig");
 const App = @import("app.zig").App;
 const Surface = @import("surface.zig").Surface;
+const Page = @import("../page_webkitgtk.zig").Page;
 const window_types = @import("../window_types.zig");
 const ui = @import("../ui/ui.zig");
 
@@ -25,6 +26,10 @@ pub const Window = struct {
     /// Null when headless (snapshots without a display).
     gtkwindow: ?*gtk.Widget,
     surface: ?*Surface = null,
+    /// The page, when the window shows one instead of native UI.
+    page: ?*Page = null,
+    /// `Options.transparent`, as the screen allowed it (`transparent.zig`).
+    transparent: @import("transparent.zig").Mode = .none,
     /// What a snapshot draws: the view, the window's size, its colors.
     view: ?ui.View = null,
     width: f64 = 0,
@@ -41,20 +46,46 @@ pub const Window = struct {
         const self = try app.gpa.create(Window);
         errdefer app.gpa.destroy(self);
         self.* = .{ .app = app, .gtkwindow = null, .title_bar = options.title_bar, .on_close = options.on_close, .width = options.width, .height = options.height, .theme = options.theme };
+        var page_options: ?PageOptions = null;
         switch (options.content) {
-            .page => return error.PagesUnsupported,
+            .page => |p| page_options = p,
             .view => |v| self.view = v,
         }
+        try app.startGtk(page_options != null);
         if (!app.gui) return self;
         const win = if (gtk.v4) gtk.v4api.gtk_window_new() else gtk.v3.gtk_window_new(0);
         self.gtkwindow = win;
         self.setTitle(options.title);
         g.gtk_window_set_default_size(win, @intFromFloat(options.width), @intFromFloat(options.height));
         g.gtk_window_set_resizable(win, @intFromBool(options.resizable));
+        if (!options.decorations) g.gtk_window_set_decorated(win, 0);
+        // Before it is realized: the visual can't change after.
+        if (options.transparent and !options.decorations) self.transparent = @import("transparent.zig").setup(win);
+        // Out of the taskbar and the pager. GTK 4 dropped both hints (on
+        // Wayland, a window can't ask), so there it is a no-op.
+        if (options.skip_taskbar and !gtk.v4) {
+            gtk.v3.gtk_window_set_skip_taskbar_hint(win, 1);
+            gtk.v3.gtk_window_set_skip_pager_hint(win, 1);
+        }
         gtk.connect(win, "destroy", @ptrCast(&onDestroy), self);
-        self.surface = try Surface.create(self, self.view.?, options.theme);
+        // The page fills the window. Without a WebKitGTK the app still opens,
+        // and says what is missing where the page would have been.
+        if (page_options) |p| {
+            if (Page.create(self, p)) |made| {
+                self.page = made;
+                if (gtk.v4) gtk.v4api.gtk_window_set_child(win, made.view) else gtk.v3.gtk_container_add(win, made.view);
+            } else |err| switch (err) {
+                error.WebKitMissing => {
+                    std.log.warn("nanoui: no WebKitGTK for this window: showing a notice instead", .{});
+                    self.view = @import("page_notice.zig").view();
+                },
+                else => return err,
+            }
+        }
+        if (self.view) |v| self.surface = try Surface.create(self, v, options.theme);
         if (options.x != null and options.y != null) self.setPosition(options.x.?, options.y.?) else self.center();
         if (options.always_on_top) self.setAlwaysOnTop(true);
+        if (options.opacity < 1) self.setOpacity(options.opacity);
         if (!app.flags.hidden and options.visible) self.show();
         return self;
     }
@@ -69,6 +100,8 @@ pub const Window = struct {
         if (self.closed) return;
         self.closed = true;
         if (self.on_close) |cb| cb.func(cb.ctx, self);
+        if (self.page) |p| p.destroy();
+        self.page = null;
         if (self.surface) |s| s.destroy();
         self.surface = null;
         const app = self.app;
@@ -146,6 +179,21 @@ pub const Window = struct {
         if (!gtk.v4) gtk.v3.gtk_window_set_keep_above(win, @intFromBool(on));
     }
 
+    /// The window's opacity, 0 to 1; it shows where a compositor runs.
+    pub fn setOpacity(self: *Window, opacity: f64) void {
+        const win = self.gtkwindow orelse return;
+        gtk.api.gtk_widget_set_opacity(win, std.math.clamp(opacity, 0, 1));
+    }
+
+    /// The screen's size in points. GTK 4 doesn't say (nor, there, where a
+    /// window is), so it is the window's own size.
+    pub fn monitorSize(self: *Window) [2]f64 {
+        if (!gtk.v4) if (gtk.v3.gdk_screen_get_default()) |s| {
+            return .{ @floatFromInt(gtk.v3.gdk_screen_get_width(s)), @floatFromInt(gtk.v3.gdk_screen_get_height(s)) };
+        };
+        return self.contentSize();
+    }
+
     pub fn isFullScreen(self: *Window) bool {
         return self.full_screen;
     }
@@ -161,6 +209,7 @@ pub const Window = struct {
         if (gtk.v4) gtk.v4api.gtk_widget_set_visible(win, 1) else gtk.v3.gtk_widget_show_all(win);
         gtk.api.gtk_window_present(win);
         if (self.surface) |s| gtk.api.gtk_widget_grab_focus(s.area);
+        if (self.page) |p| gtk.api.gtk_widget_grab_focus(p.view);
     }
 
     pub fn hide(self: *Window) void {
@@ -199,6 +248,45 @@ pub const Window = struct {
         const win = self.gtkwindow orelse return;
         gtk.api.gtk_window_set_title(win, &self.title);
     }
+
+    /// Points a page's window at `url`: a path from the app's assets, or an
+    /// absolute `http(s)://` one. No effect on a native-UI window.
+    pub fn setPageUrl(self: *Window, url: []const u8) void {
+        if (self.page) |p| p.load(url);
+    }
+
+    /// Shows entry `i` of `PageOptions.pages` (the bar's buttons).
+    pub fn showPage(self: *Window, i: usize) void {
+        const p = self.page orelse return;
+        if (i >= p.queue.options.pages.len) return;
+        p.load(p.queue.options.pages[i].url);
+    }
+
+    /// Queues an encoded message for the page and takes ownership of it.
+    /// Safe from any thread: the outbox is only touched on the main thread,
+    /// and a window closed in between is seen there.
+    pub fn sendOwned(self: *Window, msg: []u8) void {
+        const job = self.app.gpa.create(SendJob) catch return self.app.gpa.free(msg);
+        job.* = .{ .window = self, .app = self.app, .msg = msg };
+        App.onMain(job, SendJob.run);
+    }
+
+    const SendJob = struct {
+        window: *Window,
+        app: *App,
+        msg: []u8,
+
+        fn run(ctx: ?*anyopaque) callconv(.c) void {
+            const job: *SendJob = @ptrCast(@alignCast(ctx));
+            const gpa = job.app.gpa;
+            defer gpa.destroy(job);
+            defer gpa.free(job.msg);
+            for (job.app.windows.items) |live| if (live == job.window) {
+                if (live.page) |p| p.enqueue(job.msg, true);
+                return;
+            };
+        }
+    };
 
     /// What `--nanoui-snapshot` draws of this window, if it shows native UI.
     pub fn nativeView(self: *Window) ?NativeView {

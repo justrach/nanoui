@@ -125,6 +125,11 @@ pub fn a11yStep(c: *Context, id: u64, dir: i8) void {
     c.input.a11y_step = .{ .id = id, .dir = dir };
 }
 
+/// VoiceOver activated box `id`: the next frame's `interact` of it clicks.
+pub fn a11yPress(c: *Context, id: u64) void {
+    c.input.a11y_press = id;
+}
+
 pub fn addStageHole(c: *Context, r: types.Rect) void {
     if (c.stage_count < c.stage_rects.len) {
         c.stage_rects[c.stage_count] = r;
@@ -203,20 +208,27 @@ pub fn interact(c: *Context, index: u32, opts: struct { focusable: bool = false 
     const rect = c.rects.get(id);
     const top = c.hot == id;
     const hovered = top or std.mem.indexOfScalar(u64, c.hot_path.items, id) != null;
-    const right_press = top and c.input.pressed and (c.input.button == .right or (c.input.button == .left and c.input.ctrl));
-    const left_press = top and c.input.pressed and c.input.button == .left and !c.input.ctrl;
+    // Control-click asks for a context menu, as the Mac has it. Elsewhere
+    // Ctrl+left is a plain click with Ctrl held (how lists are
+    // multi-selected on Windows and Linux), so it stays a left click there.
+    const ctrl_secondary = @import("keys.zig").mac;
+    const right_press = top and c.input.pressed and (c.input.button == .right or (ctrl_secondary and c.input.button == .left and c.input.ctrl));
+    const left_press = top and c.input.pressed and c.input.button == .left and !(ctrl_secondary and c.input.ctrl);
     if (top and c.input.pressed) {
         c.active = id;
         if (opts.focusable and c.input.button != .right and !c.input.secondary) c.focus = id else if (left_press) c.focus = 0;
     }
     const released = c.input.released and c.active == id and top and !c.selection.moved;
-    const clicked = released and c.input.button == .left and !c.input.ctrl;
+    // VoiceOver's activation: a click on this box, not on what is under the pointer.
+    const a11y_press = id != 0 and c.input.a11y_press == id;
+    if (a11y_press and opts.focusable) c.focus = id;
+    const clicked = (released and c.input.button == .left and !(ctrl_secondary and c.input.ctrl)) or a11y_press;
     if (top and c.hand_cursor) c.cursor_hand = true;
     return .{
         .id = id,
         .rect = rect,
         .hovered = hovered,
-        .pressed = c.active == id and c.input.down and c.input.button == .left and !c.input.ctrl,
+        .pressed = c.active == id and c.input.down and c.input.button == .left and !(ctrl_secondary and c.input.ctrl),
         .clicked = clicked,
         .double_clicked = clicked and c.input.click_count >= 2,
         .right_pressed = right_press,
@@ -273,4 +285,11 @@ pub fn animate(c: *Context, id: u64, salt: u32, target: f32, speed: f32) f32 {
     a.value += (target - a.value) * k;
     if (@abs(target - a.value) < 0.002) a.value = target else c.animating = true;
     return a.value;
+}
+
+/// Asks the window to close once this frame is done, which is the only safe
+/// time to: closing during it frees the Context the view is building in.
+pub fn requestClose(c: *Context) void {
+    c.close_request = true;
+    c.changed = true;
 }

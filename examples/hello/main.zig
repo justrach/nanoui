@@ -102,7 +102,18 @@ pub fn main(init: std.process.Init) !void {
         .width = 720,
         .height = 560,
         .title_bar = .hidden,
-        .content = .{ .page = .{ .url = "/", .assets = &assets } },
+        .content = .{
+            .page = .{
+                .url = "/",
+                .assets = &assets,
+                // The bar in the page's corner: the app's own page, and a real
+                // page from the web in the same window.
+                .pages = &.{
+                    .{ .title = "Hello", .url = "/" },
+                    .{ .title = "WebView2 docs", .url = "https://learn.microsoft.com/en-us/microsoft-edge/webview2/" },
+                },
+            },
+        },
     });
     nanoui.App.after(1000, app, tick);
     try app.run();

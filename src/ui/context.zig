@@ -67,20 +67,10 @@ pub const Interaction = struct {
     /// (`Context.adjustable`): a splitter, a slider.
     a11y_step: i8 = 0,
 };
-pub const Hit = struct { id: u64, index: u32, rect: types.Rect, scroll: bool };
+pub const Hit = struct { id: u64, index: u32, rect: types.Rect, scroll: bool, wheel: bool = false };
 pub const Cursor = enum { arrow, hand, text, resize_left_right, resize_up_down, open_hand, closed_hand, not_allowed, crosshair };
-pub const A11yRole = enum { button, tab, text_field, splitter, slider, checkbox, switch_toggle, radio_button, group, static_text, list, row, image, menu_button, popover };
-pub const A11yItem = struct {
-    id: u64,
-    node_index: u32,
-    role: A11yRole,
-    label: []const u8,
-    value: []const u8 = "",
-    selected: bool = false,
-    enabled: bool = true,
-    /// Takes AXIncrement / AXDecrement (`Context.adjustable`).
-    adjustable: bool = false,
-};
+pub const A11yRole = @import("access.zig").Role;
+pub const A11yItem = @import("access.zig").Item;
 
 /// What the last frame cost, for profiling and the hill-climb benchmarks.
 pub const FrameStats = struct {
@@ -101,13 +91,17 @@ pub const Context = struct {
     arena: std.heap.ArenaAllocator,
     text: *text.TextSystem,
     theme: Theme = .light,
+    theme_chosen: ?Theme = null, // the view's own choice; null: the system's
     size: types.Size = .{},
     scale: f32 = 2,
-    /// What draws the frames: Metal, OpenGL (Linux, where there is a GPU),
-    /// or nanoui's own CPU renderer.
+    /// What draws the frames: Metal, OpenGL, or nanoui's own CPU renderer.
     renderer: []const u8 = if (@import("text.zig").portable) "CPU" else "Metal",
-    /// Seconds since the previous frame, for animations.
+    /// Wait for the display's refresh when presenting (Windows' Direct3D 11).
+    vsync: bool = true,
+    /// `dt` is capped and reset after an idle frame, for animations;
+    /// `frame_time` is the real gap, which a frame rate is read from.
     dt: f32 = 1.0 / 60.0,
+    frame_time: f32 = 1.0 / 60.0,
     /// Seconds since the first frame: the clock of animations a view drives itself.
     time: f64 = 0,
     frame: u64 = 0,
@@ -133,6 +127,8 @@ pub const Context = struct {
     motion_store: @import("motion/store.zig").Store = .{},
     /// The system asks for reduced motion: `ui.motion` moves at once.
     reduced_motion: bool = false,
+    /// Dynamic Type, contrast, announcements (`access.zig`).
+    access: @import("access.zig").Access = .{},
     /// Boxes of a higher layer met while painting, drawn after the page;
     /// and the one being drawn so.
     layers: std.ArrayList(u32) = .empty,
@@ -181,6 +177,7 @@ pub const Context = struct {
     building: bool = false,
     right_press: bool = false,
     drag_request: ?@import("context_hooks.zig").DragRequest = null,
+    close_request: bool = false,
     focusable_ids: std.ArrayList(u64) = .empty,
     last_focusable_ids: std.ArrayList(u64) = .empty,
     clipboard: Clipboard = .{},
@@ -284,7 +281,8 @@ pub const Context = struct {
     /// Memory that lives until the end of the frame, for formatted text.
     /// Scales every text by `z` (1 is as written): an app's zoom, ⌘= ⌘-.
     pub fn setZoom(c: *Context, z: f32) void {
-        c.text.setZoom(std.math.clamp(z, 0.5, 3));
+        c.access.zoom = z;
+        @import("access.zig").applyZoom(c);
     }
 
     pub fn alloc(c: *Context) std.mem.Allocator {
@@ -294,7 +292,6 @@ pub const Context = struct {
     pub fn print(c: *Context, comptime fmt: []const u8, args: anytype) []const u8 {
         return std.fmt.allocPrint(c.alloc(), fmt, args) catch "…";
     }
-
     /// Starts building a frame: the root fills the window.
     pub fn begin(c: *Context) void {
         if (c.frame == 0 and c.nodes.capacity == 0) c.warmMaps();
@@ -330,8 +327,8 @@ pub const Context = struct {
         c.stack.append(c.gpa, 0) catch @panic("OOM");
     }
 
-    /// A frame whose interactions changed state is built again: the edges
-    /// of the input (the press, the key) are consumed by the first build.
+    /// A frame whose interactions changed state is built again, the input's
+    /// edges spent. `close_request` is not an edge: a one-shot ask survives.
     pub fn rebuild(c: *Context) void {
         c.input.clearEdges();
         c.undo_op = .none;
@@ -339,7 +336,6 @@ pub const Context = struct {
         c.changed = false;
         c.begin();
     }
-
     pub fn finish(c: *Context) void {
         c.building = false;
         if (c.focus != 0 and std.mem.indexOfScalar(u64, c.focusable_ids.items, c.focus) == null) c.focus = 0;
@@ -476,6 +472,7 @@ pub const Context = struct {
     }
 
     pub const interact = hooks.interact;
+    pub const requestClose = hooks.requestClose;
 
     const hooks = @import("context_hooks.zig");
     const scroll_mod = @import("scroll.zig");
@@ -491,6 +488,7 @@ pub const Context = struct {
     pub const addA11y = hooks.addA11y;
     pub const adjustable = hooks.adjustable;
     pub const a11yStep = hooks.a11yStep;
+    pub const a11yPress = hooks.a11yPress;
     pub const shortcut = hooks.shortcut;
     pub const state = hooks.state;
     pub const animate = hooks.animate;
@@ -537,7 +535,7 @@ pub const Context = struct {
     pub fn pointerDown(c: *Context) void {
         c.input.down = true;
         c.input.pressed = true;
-        c.right_press = c.input.button == .right or (c.input.button == .left and c.input.ctrl);
+        c.right_press = c.input.button == .right or (@import("keys.zig").mac and c.input.button == .left and c.input.ctrl);
         if (scroll_mod.tryPressScrollbar(c)) return;
         if (c.hot == 0) c.focus = 0;
     }

@@ -16,6 +16,17 @@ pub const PageOptions = struct {
     assets: []const Asset = &.{},
     /// Web Inspector (right click > Inspect Element).
     inspectable: bool = true,
+    /// Pages the window can switch between, shown as a bar on every one of
+    /// them (the app's own and every remote page): `{ "Local", "/" }`,
+    /// `{ "Docs", "https://example.com/" }`. Empty: no bar.
+    pages: []const PageEntry = &.{},
+};
+
+/// One entry of `PageOptions.pages`.
+pub const PageEntry = struct {
+    title: []const u8,
+    /// A path from the app's assets, or an absolute `http(s)://` URL.
+    url: []const u8,
 };
 
 pub const Content = union(enum) {
@@ -60,6 +71,44 @@ pub fn Options(comptime Window: type) type {
         min_height: f64 = 150,
         resizable: bool = true,
         title_bar: TitleBar = .default,
+        /// Whether the window has a title bar and a resizable frame at all.
+        /// `false` is a borderless window: no title bar, no border and no
+        /// drag-to-resize — the application draws or moves it,
+        /// `ui.Context.window_drag` moves one. On Windows that is `WS_POPUP`
+        /// (no system shadow either); on macOS a borderless NSWindow that
+        /// still takes keys; on GTK an undecorated window.
+        ///
+        /// Independent of `title_bar`, which is about what the title bar looks
+        /// like when there is one.
+        decorations: bool = true,
+        /// Window opacity, 0 to 1. 1 is opaque and the normal path. macOS
+        /// and GTK set the window's alpha; on Windows, below 1 the window is
+        /// translucent, and that costs the GPU renderer there:
+        /// `SetLayeredWindowAttributes` has no effect on a DXGI flip-model
+        /// swap chain, so the frame is drawn by GDI while the
+        /// window is translucent and the GPU is picked up again at 1. One CPU
+        /// copy per frame while translucent is the price; see
+        /// `src/windows/surface_gpu.zig`.
+        ///
+        /// At 0 the window is invisible, which is a way to fade one out
+        /// (`setOpacity`) but not a way to hide it — use `show`/`hide`.
+        opacity: f64 = 1,
+        /// No background: only what the view draws shows, antialiased
+        /// against what is behind the window (a launcher's rounded panel,
+        /// with nothing square behind its corners). For a borderless window
+        /// (`decorations = false`); ignored on one with a frame. Windows:
+        /// per-pixel alpha (`UpdateLayeredWindow`, the CPU renderer), and
+        /// clicks on what isn't drawn fall through. Linux (GTK 3): an RGBA
+        /// window where a compositor runs; where none does, the window is
+        /// cut to what is more than half opaque. Elsewhere it changes nothing.
+        transparent: bool = false,
+        /// Keeps the window out of the taskbar and out of Alt-Tab
+        /// (`WS_EX_TOOLWINDOW` on Windows; the skip-taskbar and skip-pager
+        /// hints on GTK 3, which GTK 4 no longer has). The Mac lists apps,
+        /// not windows, so there the window leaves Command-` and the Window
+        /// menu. For a sidebar or a utility window that belongs to another
+        /// application.
+        skip_taskbar: bool = false,
         /// Native UI's colors, fixed; the system's light or dark when null.
         theme: ?ui.Theme = null,
         /// Where the window opens, in screen points from the primary screen's
@@ -74,6 +123,11 @@ pub fn Options(comptime Window: type) type {
         /// (`ui.Context.safe_area`); without it, the view is laid out
         /// inside the safe area. Elsewhere it changes nothing.
         full_bleed: bool = false,
+        /// iPad: a window of its own beside the app's, which the person can
+        /// move and close as any other (needs `ios.Options.multiple_windows`).
+        /// On a phone it covers the screen like any other window. Elsewhere
+        /// it changes nothing: every window has its own place.
+        own_scene: bool = false,
         /// Called as the window closes, before it is freed.
         on_close: ?Callback(Window) = null,
         /// Called after the window resized.

@@ -91,7 +91,7 @@ fn scrollerAt(s: *Surface, p: types.Point) ?u64 {
     var i = hits.len;
     while (i > 0) {
         i -= 1;
-        if (hits[i].scroll and hits[i].rect.contains(p)) return hits[i].id;
+        if (hits[i].scroll and hits[i].rect.contains(p)) return if (hits[i].wheel) null else hits[i].id;
     }
     return null;
 }

@@ -52,6 +52,8 @@ pub fn applyScroll(c: *Context, dy: f32) bool {
         i -= 1;
         const h = c.hits.items[i];
         if (h.scroll and h.rect.contains(c.input.mouse)) {
+            // A box that takes the wheel itself is over the one behind.
+            if (h.wheel) return false;
             const gop = c.scroll.getOrPut(c.gpa, h.id) catch return false;
             if (!gop.found_existing) gop.value_ptr.* = 0;
             if (!isHolding(c)) {
@@ -145,27 +147,38 @@ fn scrubTo(c: *Context, id: u64, g: ScrollbarGeom, thumb_top: f32) void {
 }
 
 pub fn tryPressScrollbar(c: *Context) bool {
-    if (c.input.button != .left or c.input.ctrl) return false;
+    if (c.input.button != .left or (@import("keys.zig").mac and c.input.ctrl)) return false;
     const m = c.input.mouse;
+    // The bar is drawn over the box's right edge and has no hit box of its own,
+    // so whatever is under the pointer there belongs to a row or to nothing:
+    // the pointer being on the track decides, not `hot`. Of the tracks under it
+    // the innermost wins, so a list inside a page scrolls itself, not the page.
+    //
+    // The exception is a control that reaches the edge: a button flush against
+    // the scroll box's right side is under the track, and the press is the
+    // button's. Without this the 10 points of track swallow it and the button
+    // never fires.
+    if (c.hot_index != none and c.hot_index < c.nodes.items.len and c.node(c.hot_index).interactive) return false;
+    var found: ?struct { id: u64, g: ScrollbarGeom } = null;
     var it = c.scrollbars.iterator();
     while (it.next()) |e| {
-        const id = e.key_ptr.*;
         const g = e.value_ptr.*;
-        if (c.hot != 0 and c.hot != id) continue;
         if (m.x >= g.track_x and m.x <= g.track_x + 10 and m.y >= g.track_y and m.y <= g.track_y + g.track_h) {
-            if (m.y >= g.thumb_y and m.y <= g.thumb_y + g.thumb_h) {
-                c.scrollbar_drag = .{ .id = id, .grab_dy = m.y - g.thumb_y };
-            } else {
-                const grab = g.thumb_h * 0.5;
-                c.scrollbar_drag = .{ .id = id, .grab_dy = grab };
-                scrubTo(c, id, g, m.y - grab);
-            }
-            c.hot = 0;
-            c.active = 0;
-            return true;
+            if (found == null or g.track_h < found.?.g.track_h) found = .{ .id = e.key_ptr.*, .g = g };
         }
     }
-    return false;
+    const f = found orelse return false;
+    if (m.y >= f.g.thumb_y and m.y <= f.g.thumb_y + f.g.thumb_h) {
+        c.scrollbar_drag = .{ .id = f.id, .grab_dy = m.y - f.g.thumb_y };
+    } else {
+        // A press on the track moves the thumb to the pointer, then drags.
+        const grab = f.g.thumb_h * 0.5;
+        c.scrollbar_drag = .{ .id = f.id, .grab_dy = grab };
+        scrubTo(c, f.id, f.g, m.y - grab);
+    }
+    c.hot = 0;
+    c.active = 0;
+    return true;
 }
 
 pub fn updateScrollbarDrag(c: *Context) void {
@@ -248,4 +261,32 @@ fn paintScrollbarX(c: *Context, out: *std.ArrayList(metal.Instance), n: ctx_mod.
         .radius = 2,
         .clip = metal.clip4(visible),
     }) catch {};
+}
+
+/// Scrolls the box that scrolls around the focused text field until its
+/// caret is above `bottom` (in view points: what iOS's keyboard leaves),
+/// as a UIScrollView does for its field. True when it scrolled: draw
+/// another frame.
+pub fn revealCaret(c: *Context, bottom: f32) bool {
+    const f = c.focused_text orelse return false;
+    const r = f.caret_rect;
+    const over = r.y + r.h + 12 - bottom;
+    if (r.h <= 0 or over <= 0.5) return false;
+    var i: u32 = none;
+    for (c.nodes.items, 0..) |n, k| if (n.id == f.id) {
+        i = @intCast(k);
+        break;
+    };
+    while (i != none) : (i = c.nodes.items[i].parent) {
+        const n = c.nodes.items[i];
+        if (!n.style.scroll) continue;
+        const max = c.scroll_max.get(n.id) orelse 0;
+        const s = c.scroll.getOrPut(c.gpa, n.id) catch return false;
+        if (!s.found_existing) s.value_ptr.* = 0;
+        const want = @min(max, s.value_ptr.* + over);
+        if (want <= s.value_ptr.* + 0.5) continue;
+        s.value_ptr.* = want;
+        return true;
+    }
+    return false;
 }

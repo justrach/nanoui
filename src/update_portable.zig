@@ -188,16 +188,29 @@ test "every part builds here" {
     _ = &Updater.checkNow;
 }
 
+/// A scratch path for the tests, made absolute: `swap` renames by absolute
+/// path, and a feed on disk is a `file://` URL.
+fn absTemp(io: std.Io, buf: []u8, name: []const u8) ![]const u8 {
+    var rel_buf: [256]u8 = undefined;
+    const rel = try @import("temp_path.zig").tempPath(&rel_buf, name);
+    const here = try std.process.currentPath(io, buf);
+    const rest = try std.fmt.bufPrint(buf[here..], "{s}{s}", .{ std.fs.path.sep_str, rel });
+    return buf[0 .. here + rest.len];
+}
+
 test "a staged program takes the running one's place, nothing left beside it" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     const cwd = std.Io.Dir.cwd();
-    const root = if (windows) "C:\\Windows\\Temp\\nanoui-test-swap" else "/tmp/nanoui-test-swap";
+    var root_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const root = try absTemp(io, &root_buf, "nanoui-test-swap");
     cwd.deleteTree(io, root) catch {};
     defer cwd.deleteTree(io, root) catch {};
     try cwd.createDirPath(io, root);
-    const exe = root ++ std.fs.path.sep_str ++ "app";
-    const staged = root ++ std.fs.path.sep_str ++ "staged";
+    var exe_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var staged_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const exe = try std.fmt.bufPrint(&exe_buf, "{s}{s}app", .{ root, std.fs.path.sep_str });
+    const staged = try std.fmt.bufPrint(&staged_buf, "{s}{s}staged", .{ root, std.fs.path.sep_str });
     try cwd.writeFile(io, .{ .sub_path = exe, .data = "old" });
     try cwd.writeFile(io, .{ .sub_path = staged, .data = "new" });
     try swap(gpa, io, staged, exe);
@@ -215,6 +228,12 @@ test "a staged program takes the running one's place, nothing left beside it" {
     try std.testing.expectEqual(@as(usize, if (windows) 1 else 0), aside);
 }
 
+/// A path under the tests' `root`, which is the system's temporary
+/// directory and so known only when they run.
+fn under(a: std.mem.Allocator, root: []const u8, comptime sub: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(a, "{s}" ++ sub, .{root});
+}
+
 test "an update from a feed: found, checked, unpacked, run, installed" {
     if (windows) return error.SkipZigTest; // the fake program is a shell script
     // Android's apps aren't programs that update themselves (`detect`).
@@ -222,7 +241,8 @@ test "an update from a feed: found, checked, unpacked, run, installed" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     const cwd = std.Io.Dir.cwd();
-    const root = "/tmp/nanoui-test-portable";
+    var root_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const root = try absTemp(io, &root_buf, "nanoui-test-portable");
     cwd.deleteTree(io, root) catch {};
     defer cwd.deleteTree(io, root) catch {};
     var arena_state: std.heap.ArenaAllocator = .init(gpa);
@@ -230,28 +250,28 @@ test "an update from a feed: found, checked, unpacked, run, installed" {
     const a = arena_state.allocator();
     // The installed program, 0.1.0, and a release of 0.2.0 in a feed.
     const script = "#!/bin/sh\necho \"app {s}\"\n";
-    try cwd.createDirPath(io, root ++ "/bin");
-    try cwd.writeFile(io, .{ .sub_path = root ++ "/bin/app", .data = try std.fmt.allocPrint(a, script, .{"0.1.0"}), .flags = .{ .permissions = .fromMode(0o755) } });
-    try cwd.createDirPath(io, root ++ "/pack/app-0.2.0-linux-x86_64");
-    try cwd.writeFile(io, .{ .sub_path = root ++ "/pack/app-0.2.0-linux-x86_64/app", .data = try std.fmt.allocPrint(a, script, .{"0.2.0"}), .flags = .{ .permissions = .fromMode(0o755) } });
-    try cwd.createDirPath(io, root ++ "/feed");
-    _ = try run(a, io, &.{ tar, "-czf", root ++ "/feed/app-linux.tar.gz", "-C", root ++ "/pack", "app-0.2.0-linux-x86_64" });
-    const archive = try cwd.readFileAlloc(io, root ++ "/feed/app-linux.tar.gz", a, .limited(1 << 20));
+    try cwd.createDirPath(io, try under(a, root, "/bin"));
+    try cwd.writeFile(io, .{ .sub_path = try under(a, root, "/bin/app"), .data = try std.fmt.allocPrint(a, script, .{"0.1.0"}), .flags = .{ .permissions = .fromMode(0o755) } });
+    try cwd.createDirPath(io, try under(a, root, "/pack/app-0.2.0-linux-x86_64"));
+    try cwd.writeFile(io, .{ .sub_path = try under(a, root, "/pack/app-0.2.0-linux-x86_64/app"), .data = try std.fmt.allocPrint(a, script, .{"0.2.0"}), .flags = .{ .permissions = .fromMode(0o755) } });
+    try cwd.createDirPath(io, try under(a, root, "/feed"));
+    _ = try run(a, io, &.{ tar, "-czf", try under(a, root, "/feed/app-linux.tar.gz"), "-C", try under(a, root, "/pack"), "app-0.2.0-linux-x86_64" });
+    const archive = try cwd.readFileAlloc(io, try under(a, root, "/feed/app-linux.tar.gz"), a, .limited(1 << 20));
     var digest: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(archive, &digest, .{});
-    try cwd.writeFile(io, .{ .sub_path = root ++ "/feed/manifest.json", .data = try std.fmt.allocPrint(a, "{{\"version\":\"0.2.0\",\"files\":{{\"app-linux.tar.gz\":{{\"sha256\":\"{s}\"}}}}}}", .{std.fmt.bytesToHex(digest, .lower)}) });
+    try cwd.writeFile(io, .{ .sub_path = try under(a, root, "/feed/manifest.json"), .data = try std.fmt.allocPrint(a, "{{\"version\":\"0.2.0\",\"files\":{{\"app-linux.tar.gz\":{{\"sha256\":\"{s}\"}}}}}}", .{std.fmt.bytesToHex(digest, .lower)}) });
 
-    var u: Updater = .{ .gpa = gpa, .io = io, .options = .{ .repo = "me/app", .asset = "app-linux.tar.gz", .name = "app", .version = "0.1.0" }, .feed = "file://" ++ root ++ "/feed", .bundle = root ++ "/bin/app", .current = "0.1.0", .cache = root ++ "/cache" };
+    var u: Updater = .{ .gpa = gpa, .io = io, .options = .{ .repo = "me/app", .asset = "app-linux.tar.gz", .name = "app", .version = "0.1.0" }, .feed = try std.fmt.allocPrint(a, "file://{s}/feed", .{root}), .bundle = try under(a, root, "/bin/app"), .current = "0.1.0", .cache = try under(a, root, "/cache") };
     try std.testing.expect(try fetch(&u, a));
     u.adopt();
     try std.testing.expectEqualStrings("0.2.0", u.version_buf[0..u.version_len]);
     try install(&u);
-    try std.testing.expectEqualStrings("app 0.2.0\n", try run(a, io, &.{ root ++ "/bin/app", "--version" }));
+    try std.testing.expectEqualStrings("app 0.2.0\n", try run(a, io, &.{ try under(a, root, "/bin/app"), "--version" }));
     // The cache keeps nothing of it; current now, there's nothing to fetch.
     u.current = "0.2.0";
     try std.testing.expect(!try fetch(&u, a));
     // A wrong sum is refused.
-    try cwd.writeFile(io, .{ .sub_path = root ++ "/feed/manifest.json", .data = "{\"version\":\"0.3.0\",\"files\":{\"app-linux.tar.gz\":{\"sha256\":\"0000000000000000000000000000000000000000000000000000000000000000\"}}}" });
+    try cwd.writeFile(io, .{ .sub_path = try under(a, root, "/feed/manifest.json"), .data = "{\"version\":\"0.3.0\",\"files\":{\"app-linux.tar.gz\":{\"sha256\":\"0000000000000000000000000000000000000000000000000000000000000000\"}}}" });
     try std.testing.expectError(error.ChecksumMismatch, fetch(&u, a));
 }
 
@@ -277,15 +297,16 @@ test "a newer release while one waits takes its place; the same one isn't fetche
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     const cwd = std.Io.Dir.cwd();
-    const root = "/tmp/nanoui-test-portable-newer";
+    var root_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const root = try absTemp(io, &root_buf, "nanoui-test-portable-newer");
     cwd.deleteTree(io, root) catch {};
     defer cwd.deleteTree(io, root) catch {};
     var arena_state: std.heap.ArenaAllocator = .init(gpa);
     defer arena_state.deinit();
     const a = arena_state.allocator();
-    try cwd.createDirPath(io, root ++ "/bin");
-    try cwd.writeFile(io, .{ .sub_path = root ++ "/bin/app", .data = "#!/bin/sh\necho \"app 0.1.0\"\n", .flags = .{ .permissions = .fromMode(0o755) } });
-    var u: Updater = .{ .gpa = gpa, .io = io, .options = .{ .repo = "me/app", .asset = "app-linux.tar.gz", .name = "app", .version = "0.1.0" }, .feed = "file://" ++ root ++ "/feed", .bundle = root ++ "/bin/app", .current = "0.1.0", .cache = root ++ "/cache" };
+    try cwd.createDirPath(io, try under(a, root, "/bin"));
+    try cwd.writeFile(io, .{ .sub_path = try under(a, root, "/bin/app"), .data = "#!/bin/sh\necho \"app 0.1.0\"\n", .flags = .{ .permissions = .fromMode(0o755) } });
+    var u: Updater = .{ .gpa = gpa, .io = io, .options = .{ .repo = "me/app", .asset = "app-linux.tar.gz", .name = "app", .version = "0.1.0" }, .feed = try std.fmt.allocPrint(a, "file://{s}/feed", .{root}), .bundle = try under(a, root, "/bin/app"), .current = "0.1.0", .cache = try under(a, root, "/cache") };
     // 0.2.0 comes and waits (the app isn't restarted).
     try makeRelease(a, io, root, "0.2.0");
     try std.testing.expect(try fetch(&u, a));
@@ -297,11 +318,11 @@ test "a newer release while one waits takes its place; the same one isn't fetche
     try std.testing.expectEqualStrings("0.2.0", u.ready().?); // until adopted, on the main thread
     u.adopt();
     try std.testing.expectEqualStrings("0.3.0", u.ready().?);
-    try std.testing.expectError(error.FileNotFound, cwd.access(io, root ++ "/cache/updates/0.2.0", .{}));
+    try std.testing.expectError(error.FileNotFound, cwd.access(io, try under(a, root, "/cache/updates/0.2.0"), .{}));
     // Still the latest: nothing fetched, and what waits stays.
     try std.testing.expect(!try fetch(&u, a));
-    try cwd.access(io, root ++ "/cache/updates/0.3.0", .{});
+    try cwd.access(io, try under(a, root, "/cache/updates/0.3.0"), .{});
     // Restarting installs the newest.
     try install(&u);
-    try std.testing.expectEqualStrings("app 0.3.0\n", try run(a, io, &.{ root ++ "/bin/app", "--version" }));
+    try std.testing.expectEqualStrings("app 0.3.0\n", try run(a, io, &.{ try under(a, root, "/bin/app"), "--version" }));
 }

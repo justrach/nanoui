@@ -101,3 +101,49 @@ pub const Menu = struct {
         if (it.click) |c| c.func(c.ctx, it);
     }
 };
+
+test "an accelerator matches its modifiers, and a disabled item matches nothing" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+    const m = try Menu.create(gpa, &.{
+        .{ .id = "copy", .label = "Copy", .accelerator = "CmdOrCtrl+C" },
+        .{ .id = "find", .label = "Find", .accelerator = "CmdOrCtrl+Shift+F" },
+        .{ .id = "quiet", .label = "Quiet", .accelerator = "F2", .disabled = true },
+        .{ .id = "alt", .label = "Alt", .accelerator = "Alt+Left" },
+    });
+    defer m.destroy();
+    // Ctrl+C, any shift; the shift variant is a different item.
+    try testing.expectEqualStrings("copy", m.match(.{ .key = 'c', .ctrl = true }).?.id);
+    try testing.expectEqualStrings("find", m.match(.{ .key = 'f', .ctrl = true, .shift = true }).?.id);
+    try testing.expect(m.match(.{ .key = 'f', .ctrl = true }) == null);
+    // Alt is its own modifier, and it is not Ctrl.
+    try testing.expectEqualStrings("alt", m.match(.{ .key = ui.Shortcut.left, .alt = true }).?.id);
+    try testing.expect(m.match(.{ .key = ui.Shortcut.left, .ctrl = true }) == null);
+    // A disabled item never matches, and neither does an unbound key.
+    try testing.expect(m.match(.{ .key = @as(u21, @intCast('2')) }) == null);
+}
+
+test "activating a checkbox toggles it and a radio sets it, then clicks" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+    const Clicked = struct { items: u32 = 0 };
+    const M = struct {
+        fn click(ctx: *anyopaque, _: *Item) void {
+            const c: *Clicked = @ptrCast(@alignCast(ctx));
+            c.items += 1;
+        }
+    };
+    var clicked: Clicked = .{};
+    const m = try Menu.create(gpa, &.{
+        .{ .id = "box", .label = "Box", .kind = .checkbox, .click = .{ .ctx = &clicked, .func = M.click } },
+        .{ .id = "one", .label = "One", .kind = .radio, .click = .{ .ctx = &clicked, .func = M.click } },
+    });
+    defer m.destroy();
+    Menu.activate(m.item("box").?);
+    try testing.expect(m.item("box").?.checked);
+    Menu.activate(m.item("box").?);
+    try testing.expect(!m.item("box").?.checked);
+    Menu.activate(m.item("one").?);
+    try testing.expect(m.item("one").?.checked);
+    try testing.expectEqual(@as(u32, 3), clicked.items);
+}

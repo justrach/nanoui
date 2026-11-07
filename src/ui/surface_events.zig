@@ -269,14 +269,16 @@ fn keyDown(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) void 
     const flags = objc.msg(objc.NSUInteger, event, "modifierFlags", .{});
     const in = &s.ctx.input;
     setMods(in, flags);
-    // Key combinations go to the view first, which may take them.
+    // Key combinations go to the view first, which may take them; while an
+    // input method composes, only ⌘'s do (↓, Space, Esc, Tab are its).
+    const composing = textinput.composing(s);
     const ign = objc.fromNSString(objc.msg(?objc.Object, event, "charactersIgnoringModifiers", .{}));
     if (ign.len > 0) {
         const cp = std.unicode.utf8Decode(ign[0..cf.seqLen(ign[0])]) catch 0;
         const key = input.Shortcut.keyOf(cp);
         const special = key == 0xF700 or key == 0xF701 or key == '\t' or key == 0x1b;
         // Option too: a text field with Emacs's keys takes ⌥B, ⌥F, ⌥D.
-        if (in.cmd or in.ctrl or in.alt or special) {
+        if (in.cmd or (!composing and (in.ctrl or in.alt or special))) {
             s.ctx.shortcut_taken = false;
             in.shortcut = .{ .key = key, .cmd = in.cmd, .ctrl = in.ctrl, .alt = in.alt, .shift = in.shift };
             s.frame();
@@ -291,7 +293,7 @@ fn keyDown(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) void 
             };
         }
     }
-    if (code == 48 and !in.cmd and !in.ctrl and !in.alt and !s.ctx.focused_multiline and s.ctx.focusable_ids.items.len > 0) {
+    if (code == 48 and !composing and !in.cmd and !in.ctrl and !in.alt and !s.ctx.focused_multiline and s.ctx.focusable_ids.items.len > 0) {
         s.ctx.focusCycle(in.shift);
         s.frame();
         return;
@@ -445,6 +447,7 @@ fn performDragOperation(obj: objc.Object, _: objc.SEL, info: objc.Object) callco
 fn metalDisplayLinkNeedsUpdate(obj: objc.Object, _: objc.SEL, _: objc.Object, update: objc.Object) callconv(.c) void {
     const s = surfaceOf(obj) orelse return;
     if (s.dead or s.in_frame) return;
+    s.wake.last_tick = cf.CACurrentMediaTime();
     const target = objc.msg(f64, update, "targetPresentationTimestamp", .{});
     const frame_in_due = s.ctx.frame_in != null and target >= s.frame_in_due - 0.001;
     if (!s.full_pending and !frame_in_due and !s.ctx.animating and !s.in_live_resize and !s.geometry_changed and !s.retained_ready and !s.pending_sync and s.ctx.time_driven == .none) {

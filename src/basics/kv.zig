@@ -1,8 +1,9 @@
 //! Small values kept between launches (a starred stop, a last tab): string
 //! keys to string values. On iOS and macOS they are the app's
-//! NSUserDefaults; elsewhere, for now, they live in memory for the run and
-//! are gone at the next launch. Encode anything else (JSON, numbers) as a
-//! string. `memory()` is a store of its own in memory everywhere: tests.
+//! NSUserDefaults; on Linux and Windows a JSON file in the app's data
+//! directory (kv_file.zig, attached by `App.create`); without one, memory
+//! for the run. Encode anything else (JSON, numbers) as a string.
+//! `memory()` is a store of its own in memory everywhere: tests.
 //!
 //!     const kv = nanoui.kv.standard();
 //!     try kv.set("starred", "83139,80141");
@@ -28,7 +29,7 @@ pub const Store = struct {
 
     pub fn set(s: Store, key: []const u8, value: []const u8) !void {
         if (s.mem) |m| return m.put(key, value);
-        if (!apple) return fallback().set(key, value);
+        if (!apple) return if (file) |*f| f.set(key, value) else fallback().set(key, value);
         const pool = objc.Pool.push();
         defer pool.pop();
         objc.msg(void, defaults(), "setObject:forKey:", .{ objc.nsString(value), objc.nsString(key) });
@@ -36,7 +37,7 @@ pub const Store = struct {
 
     pub fn remove(s: Store, key: []const u8) void {
         if (s.mem) |m| return m.drop(key);
-        if (!apple) return fallback().remove(key);
+        if (!apple) return if (file) |*f| f.remove(key) else fallback().remove(key);
         const pool = objc.Pool.push();
         defer pool.pop();
         objc.msg(void, defaults(), "removeObjectForKey:", .{objc.nsString(key)});
@@ -66,7 +67,7 @@ pub const Memory = struct {
         return .{ .mem = m };
     }
 
-    fn put(m: *Memory, key: []const u8, value: []const u8) !void {
+    pub fn put(m: *Memory, key: []const u8, value: []const u8) !void {
         const v = try m.gpa.dupe(u8, value);
         errdefer m.gpa.free(v);
         const gop = try m.map.getOrPut(m.gpa, key);
@@ -77,7 +78,7 @@ pub const Memory = struct {
         gop.value_ptr.* = v;
     }
 
-    fn drop(m: *Memory, key: []const u8) void {
+    pub fn drop(m: *Memory, key: []const u8) void {
         const kv = m.map.fetchRemove(key) orelse return;
         m.gpa.free(kv.key);
         m.gpa.free(kv.value);
@@ -94,9 +95,30 @@ pub const Memory = struct {
 };
 
 var process_store: ?Memory = null;
+var file: ?@import("kv_file.zig").File = null;
 
-/// Where `standard` keeps values without NSUserDefaults: memory, for the run.
+/// Keeps `standard`'s values in `<dir>/kv.json` from now on (Linux and
+/// Windows; their `App.create` calls it with the app's data directory).
+/// What was set before in memory is carried over.
+pub fn attach(io: std.Io, dir: []const u8) void {
+    if (apple or file != null) return;
+    var f = @import("kv_file.zig").File.open(std.heap.page_allocator, io, dir) catch |e| {
+        std.log.info("nanoui: values kept in memory only: {t}", .{e});
+        return;
+    };
+    if (process_store) |*m| {
+        var it = m.map.iterator();
+        while (it.next()) |e| f.set(e.key_ptr.*, e.value_ptr.*) catch {};
+        m.deinit();
+        process_store = null;
+    }
+    file = f;
+}
+
+/// Where `standard` keeps values without NSUserDefaults or a file: memory,
+/// for the run.
 fn fallback() Store {
+    if (file) |*f| return f.mem.store();
     if (process_store == null) process_store = .{ .gpa = std.heap.page_allocator };
     return process_store.?.store();
 }

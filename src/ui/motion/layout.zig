@@ -18,7 +18,10 @@ pub fn shift(c: *Context, id: u64, rect: types.Rect) [2]f32 {
     const moved: [2]f32 = .{ was[0] - rect.x, was[1] - rect.y };
     var out: [2]f32 = undefined;
     for (&s.layout, 0..) |*ch, i| {
-        if (@abs(moved[i]) > 0.01) {
+        if (tr == .instant) {
+            // Settle an existing glide even when its destination hasn't moved.
+            ch.jump(0);
+        } else if (@abs(moved[i]) > 0.01) {
             // From where it shows now, plus how far the layout moved it.
             ch.sample(c.time);
             const v = ch.velocity;

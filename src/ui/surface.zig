@@ -54,6 +54,7 @@ pub const Surface = struct {
     full_pending: bool = false,
     retained_ready: bool = false,
     frame_in_due: f64 = 0,
+    wake: @import("surface_wake.zig").Wake = .{},
     pending_sync: bool = false,
     /// A frame was wanted while the window was hidden: run it once visible.
     pending: bool = false,
@@ -76,7 +77,7 @@ pub const Surface = struct {
     after_frame_ctx: ?*anyopaque = null,
     after_frame: ?*const fn (ctx: ?*anyopaque, s: *Surface) bool = null,
     keys_released: ?KeysReleased = null,
-    a11y_cache: std.AutoHashMapUnmanaged(u64, objc.Object) = .empty,
+    a11y_cache: a11y.State = .{},
     /// Behind a stage (`attachBackdrop`): presents in a transaction when
     /// native views or geometry move.
     hosted: bool = false,
@@ -118,6 +119,7 @@ pub const Surface = struct {
             // Before anything can run a frame: setContentView: resizes the view.
             .start_time = cf.CACurrentMediaTime(),
         };
+        if (text.portable and !window.app.flags.hidden) self.text.enablePersistence(window.app.options.name);
         self.ctx = .init(gpa, &self.text);
         // Pictures go straight to the GPU before any view callback can run a frame.
         self.text.images.sink = .{ .ctx = &self.renderer, .upload = @import("metal.zig").Renderer.uploadImage };
@@ -154,9 +156,7 @@ pub const Surface = struct {
             const ws = objc.msg(objc.Object, objc.class("NSWorkspace"), "sharedWorkspace", .{});
             self.reduce_motion = objc.msg(objc.BOOL, ws, "accessibilityDisplayShouldReduceMotion", .{});
             const center = objc.msg(objc.Object, ws, "notificationCenter", .{});
-            objc.msg(void, center, "addObserver:selector:name:object:", .{
-                nsview, objc.sel("accessibilityChanged:"), objc.nsString("NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification"), @as(?objc.Object, null),
-            });
+            objc.msg(void, center, "addObserver:selector:name:object:", .{ nsview, objc.sel("accessibilityChanged:"), objc.nsString("NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification"), @as(?objc.Object, null) });
         }
         self.refreshAppearance();
         self.is_visible = objc.msg(objc.BOOL, window.nswindow, "isVisible", .{}) and (objc.msg(objc.NSUInteger, window.nswindow, "occlusionState", .{}) & 2 != 0);
@@ -168,7 +168,7 @@ pub const Surface = struct {
         self.dead = true;
         if (!self.in_frame) self.finishDestroy();
     }
-    fn finishDestroy(self: *Surface) void {
+    pub fn finishDestroy(self: *Surface) void {
         if (!self.torn_down) {
             self.torn_down = true;
             objc.setZig(self.nsview, null);
@@ -194,7 +194,7 @@ pub const Surface = struct {
             self.pacing_log.close();
             if (self.frame_log) |*fl| fl.deinit();
         }
-        if (!self.tick_scheduled) self.gpa.destroy(self);
+        if (!self.tick_scheduled and self.wake.pending == 0) self.gpa.destroy(self);
     }
 
     fn finishFrame(self: *Surface) void {
@@ -298,15 +298,15 @@ pub const Surface = struct {
         self.last_frame_time = now;
         self.frame_kind = kind;
         self.ctx.transparent_root = self.transparent;
-        c.reduce_motion = self.reduce_motion;
-        c.reduced_motion = self.reduce_motion;
+        a11y.beforeFrame(self);
         c.window_focused = if (vis) self.window.isFocused() else true;
         self.pacing_log.note(now);
         // What scrolling gathered since the last frame, applied at once.
         const dy = self.scroll.take();
         if (dy != 0 and !c.applyScroll(dy) and c.wants_wheel) c.input.scroll = .{ .y = dy };
-        const r = frame_mod.run(c, self.view, &self.text, &self.instances, self.size, self.scale, self.theme(), dt, now - self.start_time);
+        const r = frame_mod.run(c, self.view, &self.text, &self.instances, self.size, self.scale, a11y.themed(self, self.theme()), dt, now - self.start_time);
         if (self.dead) return;
+        a11y.afterFrame(self);
         @import("../play.zig").paint(self.gpa, &self.instances);
         self.frame_in_due = if (c.frame_in) |fi| now + @as(f64, fi) else 0;
         const t_af0 = if (self.frame_log != null) cf.CACurrentMediaTime() else 0;
@@ -364,9 +364,8 @@ pub const Surface = struct {
             if (more) {
                 self.setRate(null);
                 self.setPaced(true);
-            } else if (c.frame_in) |fi| {
-                self.setRate(fi);
-                self.setPaced(true);
+            } else if (c.frame_in != null) {
+                @import("surface_wake.zig").at(self, self.frame_in_due); // not a slowed link: see there
             } else if (c.time_driven != .none) {
                 self.setRate(if (c.time_driven == .fast) null else 1.0 / 24.0);
                 self.setPaced(true);
@@ -446,6 +445,7 @@ pub const Surface = struct {
             presented = self.renderer.drawLogged(self.instances.items, self.atlasTexture(), self.size, clear, null, 0).presented;
         }
         if (presented) self.last_present_target = present_at;
+        if (presented) @import("surface_wake.zig").presented(self);
         return presented;
     }
 
@@ -474,7 +474,7 @@ pub const Surface = struct {
 
     /// The display link's pace: the display's (null), or one frame every
     /// `seconds`.
-    fn setRate(self: *Surface, seconds: ?f32) void {
+    pub fn setRate(self: *Surface, seconds: ?f32) void {
         const link = self.display_link orelse return;
         const fps: f32 = if (seconds) |s| (if (s < 0.009) 0 else std.math.clamp(1 / @max(s, 0.001), 1, 60)) else 0;
         if (fps == self.link_fps) return;
@@ -499,12 +499,11 @@ pub const Surface = struct {
         return self.is_visible;
     }
 
-    fn setPaced(self: *Surface, on: bool) void {
+    pub fn setPaced(self: *Surface, on: bool) void {
+        if (on) @import("surface_wake.zig").watch(self);
         if (self.paced == on) return;
         self.paced = on;
-        if (!on) if (self.frame_log) |*fl| {
-            fl.last_t = 0;
-        };
+        if (!on and self.frame_log != null) self.frame_log.?.last_t = 0;
         if (self.display_link) |link| objc.msg(void, link, "setPaused:", .{!on});
     }
 

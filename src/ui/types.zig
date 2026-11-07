@@ -191,6 +191,9 @@ pub const Style = struct {
     glass: ?Glass = null,
     /// Children are clipped to the box and scroll vertically.
     scroll: bool = false,
+    /// The box reads the wheel itself (`Context.wants_wheel`): a scrolling
+    /// box behind it, under an overlay, doesn't take it instead.
+    wheel: bool = false,
     /// A scrolling box's bar: always there while there's more to see, or
     /// an overlay that shows while it scrolls and fades away after.
     scrollbar: Scrollbar = .always,

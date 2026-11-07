@@ -115,6 +115,12 @@ pub const Window = struct {
     pub fn setMinSize(_: *Window, _: f64, _: f64) void {}
     pub fn setResizable(_: *Window, _: bool) void {}
     pub fn setAlwaysOnTop(_: *Window, _: bool) void {}
+    pub fn setOpacity(_: *Window, _: f64) void {}
+
+    /// The window is the screen.
+    pub fn monitorSize(self: *Window) [2]f64 {
+        return self.contentSize();
+    }
 
     pub fn isFullScreen(_: *Window) bool {
         return true;

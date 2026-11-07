@@ -19,6 +19,10 @@ const ui = @import("../ui/ui.zig");
 const Window = @import("window.zig").Window;
 const touch = @import("touch.zig");
 const keys = @import("keys.zig");
+const selecting = @import("selecting.zig");
+const handles = @import("../ui/handles.zig");
+const ios_access = @import("access.zig");
+const access = @import("../ui/access.zig");
 const fold = @import("fold.zig");
 const map = @import("map.zig");
 
@@ -54,7 +58,10 @@ pub const Surface = struct {
     insets: types.Edges = .{},
     keyboard: f32 = 0,
     touch: touch.State = .{},
+    selecting: selecting.State = .{},
     keys: keys.State,
+    /// VoiceOver's elements, and the system's text size (`access.zig`).
+    access: ios_access.State,
     /// Handlers of UIKit's events running now: a surface destroyed by one
     /// (a tap that closes its window) is freed when the last returns.
     depth: u32 = 0,
@@ -90,7 +97,7 @@ pub const Surface = struct {
         const view_class = objc.defineClass(.{
             .name = "NanoUIView",
             .superclass = "UIView",
-            .methods = &(view_methods ++ touch.methods ++ keys.view_methods ++ map.view_methods),
+            .methods = &(view_methods ++ touch.methods ++ keys.view_methods ++ ios_access.view_methods ++ map.view_methods ++ selecting.view_methods),
         });
         const uiview = objc.msg(objc.Object, objc.msg(objc.Object, view_class, "alloc", .{}), "initWithFrame:", .{objc.CGRect{}});
         self.* = .{
@@ -105,8 +112,10 @@ pub const Surface = struct {
             .full_bleed = full_bleed,
             .start_time = cf.CACurrentMediaTime(),
             .keys = .init(gpa),
+            .access = .init(gpa),
         };
         self.ctx = .init(gpa, &self.text);
+        self.ctx.selection.touch = true;
         objc.setZig(uiview, self);
         objc.msg(void, uiview, "setMultipleTouchEnabled:", .{objc.YES});
         const layer = objc.msg(objc.Object, uiview, "layer", .{});
@@ -149,6 +158,8 @@ pub const Surface = struct {
         objc.release(self.uiview);
         self.instances.deinit(self.gpa);
         self.keys.deinit(self.gpa);
+        self.selecting.deinit();
+        self.access.deinit(self.gpa);
         self.ctx.deinit();
         self.text.deinit();
         self.renderer.deinit();
@@ -238,9 +249,11 @@ pub const Surface = struct {
         const dt: f32 = if (self.last_frame_time > 0) @floatCast(@min(now - self.last_frame_time, 0.1)) else 1.0 / 60.0;
         self.last_frame_time = now;
         c.reduced_motion = UIAccessibilityIsReduceMotionEnabled();
+        ios_access.beforeFrame(self);
         c.safe_area = self.safeArea();
         const root: ui.View = if (self.full_bleed) self.view else .init(self, insideSafeArea);
-        const r = frame_mod.run(c, root, &self.text, &self.instances, self.size, self.scale, self.theme(), dt, now - self.start_time);
+        const r = frame_mod.run(c, root, &self.text, &self.instances, self.size, self.scale, access.themed(c, self.theme()), dt, now - self.start_time);
+        handles.paint(self.gpa, &self.instances, c);
         @import("../play.zig").paint(self.gpa, &self.instances);
         // Native views (maps) go where their holes are.
         map.sync(self);
@@ -259,15 +272,17 @@ pub const Surface = struct {
         // CAMetalDisplayLink's): here, the layer's next one.
         self.renderer.given_drawable = objc.msg(?objc.Object, self.renderer.layer, "nextDrawable", .{});
         self.renderer.draw(self.instances.items, self.text.texture(), self.size, c.theme.background);
+        ios_access.afterFrame(self);
         pool.pop();
         self.in_frame = false;
         // No hover on a touch screen: what changed under a finger already drew.
-        const more = c.animating or r.hot_changed or self.touch.flinging() or self.foldSettling();
+        const more = c.animating or r.hot_changed or self.touch.flinging() or self.keys.repeating() or self.foldSettling();
         self.setRate(if (more or self.pending) null else c.frame_in);
         self.setPaced(more or c.frame_in != null or self.pending);
         if (!c.animating) self.last_frame_time = 0;
         // After the pace: the keyboard coming or going asks for a frame.
         keys.syncFocus(self);
+        selecting.afterFrame(self);
     }
 
     /// The app's view inside the safe area; the view sees none left.
@@ -307,6 +322,8 @@ pub const Surface = struct {
     pub fn activeChanged(self: *Surface, on: bool) void {
         if (!on) {
             self.touch.stop();
+            keys.stopRepeat(&self.keys);
+            selecting.cancelled(self);
             // What moved goes on moving when the app comes back.
             self.pending = true;
             return self.setPaced(false);
@@ -365,5 +382,6 @@ fn displayLinkFired(obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) 
     const s = Surface.enter(obj) orelse return;
     defer s.leave();
     touch.fling(s);
+    if (!s.dead) keys.repeatStep(s);
     if (!s.dead) s.frame();
 }
