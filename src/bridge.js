@@ -3,7 +3,8 @@
 // replies and events come back batched through __nanoui.receive([...]).
 (() => {
   if (window.nanoui) return;
-  // The same page on each webview: WKWebView on macOS, WebView2 on Windows.
+  // The same page on each webview: WKWebView on macOS, WebView2 on Windows,
+  // WebKitGTK on Linux, whose handlers are WKWebView's.
   // WebView2's `postMessage` takes the object and delivers it as JSON text to
   // the host (`get_WebMessageAsJson`), so the JSON goes out as an object.
   const webview2 = window.chrome && window.chrome.webview;
@@ -73,7 +74,7 @@
 
   Object.defineProperty(window, "__nanoui", { value: Object.freeze({ receive }) });
   Object.defineProperty(window, "nanoui", {
-    value: Object.freeze({ call, on, once, log, window: win, platform: "macos", version: "0.1.0" }),
+    value: Object.freeze({ call, on, once, log, window: win, platform: webview2 ? "windows" : navigator.userAgent.includes("Linux") ? "linux" : "macos", version: "0.1.0" }),
   });
 
   const ready = () => post({ t: "dom-ready" });

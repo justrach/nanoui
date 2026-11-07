@@ -2,7 +2,8 @@
 //! bridge injected at document start, assets served from one origin, and
 //! the outbox of messages batched into one evaluation per main-loop turn.
 //! Each platform's webview (`page_webkit.zig` for WKWebView,
-//! `page_webview2.zig` for Windows') supplies the four things that differ:
+//! `page_webkitgtk.zig` for Linux's, `page_webview2.zig` for Windows')
+//! supplies the four things that differ:
 //! making the view, loading a URL, running JavaScript, and serving a path.
 const std = @import("std");
 const window_types = @import("window_types.zig");
@@ -13,10 +14,10 @@ pub const bridge_js = @embedFile("bridge.js");
 /// Events wait for dom-ready so listeners exist; bounded per page.
 pub const max_held = 1024;
 
-/// Where a page's relative URLs resolve, per platform: WKWebView's custom
-/// scheme on macOS, an `https` origin on Windows (Chromium needs a scheme
-/// it knows; WebView2 intercepts every request to this one).
-pub const origin = if (@import("builtin").os.tag == .macos) "nanoui://localhost" else "https://nanoui.local";
+/// Where a page's relative URLs resolve, per platform: a custom scheme in
+/// WebKit (macOS, Linux), an `https` origin on Windows (Chromium needs a
+/// scheme it knows; WebView2 intercepts every request to this one).
+pub const origin = if (@import("builtin").os.tag == .windows) "https://nanoui.local" else "nanoui://localhost";
 
 /// A file served to pages: what `serve` answers with.
 pub const Served = struct {
@@ -105,6 +106,27 @@ pub fn Queue(comptime Window: type) type {
             }
             self.held.clearRetainingCapacity();
             if (self.window.app.flags.eval) |js| self.eval(js);
+        }
+
+        /// The bar of the app's pages, in the document that just got ready:
+        /// every document gets it, the app's own and the web's alike.
+        pub fn sendPageBar(self: *Self) void {
+            const entries = self.options.pages;
+            if (entries.len == 0) return;
+            var aw: std.Io.Writer.Allocating = .init(self.gpa);
+            defer aw.deinit();
+            const wr = &aw.writer;
+            wr.writeAll("window.__nanoui_setPages&&window.__nanoui_setPages([") catch return;
+            for (entries, 0..) |e, i| {
+                if (i > 0) wr.writeByte(',') catch return;
+                wr.print("{{\"id\":{d},\"title\":", .{i}) catch return;
+                std.json.Stringify.encodeJsonString(e.title, .{}, wr) catch return;
+                wr.writeAll(",\"current\":") catch return;
+                wr.writeAll(if (std.mem.eql(u8, e.url, self.current_url)) "true" else "false") catch return;
+                wr.writeByte('}') catch return;
+            }
+            wr.writeAll("])") catch return;
+            self.eval(aw.written());
         }
 
         /// Runs `js` now, through the platform's view.
