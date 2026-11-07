@@ -53,6 +53,22 @@ fn env(name: [*:0]const u8) ?[]const u8 {
     return std.mem.span(v);
 }
 
+extern "kernel32" fn ExpandEnvironmentStringsW(src: [*:0]const u16, dst: [*]u16, size: u32) callconv(.winapi) u32;
+
+/// The current user's own fonts on Windows, `%LOCALAPPDATA%\Microsoft\Windows\Fonts`,
+/// in `buf`; null where there is no such folder to name.
+pub fn userFontDir(buf: []u8) ?[]const u8 {
+    if (builtin.os.tag != .windows) return null;
+    // A code unit is at most three bytes of WTF-8: no more than `buf` takes.
+    var wide: [341]u16 = undefined;
+    const room: u32 = @intCast(@min(wide.len, buf.len / 3));
+    const n = ExpandEnvironmentStringsW(std.unicode.utf8ToUtf16LeStringLiteral("%LOCALAPPDATA%\\Microsoft\\Windows\\Fonts"), &wide, room);
+    // The count includes the terminator; a variable not set stays unexpanded.
+    if (n < 2 or n > room or wide[0] == '%') return null;
+    const dir = buf[0..std.unicode.wtf16LeToWtf8(buf, wide[0 .. n - 1])];
+    return if (std.fs.path.isAbsolute(dir)) dir else null;
+}
+
 pub const Db = struct {
     gpa: std.mem.Allocator,
     io: std.Io,
@@ -227,6 +243,8 @@ pub const Db = struct {
                 db.scanDir("C:\\Windows\\Fonts");
                 // Under Wine, the Linux system's fonts are on drive Z:.
                 if (db.faces.items.len < 8) db.scanDir("Z:\\usr\\share\\fonts");
+                // Where Windows installs a font unless asked to for all users.
+                if (userFontDir(&buf)) |dir| db.scanDir(dir);
             },
             .macos => {
                 for ([_][]const u8{ "/System/Library/Fonts", "/Library/Fonts" }) |d| db.scanDir(d);
@@ -281,8 +299,9 @@ pub const Db = struct {
 
     pub fn scanDir(db: *Db, path: []const u8) void {
         db.recordDir(path);
-        var dir = std.Io.Dir.cwd().openDir(db.io, path, .{ .iterate = true }) catch {
-            db.cache_broken = true;
+        var dir = std.Io.Dir.cwd().openDir(db.io, path, .{ .iterate = true }) catch |err| {
+            // A folder that isn't there is recorded as absent: the index holds.
+            if (err != error.FileNotFound) db.cache_broken = true;
             return;
         };
         defer dir.close(db.io);

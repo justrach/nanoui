@@ -296,6 +296,35 @@ test "an unsupported cmap does not invalidate other warm font faces" {
     }
 }
 
+test "Windows' per-user font folder is named from LOCALAPPDATA" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var buf: [1024]u8 = undefined;
+    const dir = fontdb.userFontDir(&buf) orelse return error.SkipZigTest;
+    try std.testing.expect(std.fs.path.isAbsolute(dir));
+    try std.testing.expect(std.mem.endsWith(u8, dir, "\\Microsoft\\Windows\\Fonts"));
+}
+
+test "a font folder that isn't there leaves the font index written and then hit" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var root_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = root_buf[0..try tmp.dir.realPath(std.testing.io, &root_buf)];
+    // As a per-user font folder is until the user installs a font.
+    const missing = try std.fs.path.join(gpa, &.{ root, "no-fonts-yet" });
+    defer gpa.free(missing);
+    const cache_path = try std.fs.path.join(gpa, &.{ root, "font-index-v2.bin" });
+    defer gpa.free(cache_path);
+    for ([_]@import("fontindex.zig").State{ .written, .hit }) |expected| {
+        var db = fontdb.Db.init(gpa, std.testing.io);
+        defer db.deinit();
+        db.fonts_dir = missing;
+        db.cache_path = cache_path;
+        db.scan();
+        try std.testing.expectEqual(expected, db.cache.state);
+    }
+}
+
 const CreateFileW = if (builtin.os.tag == .windows) struct {
     pub extern "kernel32" fn CreateFileW(
         path: [*:0]const u16,
