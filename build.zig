@@ -204,6 +204,29 @@ pub fn build(b: *std.Build) void {
         tools_step.dependOn(&b.addRunArtifact(t).step);
     }
 
+    const font_bench = b.addExecutable(.{
+        .name = "font-bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/font_bench.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "build_options", .module = options.createModule() }},
+        }),
+    });
+    if (os == .windows) {
+        font_bench.root_module.linkSystemLibrary("dwrite", .{});
+        font_bench.root_module.linkSystemLibrary("psapi", .{});
+    } else if (os == .macos) {
+        for (frameworks) |f| font_bench.root_module.linkFramework(f, .{});
+        font_bench.root_module.linkSystemLibrary("objc", .{});
+    } else if (os == .ios) {
+        for (ios_frameworks) |f| font_bench.root_module.linkFramework(f, .{});
+        font_bench.root_module.linkSystemLibrary("objc", .{});
+    }
+    const run_font_bench = b.addRunArtifact(font_bench);
+    run_font_bench.addPassthruArgs();
+    b.step("font-bench", "Measure font scanning and private memory headlessly").dependOn(&run_font_bench.step);
+
     const lines = b.addExecutable(.{
         .name = "lines",
         .root_module = b.createModule(.{

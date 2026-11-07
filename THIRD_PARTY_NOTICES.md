@@ -84,6 +84,17 @@ repositories with their own licenses and notices. Both use CodeGraff's
 colors and run graff as a separate program; CodeGraff is distributed under
 its modified AGPLv3 terms, as their notices say.
 
+### nanocua
+
+[`apps/nanocua`](apps/nanocua) is copied here from
+[CodeGraff](https://github.com/justrach/codegraff), which holds the original,
+Copyright (C) 2026 Rach Pradhan and Yu Xi Lim. **It is not under nanoui's MIT
+license.** It keeps CodeGraff's modified AGPLv3 terms, kept verbatim in
+[`third_party/licenses/codegraff-LICENSE.txt`](third_party/licenses/codegraff-LICENSE.txt).
+`apps/nanocua/VENDORED.md` says which commit it came from. It uses nanoui;
+nanoui uses nothing of it, and it isn't part of the nanoui package other programs
+depend on (`build.zig.zon`'s `paths`), so nanoui itself stays MIT.
+
 ## Stageshow (.agents/skills/stageshow)
 
 Agent skill by Benji Taylor, MIT. Source: https://github.com/benjitaylor/skills/tree/802057409787133703c56001080169e347305572/stageshow. App icons and brand assets inside keep their own licenses; see that folder's NOTICE.md and kit/brands/SOURCES.md.
