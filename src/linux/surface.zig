@@ -305,6 +305,7 @@ fn onRender(_: *gtk.Widget, _: *anyopaque, data: ?*anyopaque) callconv(.c) c_int
 /// Draws the frame with OpenGL into the framebuffer GTK bound.
 pub fn glRender(s: *Surface) bool {
     if (s.renderer) |*r| {
+        s.text.images.device_side = opengl.Renderer.maxTextureSide();
         r.sync(s.text.atlas.mask(), s.text.atlas.generation, s.text.images.pictures(), s.text.images.generation);
         r.draw(s.instances.items, s.size, s.scale, s.clearColor(), glarea.target(), s.ctx.time);
         return true;

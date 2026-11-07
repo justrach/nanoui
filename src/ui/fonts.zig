@@ -17,7 +17,7 @@ extern "c" fn CTFontDescriptorCreateWithAttributes(attrs: cf.CFDictionaryRef) ?*
 extern "c" fn CTFontCreateWithFontDescriptor(desc: *anyopaque, size: f64, matrix: ?*const Transform) ?cf.CTFontRef;
 extern "c" fn CTFontCreateCopyWithSymbolicTraits(font: cf.CTFontRef, size: f64, matrix: ?*const Transform, value: u32, mask: u32) ?cf.CTFontRef;
 extern "c" fn CTFontCreateCopyWithAttributes(font: cf.CTFontRef, size: f64, matrix: ?*const Transform, attrs: ?*anyopaque) ?cf.CTFontRef;
-extern "c" fn CTFontCopyFamilyName(font: cf.CTFontRef) cf.CFStringRef;
+extern "c" fn CTFontCopyFamilyName(font: cf.CTFontRef) ?cf.CFStringRef;
 extern "c" fn CTFontGetSymbolicTraits(font: cf.CTFontRef) u32;
 extern "c" fn CFStringCompare(a: cf.CFStringRef, b: cf.CFStringRef, options: u64) cf.CFIndex;
 
@@ -51,10 +51,15 @@ const slant: Transform = .{ .a = 1, .b = 0, .c = 0.2, .d = 1, .tx = 0, .ty = 0 }
 /// CoreText's weights, as NSFontWeight (and UIFontWeight) values.
 pub fn weightValue(w: types.Weight) f64 {
     return switch (w) {
+        .thin => -0.8,
+        .extralight => -0.6,
+        .light => -0.4,
         .regular => 0,
         .medium => 0.23,
         .semibold => 0.3,
         .bold => 0.4,
+        .extrabold => 0.56,
+        .black => 0.62,
     };
 }
 
@@ -96,7 +101,10 @@ fn named(name: []const u8, size: f32, weight: types.Weight, italic: bool) ?cf.CT
     defer cf.CFRelease(desc);
     const f = CTFontCreateWithFontDescriptor(desc, size, null) orelse return null;
     // CoreText answers with a fallback when the family is missing.
-    const got = CTFontCopyFamilyName(f);
+    const got = CTFontCopyFamilyName(f) orelse {
+        cf.CFRelease(f);
+        return null;
+    };
     defer cf.CFRelease(got);
     if (CFStringCompare(got, family, 0) != 0) {
         cf.CFRelease(f);

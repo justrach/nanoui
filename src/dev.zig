@@ -54,6 +54,15 @@ pub const Flags = struct {
 pub fn snapshot(app: anytype, path: []const u8) !void {
     for (app.windows.items) |w| {
         const s = w.nativeView() orelse continue;
+        // The Tester draws the view from here. The hidden window's own frames would
+        // draw it too, with a context of their own: a view that keeps state per window
+        // (which field has the keys) would have two contexts undoing each other.
+        const quiet = struct {
+            var nothing: u8 = 0;
+            fn view(_: *u8, _: *ui.Context) void {}
+        };
+        // Headless on Linux and Windows there is no surface, and nothing to quiet.
+        if (w.surface) |surface| surface.view = ui.View.init(&quiet.nothing, quiet.view);
         var t: ui.Tester = undefined;
         try t.init(app.gpa, s.view, .{ .width = s.width, .height = s.height, .scale = s.scale, .dark = app.flags.dark, .theme = s.theme });
         defer t.deinit();
@@ -61,10 +70,14 @@ pub fn snapshot(app: anytype, path: []const u8) !void {
         // visible window, and the view is drawn as it goes, so what it asks
         // for as it draws (a picture, a map's tiles) is asked for and answered.
         var waited: f64 = 0;
+        const dt = t.dt;
+        // Its clock goes as the event loop's does: what animates arrives on time.
+        t.dt = 0.05;
         while (waited < app.flags.wait) : (waited += 0.05) {
             runFor(0.05);
             t.frame();
         }
+        t.dt = dt;
         t.settle(2);
         try t.runScript(app.flags.script);
         try t.screenshot(path);

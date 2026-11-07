@@ -88,13 +88,20 @@ pub const Renderer = struct {
         g.glGenBuffers(1, &r.vbo);
         g.glBindVertexArray(r.vao);
         g.glBindBuffer(gl.ARRAY_BUFFER, r.vbo);
-        for (0..10) |k| {
+        for (0..12) |k| {
             g.glEnableVertexAttribArray(@intCast(k));
             g.glVertexAttribDivisor(@intCast(k), 1);
         }
         // Until a picture comes, one transparent texel stands in.
         r.images = newTexture(gl.RGBA8, 1, 1, r.bgra(), &[4]u8{ 0, 0, 0, 0 }, gl.LINEAR);
         return r;
+    }
+
+    /// The longest side a texture may have here.
+    pub fn maxTextureSide() u32 {
+        var v: i32 = 0;
+        gl.api.glGetIntegerv(0x0D33, &v); // GL_MAX_TEXTURE_SIZE
+        return if (v > 0) @intCast(v) else 2048;
     }
 
     /// The format BGRA pixels go up as: OpenGL ES takes them for RGBA.
@@ -213,7 +220,7 @@ pub const Renderer = struct {
         g.glBindBuffer(gl.ARRAY_BUFFER, r.vbo);
         // The instances from `first` on: rect, colors, uv, clip, then the
         // four floats after them.
-        for (0..10) |k| g.glVertexAttribPointer(@intCast(k), 4, gl.FLOAT, 0, stride, first * stride + k * 16);
+        for (0..12) |k| g.glVertexAttribPointer(@intCast(k), 4, gl.FLOAT, 0, stride, first * stride + k * 16);
         g.glEnable(gl.BLEND);
         // Premultiplied alpha: one, one minus source alpha.
         g.glBlendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);

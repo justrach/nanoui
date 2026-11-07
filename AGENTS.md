@@ -70,6 +70,7 @@ src/objc.zig          Objective-C runtime, runtime classes, blocks, libdispatch
 src/app.zig           lifecycle, menu bar, trays, services, client generation
 src/dev.zig           --nanoui-* flags: generate, snapshot, script, eval, hidden
 src/window.zig        NSWindow showing a page or native UI, window controls
+src/window_lights.zig the traffic lights kept where a taller top bar wants them
 src/page.zig          the page's platform-free part: the outbox, held messages, the asset table
 src/page_webkit.zig   WKWebView: the view, the scheme handler, the message handler
 src/page_webkitgtk.zig  WebKitGTK: the view, the scheme handler, the message handler
@@ -110,7 +111,10 @@ src/ui/motion/        ui.motion: springs, tweens, presence, keyframes, layout,
 src/ui/tester.zig     views without a window: input, time, PNG snapshots
 src/ui/tests.zig      widget tests through the Tester
 src/ui/text_tt.zig    text where nanoui shapes it itself (Linux, Windows, Android)
-src/ui/tt/            TrueType: font files, the installed fonts, outlines to coverage
+src/ui/tt/            TrueType: font files, the installed fonts, outlines to coverage;
+                      web fonts back to sfnt (`sfnt.zig`, `woff2*.zig`, `brotli*.zig`)
+src/ui/font_registry.zig  fonts an app brings, by family, weight, style and range
+src/ui/text_stack_*.zig   a text's fonts when it names families (`TextStyle.family`)
 src/ui/atlas_tt.zig   the glyph atlas in memory; icons.zig: line icons
 src/ui/raster.zig     the CPU renderer (same pixels as shader.metal)
 src/ui/canvas.zig     a CPU-drawn window's pixels: only what a frame changed is drawn
@@ -118,6 +122,7 @@ src/ui/opengl.zig     the OpenGL 3.3 renderer (Linux), and OpenGL ES 3's (Androi
 src/ui/gl.zig         OpenGL's functions, loaded with dlopen
 src/ui/images.zig     pictures (ui.image): decoded once, packed in a BGRA atlas
 src/ui/png_decode.zig PNG to pixels where ImageIO isn't (Linux, Windows, portable)
+src/ui/jpeg_decode.zig  JPEG likewise, baseline and progressive (jpeg_scan, jpeg_pixels); gif_decode.zig: a GIF's first frame
 src/platform.zig      what differs by OS below the UI (event loop, clipboard)
 src/linux/            GTK 3 backend: app, window, surface (GL area or CPU), dialogs, fd watches;
                       webkit: WebKitGTK, loaded with dlopen

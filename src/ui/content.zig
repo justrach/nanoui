@@ -34,6 +34,8 @@ pub const Content = union(enum) {
         /// Drawn on whole pixels: a picture made at the screen's own
         /// size (an icon from SVG), so nothing blurs it.
         snap: bool = false,
+        /// The part of it shown, 0 to 1: left, top, right, bottom.
+        part: [4]f32 = .{ 0, 0, 1, 1 },
     };
 
     pub const Icon = struct {

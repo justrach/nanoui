@@ -85,18 +85,23 @@ pub fn segment(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize)
         .{ ax - ux * e - uy * e, ay - uy * e + ux * e },
     };
     const c = i.color;
+    const moved = gpu.hasMatrix(i);
+    const inv_local = raster.pixelAt(i, inv);
     for (b[1]..b[3]) |y| {
-        const wy = (@as(f32, @floatFromInt(y)) + 0.5) * inv;
-        const cols = columns(span(&box, wy) orelse continue, scale, b) orelse continue;
+        const sy = (@as(f32, @floatFromInt(y)) + 0.5) * inv;
+        const cols: [2]usize = if (moved) .{ b[0], b[2] } else columns(span(&box, sy) orelse continue, scale, b) orelse continue;
         const row = y * out.width * 4;
         for (cols[0]..cols[1]) |x| {
-            const wx = (@as(f32, @floatFromInt(x)) + 0.5) * inv;
+            const sx = (@as(f32, @floatFromInt(x)) + 0.5) * inv;
+            const local = raster.unmatrix(i, sx, sy);
+            const wx = local[0];
+            const wy = local[1];
             const t: f32 = if (len2 > 0) std.math.clamp(((wx - ax) * abx + (wy - ay) * aby) / len2, 0, 1) else 0;
             const ox = wx - (ax + abx * t);
             const oy = wy - (ay + aby * t);
             const d = @sqrt(ox * ox + oy * oy);
             const grad: f32 = if (d > 0) (@abs(ox) + @abs(oy)) / d else 1;
-            const aa = @max(grad * inv, 0.0001) * 0.5;
+            const aa = @max(grad * inv_local, 0.0001) * 0.5;
             var cover = 1 - raster.smoothstep(hw - aa, hw + aa, d);
             if (cover <= 0) continue;
             if (dashed) {
@@ -105,10 +110,10 @@ pub fn segment(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize)
                 const m = along - (on + gap) * @floor(along / (on + gap));
                 const edge = @min(m, on - m);
                 const ug: f32 = if (len > 0) (@abs(abx) + @abs(aby)) / len else 0;
-                const ea = @max(ug * inv, 0.0001) * 0.5;
+                const ea = @max(ug * inv_local, 0.0001) * 0.5;
                 cover *= raster.smoothstep(-ea, ea, edge);
             }
-            const a = c[3] * cover * raster.clipCover(i, wx, wy, inv);
+            const a = c[3] * cover * raster.clipCover(i, sx, sy, inv);
             raster.blend(out.bytes, row + x * 4, c[0] * a, c[1] * a, c[2] * a, a);
         }
     }
@@ -139,12 +144,17 @@ pub fn triangle(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize
     }
     const inv = 1 / scale;
     const c = i.color;
+    const moved = gpu.hasMatrix(i);
+    const inv_local = raster.pixelAt(i, inv);
     for (b[1]..b[3]) |y| {
-        const wy = (@as(f32, @floatFromInt(y)) + 0.5) * inv;
-        const cols = columns(span(&v, wy) orelse continue, scale, b) orelse continue;
+        const sy = (@as(f32, @floatFromInt(y)) + 0.5) * inv;
+        const cols: [2]usize = if (moved) .{ b[0], b[2] } else columns(span(&v, sy) orelse continue, scale, b) orelse continue;
         const row = y * out.width * 4;
         pixels: for (cols[0]..cols[1]) |x| {
-            const wx = (@as(f32, @floatFromInt(x)) + 0.5) * inv;
+            const sx = (@as(f32, @floatFromInt(x)) + 0.5) * inv;
+            const local = raster.unmatrix(i, sx, sy);
+            const wx = local[0];
+            const wy = local[1];
             var cover: f32 = 1;
             for (0..3) |k| {
                 const p = v[k];
@@ -152,11 +162,11 @@ pub fn triangle(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize
                 if (f < 0 or (f == 0 and !top_left[k])) continue :pixels;
                 if (smooth & (@as(u32, 1) << @intCast(k)) != 0) {
                     const d = f / elen[k];
-                    const aa = @max((@abs(ex[k]) + @abs(ey[k])) / elen[k] * inv, 0.0001) * 0.5;
+                    const aa = @max((@abs(ex[k]) + @abs(ey[k])) / elen[k] * inv_local, 0.0001) * 0.5;
                     cover *= raster.smoothstep(-aa, aa, d);
                 }
             }
-            const a = c[3] * cover * raster.clipCover(i, wx, wy, inv);
+            const a = c[3] * cover * raster.clipCover(i, sx, sy, inv);
             raster.blend(out.bytes, row + x * 4, c[0] * a, c[1] * a, c[2] * a, a);
         }
     }

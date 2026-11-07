@@ -25,12 +25,15 @@ struct Instance {
     float4 pulse;        // period s, scale_amp, alpha_low, unused
     float4 vel;          // blur vector x, y in points, face (0 both, 1 front, 2 back), mirror x
     float4 turn;         // angle about the vertical axis rad, eye distance pt (0 flat), pivot x, pivot y
+    float4 m;            // a plane transform: x' = m.x x + m.z y + mt.x, y' = m.y x + m.w y + mt.y
+    float4 mt;
 };
 
 struct VOut {
     float4 pos [[position]];
     float2 local;
     float2 world;
+    float2 screen;       // where it lands, which is what clips it
     float2 uv;
     float2 vel [[flat]];
     float pulse_alpha [[flat]];
@@ -88,14 +91,15 @@ vertex VOut vs(uint vid [[vertex_id]], uint iid [[instance_id]],
     // A turn about the vertical axis through the pivot, seen in perspective
     // from the pivot: w carries the depth, so the rounded box, its picture
     // and its clip are interpolated perspective-correct.
-    float2 seen = p;
+    float2 landed = float2(i.m.x * p.x + i.m.z * p.y + i.mt.x, i.m.y * p.x + i.m.w * p.y + i.mt.y);
+    float2 seen = landed;
     float w = 1.0;
     float ct = cos(i.turn.x);
     bool hidden = (i.vel.z == 1.0 && ct < 0.0) || (i.vel.z == 2.0 && ct >= 0.0);
     if (i.turn.x != 0.0) {
-        float dx = p.x - i.turn.z;
+        float dx = landed.x - i.turn.z;
         float z = -dx * sin(i.turn.x);
-        seen = float2(i.turn.z + dx * ct, p.y);
+        seen = float2(i.turn.z + dx * ct, landed.y);
         if (i.turn.y > 0.0) {
             w = max(1.0 - z / i.turn.y, 0.1);
             seen = i.turn.zw + (seen - i.turn.zw) / w;
@@ -106,6 +110,7 @@ vertex VOut vs(uint vid [[vertex_id]], uint iid [[instance_id]],
     o.pos = hidden ? float4(0.0, 0.0, 0.0, 1.0) : float4((seen / viewport * float2(2.0, -2.0) + float2(-1.0, 1.0)) * w, 0.0, w);
     o.local = p_unrot - i.rect.xy;
     o.world = p;
+    o.screen = landed;
     o.uv = has_blur ? (i.uv.xy + (p_unrot - i.rect.xy) / max(i.rect.zw, float2(1e-4)) * (i.uv.zw - i.uv.xy)) : mix(i.uv.xy, i.uv.zw, corner);
     o.vel = has_blur ? v : float2(0.0);
     o.pulse_alpha = pulse_alpha;
@@ -278,14 +283,14 @@ static float4 triangle_color(float2 w, Instance i) {
 // How much of the fragment the instance's clip lets through: discarded
 // outside it, cut in its rounded corners.
 static float clip_coverage(VOut in, Instance i) {
-    if (in.world.x < i.clip.x || in.world.y < i.clip.y || in.world.x > i.clip.z || in.world.y > i.clip.w)
+    if (in.screen.x < i.clip.x || in.screen.y < i.clip.y || in.screen.x > i.clip.z || in.screen.y > i.clip.w)
         discard_fragment();
     float clip_cover = 1.0;
     if (i.clip_round > 0.0) {
         float corners = floor(i.clip_round / 4096.0);
         float rad = i.clip_round - corners * 4096.0;
         float2 ch = (i.clip.zw - i.clip.xy) * 0.5;
-        float2 q = in.world - i.clip.xy - ch;
+        float2 q = in.screen - i.clip.xy - ch;
         // Derivatives outside the branch on the corner: it differs by pixel.
         float cd = corner_sdf(q, ch, min(rad, min(ch.x, ch.y)));
         float caa = max(fwidth(cd), 0.0001) * 0.5;
@@ -377,8 +382,12 @@ static float4 shade(VOut in, Instance i, texture2d<float> atlas, texture2d<float
         float sigma = max(i.border_width, 0.25);
         float a = shadow_alpha(p, half_size, r, sigma) * i.color.a;
         // Knocked out inside the box itself: `uv.xy` is where the box is
-        // from the shadow's rect (the shadow's offset, negated).
-        if (i.kind == 5.0) a *= clamp(corner_sdf(p - i.uv.xy, half_size, r) + 0.5, 0.0, 1.0);
+        // from the shadow's rect (the shadow's offset, negated), `uv.z` how
+        // much bigger the shadow's rect is (its spread).
+        if (i.kind == 5.0) {
+            float rb = r < 0.0 ? -max(-r - i.uv.z, 0.0) : max(r - i.uv.z, 0.0);
+            a *= clamp(corner_sdf(p - i.uv.xy, max(half_size - i.uv.z, float2(0.0)), rb) + 0.5, 0.0, 1.0);
+        }
         if (a > 0.0) a = clamp(a + shadow_dither(in.pos.xy), 0.0, 1.0);
         return float4(i.color.rgb * a, a);
     }

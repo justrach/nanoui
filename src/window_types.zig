@@ -78,6 +78,13 @@ pub fn Options(comptime Window: type) type {
         min_height: f64 = 150,
         resizable: bool = true,
         title_bar: TitleBar = .default,
+        /// With `title_bar = .hidden`, macOS: where the close button's center
+        /// goes, from the window's top left, the title bar grown to twice
+        /// `y` to hold it; the other two follow at AppKit's spacing. Lets a
+        /// view's own taller top bar (`ui.Context.title_bar_height`) line up
+        /// with them. Null leaves them where AppKit puts them; other systems
+        /// have none to move.
+        traffic_lights: ?ui.Point = null,
         /// Whether the window has a title bar and a resizable frame at all.
         /// `false` is a borderless window: no title bar, no border and no
         /// drag-to-resize — the application draws or moves it,

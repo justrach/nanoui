@@ -55,6 +55,7 @@ pub const Point = types.Point;
 pub const Face = types.Face;
 pub const Fade = types.Fade;
 pub const Size = types.Size;
+pub const Affine = types.Affine;
 pub const Rect = types.Rect;
 pub const Color = types.Color;
 pub const Edges = types.Edges;
@@ -86,6 +87,10 @@ pub const scroll = widgets.scroll;
 pub const spacer = widgets.spacer;
 pub const divider = widgets.divider;
 pub const image = widgets.image;
+pub const imageSize = widgets.imageSize;
+pub const imageLimits = widgets.imageLimits;
+pub const imageTypeDecodes = widgets.imageTypeDecodes;
+pub const ImageLimits = @import("images.zig").Limits;
 pub const texture = widgets.texture;
 pub const hole = widgets.hole;
 /// A box to draw lines, triangles, polygons and circles in (draw.zig).
@@ -98,6 +103,20 @@ pub const ImageOptions = widgets.ImageOptions;
 pub const svg = widgets.svg;
 /// A font the app brings, found by family name (`Theme.font`, …).
 pub const registerFont = @import("font_registry.zig").register;
+/// A face from a TrueType, OpenType, WOFF or WOFF2 file's bytes (or an installed
+/// font), under a family `TextStyle.family` finds it by.
+pub const registerFontFace = @import("font_registry.zig").registerFace;
+pub const FontFaceOptions = @import("font_registry.zig").FaceOptions;
+/// Gives a face registered as `pending` its file, or the installed font it is.
+pub const fillFontFace = @import("font_registry.zig").fillFace;
+/// Takes away the families `registerFontFace` added whose names start so.
+pub const unregisterFontFamilies = @import("font_registry.zig").unregisterFamilies;
+/// How far a face's description is from a style, as CSS's font matching ranks them.
+pub const fontFaceScore = @import("font_registry.zig").score;
+/// Text shaped by nanoui's own TrueType reader, not the system's.
+pub const portable = @import("text.zig").portable;
+/// A tiny font made on the spot, for tests that need one that isn't installed.
+pub const test_font = @import("tt/testfont.zig");
 pub const SvgOptions = widgets.SvgOptions;
 pub const text = widgets.text;
 pub const textf = widgets.textf;
@@ -177,6 +196,7 @@ test {
     _ = @import("tests_text_style.zig");
     _ = @import("tests_text_extras.zig");
     _ = @import("tests_turn.zig");
+    _ = @import("tests_transform.zig");
     _ = @import("tests_settle.zig");
     _ = types;
     _ = device;
@@ -215,8 +235,14 @@ test {
     if (@import("builtin").os.tag == .linux) _ = @import("tests_opengl.zig");
     _ = @import("tt/raster.zig");
     _ = @import("tt/tests.zig");
+    _ = @import("tt/tests_decode.zig");
+    _ = @import("tt/brotli.zig");
+    _ = @import("font_registry.zig");
+    _ = @import("tests_text_family.zig");
     _ = @import("png.zig");
     _ = @import("png_decode.zig");
+    _ = @import("jpeg_decode.zig");
+    _ = @import("gif_decode.zig");
     _ = @import("images.zig");
     _ = @import("tests_images.zig");
     _ = @import("pacing.zig");

@@ -10,6 +10,12 @@
 //!   key:NAME      a key: enter, backspace, escape, tab, …
 //!   scroll:DY     drag DY points under the finger (negative: up, to what's below);
 //!                 held past an end it rubber-bands, so `scroll:200` at the top pulls to refresh
+//!   wheel:DY      (macOS) a trackpad's scroll, as an event through the view's own handler;
+//!                 never posted to the system, so nothing else hears it
+//!   notch:LINES   (macOS) a mouse wheel's notches, the same way
+//!   menukey:K     (macOS) ⌘K, as an event offered to the menu bar first, as AppKit does
+//!   drag:WxH      (macOS) drag the window's size there, as a person does, a change a
+//!                 frame through AppKit's live resize; says on stderr what each change cost
 //!   wait:SECONDS  pause
 //!   ax:PATH       (macOS) write what VoiceOver reads to PATH; axpress:LABEL press it
 //!
@@ -48,6 +54,69 @@ pub fn paint(gpa: std.mem.Allocator, out: *std.ArrayList(gpu.Instance)) void {
         .radius = r,
         .kind = gpu.Kind.quad,
     }) catch {};
+}
+
+extern "c" fn CGEventCreateScrollWheelEvent2(source: ?*anyopaque, units: u32, count: u32, y: i32, x: i32, z: i32) ?*anyopaque;
+extern "c" fn CGEventSetIntegerValueField(event: *anyopaque, field: u32, value: i64) void;
+extern "c" fn CGEventSetLocation(event: *anyopaque, at: objc.CGPoint) void;
+extern "c" fn CFRelease(o: *anyopaque) void;
+
+/// A trackpad's scroll over the middle of `s`, through the view's `scrollWheel:` as
+/// AppKit calls it. The event is made here and never posted.
+fn wheelEvent(s: anytype, dy: f32, precise: bool) void {
+    const pixels = 0;
+    const lines = 1;
+    const continuous = 88;
+    const phase = 99;
+    const phase_changed = 2;
+    const ev = CGEventCreateScrollWheelEvent2(null, if (precise) pixels else lines, 1, @intFromFloat(dy), 0, 0) orelse return;
+    defer CFRelease(ev);
+    if (precise) {
+        CGEventSetIntegerValueField(ev, continuous, 1);
+        CGEventSetIntegerValueField(ev, phase, phase_changed);
+    }
+    const middle: objc.CGPoint = .{ .x = s.size.w / 2, .y = s.size.h * 0.6 };
+    const base = objc.msg(objc.CGPoint, s.nsview, "convertPoint:toView:", .{ middle, @as(?objc.Object, null) });
+    // A location in the system's coordinates: from the top of the first screen.
+    const screens = objc.msg(objc.Object, objc.class("NSScreen"), "screens", .{});
+    const first = objc.msg(objc.Object, screens, "firstObject", .{});
+    const top = objc.msg(objc.CGRect, first, "frame", .{}).size.height;
+    CGEventSetLocation(ev, .{ .x = base.x, .y = top - base.y });
+    const event = objc.msg(objc.Object, objc.class("NSEvent"), "eventWithCGEvent:", .{ev});
+    objc.msg(void, s.nsview, "scrollWheel:", .{event});
+}
+
+/// Thirty changes of size between where it is and `w` × `h`, one after another as a
+/// drag gives them, each one timed.
+fn dragWindow(s: anytype, w: f32, h: f32) void {
+    const from = s.size;
+    var ms: [30]f64 = undefined;
+    objc.msg(void, s.nsview, "viewWillStartLiveResize", .{});
+    for (&ms, 0..) |*m, i| {
+        const k = @as(f32, @floatFromInt(i + 1)) / ms.len;
+        const size: objc.CGSize = .{ .width = from.w + (w - from.w) * k, .height = from.h + (h - from.h) * k };
+        const t0 = CACurrentMediaTime();
+        objc.msg(void, s.window.nswindow, "setContentSize:", .{size});
+        m.* = (CACurrentMediaTime() - t0) * 1000;
+    }
+    objc.msg(void, s.nsview, "viewDidEndLiveResize", .{});
+    std.mem.sort(f64, &ms, {}, std.sort.asc(f64));
+    var total: f64 = 0;
+    for (ms) |m| total += m;
+    std.debug.print("nanoui-play: drag of {d} changes took {d:.0} ms: median {d:.1}, slowest {d:.1}\n", .{ ms.len, total, ms[ms.len / 2], ms[ms.len - 1] });
+}
+
+extern "c" fn CACurrentMediaTime() f64;
+
+/// ⌘ and a key as AppKit first offers it: to the menu bar. Not posted either.
+fn menuKey(key: []const u8) void {
+    const keyDown: objc.NSUInteger = 10;
+    const command: objc.NSUInteger = 1 << 20;
+    const chars = objc.nsString(key);
+    const ev = objc.msg(objc.Object, objc.class("NSEvent"), "keyEventWithType:location:modifierFlags:timestamp:windowNumber:context:characters:charactersIgnoringModifiers:isARepeat:keyCode:", .{ keyDown, objc.CGPoint{ .x = 0, .y = 0 }, command, @as(f64, 0), @as(objc.NSInteger, 0), @as(?objc.Object, null), chars, chars, objc.NO, @as(u16, 0) });
+    const app = objc.msg(objc.Object, objc.class("NSApplication"), "sharedApplication", .{});
+    const menu = objc.msg(?objc.Object, app, "mainMenu", .{}) orelse return;
+    _ = objc.msg(objc.BOOL, menu, "performKeyEquivalent:", .{ev});
 }
 
 fn after(seconds: f64, p: anytype, comptime f: fn (@TypeOf(p)) void) void {
@@ -121,6 +190,21 @@ fn Player(comptime App: type) type {
                 p.scroll_at = p.finger orelse .{ .x = s.ctx.size.w / 2, .y = s.ctx.size.h * 0.6 };
                 dot = .{ .at = p.scroll_at };
                 p.scrollStep();
+            } else if (mac and std.mem.eql(u8, op, "drag")) {
+                const x = std.mem.indexOfScalar(u8, arg, 'x') orelse return p.missing(step);
+                const w = std.fmt.parseFloat(f32, arg[0..x]) catch return p.missing(step);
+                const h = std.fmt.parseFloat(f32, arg[x + 1 ..]) catch return p.missing(step);
+                dragWindow(s, w, h);
+                after(0.2, p, next);
+            } else if (mac and std.mem.eql(u8, op, "wheel")) {
+                wheelEvent(s, std.fmt.parseFloat(f32, arg) catch return p.missing(step), true);
+                after(0.05, p, next);
+            } else if (mac and std.mem.eql(u8, op, "notch")) {
+                wheelEvent(s, std.fmt.parseFloat(f32, arg) catch return p.missing(step), false);
+                after(0.05, p, next);
+            } else if (mac and std.mem.eql(u8, op, "menukey")) {
+                menuKey(arg);
+                after(0.5, p, next);
             } else if (mac and (std.mem.eql(u8, op, "ax") or std.mem.eql(u8, op, "axpress"))) {
                 const ax = @import("ui/axdump.zig");
                 const ok = if (op.len == 2) ax.dump(s.nsview, arg) else ax.press(s.nsview, arg);
@@ -170,11 +254,15 @@ fn Player(comptime App: type) type {
             s.ctx.input.mouse = p.scroll_at;
             // Held as a finger holds: past an end it rubber-bands.
             s.ctx.scroll_holding = true;
-            _ = s.ctx.applyScroll(to - p.scroll_done);
-            s.ctx.input.mouse = away;
+            // A view with no scrolling box takes the wheel itself, as a surface gives it.
+            const moved_box = s.ctx.applyScroll(to - p.scroll_done);
+            const wheel = !moved_box and s.ctx.wants_wheel;
+            if (wheel) s.ctx.input.scroll.y += to - p.scroll_done;
             p.scroll_done = to;
             if (dot) |*d| d.at = .{ .x = p.scroll_at.x, .y = p.scroll_at.y + to };
             s.frame();
+            // A wheel's pointer stays where it is; only a finger lifts.
+            if (!wheel) s.ctx.input.mouse = away;
             if (p.scroll_t < 1) return after(1.0 / 60.0, p, scrollStep);
             // Let go: it springs back (and a pull past its threshold refreshes).
             s.ctx.scroll_holding = false;

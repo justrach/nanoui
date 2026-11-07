@@ -116,8 +116,8 @@ pub fn icon(c: *Context, name: []const u8, opts: IconOptions) void {
 pub const ImageOptions = struct {
     /// Names the picture: the same key is decoded once.
     key: []const u8,
-    /// The encoded picture (PNG; on macOS anything ImageIO reads), kept by
-    /// the caller while it is shown.
+    /// The encoded picture (PNG, JPEG or GIF; on Apple's systems anything
+    /// ImageIO reads), kept by the caller while it is shown.
     bytes: []const u8,
     /// The most room it takes, in points; it keeps its proportions and is
     /// never drawn larger than its pixels at `scale`.
@@ -131,17 +131,46 @@ pub const ImageOptions = struct {
     /// Draws only the picture's shape, in this color: a monochrome mark (a
     /// logo) that follows the theme.
     tint: ?types.Color = null,
+    /// Exactly this box in points, whatever the picture's proportions: for
+    /// a size decided elsewhere (a page's `<img width>`). `max_width`,
+    /// `max_height` and `scale` then mean nothing.
+    box: ?types.Size = null,
+    /// The part of the picture shown, 0 to 1: left, top, right, bottom. With
+    /// `box`, a picture that covers its box and is cut to fit.
+    part: [4]f32 = .{ 0, 0, 1, 1 },
 };
+
+/// What pictures may cost in this view's window (`images.Limits`): an app that
+/// shows large ones asks here, before drawing them.
+pub fn imageLimits(c: *Context, limits: @import("images.zig").Limits) void {
+    c.text.images.limits = limits;
+}
+
+/// Whether pictures of a MIME type can be decoded on this system.
+pub fn imageTypeDecodes(mime: []const u8) bool {
+    return @import("images.zig").decodes(mime);
+}
+
+/// A picture's own size in pixels, from its header; null if it can't be
+/// read. Same key as `image`: read once.
+pub fn imageSize(c: *Context, key_name: []const u8, bytes: []const u8) ?types.Size {
+    const e = c.text.images.info(@import("images.zig").Images.key(key_name), bytes) orelse return null;
+    return .{ .w = @floatFromInt(e.width), .h = @floatFromInt(e.height) };
+}
 
 /// A picture; false (and nothing drawn) if it can't be decoded.
 pub fn image(c: *Context, opts: ImageOptions) bool {
     const k = @import("images.zig").Images.key(opts.key);
     // Sized from the picture's header; decoded at device size and packed only when drawn.
     const e = c.text.images.info(k, opts.bytes) orelse return false;
+    if (opts.box) |b| {
+        _ = c.leaf(.{ .width = .{ .px = b.w }, .height = .{ .px = b.h }, .radius = opts.radius }, .{ .image = .{ .key = k, .bytes = opts.bytes, .opacity = opts.opacity, .tint = opts.tint, .part = opts.part } }, null);
+        return true;
+    }
     const w: f32 = @as(f32, @floatFromInt(e.width)) / @max(opts.scale, 0.5);
     const h: f32 = @as(f32, @floatFromInt(e.height)) / @max(opts.scale, 0.5);
     const s = @min(1, @min(opts.max_width / @max(w, 1), opts.max_height / @max(h, 1)));
-    _ = c.leaf(.{ .width = .{ .px = @round(w * s) }, .height = .{ .px = @round(h * s) }, .radius = opts.radius }, .{ .image = .{ .key = k, .bytes = opts.bytes, .opacity = opts.opacity, .tint = opts.tint } }, null);
+    _ = c.leaf(.{ .width = .{ .px = @round(w * s) }, .height = .{ .px = @round(h * s) }, .radius = opts.radius }, .{ .image = .{ .key = k, .bytes = opts.bytes, .opacity = opts.opacity, .tint = opts.tint, .part = opts.part } }, null);
     return true;
 }
 
@@ -160,6 +189,9 @@ pub const SvgOptions = struct {
     /// the theme). Null draws its own colors, `currentColor` as the
     /// theme's text.
     color: ?Color = null,
+    /// `currentColor` when it isn't the theme's text (a page's picture, whose
+    /// documents start from black).
+    current: ?Color = null,
     opacity: f32 = 1,
 };
 
@@ -172,7 +204,7 @@ pub fn svg(c: *Context, opts: SvgOptions) bool {
     const ph: u32 = @intFromFloat(@max(1, @round(h * c.scale)));
     // Tinted, it's drawn white and filled with the color as it's painted;
     // otherwise currentColor is the theme's text, part of what it's kept by.
-    const cur = if (opts.color != null) Color{ .r = 1, .g = 1, .b = 1 } else c.theme.text;
+    const cur = if (opts.color != null) Color{ .r = 1, .g = 1, .b = 1 } else opts.current orelse c.theme.text;
     var hasher = std.hash.Wyhash.init(0x5c6);
     hasher.update(opts.key);
     hasher.update(std.mem.asBytes(&[2]u32{ pw, ph }));

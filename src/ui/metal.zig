@@ -40,6 +40,7 @@ pub const Renderer = struct {
     /// The image atlas on the GPU, copied when its generation changes.
     images_texture: ?objc.Object = null,
     images_generation: u64 = std.math.maxInt(u64),
+    images_side: u32 = 0,
     layer_texture: ?objc.Object = null,
     layer_w: usize = 0,
     layer_h: usize = 0,
@@ -118,12 +119,10 @@ pub const Renderer = struct {
     /// first picture).
     /// Puts a packed picture straight into the GPU's image atlas (the
     /// `Images.Sink` of a window): no copy of the atlas stays in memory.
-    pub fn uploadImage(ctx: *anyopaque, x: u32, y: u32, w: u32, h: u32, bgra: []const u8) void {
+    pub fn uploadImage(ctx: *anyopaque, x: u32, y: u32, w: u32, h: u32, bgra: []const u8, atlas_side: u32) void {
         const self: *Renderer = @ptrCast(@alignCast(ctx));
-        const side: objc.NSUInteger = @import("images.zig").size;
-        if (self.images_texture == null) {
-            const desc = objc.msg(objc.Object, objc.class("MTLTextureDescriptor"), "texture2DDescriptorWithPixelFormat:width:height:mipmapped:", .{ pixel_format, side, side, objc.NO });
-            self.images_texture = objc.msg(objc.Object, self.device, "newTextureWithDescriptor:", .{desc});
+        if (self.images_texture == null or self.images_side != atlas_side) {
+            self.makeImagesTexture(atlas_side);
         } else if (x == 0 and y == 0) {
             self.waitIdle();
         }
@@ -133,13 +132,23 @@ pub const Renderer = struct {
         });
     }
 
+    /// The picture atlas's texture at a side, frames using an older one done.
+    fn makeImagesTexture(self: *Renderer, atlas_side: u32) void {
+        if (self.images_texture) |t| {
+            self.waitIdle();
+            objc.release(t);
+        }
+        const side: objc.NSUInteger = atlas_side;
+        const desc = objc.msg(objc.Object, objc.class("MTLTextureDescriptor"), "texture2DDescriptorWithPixelFormat:width:height:mipmapped:", .{ pixel_format, side, side, objc.NO });
+        self.images_texture = objc.msg(objc.Object, self.device, "newTextureWithDescriptor:", .{desc});
+        self.images_side = atlas_side;
+        self.images_generation = std.math.maxInt(u64);
+    }
+
     pub fn syncImages(self: *Renderer, im: *Images) void {
         if (im.sink != null or im.pixels.len == 0 or im.generation == self.images_generation) return;
-        const side: objc.NSUInteger = @import("images.zig").size;
-        if (self.images_texture == null) {
-            const desc = objc.msg(objc.Object, objc.class("MTLTextureDescriptor"), "texture2DDescriptorWithPixelFormat:width:height:mipmapped:", .{ pixel_format, side, side, objc.NO });
-            self.images_texture = objc.msg(objc.Object, self.device, "newTextureWithDescriptor:", .{desc});
-        }
+        const side: objc.NSUInteger = im.side;
+        if (self.images_texture == null or self.images_side != im.side) self.makeImagesTexture(im.side);
         const Region = extern struct { x: usize, y: usize, z: usize, w: usize, h: usize, d: usize };
         // Only the rows that changed, unless the texture is new.
         const rows: [2]u32 = if (self.images_generation == std.math.maxInt(u64)) .{ 0, @intCast(side) } else im.dirty orelse .{ 0, 0 };
