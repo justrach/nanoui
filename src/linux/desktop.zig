@@ -127,37 +127,11 @@ pub fn path(gpa: std.mem.Allocator, dir: Directory, app_name: []const u8) ![]u8 
     return full;
 }
 
-/// Whether the desktop asks for dark colors: `GTK_THEME` where it is set (as
-/// GTK itself reads it), else what GtkSettings carries — where KDE and GNOME
-/// put the preference, as `gtk-application-prefer-dark-theme` or a theme
-/// named dark.
+/// Whether the desktop asks for dark colors: `GTK_THEME`, where it is set (as
+/// GTK itself reads it), else the portal's scheme, else GtkSettings — see
+/// `appearance.zig`.
 pub fn isDark() bool {
-    if (env("GTK_THEME")) |theme| return containsDark(theme);
-    switch (appearance.scheme()) {
-        .dark => return true,
-        .light => return false,
-        .unset => {},
-    }
-    const settings = gtkSettings() orelse return false;
-    var prefer: c_int = 0;
-    gtk.api.g_object_get(settings, "gtk-application-prefer-dark-theme", &prefer, @as(?*anyopaque, null));
-    if (prefer != 0) return true;
-    var name: ?[*:0]u8 = null;
-    gtk.api.g_object_get(settings, "gtk-theme-name", &name, @as(?*anyopaque, null));
-    defer if (name) |n| gtk.api.g_free(n);
-    return if (name) |n| containsDark(std.mem.span(n)) else false;
-}
-
-/// GtkSettings, once GTK has started: null without GTK or a display.
-fn gtkSettings() ?*anyopaque {
-    if (!gtk.ready()) return null;
-    return gtk.api.gtk_settings_get_default();
-}
-
-fn containsDark(name: []const u8) bool {
-    var i: usize = 0;
-    while (i + 4 <= name.len) : (i += 1) if (std.ascii.eqlIgnoreCase(name[i .. i + 4], "dark")) return true;
-    return false;
+    return appearance.dark(env("GTK_THEME"));
 }
 
 pub fn accentColor() [3]f32 {

@@ -6,7 +6,7 @@ const std = @import("std");
 const gtk = @import("gtk.zig");
 
 /// What the desktop asks for; `unset` leaves the answer to GTK.
-pub const Scheme = enum { unset, dark, light };
+const Scheme = enum { unset, dark, light };
 
 const Api = struct {
     g_bus_get_sync: *const fn (bus: c_int, cancellable: ?*anyopaque, err: ?*anyopaque) callconv(.c) ?*anyopaque,
@@ -27,26 +27,98 @@ var state: enum { unknown, ready, absent } = .unknown;
 var tried = false;
 var connection: ?*anyopaque = null;
 var scheme_cache: Scheme = .unset;
+/// What GtkSettings said, kept until GTK says it changed.
+var settings_dark: ?bool = null;
 var watchers: ?*Watch = null;
 
-/// What the desktop's color scheme says, read once and kept current.
-pub fn scheme() Scheme {
+/// Whether the desktop asks for dark colors: `gtk_theme` (`GTK_THEME`), where
+/// set, as GTK itself reads it; else the portal's scheme; else GtkSettings.
+pub fn dark(gtk_theme: ?[]const u8) bool {
+    if (gtk_theme) |theme| return containsDark(theme);
     ensure();
-    return scheme_cache;
+    switch (scheme_cache) {
+        .dark => return true,
+        .light => return false,
+        .unset => {},
+    }
+    if (settings_dark) |dark_colors| return dark_colors;
+    const dark_colors = readSettings();
+    settings_dark = dark_colors;
+    return dark_colors;
+}
+
+/// How often GtkSettings was read; the test below watches it stay put.
+var settings_reads: usize = 0;
+
+fn readSettings() bool {
+    settings_reads += 1;
+    if (!gtk.ready()) return false;
+    const settings = gtk.api.gtk_settings_get_default() orelse return false;
+    var prefer: c_int = 0;
+    gtk.api.g_object_get(settings, "gtk-application-prefer-dark-theme", &prefer, @as(?*anyopaque, null));
+    if (prefer != 0) return true;
+    var name: ?[*:0]u8 = null;
+    gtk.api.g_object_get(settings, "gtk-theme-name", &name, @as(?*anyopaque, null));
+    defer if (name) |n| gtk.api.g_free(n);
+    return if (name) |n| containsDark(std.mem.span(n)) else false;
+}
+
+/// Whether a theme's name says dark: "Adwaita-dark", "Darkly".
+fn containsDark(name: []const u8) bool {
+    return std.ascii.findIgnoreCase(name, "dark") != null;
+}
+
+test "the portal's color scheme" {
+    try std.testing.expectEqual(Scheme.dark, schemeOf(1));
+    try std.testing.expectEqual(Scheme.light, schemeOf(2));
+    try std.testing.expectEqual(Scheme.unset, schemeOf(0));
+    try std.testing.expectEqual(Scheme.unset, schemeOf(3));
+}
+
+test "GtkSettings are read once and kept" {
+    ensure();
+    // As if the portal had no opinion: the fallback is what is being measured.
+    scheme_cache = .unset;
+    settings_dark = null;
+    const before = settings_reads;
+
+    const first = dark(null);
+    try std.testing.expectEqual(before + 1, settings_reads);
+    for (0..64) |_| try std.testing.expectEqual(first, dark(null));
+    try std.testing.expectEqual(before + 1, settings_reads);
+
+    // What the appearance watchers do when GTK's settings change.
+    settings_dark = null;
+    _ = dark(null);
+    try std.testing.expectEqual(before + 2, settings_reads);
+}
+
+test "GTK_THEME overrides the desktop" {
+    try std.testing.expect(dark("Adwaita-dark"));
+    try std.testing.expect(!dark("Breeze"));
+    try std.testing.expect(!dark("Adwaita:light"));
+}
+
+test "theme names say dark" {
+    try std.testing.expect(containsDark("Adwaita-dark"));
+    try std.testing.expect(containsDark("Darkly"));
+    try std.testing.expect(containsDark("Breeze-Dark"));
+    try std.testing.expect(!containsDark("Breeze"));
+    try std.testing.expect(!containsDark(""));
 }
 
 /// A window that follows the system's appearance: `notify` is called (with
 /// `ctx`) when the portal or GTK says it changed.
 pub const Watch = struct {
-    notify: *const fn (?*anyopaque) callconv(.c) void = noop,
+    notify: *const fn (?*anyopaque) void = noop,
     ctx: ?*anyopaque = null,
     settings: ?*anyopaque = null,
     settings_handlers: [2]c_ulong = .{ 0, 0 },
     next: ?*Watch = null,
 
-    fn noop(_: ?*anyopaque) callconv(.c) void {}
+    fn noop(_: ?*anyopaque) void {}
 
-    pub fn start(self: *Watch, ctx: ?*anyopaque, notify: *const fn (?*anyopaque) callconv(.c) void) void {
+    pub fn start(self: *Watch, ctx: ?*anyopaque, notify: *const fn (?*anyopaque) void) void {
         self.ctx = ctx;
         self.notify = notify;
         ensure();
@@ -92,7 +164,13 @@ fn read() void {
         value = inner;
     }
     if (!std.mem.eql(u8, std.mem.span(api.g_variant_get_type_string(value)), "u")) return;
-    scheme_cache = switch (api.g_variant_get_uint32(value)) {
+    scheme_cache = schemeOf(api.g_variant_get_uint32(value));
+    settings_dark = null;
+}
+
+/// The portal's `color-scheme`: 0 has no preference, 1 prefers dark, 2 light.
+fn schemeOf(value: u32) Scheme {
+    return switch (value) {
         1 => .dark,
         2 => .light,
         else => .unset,
@@ -106,6 +184,7 @@ fn onSettingChanged(_: ?*anyopaque, _: ?[*:0]const u8, _: ?[*:0]const u8, _: ?[*
 }
 
 fn onSettingsChanged(_: ?*anyopaque, _: ?*anyopaque, data: ?*anyopaque) callconv(.c) void {
+    settings_dark = null;
     const watch: *Watch = @ptrCast(@alignCast(data.?));
     watch.notify(watch.ctx);
 }

@@ -187,7 +187,7 @@ pub const Surface = struct {
     }
 
     /// The system's appearance may have changed: the next frame draws it.
-    fn appearanceChanged(ctx: ?*anyopaque) callconv(.c) void {
+    fn appearanceChanged(ctx: ?*anyopaque) void {
         const self: *Surface = @ptrCast(@alignCast(ctx.?));
         self.requestFrame();
     }
