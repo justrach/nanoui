@@ -75,6 +75,7 @@ pub const Surface = struct {
             .theme_override = theme_override,
             .start_time = clock.now(),
         };
+        if (window.app.gui and !window.app.flags.hidden) self.text.enablePersistence(window.app.options.name);
         self.ctx = .init(gpa, &self.text);
         // No theme background under a transparent window's view.
         self.ctx.transparent_root = window.transparent != .none;

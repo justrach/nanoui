@@ -14,6 +14,7 @@ const ui = @import("../ui/ui.zig");
 const Surface = @import("surface.zig").Surface;
 const Key = @import("../ui/input.zig").Key;
 const textinput = @import("textinput.zig");
+const key_repeat = @import("key_repeat.zig");
 
 extern "c" const UIKeyboardWillChangeFrameNotification: objc.Object;
 extern "c" const UIKeyboardFrameEndUserInfoKey: objc.Object;
@@ -29,6 +30,13 @@ pub const State = struct {
     arena: std.heap.ArenaAllocator,
     pasted: std.ArrayList(u8) = .empty,
     text: textinput.State = .{},
+    /// The key a view took that's still held, and when it presses again.
+    held: ?objc.Object = null,
+    repeat: key_repeat.Timer = .{},
+
+    pub fn repeating(st: State) bool {
+        return st.repeat.running();
+    }
 
     pub fn init(gpa: std.mem.Allocator) State {
         return .{ .arena = .init(gpa) };
@@ -39,6 +47,7 @@ pub const State = struct {
         st.pasted.deinit(gpa);
         st.text.deinit();
         st.arena.deinit();
+        stopRepeat(st);
     }
 };
 
@@ -131,6 +140,10 @@ fn reveal(s: *Surface) void {
     st.revealed_over = kb;
     if (kb <= 0) return;
     if (@import("../ui/scroll.zig").revealCaret(&s.ctx, s.size.h - s.safeArea().bottom)) s.requestFrame();
+}
+
+pub fn pushOp(s: *Surface, op: ctx_mod.TextOp) void {
+    push(s, op);
 }
 
 fn push(s: *Surface, op: ctx_mod.TextOp) void {
@@ -239,7 +252,10 @@ fn pressesBegan(obj: objc.Object, _: objc.SEL, presses: objc.Object, event: ?obj
             for (0..objc.msg(objc.NSUInteger, all, "count", .{})) |i| {
                 const press = objc.msg(objc.Object, all, "objectAtIndex:", .{i});
                 const key = objc.msg(?objc.Object, press, "key", .{}) orelse continue;
-                if (handle(s, key)) taken = true;
+                if (handle(s, key)) {
+                    taken = true;
+                    if (!s.dead) startRepeat(s, key);
+                }
                 if (s.dead) return;
             }
             if (taken) return;
@@ -272,8 +288,10 @@ fn released(obj: objc.Object, presses: objc.Object, event: ?objc.Object) void {
     for (0..objc.msg(objc.NSUInteger, all, "count", .{})) |i| {
         const press = objc.msg(objc.Object, all, "objectAtIndex:", .{i});
         const key = objc.msg(?objc.Object, press, "key", .{}) orelse continue;
+        const code = objc.msg(objc.NSInteger, key, "keyCode", .{});
+        if (s.keys.repeat.release(code)) releaseHeld(&s.keys);
         // The left and right Control, Shift, Option and Command keys.
-        switch (objc.msg(objc.NSInteger, key, "keyCode", .{})) {
+        switch (code) {
             0xE0, 0xE4 => in.ctrl = false,
             0xE1, 0xE5 => in.shift = false,
             0xE2, 0xE6 => in.alt = false,
@@ -281,6 +299,35 @@ fn released(obj: objc.Object, presses: objc.Object, event: ?objc.Object) void {
             else => {},
         }
     }
+}
+
+fn startRepeat(s: *Surface, key: objc.Object) void {
+    const in = &s.ctx.input;
+    const code = objc.msg(objc.NSInteger, key, "keyCode", .{});
+    if (!key_repeat.repeats(code, in.cmd, in.ctrl)) return;
+    releaseHeld(&s.keys);
+    s.keys.held = objc.retain(key);
+    s.keys.repeat.start(code, cf.CACurrentMediaTime());
+    s.requestFrame();
+}
+
+fn releaseHeld(st: *State) void {
+    if (st.held) |k| objc.release(k);
+    st.held = null;
+}
+
+/// No more repeats: the app left the foreground, or the surface is going.
+pub fn stopRepeat(st: *State) void {
+    st.repeat = .{};
+    releaseHeld(st);
+}
+
+/// One step of a held key, before the display link's frame.
+pub fn repeatStep(s: *Surface) void {
+    if (!s.keys.repeat.due(cf.CACurrentMediaTime())) return;
+    const key = s.keys.held orelse return;
+    // It stopped meaning anything (the field it moved in went): let it go.
+    if (!handle(s, key) and !s.dead) stopRepeat(&s.keys);
 }
 
 /// The modifier keys held, from UIKit's flags (a key's, an event's).

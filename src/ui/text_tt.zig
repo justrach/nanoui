@@ -4,6 +4,7 @@
 //! font lacks, greedy wrapping at spaces, carets, and the glyph atlas.
 //! The same interface as `text_mac.zig`; layouts are cached the same way.
 const std = @import("std");
+const builtin = @import("builtin");
 const types = @import("types.zig");
 const fontdb = @import("tt/fontdb.zig");
 const tt = @import("tt/font.zig");
@@ -16,6 +17,14 @@ pub const rich = @import("rich_tt.zig");
 pub const Atlas = atlas_mod.Atlas;
 pub const Sprite = atlas_mod.Sprite;
 pub const subpixel_bins = atlas_mod.subpixel_bins;
+
+const desktop = switch (builtin.os.tag) {
+    .macos => @import("../desktop.zig"),
+    .ios => @import("../ios/desktop.zig"),
+    .windows => @import("../windows/desktop.zig"),
+    .linux => if (builtin.abi.isAndroid()) @import("../android/desktop.zig") else @import("../linux/desktop.zig"),
+    else => unreachable,
+};
 
 pub const Font = struct {
     ascent: f32,
@@ -78,6 +87,15 @@ pub const TextSystem = struct {
 
     pub fn init(gpa: std.mem.Allocator) TextSystem {
         return .{ .gpa = gpa, .db = .init(gpa, std.Io.Threaded.global_single_threaded.io()), .atlas = .init(gpa), .images = .{ .gpa = gpa } };
+    }
+
+    /// Called only by live window surfaces. Testers and headless snapshots use
+    /// plain `init`, so they never create or write a persistent font index.
+    pub fn enablePersistence(self: *TextSystem, app_name: []const u8) void {
+        if (builtin.is_test) return;
+        const dir = desktop.path(self.gpa, .cache, app_name) catch return;
+        defer self.gpa.free(dir);
+        self.db.enableCache(dir);
     }
 
     pub fn deinit(self: *TextSystem) void {

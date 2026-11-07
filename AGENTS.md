@@ -2,7 +2,7 @@
 
 nanoui is a desktop application framework in Zig 0.17, after
 [mygo](https://github.com/egoist/mygo). Windows show either a web page in the
-system webview (WKWebView, macOS only for now) with typed Zig ↔ TypeScript
+system webview (WKWebView, WebView2, WebKitGTK) with typed Zig ↔ TypeScript
 IPC, or native UI that nanoui draws itself, in the manner of GPUI: with Metal
 and CoreText on macOS; on Linux (GTK 3, loaded with dlopen) and Windows
 (Win32) with nanoui's own TrueType text (`src/ui/tt/`) and CPU renderer
@@ -73,6 +73,7 @@ src/window.zig        NSWindow showing a page or native UI, window controls
 src/window_lights.zig the traffic lights kept where a taller top bar wants them
 src/page.zig          the page's platform-free part: the outbox, held messages, the asset table
 src/page_webkit.zig   WKWebView: the view, the scheme handler, the message handler
+src/page_webkitgtk.zig  WebKitGTK: the view, the scheme handler, the message handler
 src/page_webview2.zig WebView2: the view, the resource filter, the message handler
 src/page_webview2_profile.zig  WebView2's profile folder
 src/windows/webview2.zig  WebView2's COM interfaces, by vtable slot
@@ -123,7 +124,8 @@ src/ui/images.zig     pictures (ui.image): decoded once, packed in a BGRA atlas
 src/ui/png_decode.zig PNG to pixels where ImageIO isn't (Linux, Windows, portable)
 src/ui/jpeg_decode.zig  JPEG likewise, baseline and progressive (jpeg_scan, jpeg_pixels); gif_decode.zig: a GIF's first frame
 src/platform.zig      what differs by OS below the UI (event loop, clipboard)
-src/linux/            GTK 3 backend: app, window, surface (GL area or CPU), dialogs, fd watches
+src/linux/            GTK 3 backend: app, window, surface (GL area or CPU), dialogs, fd watches;
+                      webkit: WebKitGTK, loaded with dlopen
 src/windows/          Win32 backend: app, window, surface (events, frames) +
                       surface_gpu (paint, D3D11 present), d3d (swap chain),
                       ime (IMM32), win32 (the extern layer), desktop, dialog,
@@ -139,7 +141,7 @@ src/android/          NativeActivity backend: the activity and the app's thread 
 src/menu_accel.zig    menus as accelerators (Linux, Windows, iOS, Android)
 src/kit/              nanoui.kit: components after GPUI Kit (buttons, overlays, tabs, forms)
 tools/*.Dockerfile    Linux (GTK, Xvfb) and Windows (Wine) test images
-tools/ios/            app bundles (bundle.zig), the Simulator (sim.sh), Zig's lib fixed (zig-lib.sh)
+tools/ios/            app bundles (bundle.zig, finish.sh, check-bundle.sh), the Simulator (sim.sh), Zig's lib fixed (zig-lib.sh)
 tools/android/        APKs (apk.zig: the SDK, the manifest, aapt2, pack.zig, apksigner), run.sh, emulator.sh
 examples/             hello (webview), counter and gallery (native UI), browser (local and remote pages)
 hillclimb/            headless benchmarks against mygo (its own package)
@@ -147,6 +149,10 @@ apps/nanoterm/        the first app: a Warp-like terminal with ACP agents
 apps/nanomon/         a small activity monitor (libproc, Mach, /proc)
 apps/nanobrowser/     a web browser with its own engine, no webview (HTML, CSS, layout, JavaScript); its README says what it is not
 apps/nanomail/        a JMAP mail client for macOS and iOS
+apps/nanocua/         computer use for agents: MCP over a socket, the accessibility tree, input
+                      and screenshots in one app in the background, a panel with a kill switch
+                      (macOS). Vendored from codegraff, under its license, not MIT: change it
+                      there (VENDORED.md), not here
 site/                 the website (its own repo): Next.js on Cloudflare Workers, a gallery
 tools/lines.zig       the 600-line check
 tools/version.sh      set or check the version (build.zig.zon) for a release

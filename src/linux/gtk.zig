@@ -31,6 +31,10 @@ pub const Api = struct {
     g_main_loop_unref: *const fn (loop: *anyopaque) callconv(.c) void,
     g_free: *const fn (ptr: ?*anyopaque) callconv(.c) void,
     g_object_unref: *const fn (obj: *anyopaque) callconv(.c) void,
+    g_object_ref_sink: *const fn (obj: *anyopaque) callconv(.c) *anyopaque,
+    g_object_new: *const fn (kind: usize, first_property: ?[*:0]const u8, ...) callconv(.c) ?*anyopaque,
+    g_signal_handler_disconnect: *const fn (instance: *anyopaque, id: c_ulong) callconv(.c) void,
+    g_memory_input_stream_new_from_data: *const fn (data: [*]const u8, len: isize, destroy: ?*anyopaque) callconv(.c) *anyopaque,
     g_slist_free: *const fn (list: ?*anyopaque) callconv(.c) void,
     // GTK, the same in 3 and 4.
     gtk_window_set_title: *const fn (w: *Widget, title: [*:0]const u8) callconv(.c) void,
@@ -70,6 +74,8 @@ pub const Api = struct {
     // GDK.
     gdk_keyval_to_unicode: *const fn (keyval: c_uint) callconv(.c) u32,
     gdk_display_get_default: *const fn () callconv(.c) ?*anyopaque,
+    gdk_display_get_default_seat: *const fn (display: *anyopaque) callconv(.c) *anyopaque,
+    gdk_seat_get_pointer: *const fn (seat: *anyopaque) callconv(.c) ?*anyopaque,
     // cairo.
     cairo_image_surface_create_for_data: *const fn (data: [*]u8, format: c_int, width: c_int, height: c_int, stride: c_int) callconv(.c) *anyopaque,
     cairo_surface_set_device_scale: *const fn (surface: *anyopaque, x: f64, y: f64) callconv(.c) void,
@@ -90,6 +96,8 @@ pub const Api3 = struct {
     gtk_window_get_size: *const fn (w: *Widget, width: *c_int, height: *c_int) callconv(.c) void,
     gtk_window_get_position: *const fn (w: *Widget, x: *c_int, y: *c_int) callconv(.c) void,
     gtk_window_set_position: *const fn (w: *Widget, pos: c_int) callconv(.c) void,
+    gtk_window_begin_move_drag: *const fn (w: *Widget, button: c_int, root_x: c_int, root_y: c_int, time: u32) callconv(.c) void,
+    gdk_device_get_position: *const fn (device: *anyopaque, screen: ?*anyopaque, x: *c_int, y: *c_int) callconv(.c) void,
     gtk_window_set_keep_above: *const fn (w: *Widget, on: c_int) callconv(.c) void,
     gtk_window_set_skip_taskbar_hint: *const fn (w: *Widget, on: c_int) callconv(.c) void,
     gtk_window_set_skip_pager_hint: *const fn (w: *Widget, on: c_int) callconv(.c) void,
@@ -138,6 +146,9 @@ pub const Api4 = struct {
     gtk_window_destroy: *const fn (w: *Widget) callconv(.c) void,
     gtk_window_minimize: *const fn (w: *Widget) callconv(.c) void,
     gtk_window_get_default_size: *const fn (w: *Widget, width: *c_int, height: *c_int) callconv(.c) void,
+    gtk_native_get_surface: *const fn (native: *Widget) callconv(.c) ?*anyopaque,
+    gdk_surface_get_device_position: *const fn (surface: *anyopaque, device: *anyopaque, x: *f64, y: *f64, mask: ?*c_uint) callconv(.c) c_int,
+    gdk_toplevel_begin_move: *const fn (toplevel: *anyopaque, device: *anyopaque, button: c_int, x: f64, y: f64, time: u32) callconv(.c) void,
     gtk_widget_set_visible: *const fn (w: *Widget, on: c_int) callconv(.c) void,
     gtk_widget_set_focusable: *const fn (w: *Widget, on: c_int) callconv(.c) void,
     gtk_widget_set_cursor_from_name: *const fn (w: *Widget, name: ?[*:0]const u8) callconv(.c) void,
@@ -176,14 +187,33 @@ pub var v3: Api3 = undefined;
 pub var v4api: Api4 = undefined;
 /// GTK 4 is loaded (else GTK 3).
 pub var v4 = false;
+/// Only GTK 3 will do: the WebKitGTK a page needs is built for it.
+pub var force3 = false;
 var loaded = false;
+var display: ?bool = null;
+
+/// `NANOUI_GTK=3` asks for GTK 3.
+pub fn wantsThree() bool {
+    return if (std.c.getenv("NANOUI_GTK")) |v| std.mem.eql(u8, std.mem.span(v), "3") else false;
+}
+
+/// GTK is loaded and started, for what needs a display and may come before
+/// any window (a dialog, the clipboard); false without GTK or a display.
+pub fn ready() bool {
+    if (!load()) return false;
+    if (display == null) {
+        const ok = if (v4) v4api.gtk_init_check() else v3.gtk_init_check(null, null);
+        display = ok != 0;
+    }
+    return display.?;
+}
 
 /// Loads GTK and what it links (GDK, GLib, cairo): GTK 4 where it's
-/// installed, else GTK 3 (`NANOUI_GTK=3` asks for 3); false when neither is.
+/// installed, else GTK 3 (`wantsThree`, `force3`); false when neither is.
+/// Enough for GLib's timers and watches: `ready` starts it for windows.
 pub fn load() bool {
     if (loaded) return true;
-    const want3 = if (std.c.getenv("NANOUI_GTK")) |v| std.mem.eql(u8, std.mem.span(v), "3") else false;
-    if (!want3) if (std.c.dlopen("libgtk-4.so.1", .{ .NOW = true, .GLOBAL = true })) |lib| {
+    if (!wantsThree() and !force3) if (std.c.dlopen("libgtk-4.so.1", .{ .NOW = true, .GLOBAL = true })) |lib| {
         if (table(Api, lib, &api) and table(Api4, lib, &v4api)) {
             v4 = true;
             loaded = true;

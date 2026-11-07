@@ -5,6 +5,19 @@
 //! was then covered by the older one (a deleted letter came back, a list's
 //! selection went back a row). The link is paused instead, and run again at
 //! the display's pace a refresh before the frame is due.
+//!
+//! Also a running link that gives no frames. On macOS 14 and 15 a
+//! CAMetalDisplayLink can stop after a few frames and stay stopped, for many
+//! seconds, until something else on the screen's layers changes: seen on CI's
+//! Macs, where a query stopped drawing as soon as a key no longer resized the
+//! panel. Keys were handled, and nothing showed. `watch` looks after it for as
+//! long as a frame is wanted, and invalidating the window's shadow, which leaves
+//! nothing changed, has had it running again within 40 ms each time.
+//!
+//! A link that does run can still leave a presented frame off the screen: a
+//! word typed showed only 1.25 s later, once another key's nudge came. So every
+//! present is followed by the same nudge (`presented`), and with it neither
+//! has been seen on macOS 14, 15 or 26.
 const std = @import("std");
 const objc = @import("../objc.zig");
 const cf = @import("cf.zig");
@@ -15,7 +28,20 @@ pub const Wake = struct {
     due: f64 = 0,
     /// Wakes still to fire: the surface outlives them (`finishDestroy`).
     pending: u32 = 0,
+    /// The link's last frame (`CACurrentMediaTime`).
+    last_tick: f64 = 0,
+    /// `check` is due; since when; and how many nudges went unanswered.
+    watching: bool = false,
+    watched_from: f64 = 0,
+    nudges: u8 = 0,
 };
+
+/// How long a running link may give no frame: more than one interval at its
+/// slowest pace (1/24 s), and a healthy link's start takes about 20 ms.
+const patience = 0.05;
+/// Then it's left until a frame is next wanted: a sleeping display gives no
+/// frames either, and nothing here should go on running for that.
+const max_nudges = 5;
 
 /// Pauses `s`'s display link until about `due`. Only the latest wake counts.
 pub fn at(s: *Surface, due: f64) void {
@@ -46,4 +72,65 @@ fn fire(ptr: ?*anyopaque) callconv(.c) void {
     }
     s.setRate(null);
     s.setPaced(true);
+}
+
+/// A frame has just gone to the screen: has the window server look. Not while
+/// another is on its way, which covers one left off the screen a refresh later:
+/// at 60 fps the nudge took about 5% of a core in the window server.
+pub fn presented(s: *Surface) void {
+    if (s.ctx.animating or s.ctx.time_driven != .none) return;
+    objc.msg(void, s.window.nswindow, "invalidateShadow", .{});
+}
+
+/// A frame is wanted from the link: sees that it comes. Not a poll: it stops
+/// as the link is paused, which it is whenever nothing is wanted.
+pub fn watch(s: *Surface) void {
+    if (s.display_link == null) return;
+    s.wake.nudges = 0;
+    arm(s);
+}
+
+fn arm(s: *Surface) void {
+    if (s.wake.watching) return;
+    s.wake.watching = true;
+    s.wake.watched_from = cf.CACurrentMediaTime();
+    s.wake.pending += 1;
+    objc.dispatchAfter(@intFromFloat(patience * std.time.ns_per_s), s, check);
+}
+
+const Look = enum { stop, again, nudge };
+
+fn look(wanted: bool, ticked: bool, nudges: u8) Look {
+    if (!wanted) return .stop;
+    if (ticked) return .again;
+    return if (nudges < max_nudges) .nudge else .stop;
+}
+
+fn check(ptr: ?*anyopaque) callconv(.c) void {
+    const s: *Surface = @ptrCast(@alignCast(ptr));
+    s.wake.pending -= 1;
+    s.wake.watching = false;
+    if (s.dead) return s.finishDestroy();
+    const ticked = s.wake.last_tick >= s.wake.watched_from;
+    switch (look(s.paced and s.visible(), ticked, s.wake.nudges)) {
+        .stop => return,
+        .again => s.wake.nudges = 0,
+        .nudge => {
+            s.wake.nudges += 1;
+            objc.msg(void, s.window.nswindow, "invalidateShadow", .{});
+        },
+    }
+    arm(s);
+}
+
+test "a link that gives no frames is nudged, and not for ever" {
+    const t = std.testing;
+    try t.expectEqual(Look.again, look(true, true, 0));
+    try t.expectEqual(Look.nudge, look(true, false, 0));
+    try t.expectEqual(Look.nudge, look(true, false, max_nudges - 1));
+    // A sleeping display: the next frame wanted looks again.
+    try t.expectEqual(Look.stop, look(true, false, max_nudges));
+    // Paused or out of sight: no frames are wanted, so nothing runs.
+    try t.expectEqual(Look.stop, look(false, false, 0));
+    try t.expectEqual(Look.stop, look(false, true, 0));
 }

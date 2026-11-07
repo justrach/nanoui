@@ -13,6 +13,9 @@ const dev = @import("../dev.zig");
 const window_mod = @import("window.zig");
 const menu_mod = @import("../menu_accel.zig");
 const ui = @import("../ui/ui.zig");
+const scenes = @import("scenes.zig");
+const tsgen = @import("../tsgen.zig");
+const ipc = @import("../ipc.zig").ipc(Window, App);
 const Window = window_mod.Window;
 
 extern "c" fn UIApplicationMain(argc: c_int, argv: [*]?[*:0]u8, principal: ?objc.Object, delegate: ?objc.Object) c_int;
@@ -38,6 +41,15 @@ pub const App = struct {
     options: Options,
     windows: std.ArrayList(*Window) = .empty,
     main_menu: ?*menu_mod.Menu = null,
+    /// What pages call (`ipc.zig`), and the client they load it through.
+    services: std.StringHashMapUnmanaged(ipc.Service) = .empty,
+    events: std.ArrayList(tsgen.Service) = .empty,
+    client_js: ?[]u8 = null,
+    /// Windows waiting for their own scene, and what makes one for the system's
+    /// New Window (`scenes.zig`).
+    pending_scenes: std.ArrayList(*Window) = .empty,
+    on_new_window: ?struct { ctx: *anyopaque, func: *const fn (ctx: *anyopaque, app: *App) void } = null,
+    answering_scene: bool = false,
     flags: dev.Flags = .{},
     /// The UIWindow nanoui's windows show in, once UIKit made it.
     uiwindow: ?objc.Object = null,
@@ -86,6 +98,10 @@ pub const App = struct {
     pub fn destroy(self: *App) void {
         while (self.windows.items.len > 0) self.windows.items[self.windows.items.len - 1].close();
         self.windows.deinit(self.gpa);
+        self.pending_scenes.deinit(self.gpa);
+        self.services.deinit(self.gpa);
+        self.events.deinit(self.gpa);
+        if (self.client_js) |js| self.gpa.free(js);
         if (self.main_menu) |m| m.destroy();
         if (self.placeholder) |p| objc.release(p);
         if (self.uiwindow) |w| objc.release(w);
@@ -93,26 +109,52 @@ pub const App = struct {
         self.gpa.destroy(self);
     }
 
-    /// Pages are not supported on iOS yet: services have no caller.
+    /// Binds a service: pages call its methods as `Name.method(...)`
+    /// through the generated client (`nanoui.js`).
     pub fn bind(self: *App, service: anytype) !void {
-        _ = self;
-        _ = service;
+        const T = @typeInfo(@TypeOf(service)).pointer.child;
+        const svc = ipc.service(T, service);
+        try self.services.put(self.gpa, svc.name, svc);
     }
 
+    /// Declares a typed event (`nanoui.Event(...)`) for the generated client.
     pub fn registerEvent(self: *App, comptime E: type) !void {
-        _ = self;
-        _ = E;
+        try self.events.append(self.gpa, E.client);
+    }
+
+    /// The generated JavaScript client, served to pages at `/nanoui.js`.
+    pub fn clientJs(self: *App) ![]const u8 {
+        if (self.client_js) |js| return js;
+        var aw: std.Io.Writer.Allocating = .init(self.gpa);
+        errdefer aw.deinit();
+        try aw.writer.writeAll(tsgen.runtime_js);
+        var it = self.services.valueIterator();
+        while (it.next()) |svc| try aw.writer.writeAll(svc.client.js);
+        for (self.events.items) |e| try aw.writer.writeAll(e.js);
+        self.client_js = try aw.toOwnedSlice();
+        return self.client_js.?;
     }
 
     pub fn newWindow(self: *App, options: window_mod.Options) !*Window {
         const w = try Window.create(self, options);
         errdefer w.close();
         try self.windows.append(self.gpa, w);
+        if (w.own_scene) {
+            // Not up yet: `attach` asks. Where there are no scenes to have, on the stack.
+            if (self.uiwindow == null or scenes.request(self, w)) return w;
+            w.own_scene = false;
+        }
         if (self.uiwindow != null) {
             w.realize();
             self.arrange();
         }
         return w;
+    }
+
+    /// What makes a window when the system opens a new one of the app (iPad's New
+    /// Window, a window restored): `func` calls `newWindow` with `.own_scene`.
+    pub fn onNewWindow(self: *App, ctx: *anyopaque, func: *const fn (ctx: *anyopaque, app: *App) void) void {
+        self.on_new_window = .{ .ctx = ctx, .func = func };
     }
 
     /// Where a window shown now stacks: over every other.
@@ -131,12 +173,13 @@ pub const App = struct {
     /// Runs UIKit: it never returns while the app runs. With
     /// `--nanoui-snapshot` it renders the first window offscreen instead.
     pub fn run(self: *App) !void {
-        if (self.flags.generate_dir != null) return error.PagesUnsupported;
+        // The client is written from a Mac or a PC's build; a phone has no project to write it into.
+        if (self.flags.generate_dir != null) return error.GenerateUnsupported;
         if (self.flags.snapshot) |path| return dev.snapshot(self, path);
         if (self.stopping) return;
         self.running = true;
         if (self.flags.play) |steps| @import("../play.zig").start(self, steps);
-        _ = defineClasses();
+        _ = scenes.defineClasses();
         const name = objc.nsString("NanoUIAppDelegate");
         _ = UIApplicationMain(_NSGetArgc().*, _NSGetArgv().*, null, name);
         self.running = false;
@@ -298,7 +341,7 @@ pub const App = struct {
         for (0..i + 1) |_| {
             var best: ?*Window = null;
             for (self.windows.items) |w| {
-                if (!w.wanted or w.closed or w.controller == null) continue;
+                if (!w.wanted or w.closed or w.controller == null or w.own_scene) continue;
                 if (last) |l| if (w.order <= l.order) continue;
                 if (best == null or w.order < best.?.order) best = w;
             }
@@ -405,7 +448,9 @@ pub const App = struct {
     /// Which windows the screen shows now: the root and those presented
     /// over it, not on their way out.
     fn markShown(self: *App) void {
-        for (self.windows.items) |w| w.shown = false;
+        for (self.windows.items) |w| {
+            if (!w.own_scene) w.shown = false;
+        }
         const win = self.uiwindow orelse return;
         var it = objc.msg(?objc.Object, win, "rootViewController", .{});
         while (it) |v| : (it = objc.msg(?objc.Object, v, "presentedViewController", .{})) {
@@ -426,12 +471,14 @@ pub const App = struct {
     }
 
     /// UIKit made the window the app shows in: nanoui's windows go in it.
-    fn attach(self: *App, uiwindow: objc.Object) void {
+    pub fn attach(self: *App, uiwindow: objc.Object) void {
         self.uiwindow = objc.retain(uiwindow);
         self.placeholder = objc.new("UIViewController");
         // Made now, or kept from a scene that went. The first takes the
         // screen at once; the others go over it once it is on screen.
-        for (self.windows.items) |w| w.realize();
+        for (self.windows.items) |w| {
+            if (!w.own_scene) w.realize();
+        }
         const root = if (self.nth(0)) |w| w.controller.? else self.placeholder.?;
         // Its first frame may show or close windows: `arrange` waits.
         self.arranging = true;
@@ -440,11 +487,19 @@ pub const App = struct {
         self.arranging = false;
         self.markShown();
         self.scheduleArrange();
+        // Windows made before UIKit ran that asked for a scene of their own.
+        const early = self.gpa.dupe(*Window, self.windows.items) catch return;
+        defer self.gpa.free(early);
+        for (early) |w| if (w.own_scene and w.controller == null and !scenes.request(self, w)) {
+            w.own_scene = false;
+            w.realize();
+            self.arrange();
+        };
     }
 
     /// Foreground and background: frames stop in the background, where
     /// the GPU is not the app's, and the one waiting runs on return.
-    fn setActive(self: *App, on: bool) void {
+    pub fn setActive(self: *App, on: bool) void {
         if (self.active == on) return;
         self.active = on;
         // A frame waiting may close a window: go through a copy, skipping
@@ -459,7 +514,7 @@ pub const App = struct {
 
     /// The system let the scene go (it may connect a new one later): the
     /// windows leave its UIWindow, free to go in the next one's.
-    fn detach(self: *App) void {
+    pub fn detach(self: *App) void {
         const win = self.uiwindow orelse return;
         // A dialog up goes with it, unanswered: its wait ends.
         @import("dialog.zig").scene_gone +%= 1;
@@ -476,91 +531,3 @@ pub const App = struct {
         self.markShown();
     }
 };
-
-fn defineClasses() objc.Class {
-    _ = objc.defineClass(.{
-        .name = "NanoUISceneDelegate",
-        .superclass = "UIResponder",
-        .protocols = &.{"UIWindowSceneDelegate"},
-        .methods = &.{
-            .{ .name = "scene:willConnectToSession:options:", .imp = &sceneConnect, .types = "v@:@@@" },
-            .{ .name = "sceneDidBecomeActive:", .imp = &becameActive, .types = "v@:@" },
-            .{ .name = "sceneWillEnterForeground:", .imp = &becameActive, .types = "v@:@" },
-            .{ .name = "sceneDidEnterBackground:", .imp = &enteredBackground, .types = "v@:@" },
-            .{ .name = "sceneDidDisconnect:", .imp = &sceneDisconnect, .types = "v@:@" },
-            .{ .name = "window", .imp = &windowGetter, .types = "@@:" },
-            .{ .name = "setWindow:", .imp = &windowSetter, .types = "v@:@" },
-        },
-    });
-    return objc.defineClass(.{
-        .name = "NanoUIAppDelegate",
-        .superclass = "UIResponder",
-        .protocols = &.{"UIApplicationDelegate"},
-        .methods = &.{
-            .{ .name = "application:didFinishLaunchingWithOptions:", .imp = &didFinishLaunching, .types = "B@:@@" },
-            .{ .name = "application:configurationForConnectingSceneSession:options:", .imp = &sceneConfiguration, .types = "@@:@@@" },
-            .{ .name = "applicationDidBecomeActive:", .imp = &becameActive, .types = "v@:@" },
-            .{ .name = "applicationWillEnterForeground:", .imp = &becameActive, .types = "v@:@" },
-            .{ .name = "applicationDidEnterBackground:", .imp = &enteredBackground, .types = "v@:@" },
-            .{ .name = "window", .imp = &windowGetter, .types = "@@:" },
-            .{ .name = "setWindow:", .imp = &windowSetter, .types = "v@:@" },
-        },
-    });
-}
-
-/// Whether Info.plist declares scenes: then the scene delegate shows the app.
-fn usesScenes() bool {
-    const bundle = objc.msg(objc.Object, objc.class("NSBundle"), "mainBundle", .{});
-    return objc.msg(?objc.Object, bundle, "objectForInfoDictionaryKey:", .{objc.nsString("UIApplicationSceneManifest")}) != null;
-}
-
-fn didFinishLaunching(_: objc.Object, _: objc.SEL, _: objc.Object, _: ?objc.Object) callconv(.c) objc.BOOL {
-    const app = current orelse return objc.YES;
-    if (usesScenes()) return objc.YES;
-    const screen = objc.msg(objc.Object, objc.class("UIScreen"), "mainScreen", .{});
-    const bounds = objc.msg(objc.CGRect, screen, "bounds", .{});
-    const win = objc.msg(objc.Object, objc.alloc("UIWindow"), "initWithFrame:", .{bounds});
-    defer objc.release(win);
-    app.attach(win);
-    return objc.YES;
-}
-
-fn sceneConfiguration(_: objc.Object, _: objc.SEL, _: objc.Object, session: objc.Object, _: objc.Object) callconv(.c) objc.Object {
-    const role = objc.msg(objc.Object, session, "role", .{});
-    const config = objc.msg(objc.Object, objc.class("UISceneConfiguration"), "configurationWithName:sessionRole:", .{ @as(?objc.Object, null), role });
-    objc.msg(void, config, "setDelegateClass:", .{objc.class("NanoUISceneDelegate")});
-    return config;
-}
-
-fn sceneConnect(_: objc.Object, _: objc.SEL, scene: objc.Object, _: objc.Object, _: objc.Object) callconv(.c) void {
-    const app = current orelse return;
-    // One scene shows the app; another (iPad's windows) is not supported yet.
-    if (app.uiwindow != null) return;
-    // Connected in the background (a launch for a background task): no
-    // frames until it comes forward (UISceneActivationStateBackground).
-    if (objc.msg(objc.NSInteger, scene, "activationState", .{}) == 2) app.active = false;
-    const win = objc.msg(objc.Object, objc.alloc("UIWindow"), "initWithWindowScene:", .{scene});
-    defer objc.release(win);
-    app.attach(win);
-}
-
-fn sceneDisconnect(_: objc.Object, _: objc.SEL, scene: objc.Object) callconv(.c) void {
-    const app = current orelse return;
-    const win = app.uiwindow orelse return;
-    if (objc.msg(?objc.Object, win, "windowScene", .{}) == scene) app.detach();
-}
-
-fn becameActive(_: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
-    if (current) |app| app.setActive(true);
-}
-
-fn enteredBackground(_: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
-    if (current) |app| app.setActive(false);
-}
-
-fn windowGetter(_: objc.Object, _: objc.SEL) callconv(.c) ?objc.Object {
-    const app = current orelse return null;
-    return app.uiwindow;
-}
-
-fn windowSetter(_: objc.Object, _: objc.SEL, _: ?objc.Object) callconv(.c) void {}

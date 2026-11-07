@@ -15,6 +15,40 @@ pub const Options = struct {
     /// Why the app asks for the location while in use, shown in iOS's
     /// prompt (NSLocationWhenInUseUsageDescription). Without it, iOS refuses.
     location_usage: ?[]const u8 = null,
+    /// iPad: the person can open several windows of the app, and windows made
+    /// with `.own_scene` get theirs (UIApplicationSupportsMultipleScenes).
+    multiple_windows: bool = false,
+    /// More of Info.plist, as plist XML: `<key>…</key><string>…</string>`
+    /// (URL schemes, background modes, usage descriptions). A key the
+    /// bundle already sets mustn't appear again.
+    info: []const u8 = "",
+    /// An asset catalog (`.xcassets`), compiled with Xcode's actool: its
+    /// `app_icon` set becomes the icon, the rest `Assets.car`.
+    assets: ?std.Build.LazyPath = null,
+    app_icon: []const u8 = "AppIcon",
+    /// Files the app reads from its bundle (fonts, sounds, a privacy
+    /// manifest), by the name they have there.
+    resources: []const Part = &.{},
+    /// Folders for `PlugIns/`, as Xcode builds them: an app's widgets, share
+    /// extensions and the like (`.name = "Widgets.appex"`).
+    extensions: []const Part = &.{},
+    /// A Watch app's folder for `Watch/` (`.name = "Notes Watch.app"`).
+    watch: ?Part = null,
+    /// The signature's entitlements (push, keychain groups, app groups).
+    entitlements: ?std.Build.LazyPath = null,
+    /// Signs for a device. Without it the bundle is signed ad hoc, for the
+    /// Simulator, when any of the options above need a signature at all.
+    sign: ?Sign = null,
+};
+
+/// A file or folder that goes in the bundle, and its name there.
+pub const Part = struct { path: std.Build.LazyPath, name: []const u8 };
+
+pub const Sign = struct {
+    /// As `security find-identity` names it ("Apple Development: …").
+    identity: []const u8,
+    /// Becomes `embedded.mobileprovision`.
+    profile: std.Build.LazyPath,
 };
 
 /// The folder `<name>.app` holding `exe` and an Info.plist made for its
@@ -25,7 +59,39 @@ pub fn app(b: *std.Build, exe: *std.Build.Step.Compile, opts: Options) std.Build
     const wf = b.addWriteFiles();
     _ = wf.add(b.fmt("{s}/Info.plist", .{dir}), infoPlist(b, exe.name, target, opts));
     _ = wf.addCopyFile(executable(b, exe), b.fmt("{s}/{s}", .{ dir, exe.name }));
-    return wf.getDirectory().path(b, dir);
+    for (opts.resources) |r| _ = wf.addCopyFile(r.path, b.fmt("{s}/{s}", .{ dir, r.name }));
+    for (opts.extensions) |e| _ = wf.addCopyDirectory(e.path, b.fmt("{s}/PlugIns/{s}", .{ dir, e.name }), .{});
+    if (opts.watch) |w| _ = wf.addCopyDirectory(w.path, b.fmt("{s}/Watch/{s}", .{ dir, w.name }), .{});
+    const made = wf.getDirectory().path(b, dir);
+    if (opts.assets == null and opts.entitlements == null and opts.sign == null and opts.extensions.len == 0 and opts.watch == null) return made;
+    return finished(b, made, target, opts);
+}
+
+/// The app with what takes Xcode's tools: its catalog compiled and merged
+/// in, then signed from the inside out (finish.sh).
+fn finished(b: *std.Build, made: std.Build.LazyPath, target: std.Target, opts: Options) std.Build.LazyPath {
+    const run = b.addSystemCommand(&.{ "sh", "-c", @embedFile("finish.sh"), "finish" });
+    run.addDirectoryArg(made);
+    const out = run.addOutputDirectoryArg(b.fmt("{s}.app", .{opts.name}));
+    run.addArg(if (opts.sign) |s| s.identity else "-");
+    if (opts.sign) |s| run.addFileArg(s.profile) else run.addArg("");
+    if (opts.entitlements) |e| run.addFileArg(e) else run.addArg("");
+    if (opts.assets) |catalog| {
+        const simulator = target.abi == .simulator;
+        const min = target.os.version_range.semver.min;
+        const actool = b.addSystemCommand(&.{ "xcrun", "actool", "--notices", "--warnings", "--errors", "--output-format", "human-readable-text" });
+        actool.addArgs(&.{ "--platform", if (simulator) "iphonesimulator" else "iphoneos", "--minimum-deployment-target", b.fmt("{d}.{d}", .{ min.major, min.minor }) });
+        actool.addArgs(&.{ "--target-device", "iphone", "--target-device", "ipad", "--app-icon", opts.app_icon, "--output-partial-info-plist" });
+        const partial = actool.addOutputFileArg("partial.plist");
+        actool.addArg("--compile");
+        const compiled = actool.addOutputDirectoryArg("compiled");
+        // A step's cache doesn't hash a folder argument's contents; WriteFiles
+        // does, so an edited catalog is compiled again.
+        actool.addDirectoryArg(b.addWriteFiles().addCopyDirectory(catalog, "Assets.xcassets", .{}));
+        run.addDirectoryArg(compiled);
+        run.addFileArg(partial);
+    }
+    return out;
 }
 
 /// `exe` as an app's program. For the Simulator, as Zig links it. For a
@@ -74,12 +140,15 @@ pub fn executable(b: *std.Build, exe: *std.Build.Step.Compile) std.Build.LazyPat
 /// screen (a narrower window without it) and its fold's reserved regions.
 fn stamped(b: *std.Build, exe: *std.Build.Step.Compile, bin: std.Build.LazyPath) std.Build.LazyPath {
     const min = exe.root_module.resolved_target.?.result.os.version_range.semver.min;
-    const run = b.addSystemCommand(&.{ "sh", "-c",
+    const run = b.addSystemCommand(&.{
+        "sh",    "-c",
         \\set -e
         \\sdk="$(xcrun --sdk iphonesimulator --show-sdk-version)"
         \\xcrun vtool -set-build-version iossim "$1" "$sdk" -replace -output "$3" "$2" 2>/dev/null
         \\codesign -f -s - "$3" 2>/dev/null
-    , "stamp", b.fmt("{d}.{d}", .{ min.major, min.minor }) });
+        ,
+        "stamp", b.fmt("{d}.{d}", .{ min.major, min.minor }),
+    });
     run.addFileArg(bin);
     return run.addOutputFileArg(exe.name);
 }
@@ -131,11 +200,12 @@ pub fn infoPlist(b: *std.Build, exe_name: []const u8, target: std.Target, opts: 
         \\  <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
         \\  <key>UILaunchScreen</key><dict/>
         \\  <key>UIApplicationSceneManifest</key>
-        \\  <dict><key>UIApplicationSupportsMultipleScenes</key><false/></dict>
+        \\  <dict><key>UIApplicationSupportsMultipleScenes</key><{s}/></dict>
         \\  <key>UIApplicationSupportsIndirectInputEvents</key><true/>
         \\  <key>CADisableMinimumFrameDurationOnPhone</key><true/>
         \\  <key>UIFileSharingEnabled</key><{s}/>
         \\  <key>LSSupportsOpeningDocumentsInPlace</key><{s}/>
+        \\{s}
         \\{s}
         \\  <key>UISupportedInterfaceOrientations</key>
         \\  <array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
@@ -154,9 +224,11 @@ pub fn infoPlist(b: *std.Build, exe_name: []const u8, target: std.Target, opts: 
         if (simulator) "iPhoneSimulator" else "iPhoneOS",
         min.major,
         min.minor,
+        if (opts.multiple_windows) "true" else "false",
         if (opts.file_sharing) "true" else "false",
         if (opts.file_sharing) "true" else "false",
         if (opts.location_usage) |why| b.fmt("  <key>NSLocationWhenInUseUsageDescription</key><string>{s}</string>", .{escaped(b, why)}) else "",
+        opts.info,
     });
 }
 
