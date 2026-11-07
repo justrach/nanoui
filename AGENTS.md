@@ -147,6 +147,7 @@ examples/             hello (webview), counter and gallery (native UI), browser 
 hillclimb/            headless benchmarks against mygo (its own package)
 apps/nanoterm/        the first app: a Warp-like terminal with ACP agents
 apps/nanomon/         a small activity monitor (libproc, Mach, /proc)
+apps/nanobrowser/     a web browser with its own engine, no webview (HTML, CSS, layout, JavaScript); its README says what it is not
 apps/nanomail/        a JMAP mail client for macOS and iOS
 apps/nanocua/         computer use for agents: MCP over a socket, the accessibility tree, input
                       and screenshots in one app in the background, a panel with a kill switch
