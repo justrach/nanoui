@@ -193,6 +193,80 @@ test "layout: boxes the layout moves glide from where they were" {
     try testing.expectApproxEqAbs(@as(f32, 40), yOf(&t, 0xff0000).?, 0.01);
 }
 
+const LayoutMove = struct {
+    moved: bool = false,
+    transition: motion.Transition,
+
+    fn view(s: *LayoutMove, c: *ui.Context) void {
+        const root = ui.div(c).column().sizeFull().p(if (s.moved) 40 else 0).bg(.white);
+        defer root.end();
+        const f = motion.frame(c, .{ .layout = true, .transition = s.transition });
+        ui.div(c).w(20).h(20).bg(.hex(0xff0000)).motion(f).end();
+    }
+};
+
+fn layoutPosition(t: *ui.Tester) ![2]f32 {
+    for (t.instances.items) |it| {
+        if (it.color[0] == 1 and it.color[1] == 0 and it.color[2] == 0)
+            return .{ it.rect[0], it.rect[1] };
+    }
+    return error.MissingLayoutBox;
+}
+
+fn interruptLayout(comptime flag: []const u8) !void {
+    const transitions = [_]motion.Transition{
+        .{ .tween = .{ .duration = 1, .ease = .linear } },
+        .default,
+    };
+    for (transitions) |transition| {
+        var s: LayoutMove = .{ .transition = transition };
+        var t: ui.Tester = undefined;
+        try t.init(testing.allocator, .init(&s, LayoutMove.view), .{ .width = 120, .height = 120, .scale = 1 });
+        defer t.deinit();
+        try testing.expectEqual([2]f32{ 0, 0 }, try layoutPosition(&t));
+        try testing.expect(!t.ctx.animating);
+
+        s.moved = true;
+        t.frame();
+        t.advance(0.1);
+        const mid = try layoutPosition(&t);
+        try testing.expect(mid[0] > 0 and mid[0] < 40 and mid[1] > 0 and mid[1] < 40);
+        try testing.expect(t.ctx.animating);
+
+        // Only the preference changes: the layout destination stays put.
+        @field(t.ctx, flag) = true;
+        t.frame();
+        try testing.expectEqual([2]f32{ 40, 40 }, try layoutPosition(&t));
+        try testing.expect(!t.ctx.animating and t.ctx.frame_in == null);
+        t.frame();
+        try testing.expectEqual([2]f32{ 40, 40 }, try layoutPosition(&t));
+        try testing.expect(!t.ctx.animating and t.ctx.frame_in == null);
+
+        // Turning motion back on must not resume the cancelled transition.
+        @field(t.ctx, flag) = false;
+        t.frame();
+        try testing.expectEqual([2]f32{ 40, 40 }, try layoutPosition(&t));
+        try testing.expect(!t.ctx.animating);
+        s.moved = false;
+        t.frame();
+        t.advance(0.1);
+        const back = try layoutPosition(&t);
+        try testing.expect(back[0] > 0 and back[0] < 40 and back[1] > 0 and back[1] < 40);
+        try testing.expect(t.ctx.animating);
+        t.settle(3);
+        try testing.expectEqual([2]f32{ 0, 0 }, try layoutPosition(&t));
+        try testing.expect(!t.ctx.animating and t.ctx.frame_in == null);
+    }
+}
+
+test "layout: reduced_motion interrupts an active transition at an unchanged destination" {
+    try interruptLayout("reduced_motion");
+}
+
+test "layout: reduce_motion interrupts an active transition at an unchanged destination" {
+    try interruptLayout("reduce_motion");
+}
+
 test "animated colors stay inside the renderer's unit range" {
     var f: motion.Frame = .{};
     motion.setChannel(&f, 7, -0.2);
