@@ -126,12 +126,31 @@ pub fn path(gpa: std.mem.Allocator, dir: Directory, app_name: []const u8) ![]u8 
     return full;
 }
 
-/// Whether the desktop asks for dark colors (a GTK theme named dark).
+/// Whether the desktop asks for dark colors: `GTK_THEME` saying dark, or the
+/// GTK theme itself (`gtk-theme-name`: `Adwaita-dark`, and the like) — the
+/// desktop's own setting, which on Wayland comes from the settings portal
+/// and follows a change live.
 pub fn isDark() bool {
-    const theme = env("GTK_THEME") orelse return false;
+    if (env("GTK_THEME")) |theme| if (hasDark(theme)) return true;
+    return gtkThemeIsDark();
+}
+
+fn hasDark(name: []const u8) bool {
     var i: usize = 0;
-    while (i + 4 <= theme.len) : (i += 1) if (std.ascii.eqlIgnoreCase(theme[i .. i + 4], "dark")) return true;
+    while (i + 4 <= name.len) : (i += 1) if (std.ascii.eqlIgnoreCase(name[i .. i + 4], "dark")) return true;
     return false;
+}
+
+/// The theme GTK is using, read from its own settings: null where GTK isn't
+/// loaded (a headless run) or the setting isn't there.
+fn gtkThemeIsDark() bool {
+    if (!gtk.load()) return false;
+    const settings = gtk.api.gtk_settings_get_default() orelse return false;
+    var name: ?[*:0]u8 = null;
+    gtk.api.g_object_get(settings, "gtk-theme-name", &name, @as(?*anyopaque, null));
+    const theme = name orelse return false;
+    defer gtk.api.g_free(theme);
+    return hasDark(std.mem.span(theme));
 }
 
 pub fn accentColor() [3]f32 {

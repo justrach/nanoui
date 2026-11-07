@@ -1,13 +1,15 @@
-//! A transparent window on Linux, GTK 3 (`Options.transparent`): only what
-//! the view draws shows. Where a compositor runs (X11 with one, and every
-//! Wayland session) the window takes the screen's RGBA visual, is cleared to
-//! nothing before its child draws, and the GL area keeps an alpha channel:
-//! the corners of a rounded panel are antialiased against the desktop.
-//! Where none runs, alpha can't show, so the window is cut instead to what
-//! the frame draws more than half opaque (the Shape extension: hard edges,
-//! but nothing square behind the corners); the CPU renderer draws it, so the
-//! shape can be read from its pixels. The functions are looked up, not
-//! required: a GTK without them leaves the window opaque.
+//! A transparent window on Linux (`Options.transparent`): only what the view
+//! draws shows. GTK 4 takes it by turning the window's own background off
+//! (one CSS rule) and letting the frame's alpha through: on Wayland the
+//! compositor always blends it. GTK 3, where a compositor runs (X11 with
+//! one, and every Wayland session) the window takes the screen's RGBA visual,
+//! is cleared to nothing before its child draws, and the GL area keeps an
+//! alpha channel: the corners of a rounded panel are antialiased against the
+//! desktop. Where none runs, alpha can't show, so the window is cut instead
+//! to what the frame draws more than half opaque (the Shape extension: hard
+//! edges, but nothing square behind the corners); the CPU renderer draws it,
+//! so the shape can be read from its pixels. The GTK 3 functions are looked
+//! up, not required: a GTK without them leaves the window opaque.
 const std = @import("std");
 const gtk = @import("gtk.zig");
 
@@ -56,10 +58,11 @@ fn load() bool {
     return loaded.?;
 }
 
-/// Makes `win` (a GTK 3 toplevel, not yet realized) transparent, as far as
+/// Makes `win` (a GTK toplevel, not yet realized) transparent, as far as
 /// the screen allows: which way it went.
 pub fn setup(win: *gtk.Widget) Mode {
-    if (gtk.v4 or !load()) return .none;
+    if (gtk.v4) return setupV4(win);
+    if (!load()) return .none;
     const screen = api.gtk_widget_get_screen(win) orelse return .none;
     // The theme's background isn't drawn under the view, in either mode.
     api.gtk_widget_set_app_paintable(win, 1);
@@ -67,6 +70,53 @@ pub fn setup(win: *gtk.Widget) Mode {
     if (api.gdk_screen_is_composited(screen) == 0) return .shape;
     const visual = api.gdk_screen_get_rgba_visual(screen) orelse return .shape;
     api.gtk_widget_set_visual(win, visual);
+    return .alpha;
+}
+
+/// GTK 4's own: the window's background (the theme's, painted behind the
+/// child) is turned off with one CSS provider, and what the view draws —
+/// alpha and all — is what shows. On Wayland that is exactly the frame's
+/// alpha; on X11 it shows where a compositor runs.
+const Api4 = struct {
+    gtk_css_provider_new: *const fn () callconv(.c) *anyopaque,
+    gtk_css_provider_load_from_data: *const fn (p: *anyopaque, data: [*]const u8, len: isize, err: ?*anyopaque) callconv(.c) c_int,
+    gtk_style_context_add_provider_for_display: *const fn (display: *anyopaque, provider: *anyopaque, priority: c_uint) callconv(.c) void,
+    gtk_widget_add_css_class: *const fn (w: *gtk.Widget, name: [*:0]const u8) callconv(.c) void,
+};
+
+var api4: Api4 = undefined;
+var loaded4: ?bool = null;
+/// The provider is the display's, added once for every transparent window.
+var css_added = false;
+/// GTK_STYLE_PROVIDER_PRIORITY_USER: above the theme's own window background.
+const css_priority = 800;
+
+fn load4() bool {
+    if (loaded4) |l| return l;
+    loaded4 = blk: {
+        const lib = std.c.dlopen("libgtk-4.so.1", .{ .NOW = true, .GLOBAL = true }) orelse break :blk false;
+        inline for (@typeInfo(Api4).@"struct".field_names) |name| {
+            const sym = std.c.dlsym(lib, name) orelse break :blk false;
+            @field(api4, name) = @ptrCast(@alignCast(sym));
+        }
+        break :blk true;
+    };
+    return loaded4.?;
+}
+
+fn setupV4(win: *gtk.Widget) Mode {
+    if (!load4()) return .none;
+    const display = gtk.api.gdk_display_get_default() orelse return .none;
+    if (!css_added) {
+        const provider = api4.gtk_css_provider_new();
+        // Only what takes the class: an app's other windows keep theirs.
+        const css = "window.nanoui-transparent { background: none; }";
+        _ = api4.gtk_css_provider_load_from_data(provider, css, css.len, null);
+        api4.gtk_style_context_add_provider_for_display(display, provider, css_priority);
+        gtk.api.g_object_unref(provider);
+        css_added = true;
+    }
+    api4.gtk_widget_add_css_class(win, "nanoui-transparent");
     return .alpha;
 }
 

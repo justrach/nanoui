@@ -113,11 +113,13 @@ pub const Surface = struct {
         if (self.idle != 0) _ = g.g_source_remove(self.idle);
         if (self.later != 0) _ = g.g_source_remove(self.later);
         if (self.fallback != 0) _ = g.g_source_remove(self.fallback);
-        // While the area is still realized: its context frees the renderer's.
-        if (self.renderer) |*r| {
-            glarea.api.gtk_gl_area_make_current(self.area);
-            r.deinit();
-        }
+        // The renderer is nothing but GPU handles (programs, buffers, the
+        // atlases, its targets), and they go with the GL area's context,
+        // which GTK frees as the window does. By now the area may already be
+        // disposed, so its context can't be made current — asking for one
+        // here failed (`GTK_IS_GL_AREA`). Nothing of the renderer's own is
+        // ours to free.
+        self.renderer = null;
         g.g_object_unref(self.im);
         self.instances.deinit(self.gpa);
         self.committed.deinit(self.gpa);
