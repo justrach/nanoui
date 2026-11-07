@@ -143,6 +143,10 @@ hillclimb/            headless benchmarks against mygo (its own package)
 apps/nanoterm/        the first app: a Warp-like terminal with ACP agents
 apps/nanomon/         a small activity monitor (libproc, Mach, /proc)
 apps/nanomail/        a JMAP mail client for macOS and iOS
+apps/nanocua/         computer use for agents: MCP over a socket, the accessibility tree, input
+                      and screenshots in one app in the background, a panel with a kill switch
+                      (macOS). Vendored from codegraff, under its license, not MIT: change it
+                      there (VENDORED.md), not here
 site/                 the website (its own repo): Next.js on Cloudflare Workers, a gallery
 tools/lines.zig       the 600-line check
 tools/version.sh      set or check the version (build.zig.zon) for a release

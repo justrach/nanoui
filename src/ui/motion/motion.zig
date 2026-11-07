@@ -27,6 +27,26 @@ pub const Keyframes = @import("keyframes.zig").Keyframes;
 pub const keyframes = @import("keyframes.zig").keyframes;
 pub const layoutShift = @import("layout.zig").shift;
 pub const Store = store.Store;
+/// Reusable timing/curve presets, using the existing interruptible channels.
+pub const catalog = @import("catalog.zig");
+pub const MotionSpec = catalog.MotionSpec;
+pub const effects = @import("effects.zig");
+const helpers = @import("helpers.zig");
+pub const fadeIn = helpers.fadeIn;
+pub const settleDown = helpers.settleDown;
+pub const fadeQuick = helpers.fadeQuick;
+pub const menuIn = helpers.menuIn;
+pub const menuOut = helpers.menuOut;
+pub const dialogIn = helpers.dialogIn;
+pub const splashOut = helpers.splashOut;
+pub const hoverT = helpers.hoverT;
+pub const revealT = helpers.revealT;
+pub const resetReveal = helpers.resetReveal;
+pub const hoverBlend = helpers.hoverBlend;
+pub const PulseOptions = helpers.PulseOptions;
+pub const pulseLease = helpers.pulseLease;
+pub const pulseDelta = helpers.pulseDelta;
+pub const phaseAt = helpers.phaseAt;
 pub const scroll = @import("scroll.zig");
 pub const drag = @import("drag.zig").drag;
 pub const Drag = @import("drag.zig").Drag;
@@ -279,7 +299,7 @@ fn step(c: *Context, s: *State, id: u64, m: Motion, initial: ?Target, leaving: b
             ch.* = .at(entry orelse rest(i) orelse target);
             s.has |= bit;
         }
-        ch.retarget(target, tr, m.delay, c.time);
+        ch.retarget(target, tr, if (c.reduced_motion or c.reduce_motion) 0 else m.delay, c.time);
         ch.sample(c.time);
         setChannel(&f, i, @floatCast(ch.value));
         if (ch.moving) f.animating = true;
