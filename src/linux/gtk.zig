@@ -33,10 +33,12 @@ pub const Api = struct {
     g_object_unref: *const fn (obj: *anyopaque) callconv(.c) void,
     g_object_ref_sink: *const fn (obj: *anyopaque) callconv(.c) *anyopaque,
     g_object_new: *const fn (kind: usize, first_property: ?[*:0]const u8, ...) callconv(.c) ?*anyopaque,
+    g_object_get: *const fn (obj: *anyopaque, first_property: [*:0]const u8, ...) callconv(.c) void,
     g_signal_handler_disconnect: *const fn (instance: *anyopaque, id: c_ulong) callconv(.c) void,
     g_memory_input_stream_new_from_data: *const fn (data: [*]const u8, len: isize, destroy: ?*anyopaque) callconv(.c) *anyopaque,
     g_slist_free: *const fn (list: ?*anyopaque) callconv(.c) void,
     // GTK, the same in 3 and 4.
+    gtk_settings_get_default: *const fn () callconv(.c) ?*anyopaque,
     gtk_window_set_title: *const fn (w: *Widget, title: [*:0]const u8) callconv(.c) void,
     gtk_window_set_default_size: *const fn (w: *Widget, width: c_int, height: c_int) callconv(.c) void,
     gtk_window_set_resizable: *const fn (w: *Widget, on: c_int) callconv(.c) void,
