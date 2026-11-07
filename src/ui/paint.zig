@@ -72,7 +72,9 @@ fn paintCanvas(c: *Context, out: *std.ArrayList(metal.Instance), cv: *const @imp
 
 /// `scrolled`: how far the scrolling boxes it's in have scrolled it up.
 fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip: types.Rect, opacity_in: f32, selectable_in: bool, scrolled: f32) void {
-    const n = c.node(index).*;
+    // Painting never changes the tree: borrow the node rather than copying
+    // its entire style and content for every row, including clipped ones.
+    const n: *const ctx_mod.Node = c.node(index);
     const st = n.style;
     // A higher layer is drawn later, over the page.
     if (st.layer > 0 and index != c.layer_root) {
@@ -140,7 +142,7 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip:
             .clip = clip4,
         });
         switch (n.content) {
-            .text => |*t| paintText(c, out, index, &n, t, clip4, opacity, selectable, moving),
+            .text => |*t| paintText(c, out, index, n, t, clip4, opacity, selectable, moving),
             .icon => |ic| if (c.text.atlas.symbol(ic.name, ic.size, @backingInt(ic.weight))) |sp| {
                 // Centered in its box, which may be larger (a fixed frame).
                 const inner = r.inset(st.padding);
@@ -197,9 +199,9 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip:
     if ((st.clip or st.scroll or st.scroll_x) and st.radius > 0) roundClip(out.items[first..], r, visible, st.radius);
 
     if (st.scroll and st.scrollbar == .overlay) {
-        paintScrollbar(c, out, n, visible, opacity);
+        paintScrollbar(c, out, n.*, visible, opacity);
     } else if (st.scroll or st.scroll_x) {
-        @import("scroll.zig").paintScrollbars(c, out, n, visible, opacity);
+        @import("scroll.zig").paintScrollbars(c, out, n.*, visible, opacity);
     }
     if (st.scale != 1) scaleItems(out.items[start..], r, @max(st.scale, 0), st.scale_anchor, clip4);
     if (st.layout_motion != 0) {

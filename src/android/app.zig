@@ -167,6 +167,9 @@ pub const App = struct {
         calls.after(0, ctx, func);
     }
 
+    /// iPad's New Window (`ios/scenes.zig`): the system doesn't ask for windows here.
+    pub fn onNewWindow(_: *App, _: *anyopaque, _: *const fn (ctx: *anyopaque, app: *App) void) void {}
+
     /// Files the system opens with the app: not taken on Android yet.
     pub fn onOpenFiles(_: *App, _: *anyopaque, _: *const fn (ctx: *anyopaque, paths: []const []const u8) void) void {}
 

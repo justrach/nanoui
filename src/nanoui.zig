@@ -103,8 +103,8 @@ pub const Window = plat.window.Window;
 pub const WindowOptions = plat.window.Options;
 pub const PageOptions = plat.window.PageOptions;
 pub const Asset = plat.window.Asset;
-/// Typed IPC for pages: wherever a webview draws them (macOS, Windows, Linux).
-const has_pages = mac or builtin.os.tag == .windows or (builtin.os.tag == .linux and !is_android);
+/// Typed IPC for pages: wherever a webview draws them (macOS, iOS, Windows, Linux).
+const has_pages = mac or builtin.os.tag == .ios or builtin.os.tag == .windows or (builtin.os.tag == .linux and !is_android);
 const page_ipc = if (has_pages) @import("ipc.zig").ipc(plat.window.Window, plat.app.App) else struct {};
 pub const Call = if (has_pages) page_ipc.Call else void;
 pub const Event = if (has_pages) page_ipc.Event else void;
@@ -148,6 +148,8 @@ test {
     _ = @import("menu_types.zig");
     _ = @import("update.zig");
     _ = @import("update_auto.zig");
+    // Pure, and tested on every platform: the rest of src/ios only compiles for iOS.
+    _ = @import("ios/key_repeat.zig");
     _ = @import("basics/kv_file.zig");
     _ = @import("http.zig");
     _ = haptics;

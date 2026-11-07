@@ -37,6 +37,7 @@ jobs:
       # iOS needs Zig's lib fixed (the flag goes first) and Xcode's SDKs.
       - run: zig build $(sh tools/ios/zig-lib.sh) -Dtarget=aarch64-ios-simulator --prefix zig-out/ios-sim
       - run: zig build $(sh tools/ios/zig-lib.sh) -Dtarget=aarch64-ios --prefix zig-out/ios
+      - run: zig build $(sh tools/ios/zig-lib.sh) test-bundle -Dtarget=aarch64-ios-simulator
 
   linux:
     runs-on: ubuntu-24.04

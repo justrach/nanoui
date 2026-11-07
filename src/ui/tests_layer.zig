@@ -49,3 +49,38 @@ test "a layered, fixed box is drawn over the page, unclipped, and takes the clic
     try testing.expectEqual(@as(u32, 1), s.clicked_overlay);
     try testing.expectEqual(@as(u32, 0), s.clicked_page);
 }
+
+test "repainting scrolled, transformed layers borrows an unchanged tree" {
+    const View = struct {
+        fn view(_: *@This(), c: *ui.Context) void {
+            ui.scroll(c, .{ .width = .fill, .height = .fill });
+            defer ui.end(c);
+            for (0..20) |i| {
+                _ = c.open(.{ .width = .fill, .height = .{ .px = 28 }, .scale = 0.9, .opacity = 0.7, .group = true }, null);
+                ui.textf(c, .{}, "Row {d}", .{i});
+                if (i == 3) {
+                    const overlay = ui.div(c).fixed().offset(10, 10).w(50).h(20).bg(.white).layer(1);
+                    ui.text(c, "Overlay", .{});
+                    overlay.end();
+                }
+                c.end();
+            }
+        }
+    };
+    var s: View = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&s, View.view), .{ .width = 160, .height = 120 });
+    defer t.deinit();
+    t.scroll(80, 60, -84);
+    const nodes = try testing.allocator.dupe(@import("context.zig").Node, t.ctx.nodes.items);
+    defer testing.allocator.free(nodes);
+    const items = try testing.allocator.dupe(@import("gpu.zig").Instance, t.instances.items);
+    defer testing.allocator.free(items);
+    // Atlas population and deferred layers may allocate during paint, but
+    // source rects, styles and text must not be rewritten or transformed twice.
+    t.ctx.next_hits.clearRetainingCapacity();
+    @import("selection.zig").beginPaint(&t.ctx);
+    @import("paint.zig").paint(&t.ctx, &t.instances);
+    try testing.expectEqualDeep(nodes, t.ctx.nodes.items);
+    try testing.expectEqualDeep(items, t.instances.items);
+}

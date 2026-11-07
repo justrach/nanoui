@@ -511,7 +511,7 @@ const Gallery = struct {
 
     fn typography(_: *Gallery, c: *ui.Context) void {
         ui.heading(c, "Typography");
-        ui.card(c, .{ .width = .fill, .gap = 10, .max_width = 640 });
+        ui.card(c, .{ .width = .fill, .gap = 10, .max_width = 640, .selectable = true });
         defer ui.end(c);
         ui.text(c, "Large Title", .{ .size = 30, .weight = .bold });
         ui.text(c, "Title, semibold", .{ .size = 20, .weight = .semibold });

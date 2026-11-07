@@ -5,7 +5,7 @@ pub const ios = @import("tools/ios/bundle.zig");
 /// Android APKs, likewise: `@import("nanoui").android.apk(b, lib, .{ .name = "Notes", .id = "com.example.notes" })`.
 pub const android = @import("tools/android/apk.zig");
 
-const examples = [_][]const u8{ "hello", "counter", "gallery", "duo", "board", "basics", "map", "turn", "access", "todo", "sgbus", "browser", "drop" };
+const examples = [_][]const u8{ "hello", "counter", "gallery", "duo", "board", "basics", "map", "turn", "access", "todo", "sgbus", "browser", "drop", "scenes" };
 const frameworks = [_][]const u8{ "AppKit", "WebKit", "Metal", "QuartzCore", "CoreText", "CoreGraphics", "CoreFoundation", "Foundation", "ImageIO", "UniformTypeIdentifiers", "CoreVideo" };
 const ios_frameworks = [_][]const u8{ "UIKit", "CoreLocation", "MapKit", "Metal", "QuartzCore", "CoreText", "CoreGraphics", "CoreFoundation", "Foundation", "ImageIO", "UniformTypeIdentifiers", "CoreVideo" };
 
@@ -113,8 +113,8 @@ pub fn build(b: *std.Build) void {
 
     for (examples) |name| {
         // Pages (the hello and browser examples) need a webview: WKWebView on
-        // macOS, WebView2 on Windows, WebKitGTK on Linux.
-        const has_pages = os == .macos or os == .windows or (os == .linux and !target.result.abi.isAndroid());
+        // macOS and iOS, WebView2 on Windows, WebKitGTK on Linux.
+        const has_pages = os == .macos or os == .ios or os == .windows or (os == .linux and !target.result.abi.isAndroid());
         if (!has_pages and (std.mem.eql(u8, name, "hello") or std.mem.eql(u8, name, "browser"))) continue;
         if (os == .ios) {
             addIosExample(b, name, target, optimize, nanoui);
@@ -190,6 +190,29 @@ pub fn build(b: *std.Build) void {
         tools_step.dependOn(&b.addRunArtifact(t).step);
     }
 
+    const font_bench = b.addExecutable(.{
+        .name = "font-bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/font_bench.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "build_options", .module = options.createModule() }},
+        }),
+    });
+    if (os == .windows) {
+        font_bench.root_module.linkSystemLibrary("dwrite", .{});
+        font_bench.root_module.linkSystemLibrary("psapi", .{});
+    } else if (os == .macos) {
+        for (frameworks) |f| font_bench.root_module.linkFramework(f, .{});
+        font_bench.root_module.linkSystemLibrary("objc", .{});
+    } else if (os == .ios) {
+        for (ios_frameworks) |f| font_bench.root_module.linkFramework(f, .{});
+        font_bench.root_module.linkSystemLibrary("objc", .{});
+    }
+    const run_font_bench = b.addRunArtifact(font_bench);
+    run_font_bench.addPassthruArgs();
+    b.step("font-bench", "Measure font scanning and private memory headlessly").dependOn(&run_font_bench.step);
+
     const lines = b.addExecutable(.{
         .name = "lines",
         .root_module = b.createModule(.{
@@ -219,6 +242,7 @@ fn addIosExample(b: *std.Build, name: []const u8, target: std.Build.ResolvedTarg
     const opts: ios.Options = .{
         .name = title,
         .id = b.fmt("dev.nanoui.{s}", .{name}),
+        .multiple_windows = std.mem.eql(u8, name, "scenes"),
         .location_usage = if (std.mem.eql(u8, name, "basics") or std.mem.eql(u8, name, "map") or std.mem.eql(u8, name, "sgbus")) "The example shows where you are." else null,
     };
     const bundle = ios.app(b, exe, opts);
@@ -229,6 +253,24 @@ fn addIosExample(b: *std.Build, name: []const u8, target: std.Build.ResolvedTarg
         run.addPassthruArgs();
         step.dependOn(&run.step);
     } else step.dependOn(&b.addFail("run-* runs in the Simulator (-Dtarget=aarch64-ios-simulator); install on a device from Xcode or with xcrun devicectl").step);
+    if (std.mem.eql(u8, name, "counter")) {
+        // Every option `ios.app` takes, checked once they've gone through Xcode's tools.
+        const f = "tools/ios/fixture/";
+        const full = ios.app(b, exe, .{
+            .name = "Fixture",
+            .id = "dev.nanoui.fixture",
+            .info = "  <key>CFBundleURLTypes</key><array><dict><key>CFBundleURLSchemes</key><array><string>fixture</string></array></dict></array>",
+            .assets = b.path(f ++ "Assets.xcassets"),
+            .resources = &.{.{ .path = b.path(f ++ "resource.txt"), .name = "resource.txt" }},
+            .extensions = &.{.{ .path = b.path(f ++ "Widgets.appex"), .name = "Widgets.appex" }},
+            .watch = .{ .path = b.path(f ++ "Fixture Watch.app"), .name = "Fixture Watch.app" },
+            .entitlements = b.path(f ++ "fixture.entitlements"),
+        });
+        const check = b.addSystemCommand(&.{"sh"});
+        check.addFileArg(b.path("tools/ios/check-bundle.sh"));
+        check.addDirectoryArg(full);
+        b.step("test-bundle", "Check an iOS bundle with every option (-Dtarget=aarch64-ios-simulator)").dependOn(&check.step);
+    }
 }
 
 /// An example as an Android app: `zig-out/android/<Name>.apk`, and

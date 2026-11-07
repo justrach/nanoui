@@ -23,7 +23,7 @@ name="$(basename "$app")"
 cp -R "$app" "$tmp/$name"
 chmod -R u+w "$tmp/$name"
 chmod +x "$tmp/$name/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$tmp/$name/Info.plist")"
-codesign --force --sign - --timestamp=none "$tmp/$name" >/dev/null
+codesign --force --sign - --timestamp=none --preserve-metadata=entitlements "$tmp/$name" >/dev/null
 
 # The Simulator keeps its own copy.
 xcrun simctl install booted "$tmp/$name"

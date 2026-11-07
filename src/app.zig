@@ -74,6 +74,9 @@ pub const App = struct {
         func: *const fn (ctx: *anyopaque, paths: []const []const u8) void,
     };
 
+    /// iPad's New Window (`ios/scenes.zig`): the system doesn't ask for windows here.
+    pub fn onNewWindow(_: *App, _: *anyopaque, _: *const fn (ctx: *anyopaque, app: *App) void) void {}
+
     /// Takes the files the system asks the app to open.
     pub fn onOpenFiles(self: *App, ctx: *anyopaque, func: *const fn (ctx: *anyopaque, paths: []const []const u8) void) void {
         self.open_files = .{ .ctx = ctx, .func = func };

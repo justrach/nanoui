@@ -123,6 +123,11 @@ pub fn Options(comptime Window: type) type {
         /// (`ui.Context.safe_area`); without it, the view is laid out
         /// inside the safe area. Elsewhere it changes nothing.
         full_bleed: bool = false,
+        /// iPad: a window of its own beside the app's, which the person can
+        /// move and close as any other (needs `ios.Options.multiple_windows`).
+        /// On a phone it covers the screen like any other window. Elsewhere
+        /// it changes nothing: every window has its own place.
+        own_scene: bool = false,
         /// Called as the window closes, before it is freed.
         on_close: ?Callback(Window) = null,
         /// Called after the window resized.
