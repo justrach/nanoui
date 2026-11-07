@@ -84,7 +84,12 @@ pub fn text(c: *Context, str: []const u8, style: types.TextStyle) void {
 }
 
 /// Text whose byte ranges `spans` have colors of their own (ANSI output,
-/// syntax highlighting).
+/// syntax highlighting, a search's match).
+///
+/// `spans` is kept until the frame is laid out, which is after the view
+/// function returns: it has to outlive the call — a comptime literal, or
+/// memory the app holds. An app building spans per frame keeps an arena for
+/// them and resets it as the next frame starts.
 pub fn richText(c: *Context, str: []const u8, spans: []const types.Span, style: types.TextStyle) void {
     const color = style.color orelse c.theme.text;
     const width: types.Length = if (style.wrap) .fill else .auto;

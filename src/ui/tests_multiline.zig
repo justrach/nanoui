@@ -26,6 +26,30 @@ fn fieldHeight(t: *ui.Tester) f32 {
     return t.ctx.nodes.items[root.first_child].rect.h;
 }
 
+test "a multiline field works a word at a time with Control" {
+    var k: Composer = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&k, Composer.view), .{ .width = 400, .height = 300 });
+    defer t.deinit();
+    t.settle(1);
+
+    k.buf.set("the quick brown fox");
+    t.frame();
+    t.setMods(.{ .ctrl = true });
+    t.key(.backspace);
+    try testing.expectEqualStrings("the quick brown ", k.buf.text());
+    t.key(.backspace);
+    try testing.expectEqualStrings("the quick ", k.buf.text());
+    t.key(.left); // a word back: before "quick", which Control takes whole
+    t.key(.backspace);
+    try testing.expectEqualStrings("quick ", k.buf.text());
+    // A plain Backspace is still one letter.
+    t.setMods(.{});
+    t.key(.end);
+    t.key(.backspace);
+    try testing.expectEqualStrings("quick", k.buf.text());
+}
+
 test "a multiline field wraps, grows, and takes Shift-Return as a new line" {
     var k: Composer = .{};
     var t: ui.Tester = undefined;

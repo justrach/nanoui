@@ -9,6 +9,9 @@ const types = @import("types.zig");
 const utf8 = @import("utf8.zig");
 const ctx_mod = @import("context.zig");
 const lines_mod = @import("textfield_lines.zig");
+const keys = @import("textfield_keys.zig");
+/// The command a key with its modifiers means (`textfield_keys.zig`).
+pub const commandOf = keys.commandOf;
 pub const Caret = lines_mod.Caret;
 const Context = ctx_mod.Context;
 const EditState = ctx_mod.EditState;
@@ -404,28 +407,19 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
             if (op == .command and (op.command == .copy or op.command == .cut) and e.caret != e.anchor) c.copy_done = true;
             apply(buffer, e, op, opts, c.clipboard, &result);
         }
-        // Without an input method (tests, synthetic input): keys and chars.
-        if (c.input.chars.len > 0 and !took.text) apply(buffer, e, .{ .insert = c.input.chars }, opts, c.clipboard, &result);
-        if (!took.key) if (c.input.key) |k| switch (k) {
-            .backspace => apply(buffer, e, .{ .command = .delete_backward }, opts, c.clipboard, &result),
-            .delete => apply(buffer, e, .{ .command = .delete_forward }, opts, c.clipboard, &result),
-            .left => apply(buffer, e, .{ .command = if (c.input.shift) .select_left else .move_left }, opts, c.clipboard, &result),
-            .right => apply(buffer, e, .{ .command = if (c.input.shift) .select_right else .move_right }, opts, c.clipboard, &result),
-            .up, .down => if (multi) {
-                e.caret = lines_mod.vertical(c, buffer.text(), style, lines_mod.layout(c, buffer.text(), style, wrap_w), e.caret, if (k == .up) -1 else 1);
-                if (!c.input.shift) e.anchor = e.caret;
-            } else apply(buffer, e, .{ .command = if (k == .up) .move_line_start else .move_line_end }, opts, c.clipboard, &result),
-            .home => apply(buffer, e, .{ .command = .move_line_start }, opts, c.clipboard, &result),
-            .end => apply(buffer, e, .{ .command = .move_line_end }, opts, c.clipboard, &result),
-            .tab => c.focusCycle(c.input.shift),
-            .enter => if (multi and (c.input.shift or c.input.alt)) {
-                apply(buffer, e, .{ .command = .insert_line_break }, opts, c.clipboard, &result);
-            } else {
-                result.submitted = true;
-            },
-            .escape => c.focus = 0,
-            else => {},
-        };
+        // Without an input method (tests, synthetic input): keys and chars,
+        // a word at a time with Control (`textfield_keys.zig`).
+        keys.handle(c, .{
+            .buffer = buffer,
+            .edit = e,
+            .opts = opts,
+            .result = &result,
+            .multi = multi,
+            .style = style,
+            .wrap_w = wrap_w,
+            .text_taken = took.text,
+            .key_taken = took.key,
+        });
         textedit.commitUndo(c, buffer, e, &result, took.text, took.key);
         textedit.updateCaretBlink(c, was_focused, result.changed, e.caret != prev_caret);
         if (result.changed or result.submitted) c.changed = true;
