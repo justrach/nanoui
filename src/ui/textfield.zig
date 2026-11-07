@@ -364,11 +364,11 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
                 }
             } else if (c.input.pressed and c.input.button == .left and !c.input.ctrl and it.hovered) {
                 const idx = c.text.indexAt(shownOf(buffer.text(), opts.password, bullets), style, local_x);
-                const at = if (opts.password) byteOfCodepoint(buffer.text(), idx / 3) else idx;
+                const at = if (opts.password) lines_mod.byteOfCodepoint(buffer.text(), idx / 3) else idx;
                 textedit.pointerSelect(c, e, buffer.text(), at, false);
             } else if (e.selecting and c.input.down) {
                 const idx = c.text.indexAt(shownOf(buffer.text(), opts.password, bullets), style, local_x);
-                const at = if (opts.password) byteOfCodepoint(buffer.text(), idx / 3) else idx;
+                const at = if (opts.password) lines_mod.byteOfCodepoint(buffer.text(), idx / 3) else idx;
                 textedit.pointerDrag(c, e, buffer.text(), at, false);
             }
             if (!c.input.down) e.selecting = false;
@@ -470,6 +470,7 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
                 .anchor = e.anchor,
                 .marked = e.marked,
                 .caret_rect = .{ .x = r.x + pad_x + d.caret.x, .y = r.y + pad_y + d.caret.y, .w = opts.caret.width, .h = lh_ },
+                .ends = if (e.caret != e.anchor) lines_mod.ends(c, s, style, lines, @min(e.caret, e.anchor), @max(e.caret, e.anchor), r.x + pad_x, r.y + pad_y - e.scroll_y, lh_) else null,
             };
         }
         return result;
@@ -522,16 +523,13 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
             .anchor = e.anchor,
             .marked = e.marked,
             .caret_rect = .{ .x = r.x + pad_x + caret_x - e.scroll_x, .y = r.y + (r.h - lh) / 2, .w = opts.caret.width, .h = lh },
+            .ends = if (hi > lo) .{
+                .{ .x = r.x + pad_x - e.scroll_x + c.text.caretX(shown, style, shownIndex(s, opts.password, lo)), .y = r.y + (r.h - lh) / 2, .w = 0, .h = lh },
+                .{ .x = r.x + pad_x - e.scroll_x + c.text.caretX(shown, style, shownIndex(s, opts.password, hi)), .y = r.y + (r.h - lh) / 2, .w = 0, .h = lh },
+            } else null,
         };
     }
     return result;
-}
-
-fn byteOfCodepoint(s: []const u8, n: usize) usize {
-    var i: usize = 0;
-    var k: usize = 0;
-    while (i < s.len and k < n) : (k += 1) i += utf8.seqLen(s[i]);
-    return @min(i, s.len);
 }
 
 pub const rehome = textedit.rehome;

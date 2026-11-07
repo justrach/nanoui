@@ -12,6 +12,7 @@ const cf = @import("../ui/cf.zig");
 const types = @import("../ui/types.zig");
 const Surface = @import("surface.zig").Surface;
 const keys = @import("keys.zig");
+const selecting = @import("selecting.zig");
 
 /// How far a finger moves before it scrolls rather than presses, points.
 const slop: f32 = 10;
@@ -121,6 +122,8 @@ fn began(obj: objc.Object, _: objc.SEL, touches: objc.Object, event: ?objc.Objec
     st.* = .{ .finger = t, .start = p, .last = p, .last_time = cf.CACurrentMediaTime(), .stopper = was_flinging };
     // A touch on a fling stops it, as on iOS, and presses nothing.
     if (st.stopper) return;
+    if (selecting.takeHandle(s, p)) return;
+    selecting.pressed(s);
     s.ctx.input.mouse = p;
     s.ctx.updateHot();
     s.ctx.input.click_count = @intCast(@max(1, objc.msg(objc.NSUInteger, t, "tapCount", .{})));
@@ -208,6 +211,7 @@ fn moved(obj: objc.Object, _: objc.SEL, touches: objc.Object, event: ?objc.Objec
     var dy = p.y - st.last.y;
     st.last = p;
     st.last_time = now;
+    if (selecting.moved(s, p)) return;
     if (!st.scrolling) {
         const ty = p.y - st.start.y;
         const tx = p.x - st.start.x;
@@ -254,6 +258,13 @@ fn ended(obj: objc.Object, _: objc.SEL, touches: objc.Object, event: ?objc.Objec
     }
     const t = followed(s, touches) orelse return;
     st.finger = null;
+    if (selecting.released(s)) {
+        s.frame();
+        if (s.dead) return;
+        lift(s);
+        if (!s.dead) selecting.settled(s, false);
+        return;
+    }
     if (st.scrolling) {
         st.scrolling = false;
         s.ctx.scroll_holding = false;
@@ -277,7 +288,9 @@ fn ended(obj: objc.Object, _: objc.SEL, touches: objc.Object, event: ?objc.Objec
     // The tap may have closed the window.
     if (s.dead) return;
     lift(s);
-    if (!s.dead) keys.tapped(s);
+    if (s.dead) return;
+    keys.tapped(s);
+    selecting.settled(s, true);
 }
 
 fn cancelled(obj: objc.Object, _: objc.SEL, touches: objc.Object, _: ?objc.Object) callconv(.c) void {
@@ -288,6 +301,7 @@ fn cancelled(obj: objc.Object, _: objc.SEL, touches: objc.Object, _: ?objc.Objec
     if (followed(s, touches) == null and !second) return;
     const pressing = !st.scrolling and !st.stopper;
     st.* = .{};
+    selecting.cancelled(s);
     s.ctx.scroll_holding = false;
     // The system took the touch (a gesture, a call): nothing is clicked.
     s.ctx.input.mouse = away;

@@ -77,6 +77,7 @@ pub const Surface = struct {
             .start_time = clock.now(),
             .keys = .init(gpa),
         };
+        if (!window.app.headless and !window.app.flags.hidden) self.text.enablePersistence(window.app.options.name);
         self.ctx = .init(gpa, &self.text);
         self.ctx.reduced_motion = window.app.reduced_motion;
         self.updateGeometry();

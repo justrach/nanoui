@@ -122,6 +122,7 @@ pub const Surface = struct {
             // Before anything can run a frame: setContentView: resizes the view.
             .start_time = cf.CACurrentMediaTime(),
         };
+        if (text.portable and !window.app.flags.hidden) self.text.enablePersistence(window.app.options.name);
         self.ctx = .init(gpa, &self.text);
         // Pictures go straight to the GPU before any view callback can run a frame.
         self.text.images.sink = .{ .ctx = &self.renderer, .upload = @import("metal.zig").Renderer.uploadImage };
@@ -158,9 +159,7 @@ pub const Surface = struct {
             const ws = objc.msg(objc.Object, objc.class("NSWorkspace"), "sharedWorkspace", .{});
             self.reduce_motion = objc.msg(objc.BOOL, ws, "accessibilityDisplayShouldReduceMotion", .{});
             const center = objc.msg(objc.Object, ws, "notificationCenter", .{});
-            objc.msg(void, center, "addObserver:selector:name:object:", .{
-                nsview, objc.sel("accessibilityChanged:"), objc.nsString("NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification"), @as(?objc.Object, null),
-            });
+            objc.msg(void, center, "addObserver:selector:name:object:", .{ nsview, objc.sel("accessibilityChanged:"), objc.nsString("NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification"), @as(?objc.Object, null) });
         }
         self.refreshAppearance();
         self.is_visible = objc.msg(objc.BOOL, window.nswindow, "isVisible", .{}) and (objc.msg(objc.NSUInteger, window.nswindow, "occlusionState", .{}) & 2 != 0);
@@ -450,6 +449,7 @@ pub const Surface = struct {
             presented = self.renderer.drawLogged(self.instances.items, self.atlasTexture(), self.size, clear, null, 0).presented;
         }
         if (presented) self.last_present_target = present_at;
+        if (presented) @import("surface_wake.zig").presented(self);
         return presented;
     }
 
@@ -504,11 +504,10 @@ pub const Surface = struct {
     }
 
     pub fn setPaced(self: *Surface, on: bool) void {
+        if (on) @import("surface_wake.zig").watch(self);
         if (self.paced == on) return;
         self.paced = on;
-        if (!on) if (self.frame_log) |*fl| {
-            fl.last_t = 0;
-        };
+        if (!on and self.frame_log != null) self.frame_log.?.last_t = 0;
         if (self.display_link) |link| objc.msg(void, link, "setPaused:", .{!on});
     }
 
