@@ -542,17 +542,7 @@ pub const Surface = struct {
     }
 
     pub fn applyCursor(self: *Surface) void {
-        const name: [:0]const u8 = switch (self.cursor) {
-            .arrow => "arrowCursor",
-            .hand => "pointingHandCursor",
-            .text => "IBeamCursor",
-            .resize_left_right => "resizeLeftRightCursor",
-            .resize_up_down => "resizeUpDownCursor",
-            .open_hand => "openHandCursor",
-            .closed_hand => "closedHandCursor",
-            .not_allowed => "operationNotAllowedCursor",
-            .crosshair => "crosshairCursor",
-        };
+        const name = @import("surface_cursor.zig").name(self.cursor);
         objc.msg(void, objc.msg(objc.Object, objc.class("NSCursor"), name, .{}), "set", .{});
     }
 
