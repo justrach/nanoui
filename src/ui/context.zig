@@ -112,6 +112,7 @@ const Hit = struct { id: u64, index: u32, rect: types.Rect, scroll: bool, wheel:
 pub const Cursor = enum { arrow, hand, text, resize_left_right, resize_up_down };
 
 /// What the last frame cost, for profiling and the hill-climb benchmarks.
+pub const ScrollOffset = struct { id: u64, y: f32, view: types.Rect };
 pub const FrameStats = struct {
     build_ms: f64 = 0,
     layout_ms: f64 = 0,
@@ -120,6 +121,8 @@ pub const FrameStats = struct {
     passes: u32 = 0,
     nodes: usize = 0,
     instances: usize = 0,
+    /// The scene was the last frame's, shifted: nothing was built or painted.
+    retained: bool = false,
 };
 const Anim = struct { value: f32, frame: u64 };
 /// A widget's own state (`Context.state`): a few bytes, kept while it's drawn.
@@ -141,6 +144,14 @@ pub const Context = struct {
     time: f64 = 0,
     frame: u64 = 0,
     input: Input = .{},
+    /// `applyScroll` moved an offset. A quiet next frame may shift the scene.
+    scroll_delta: bool = false,
+    /// `ui.list` built this frame: its rows are not all in the tree.
+    virtual_list: bool = false,
+    /// Last painted scene, for a scroll that only moved.
+    scroll_scene: std.ArrayList(@import("gpu.zig").Instance) = .empty,
+    scroll_offsets: std.ArrayList(ScrollOffset) = .empty,
+    scroll_scene_ok: bool = false,
 
     nodes: std.ArrayList(Node) = .empty,
     stack: std.ArrayList(u32) = .empty,
@@ -274,6 +285,8 @@ pub const Context = struct {
         c.scroll_cap.deinit(c.gpa);
         c.scroll_moved.deinit(c.gpa);
         c.selection.deinit(c.gpa);
+        c.scroll_scene.deinit(c.gpa);
+        c.scroll_offsets.deinit(c.gpa);
     }
 
     /// Memory that lives until the end of the frame, for formatted text.
@@ -303,6 +316,7 @@ pub const Context = struct {
         c.focused_text = null;
         c.wants_wheel = false;
         c.wants_moves = false;
+        c.virtual_list = false;
         c.scroll_cap.clearRetainingCapacity();
         c.nodes.append(c.gpa, .{
             .id = 0x9e3779b97f4a7c15,
@@ -574,6 +588,7 @@ pub const Context = struct {
                 const gop = c.scroll.getOrPut(c.gpa, h.id) catch return false;
                 if (!gop.found_existing) gop.value_ptr.* = 0;
                 gop.value_ptr.* = @max(0, gop.value_ptr.* - dy);
+                c.scroll_delta = true;
                 return true;
             }
         }

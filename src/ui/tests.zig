@@ -114,6 +114,7 @@ test "scrolling moves content and stops at the end" {
     defer t.deinit();
     const before = t.findText("Row 5").?.y;
     t.scroll(100, 100, -50);
+    try testing.expect(t.ctx.stats.retained);
     try testing.expectEqual(before - 50, t.findText("Row 5").?.y);
     t.scroll(100, 100, -100000);
     const last = t.findText("Row 39").?;
@@ -284,6 +285,7 @@ test "a virtualized list builds only the rows in view" {
     // Scroll to row 50 000: it shows where row 0 did.
     t.scroll(100, 100, -30 * 50_000);
     t.frame();
+    try testing.expect(!t.ctx.stats.retained);
     const r = t.findText("Row 50000") orelse return error.RowNotBuilt;
     try testing.expectApproxEqAbs(@as(f32, 0), r.y, 6);
     try testing.expect(t.ctx.nodes.items.len < 60);
