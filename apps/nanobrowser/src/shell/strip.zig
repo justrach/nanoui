@@ -86,7 +86,7 @@ fn tab(c: *ui.Context, t: *Tab, live: bool, span: f32) TabAction {
         ui.icon(c, "circle.dotted", .{ .size = 13, .frame = 16, .color = p.muted });
     } else if (t.page) |page| {
         if (page.favicon()) |bytes| {
-            if (!ui.image(c, .{ .key = page.faviconKey(), .bytes = bytes, .box = .{ .w = 16, .h = 16 }, .radius = 3 }))
+            if (!ui.image(c, .{ .key = page.faviconKey(), .source = .{ .encoded = bytes }, .box = .{ .w = 16, .h = 16 }, .radius = 3 }))
                 ui.icon(c, "globe", .{ .size = 13, .frame = 16, .color = p.muted });
         } else ui.icon(c, "globe", .{ .size = 13, .frame = 16, .color = p.muted });
     } else ui.icon(c, "globe", .{ .size = 13, .frame = 16, .color = p.muted });

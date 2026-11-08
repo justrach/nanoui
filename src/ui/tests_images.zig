@@ -7,7 +7,7 @@ const images = @import("images.zig");
 const ViewState = struct {
     bytes: []const u8,
     fn view(s: *ViewState, c: *ui.Context) void {
-        _ = ui.image(c, .{ .key = "icon", .bytes = s.bytes, .max_width = 15, .max_height = 15, .radius = 0, .scale = 0.5 });
+        _ = ui.image(c, .{ .key = "icon", .source = .{ .encoded = s.bytes }, .max_width = 15, .max_height = 15, .radius = 0, .scale = 0.5 });
     }
 };
 
@@ -42,7 +42,7 @@ const BudgetState = struct {
     bytes: []const u8,
     fn view(s: *BudgetState, c: *ui.Context) void {
         for (0..9) |i| {
-            _ = ui.image(c, .{ .key = c.print("icon.{d}", .{i}), .bytes = s.bytes, .max_width = 15, .max_height = 15, .radius = 0, .scale = 0.5 });
+            _ = ui.image(c, .{ .key = c.print("icon.{d}", .{i}), .source = .{ .encoded = s.bytes }, .max_width = 15, .max_height = 15, .radius = 0, .scale = 0.5 });
         }
     }
 };
@@ -107,8 +107,8 @@ const PartState = struct {
     bytes: []const u8,
     fn view(s: *PartState, c: *ui.Context) void {
         // Its left half, stretched over a box twice as wide as tall.
-        _ = ui.image(c, .{ .key = "sides", .bytes = s.bytes, .radius = 0, .box = .{ .w = 40, .h = 20 }, .part = .{ 0, 0, 0.5, 1 } });
-        _ = ui.image(c, .{ .key = "sides", .bytes = s.bytes, .radius = 0, .box = .{ .w = 40, .h = 20 }, .part = .{ 0.5, 0, 1, 1 } });
+        _ = ui.image(c, .{ .key = "sides", .source = .{ .encoded = s.bytes }, .radius = 0, .box = .{ .w = 40, .h = 20 }, .part = .{ 0, 0, 0.5, 1 } });
+        _ = ui.image(c, .{ .key = "sides", .source = .{ .encoded = s.bytes }, .radius = 0, .box = .{ .w = 40, .h = 20 }, .part = .{ 0.5, 0, 1, 1 } });
     }
 };
 
@@ -150,7 +150,7 @@ test "ui.image shows the part asked for, in the box asked for" {
 const FormatState = struct {
     bytes: []const u8,
     fn view(s: *FormatState, c: *ui.Context) void {
-        _ = ui.image(c, .{ .key = "picture", .bytes = s.bytes, .radius = 0, .box = .{ .w = 32, .h = 32 } });
+        _ = ui.image(c, .{ .key = "picture", .source = .{ .encoded = s.bytes }, .radius = 0, .box = .{ .w = 32, .h = 32 } });
     }
 };
 
@@ -188,7 +188,7 @@ const Big = struct {
     limits: ?images.Limits = null,
     fn view(s: *Big, c: *ui.Context) void {
         if (s.limits) |l| ui.imageLimits(c, l);
-        _ = ui.image(c, .{ .key = "big", .bytes = s.bytes, .box = .{ .w = s.w, .h = 20 }, .radius = 0 });
+        _ = ui.image(c, .{ .key = "big", .source = .{ .encoded = s.bytes }, .box = .{ .w = s.w, .h = 20 }, .radius = 0 });
     }
 };
 
@@ -246,14 +246,14 @@ test "a frame's pictures that don't fit double the atlas, and a smaller frame's 
     defer gpa.free(png);
     im.beginPaint();
     im.decodes_left = 8;
-    const first = im.get(images.Images.key("a"), png, 2000).?;
+    const first = im.get(images.Images.key("a"), .{ .encoded = png }, 2000).?;
     try testing.expectEqual(images.size, im.side);
     try testing.expect(first.uv[2] > 0);
-    const second = im.get(images.Images.key("b"), png, 2000).?;
+    const second = im.get(images.Images.key("b"), .{ .encoded = png }, 2000).?;
     try testing.expectEqual(@as(u32, 4096), im.side);
     try testing.expect(im.reset_during_frame);
     // Both in the larger atlas, apart.
-    const again = im.get(images.Images.key("a"), png, 2000).?;
+    const again = im.get(images.Images.key("a"), .{ .encoded = png }, 2000).?;
     try testing.expect(again.uv[1] != second.uv[1] or again.uv[0] != second.uv[0]);
     try testing.expectEqual(@as(usize, 4096 * 4096 * 4), im.pixels.len);
 }
@@ -268,13 +268,13 @@ test "a decoded picture over budget leaves the cache, not the atlas" {
     const png = try ui.png.encode(gpa, .{ .bytes = raw, .width = 32, .height = 32 });
     defer gpa.free(png);
     im.beginPaint();
-    const a = im.get(images.Images.key("a"), png, 32).?;
-    _ = im.get(images.Images.key("b"), png, 32).?;
+    const a = im.get(images.Images.key("a"), .{ .encoded = png }, 32).?;
+    _ = im.get(images.Images.key("b"), .{ .encoded = png }, 32).?;
     try testing.expectEqual(@as(usize, 1), im.decoded.count());
     // Still drawn from the atlas, nothing decoded again.
     const gen = im.generation;
     const left = im.decodes_left;
-    const a2 = im.get(images.Images.key("a"), png, 32).?;
+    const a2 = im.get(images.Images.key("a"), .{ .encoded = png }, 32).?;
     try testing.expectEqual(a.uv, a2.uv);
     try testing.expectEqual(gen, im.generation);
     try testing.expectEqual(left, im.decodes_left);
@@ -289,7 +289,7 @@ test "an SVG larger than a picture may be is drawn at the limit, not past the at
     const d = im.infoSvg(77, doc, .{ .width = 6000, .height = 3000, .current = .{ 0, 0, 0, 1 } }).?;
     try testing.expectEqual(@as(u32, images.max_side), d.w);
     try testing.expectEqual(@as(u32, images.max_side / 2), d.h);
-    try testing.expect(im.get(77, doc, 6000) != null);
+    try testing.expect(im.get(77, .{ .encoded = doc }, 6000) != null);
 }
 
 test "types that decode here" {
@@ -298,4 +298,114 @@ test "types that decode here" {
     try testing.expect(ui.imageTypeDecodes("image/svg+xml"));
     try testing.expect(!ui.imageTypeDecodes("image/jxl"));
     try testing.expect(!ui.imageTypeDecodes("text/html"));
+}
+
+/// The rectangle the last frame gave the picture `name`.
+fn imageRect(t: *ui.Tester, name: []const u8) ?ui.Rect {
+    const k = images.Images.key(name);
+    for (t.ctx.nodes.items) |n| switch (n.content) {
+        .image => |im| if (im.key == k) return n.rect,
+        else => {},
+    };
+    return null;
+}
+
+const Tile = struct {
+    bgra: []const u8,
+    png: []const u8,
+    fn view(s: *Tile, c: *ui.Context) void {
+        ui.column(c, .{ .padding = .all(10), .gap = 2 });
+        defer ui.end(c);
+        _ = ui.image(c, .{ .key = "raw", .source = .{ .pixels = .{ .bgra = s.bgra, .width = 4, .height = 4 } }, .max_width = 4, .max_height = 4, .radius = 0, .scale = 1 });
+        _ = ui.image(c, .{ .key = "png", .source = .{ .encoded = s.png }, .max_width = 4, .max_height = 4, .radius = 0, .scale = 1 });
+    }
+};
+
+test "raw pixels draw like the same picture decoded from a PNG" {
+    const gpa = testing.allocator;
+    var px: [4 * 4 * 4]u8 = undefined;
+    for (0..4) |y| for (0..4) |x| {
+        px[(y * 4 + x) * 4 ..][0..4].* = if ((x + y) % 2 == 0) .{ 30, 90, 200, 255 } else .{ 220, 40, 10, 255 };
+    };
+    const png = try ui.png.encode(gpa, .{ .bytes = &px, .width = 4, .height = 4 });
+    defer gpa.free(png);
+    var s: Tile = .{ .bgra = &px, .png = png };
+    var t: ui.Tester = undefined;
+    try t.init(gpa, .init(&s, Tile.view), .{ .width = 60, .height = 60, .scale = 1 });
+    defer t.deinit();
+    t.settle(1);
+    const a = imageRect(&t, "raw").?;
+    const b = imageRect(&t, "png").?;
+    try testing.expectEqual(a.w, b.w);
+    try testing.expectEqual(a.h, b.h);
+    const kw = images.Images.key("raw");
+    const kp = images.Images.key("png");
+    const ew = t.ctx.text.images.entries.get(.{ .key = kw, .side = 4 }).?.entry.?;
+    const ep = t.ctx.text.images.entries.get(.{ .key = kp, .side = 4 }).?.entry.?;
+    try testing.expect(ew.uv[0] != ep.uv[0]);
+    const out = try t.render(gpa);
+    defer out.deinit(gpa);
+    const ax: usize = @intFromFloat(@round(a.x));
+    const ay: usize = @intFromFloat(@round(a.y));
+    const bx: usize = @intFromFloat(@round(b.x));
+    const by: usize = @intFromFloat(@round(b.y));
+    const w: usize = @intFromFloat(@round(a.w));
+    const h: usize = @intFromFloat(@round(a.h));
+    try testing.expect(w == 4 and h == 4);
+    for (0..h) |y| for (0..w) |x| {
+        const p = ((ay + y) * out.width + ax + x) * 4;
+        const q = ((by + y) * out.width + bx + x) * 4;
+        for (0..4) |ch| {
+            const want = if ((x + y) % 2 == 0) [4]u8{ 30, 90, 200, 255 } else [4]u8{ 220, 40, 10, 255 };
+            const d = if (out.bytes[p + ch] > want[ch]) out.bytes[p + ch] - want[ch] else want[ch] - out.bytes[p + ch];
+            try testing.expect(d <= 1);
+            const e = if (out.bytes[p + ch] > out.bytes[q + ch]) out.bytes[p + ch] - out.bytes[q + ch] else out.bytes[q + ch] - out.bytes[p + ch];
+            try testing.expect(e <= 1);
+        }
+    };
+}
+
+const Same = struct {
+    bgra: []const u8,
+    fn view(s: *Same, c: *ui.Context) void {
+        _ = ui.image(c, .{ .key = "same", .source = .{ .pixels = .{ .bgra = s.bgra, .width = 2, .height = 2 } }, .max_width = 2, .max_height = 2, .radius = 0, .scale = 1 });
+    }
+};
+
+test "a key keeps the first pixels it was given" {
+    const gpa = testing.allocator;
+    var px = [_]u8{ 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255 };
+    var s: Same = .{ .bgra = &px };
+    var t: ui.Tester = undefined;
+    try t.init(gpa, .init(&s, Same.view), .{ .width = 20, .height = 20, .scale = 1 });
+    defer t.deinit();
+    const r = imageRect(&t, "same").?;
+    const first = try t.render(gpa);
+    defer first.deinit(gpa);
+    const p = (@as(usize, @intFromFloat(@round(r.y))) * first.width + @as(usize, @intFromFloat(@round(r.x)))) * 4;
+    try testing.expectEqualSlices(u8, &[_]u8{ 0, 0, 255, 255 }, first.bytes[p..][0..4]);
+    @memset(&px, 0);
+    px[3] = 255;
+    t.frame();
+    const second = try t.render(gpa);
+    defer second.deinit(gpa);
+    try testing.expectEqualSlices(u8, first.bytes[p..][0..4], second.bytes[p..][0..4]);
+}
+
+test "raw pixels validate their rows and preserve stride" {
+    const gpa = testing.allocator;
+    var im: images.Images = .{ .gpa = gpa };
+    defer im.deinit();
+    var buf = [_]u8{
+        10, 20, 30, 255, 40,  50,  60,  255, 0, 0, 0, 0, 0, 0, 0, 0,
+        70, 80, 90, 128, 100, 110, 120, 128, 0, 0, 0, 0, 0, 0, 0, 0,
+    };
+    const source: images.Source = .{ .pixels = .{ .bgra = &buf, .width = 2, .height = 2, .stride = 16 } };
+    const k = images.Images.key("raw-stride");
+    try testing.expectEqual(images.Info{ .width = 2, .height = 2 }, im.info(k, source).?);
+    _ = im.get(k, source, 2).?;
+    try testing.expectEqualSlices(u8, buf[0..8], im.pixels[0..8]);
+    try testing.expectEqualSlices(u8, buf[16..24], im.pixels[im.side * 4 ..][0..8]);
+    try testing.expect(im.info(images.Images.key("short"), .{ .pixels = .{ .bgra = buf[0..8], .width = 2, .height = 2 } }) == null);
+    try testing.expect(im.info(images.Images.key("stride"), .{ .pixels = .{ .bgra = &buf, .width = 2, .height = 2, .stride = 4 } }) == null);
 }

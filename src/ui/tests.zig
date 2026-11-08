@@ -412,9 +412,9 @@ test "a picture keeps its proportions, fits its room, and bad bytes draw nothing
         fn view(p: *@This(), c: *ui.Context) void {
             ui.column(c, .{ .padding = .all(10), .gap = 6 });
             defer ui.end(c);
-            p.ok = ui.image(c, .{ .key = "wide", .bytes = p.bytes, .max_width = 100 });
-            p.bad = ui.image(c, .{ .key = "junk", .bytes = "not a picture" });
-            _ = ui.image(c, .{ .key = "web", .bytes = p.bytes, .max_width = 1000, .scale = 1 });
+            p.ok = ui.image(c, .{ .key = "wide", .source = .{ .encoded = p.bytes }, .max_width = 100 });
+            p.bad = ui.image(c, .{ .key = "junk", .source = .{ .encoded = "not a picture" } });
+            _ = ui.image(c, .{ .key = "web", .source = .{ .encoded = p.bytes }, .max_width = 1000, .scale = 1 });
         }
     };
     var px: [400 * 100 * 4]u8 = @splat(255);

@@ -23,11 +23,11 @@ pub const Content = union(enum) {
         opacity: f32 = 1,
     };
 
-    /// A picture: its key in the image atlas, and its bytes for the first
-    /// time it is drawn.
+    /// A picture: its key in the image atlas, and where its pixels come from
+    /// the first time it is drawn.
     pub const Image = struct {
         key: u64,
-        bytes: []const u8,
+        source: @import("images.zig").Source,
         opacity: f32 = 1,
         /// Its shape (alpha) filled with this color: a monochrome mark.
         tint: ?types.Color = null,

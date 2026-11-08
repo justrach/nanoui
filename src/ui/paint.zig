@@ -182,7 +182,7 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip_
                     .clip = clip4,
                 });
             },
-            .image => |im| if (c.text.images.get(im.key, im.bytes, imageSide(im, rect4, c.scale))) |e| push(c, out, .{
+            .image => |im| if (c.text.images.get(im.key, im.source, imageSide(im, rect4, c.scale))) |e| push(c, out, .{
                 .rect = if (im.snap) .{ snap(r.x, c.scale), snap(r.y, c.scale), r.w, r.h } else rect4,
                 .color = .{ 1, 1, 1, im.opacity * opacity },
                 // A tint (alpha above 0) fills the picture's shape instead.

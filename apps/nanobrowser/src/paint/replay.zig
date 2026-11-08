@@ -293,10 +293,10 @@ fn drawPicture(c: *ui.Context, im: display.Kind.Image, placed: ui.Style, r: Rect
         _ = c.open(placed, null);
         defer c.end();
         if (isSvg(n.image)) {
-            _ = ui.svg(c, .{ .key = n.image_key, .bytes = n.image, .width = r.w, .height = r.h, .color = color(k) });
+            _ = ui.svg(c, .{ .key = n.image_key, .source = .{ .encoded = n.image }, .width = r.w, .height = r.h, .color = color(k) });
             return;
         }
-        _ = ui.image(c, .{ .key = n.image_key, .bytes = n.image, .box = .{ .w = r.w, .h = r.h }, .radius = 0, .tint = color(k) });
+        _ = ui.image(c, .{ .key = n.image_key, .source = .{ .encoded = n.image }, .box = .{ .w = r.w, .h = r.h }, .radius = 0, .tint = color(k) });
         return;
     }
     if (im.corners != 15 and im.radius > 0) {
@@ -324,7 +324,7 @@ fn drawMask(c: *ui.Context, ms: display.Kind.Mask, bytes: []const u8, placed: ui
         _ = ui.svg(c, .{ .key = ms.url, .bytes = bytes, .width = r.w, .height = r.h, .color = color(ms.color) });
         return;
     }
-    _ = ui.image(c, .{ .key = ms.url, .bytes = bytes, .box = .{ .w = r.w, .h = r.h }, .radius = 0, .tint = color(ms.color) });
+    _ = ui.image(c, .{ .key = ms.url, .source = .{ .encoded = bytes }, .box = .{ .w = r.w, .h = r.h }, .radius = 0, .tint = color(ms.color) });
 }
 
 fn drawImage(c: *ui.Context, im: display.Kind.Image, placed: ui.Style, r: Rect) void {
@@ -339,7 +339,7 @@ fn drawImage(c: *ui.Context, im: display.Kind.Image, placed: ui.Style, r: Rect) 
     defer c.end();
     // An inline `<svg>` is laid out to its box and says for itself how it fits.
     if (n.ns == .svg) {
-        _ = ui.svg(c, .{ .key = n.image_key, .bytes = n.image, .width = r.w, .height = r.h });
+        _ = ui.svg(c, .{ .key = n.image_key, .source = .{ .encoded = n.image }, .width = r.w, .height = r.h });
         return;
     }
     const svg = isSvg(n.image);
@@ -353,7 +353,7 @@ fn drawImage(c: *ui.Context, im: display.Kind.Image, placed: ui.Style, r: Rect) 
         // Documents start from black, whatever this window's theme.
         _ = c.open(.{ .absolute = true, .offset = .{ .x = p.x, .y = p.y } }, null);
         defer c.end();
-        _ = ui.svg(c, .{ .key = n.image_key, .bytes = n.image, .width = p.w, .height = p.h, .current = ui.Color.black });
+        _ = ui.svg(c, .{ .key = n.image_key, .source = .{ .encoded = n.image }, .width = p.w, .height = p.h, .current = ui.Color.black });
         return;
     }
     const v = visiblePart(p, r.w, r.h);
@@ -361,10 +361,10 @@ fn drawImage(c: *ui.Context, im: display.Kind.Image, placed: ui.Style, r: Rect) 
     if (v.w != r.w or v.h != r.h or v.x != 0 or v.y != 0) {
         _ = c.open(.{ .absolute = true, .offset = .{ .x = v.x, .y = v.y } }, null);
         defer c.end();
-        _ = ui.image(c, .{ .key = n.image_key, .bytes = n.image, .box = .{ .w = v.w, .h = v.h }, .radius = 0, .part = v.part });
+        _ = ui.image(c, .{ .key = n.image_key, .source = .{ .encoded = n.image }, .box = .{ .w = v.w, .h = v.h }, .radius = 0, .part = v.part });
         return;
     }
-    _ = ui.image(c, .{ .key = n.image_key, .bytes = n.image, .box = .{ .w = v.w, .h = v.h }, .radius = im.radius, .part = v.part });
+    _ = ui.image(c, .{ .key = n.image_key, .source = .{ .encoded = n.image }, .box = .{ .w = v.w, .h = v.h }, .radius = im.radius, .part = v.part });
 }
 
 const Placed = struct { x: f32, y: f32, w: f32, h: f32 };
