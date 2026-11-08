@@ -9,6 +9,7 @@ const textinput = @import("textinput.zig");
 const a11y = @import("a11y.zig");
 const input = @import("input.zig");
 const Surface = @import("surface.zig").Surface;
+const link_pace = @import("surface_pacing.zig");
 
 pub const methods = [_]objc.Method{
     .{ .name = "isFlipped", .imp = &yes, .types = "c@:" },
@@ -38,7 +39,7 @@ pub const methods = [_]objc.Method{
     .{ .name = "performDragOperation:", .imp = &performDragOperation, .types = "c@:@" },
     // Updates on movement only: nothing polls.
     .{ .name = "wantsPeriodicDraggingUpdates", .imp = &no, .types = "c@:" },
-    .{ .name = "setFrameSize:", .imp = &setFrameSize, .types = "v@:{CGSize=dd}" },
+    .{ .name = "setFrameSize:", .imp = &link_pace.setFrameSize, .types = "v@:{CGSize=dd}" },
     .{ .name = "viewDidChangeBackingProperties", .imp = &backingChanged, .types = "v@:" },
     .{ .name = "viewDidChangeEffectiveAppearance", .imp = &appearanceChanged, .types = "v@:" },
     .{ .name = "accessibilityChanged:", .imp = &accessibilityChanged, .types = "v@:@" },
@@ -46,9 +47,9 @@ pub const methods = [_]objc.Method{
     .{ .name = "cursorUpdate:", .imp = &cursorUpdate, .types = "v@:@" },
     .{ .name = "resetCursorRects", .imp = &resetCursorRects, .types = "v@:" },
     .{ .name = "draggingSession:sourceOperationMaskForDraggingContext:", .imp = &draggingSourceMask, .types = "Q@:@q" },
-    .{ .name = "metalDisplayLink:needsUpdate:", .imp = &metalDisplayLinkNeedsUpdate, .types = "v@:@@" },
-    .{ .name = "viewWillStartLiveResize", .imp = &liveResizeStart, .types = "v@:" },
-    .{ .name = "viewDidEndLiveResize", .imp = &liveResizeEnd, .types = "v@:" },
+    .{ .name = "metalDisplayLink:needsUpdate:", .imp = &link_pace.metalDisplayLinkNeedsUpdate, .types = "v@:@@" },
+    .{ .name = "viewWillStartLiveResize", .imp = &link_pace.liveResizeStart, .types = "v@:" },
+    .{ .name = "viewDidEndLiveResize", .imp = &link_pace.liveResizeEnd, .types = "v@:" },
 } ++ textinput.methods ++ a11y.methods;
 
 /// What drags from other apps may bring.
@@ -443,63 +444,6 @@ fn performDragOperation(obj: objc.Object, _: objc.SEL, info: objc.Object) callco
     s.frame();
     s.ctx.input.drop = null;
     return if (s.ctx.acceptsDropAt(p)) objc.YES else objc.NO;
-}
-
-fn metalDisplayLinkNeedsUpdate(obj: objc.Object, _: objc.SEL, _: objc.Object, update: objc.Object) callconv(.c) void {
-    const s = surfaceOf(obj) orelse return;
-    if (s.dead or s.in_frame) return;
-    s.wake.last_tick = cf.CACurrentMediaTime();
-    const target = objc.msg(f64, update, "targetPresentationTimestamp", .{});
-    const frame_in_due = s.ctx.frame_in != null and target >= s.frame_in_due - 0.001;
-    if (!s.full_pending and !frame_in_due and !s.ctx.animating and !s.geometry_changed and !s.retained_ready and !s.pending_sync and s.ctx.time_driven == .none) {
-        s.updatePacing(target, false);
-        return;
-    }
-    const drawable = objc.msg(?objc.Object, update, "drawable", .{}) orelse return;
-    const duration: f64 = if (s.link_fps > 0) 1.0 / @as(f64, s.link_fps) else 1.0 / @as(f64, @max(60.0, s.max_fps));
-    s.renderer.given_drawable = drawable;
-    defer s.renderer.given_drawable = null;
-    if (!s.full_pending and !frame_in_due and !s.ctx.animating and !s.geometry_changed and (s.retained_ready or (!s.pending_sync and s.ctx.time_driven != .none))) {
-        s.redrawRetained(target, duration);
-        return;
-    }
-    s.frameAt(.link, target, duration);
-}
-
-fn liveResizeStart(obj: objc.Object, _: objc.SEL) callconv(.c) void {
-    objc.msgSuper(void, obj, objc.class("NSView"), "viewWillStartLiveResize", .{});
-    const s = surfaceOf(obj) orelse return;
-    // The link keeps drawing through the drag, at every vsync, at the
-    // size of the moment: frames presented in the resize's transaction
-    // instead stall the main thread on `waitUntilScheduled` (2-18 resize
-    // steps a second instead of the drag's 180). Each step asks for its
-    // frame (`setFrameSize`); held still, the link stops after a moment.
-    s.ctx.live_resizing = true;
-    s.resize_step_at = cf.CACurrentMediaTime();
-    if (s.resizeSyncEnabled()) s.stopLink();
-    s.requestFrame();
-}
-
-fn liveResizeEnd(obj: objc.Object, _: objc.SEL) callconv(.c) void {
-    objc.msgSuper(void, obj, objc.class("NSView"), "viewDidEndLiveResize", .{});
-    const s = surfaceOf(obj) orelse return;
-    s.ctx.live_resizing = false;
-    s.startLink();
-    s.requestFrame();
-}
-
-fn setFrameSize(obj: objc.Object, _: objc.SEL, size: objc.CGSize) callconv(.c) void {
-    objc.msgSuper(void, obj, objc.class("NSView"), "setFrameSize:", .{size});
-    const s = surfaceOf(obj) orelse return;
-    s.updateGeometry();
-    // In a drag the link's next frame lays out at this size: a frame now
-    // would have no drawable to present.
-    if (s.ctx.live_resizing) {
-        s.resize_step_at = cf.CACurrentMediaTime();
-        if (s.resizeInTransaction()) return;
-        return s.requestFrame();
-    }
-    s.frame();
 }
 
 fn backingChanged(obj: objc.Object, _: objc.SEL) callconv(.c) void {

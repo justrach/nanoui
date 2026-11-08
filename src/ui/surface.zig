@@ -17,6 +17,7 @@ const ui = @import("ui.zig");
 const Window = @import("../window.zig").Window;
 const a11y = @import("a11y.zig");
 const events = @import("surface_events.zig");
+const link_pace = @import("surface_pacing.zig");
 const frame_log_mod = @import("frame_log.zig");
 pub const FrameLog = frame_log_mod.FrameLog;
 pub const KeysReleased = struct { ctx: ?*anyopaque, func: *const fn (ctx: ?*anyopaque, s: *Surface) void };
@@ -162,30 +163,8 @@ pub const Surface = struct {
         self.frame();
         return self;
     }
-    /// The CAMetalDisplayLink that paces frames and hands out drawables.
-    pub fn startLink(self: *Surface) void {
-        if (self.display_link != null) return;
-        const link = objc.msg(objc.Object, objc.alloc("CAMetalDisplayLink"), "initWithMetalLayer:", .{self.renderer.layer});
-        objc.msg(void, link, "setDelegate:", .{self.nsview});
-        objc.msg(void, link, "setPaused:", .{objc.YES});
-        const loop = objc.msg(objc.Object, objc.class("NSRunLoop"), "mainRunLoop", .{});
-        objc.msg(void, link, "addToRunLoop:forMode:", .{ loop, NSRunLoopCommonModes });
-        self.display_link = link;
-        self.paced = false;
-        self.link_fps = -1;
-    }
-
-    /// Drops the link: a layer with one attached refuses `nextDrawable`,
-    /// and a live resize draws its steps in the window's transaction with
-    /// drawables taken from the layer.
-    pub fn stopLink(self: *Surface) void {
-        const link = self.display_link orelse return;
-        objc.msg(void, link, "setDelegate:", .{@as(?objc.Object, null)});
-        objc.msg(void, link, "invalidate", .{});
-        objc.release(link);
-        self.display_link = null;
-        self.paced = false;
-    }
+    pub const startLink = link_pace.startLink;
+    pub const stopLink = link_pace.stopLink;
 
     pub fn destroy(self: *Surface) void {
         self.dead = true;
@@ -244,16 +223,7 @@ pub const Surface = struct {
         self.updateMaxFps();
     }
 
-    fn updateMaxFps(self: *Surface) void {
-        const screen = objc.msg(?objc.Object, self.window.nswindow, "screen", .{});
-        const fps: f32 = if (screen) |sc| @floatFromInt(@max(60, objc.msg(objc.NSInteger, sc, "maximumFramesPerSecond", .{}))) else 60;
-        if (fps != self.max_fps) {
-            self.max_fps = fps;
-            const cur = self.link_fps;
-            self.link_fps = -1;
-            if (cur >= 0) self.setRate(if (cur == 0) null else 1 / cur);
-        }
-    }
+    const updateMaxFps = link_pace.updateMaxFps;
 
     pub fn refreshAppearance(self: *Surface) void {
         const appearance = objc.msg(objc.Object, self.nsview, "effectiveAppearance", .{});
@@ -403,37 +373,9 @@ pub const Surface = struct {
         }
     }
 
-    /// How long the link keeps running after a live-resize step: a drag's
-    /// next step lands on a running link, and a held mouse stops it.
-    const resize_grace = 0.25;
-
-    /// A live resize is changing the size now: a held mouse is not.
-    pub fn resizeStepping(self: *Surface) bool {
-        return self.ctx.live_resizing and cf.CACurrentMediaTime() - self.resize_step_at < resize_grace;
-    }
-
-    /// One live-resize step drawn in the window's own transaction: the
-    /// frame is laid out and presented at this size before Core Animation
-    /// composites the step, so the window never shows a stale one. False
-    /// when it can't (hidden, or `NANOUI_RESIZE_SYNC=0`): the link draws.
-    pub fn resizeSyncEnabled(_: *Surface) bool {
-        if (getenv("NANOUI_RESIZE_SYNC")) |v| if (std.mem.eql(u8, std.mem.span(v), "0")) return false;
-        return true;
-    }
-
-    pub fn resizeInTransaction(self: *Surface) bool {
-        if (self.in_frame or self.dead or !self.visible() or self.display_link != null) return false;
-        if (!self.resizeSyncEnabled()) return false;
-        const drawable = objc.msg(?objc.Object, self.renderer.layer, "nextDrawable", .{}) orelse return false;
-        self.renderer.given_drawable = drawable;
-        defer self.renderer.given_drawable = null;
-        self.pending_sync = true;
-        self.full_pending = true;
-        const now = @max(cf.CACurrentMediaTime(), self.last_frame_time);
-        const fallback_dur = 1.0 / @as(f64, @max(60.0, self.max_fps));
-        self.frameAt(.input, now, if (self.link_duration > 0) self.link_duration else fallback_dur);
-        return true;
-    }
+    pub const resizeStepping = link_pace.resizeStepping;
+    pub const resizeSyncEnabled = link_pace.resizeSyncEnabled;
+    pub const resizeInTransaction = link_pace.resizeInTransaction;
 
     pub fn redrawRetained(self: *Surface, target_in: f64, duration_in: f64) void {
         if (self.in_frame or self.dead) return;
@@ -645,4 +587,3 @@ pub const Surface = struct {
         return .{ .x = @floatCast(local.x), .y = @floatCast(local.y) };
     }
 };
-extern "c" const NSRunLoopCommonModes: objc.Object;
