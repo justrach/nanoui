@@ -8,8 +8,22 @@ const types = @import("../ui/types.zig");
 /// One WM_DROPFILES, however many files it carries. The URLs and their UTF-8
 /// storage live for the frame, as they do on the Mac; the HDROP does not.
 pub fn handle(surface: ?*Surface, hwnd: w.HWND, hdrop: w.HDROP) void {
+    const s = surface orelse {
+        w.DragFinish(hdrop);
+        return;
+    };
+    // A sent WM_DROPFILES can reenter the window procedure while the view is
+    // building (Shell/COM calls pump messages). The Context's drop targets are
+    // cleared at that point, and Surface.frame only queues a later frame; if we
+    // continued, acceptsDropAt would reject it or the deferred input.drop would
+    // be cleared before that frame ran. Repost the same HDROP and keep ownership
+    // with Windows until it can be handled between frames.
+    if (s.in_frame) {
+        if (w.PostMessageW(hwnd, w.WM_DROPFILES, @intFromPtr(hdrop), 0) != 0) return;
+        w.DragFinish(hdrop);
+        return;
+    }
     defer w.DragFinish(hdrop);
-    const s = surface orelse return;
     var p: w.POINT = .{};
     // A non-client drop is reported in screen coordinates; a client one is
     // already in the coordinates the surface uses before its DPI scale.

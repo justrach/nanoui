@@ -133,3 +133,41 @@ test "WM_DROPFILES without a drop target keeps the view unchanged" {
     try testing.expectEqual(@as(u32, 0), receiver.events);
     try testing.expect(win.surface.?.ctx.input.drop == null);
 }
+
+test "WM_DROPFILES arriving while a frame builds is delivered between frames" {
+    const gpa = testing.allocator;
+    const app = try gpa.create(App);
+    app.* = .{
+        .gpa = gpa,
+        .io = std.Io.Threaded.global_single_threaded.io(),
+        .options = .{ .quit_on_last_window_closed = false },
+        .flags = .{ .hidden = true },
+        .gui = true,
+    };
+    defer app.destroy();
+    const expected = [_][]const u8{"file:///C:/reentered.txt"};
+    var receiver: Receiver = .{ .expected = &expected };
+    const win = try app.newWindow(.{
+        .title = "hidden reentrant drop test",
+        .width = 320,
+        .height = 200,
+        .visible = false,
+        .content = .{ .view = .init(&receiver, Receiver.view) },
+    });
+    const hwnd = win.hwnd orelse return error.SkipZigTest;
+    const surface = win.surface.?;
+    const paths = [_][]const u8{"C:\\reentered.txt"};
+    const hdrop = try makeHDrop(&paths, .{ .x = 48, .y = 32 });
+
+    surface.in_frame = true;
+    _ = w.SendMessageW(hwnd, w.WM_DROPFILES, @intFromPtr(hdrop), 0);
+    try testing.expectEqual(@as(u32, 0), receiver.events);
+    try testing.expect(surface.ctx.input.drop == null);
+    surface.in_frame = false;
+    @import("loop.zig").runFor(0.1);
+
+    try testing.expectEqual(@as(u32, 1), receiver.events);
+    try testing.expectEqual(@as(usize, 1), receiver.paths);
+    try testing.expect(receiver.urls_match);
+    try testing.expect(surface.ctx.input.drop == null);
+}
