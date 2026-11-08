@@ -224,6 +224,9 @@ pub const Surface = struct {
     pub fn requestFrame(self: *Surface) void {
         if (self.resizing) return;
         if (self.display_link != null) {
+            // A network reply or a shortcut must not inherit a 1-second
+            // clock. The next refresh is the screen's own pace.
+            self.ctx.frame_in = null;
             @import("surface_pacing.zig").setRate(self, null);
             self.setPaced(true);
         } else self.scheduleTick();
