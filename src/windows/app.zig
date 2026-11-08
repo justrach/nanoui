@@ -279,9 +279,13 @@ pub const App = struct {
     /// is named on the command line, which the app reads itself.
     pub fn onOpenFiles(_: *App, _: *anyopaque, _: *const fn (ctx: *anyopaque, paths: []const []const u8) void) void {}
 
-    /// From any thread: calls `func(ctx)` on the main thread soon.
-    pub fn onMain(ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) void {
-        _ = @import("fdwatch.zig").post(ctx, func);
+    /// From any thread: calls `func(ctx)` on the main thread soon. False
+    /// when it never will: the message window is not made yet or
+    /// PostMessageW failed (the thread's queue is full), and the call is
+    /// dropped. A caller that keeps a "wake in flight" flag lowers it then,
+    /// or every later wake would wait on one that never comes.
+    pub fn onMain(ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) bool {
+        return @import("fdwatch.zig").post(ctx, func);
     }
 
     pub fn after(ms: u64, ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) void {

@@ -319,7 +319,7 @@ test "onMain lands the call on the thread that pumps" {
     // The hand-built app skipped the fdwatch window `onMain` posts through.
     _ = @import("fdwatch.zig").prepare() catch return error.SkipZigTest;
     var c: Counter = .{};
-    App.onMain(&c, bump);
+    try testing.expect(App.onMain(&c, bump));
     try testing.expectEqual(@as(u32, 0), c.n);
     loop.runFor(0.2);
     try testing.expectEqual(@as(u32, 1), c.n);

@@ -279,7 +279,11 @@ pub const Window = struct {
     pub fn sendOwned(self: *Window, msg: []u8) void {
         const job = self.app.gpa.create(SendJob) catch return self.app.gpa.free(msg);
         job.* = .{ .window = self, .app = self.app, .msg = msg };
-        App.onMain(job, SendJob.run);
+        // Never queued (the app is gone): nothing will run the job.
+        if (!App.onMain(job, SendJob.run)) {
+            self.app.gpa.free(msg);
+            self.app.gpa.destroy(job);
+        }
     }
 
     const SendJob = struct {

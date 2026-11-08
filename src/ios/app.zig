@@ -192,9 +192,11 @@ pub const App = struct {
     }
 
     /// Calls `func(ctx)` on the main thread after `ms` milliseconds.
-    /// From any thread: calls `func(ctx)` on the main thread soon.
-    pub fn onMain(ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) void {
+    /// From any thread: calls `func(ctx)` on the main thread soon. True
+    /// when queued (GCD's main queue always takes it), as on the Mac.
+    pub fn onMain(ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) bool {
         objc.dispatchMain(ctx, func);
+        return true;
     }
 
     /// Files the system opens with the app: not taken on iOS yet.
