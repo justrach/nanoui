@@ -228,6 +228,7 @@ test {
     _ = @import("panes.zig");
     _ = @import("layout.zig");
     _ = textfield;
+    _ = @import("textfield_tests.zig");
     _ = @import("tests.zig");
     _ = @import("tests_keymap.zig");
     _ = @import("tests_multiline.zig");
