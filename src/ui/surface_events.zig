@@ -9,6 +9,7 @@ const textinput = @import("textinput.zig");
 const a11y = @import("a11y.zig");
 const input = @import("input.zig");
 const Surface = @import("surface.zig").Surface;
+const drop = @import("surface_drop.zig");
 
 pub const methods = [_]objc.Method{
     .{ .name = "isFlipped", .imp = &yes, .types = "c@:" },
@@ -32,10 +33,10 @@ pub const methods = [_]objc.Method{
     .{ .name = "keyDown:", .imp = &keyDown, .types = "v@:@" },
     .{ .name = "flagsChanged:", .imp = &flagsChanged, .types = "v@:@" },
     .{ .name = "paste:", .imp = &paste, .types = "v@:@" },
-    .{ .name = "draggingEntered:", .imp = &draggingUpdated, .types = "Q@:@" },
-    .{ .name = "draggingUpdated:", .imp = &draggingUpdated, .types = "Q@:@" },
-    .{ .name = "draggingExited:", .imp = &draggingExited, .types = "v@:@" },
-    .{ .name = "performDragOperation:", .imp = &performDragOperation, .types = "c@:@" },
+    .{ .name = "draggingEntered:", .imp = &drop.draggingUpdated, .types = "Q@:@" },
+    .{ .name = "draggingUpdated:", .imp = &drop.draggingUpdated, .types = "Q@:@" },
+    .{ .name = "draggingExited:", .imp = &drop.draggingExited, .types = "v@:@" },
+    .{ .name = "performDragOperation:", .imp = &drop.performDragOperation, .types = "c@:@" },
     // Updates on movement only: nothing polls.
     .{ .name = "wantsPeriodicDraggingUpdates", .imp = &no, .types = "c@:" },
     .{ .name = "setFrameSize:", .imp = &setFrameSize, .types = "v@:{CGSize=dd}" },
@@ -404,54 +405,6 @@ fn paste(obj: objc.Object, _: objc.SEL, _: ?objc.Object) callconv(.c) void {
     s.ctx.input.shortcut = null;
     if (s.ctx.shortcut_taken) return;
     pasteText(s);
-}
-
-/// Where a drag is, in view points.
-fn dragPoint(s: *Surface, info: objc.Object) types.Point {
-    return s.toView(objc.msg(objc.CGPoint, info, "draggingLocation", .{}));
-}
-
-/// A drag from another app moves over the view: a copy where a box takes drops.
-fn draggingUpdated(obj: objc.Object, _: objc.SEL, info: objc.Object) callconv(.c) objc.NSUInteger {
-    const s = surfaceOf(obj) orelse return 0;
-    const p = dragPoint(s, info);
-    s.ctx.input.drag_over = p;
-    s.frame();
-    return if (s.ctx.acceptsDropAt(p)) 1 else 0; // NSDragOperationCopy
-}
-
-fn draggingExited(obj: objc.Object, _: objc.SEL, _: ?objc.Object) callconv(.c) void {
-    const s = surfaceOf(obj) orelse return;
-    s.ctx.input.drag_over = null;
-    s.frame();
-}
-
-/// The drop: its links (files as file URLs) and text, for one frame.
-fn performDragOperation(obj: objc.Object, _: objc.SEL, info: objc.Object) callconv(.c) objc.BOOL {
-    const s = surfaceOf(obj) orelse return objc.NO;
-    const pool = objc.Pool.push();
-    defer pool.pop();
-    var arena: std.heap.ArenaAllocator = .init(s.gpa);
-    defer arena.deinit();
-    const a = arena.allocator();
-    const p = dragPoint(s, info);
-    const pb = objc.msg(objc.Object, info, "draggingPasteboard", .{});
-    const classes = objc.msg(objc.Object, objc.class("NSArray"), "arrayWithObject:", .{objc.class("NSURL")});
-    var urls: std.ArrayList([]const u8) = .empty;
-    if (objc.msg(?objc.Object, pb, "readObjectsForClasses:options:", .{ classes, @as(?objc.Object, null) })) |arr| {
-        const n = objc.msg(objc.NSUInteger, arr, "count", .{});
-        for (0..n) |i| {
-            const url = objc.msg(objc.Object, arr, "objectAtIndex:", .{@as(objc.NSUInteger, i)});
-            const str = a.dupe(u8, objc.fromNSString(objc.msg(?objc.Object, url, "absoluteString", .{}))) catch continue;
-            urls.append(a, str) catch {};
-        }
-    }
-    const text = a.dupe(u8, objc.fromNSString(objc.msg(?objc.Object, pb, "stringForType:", .{objc.nsString("public.utf8-plain-text")}))) catch "";
-    s.ctx.input.drag_over = null;
-    s.ctx.input.drop = .{ .point = p, .urls = urls.items, .text = text };
-    s.frame();
-    s.ctx.input.drop = null;
-    return if (s.ctx.acceptsDropAt(p)) objc.YES else objc.NO;
 }
 
 fn metalDisplayLinkNeedsUpdate(obj: objc.Object, _: objc.SEL, _: objc.Object, update: objc.Object) callconv(.c) void {
