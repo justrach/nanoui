@@ -102,11 +102,11 @@ pub fn metalDisplayLinkNeedsUpdate(obj: objc.Object, _: objc.SEL, _: objc.Object
 pub fn liveResizeStart(obj: objc.Object, _: objc.SEL) callconv(.c) void {
     objc.msgSuper(void, obj, objc.class("NSView"), "viewWillStartLiveResize", .{});
     const s = objc.getZig(Surface, obj) orelse return;
-    // The link keeps drawing through the drag, at every vsync, at the
-    // size of the moment: frames presented in the resize's transaction
-    // instead stall the main thread on `waitUntilScheduled` (2-18 resize
-    // steps a second instead of the drag's 180). Each step asks for its
-    // frame (`setFrameSize`); held still, the link stops after a moment.
+    // Each step is laid out and presented in the resize's own transaction
+    // (`resizeInTransaction`, from `setFrameSize`), so the window never
+    // composites a stale frame, and the link stops meanwhile. With that
+    // off (`NANOUI_RESIZE_SYNC=0`) the link draws each step instead; held
+    // still, it stops after a moment (`resizeStepping`).
     s.ctx.live_resizing = true;
     s.resize_step_at = cf.CACurrentMediaTime();
     if (s.resizeSyncEnabled()) s.stopLink();
