@@ -17,8 +17,13 @@
 //!
 //! The frame is never extended into the client (`DwmExtendFrameIntoClientArea`):
 //! the real app measured the DWM then painting its own caption material over
-//! the app's band on the glass. The classic frame's paint (`WM_NCPAINT`,
-//! `WM_NCACTIVATE`) is suppressed, or it lands on the view's top rows.
+//! the app's band on the glass. `WM_NCACTIVATE` is told not to repaint, or
+//! the inactive caption lands on the view's top rows. `WM_NCPAINT` goes to
+//! DefWindowProc: answering it turns the DWM's non-client rendering off
+//! (`DWMWA_NCRENDERING_ENABLED` false), and then nothing paints the side and
+//! bottom borders, which show white instead of the DWM's invisible resize
+//! frame. That also brings the classic caption back over the top rows of an
+//! inactive window.
 const std = @import("std");
 const w = @import("win32.zig");
 const Window = @import("window.zig").Window;
@@ -147,9 +152,8 @@ pub fn handle(win: *Window, hwnd: w.HWND, msg: u32, wp: w.WPARAM, lp: w.LPARAM) 
             params.rgrc[0].top = reclaimedTop(original_top, w.IsZoomed(hwnd) != 0, frameTop(w.GetDpiForWindow(hwnd)));
             return 0;
         },
-        // The classic frame's paint lands on the view's top rows: lParam -1
-        // is WM_NCACTIVATE's "do not repaint the non-client area".
-        WM_NCPAINT => return 0,
+        // lParam -1 is WM_NCACTIVATE's "do not repaint the non-client area".
+        // WM_NCPAINT is left to DefWindowProc: see the top of this file.
         WM_NCACTIVATE => return w.DefWindowProcW(hwnd, msg, wp, -1),
         WM_NCHITTEST => {
             // The side and bottom borders are still the system's.
