@@ -15,7 +15,10 @@ const none = ctx_mod.none;
 pub fn store(c: *Context, instances: *std.ArrayList(gpu.Instance)) void {
     c.scroll_scene_ok = false;
     c.scroll_offsets.clearRetainingCapacity();
-    if (c.virtual_list or c.animating or c.frame_in != null or c.changed) return;
+    // A loader's later tick is not a scene change. Treating it as one
+    // rebuilds the window on every wheel event and drops scroll off the
+    // display's pace.
+    if (c.virtual_list or c.animating or c.changed) return;
     if (virtualSpacer(c, 0)) return;
     c.scroll_scene.clearRetainingCapacity();
     c.scroll_scene.appendSlice(c.gpa, instances.items) catch return;
