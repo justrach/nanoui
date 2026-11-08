@@ -160,6 +160,28 @@ pub const Tester = struct {
         t.frame();
     }
 
+    /// The pointer goes down at (x, y) and stays down (`move`, `up`), with
+    /// the modifier keys `setMods` left.
+    pub fn down(t: *Tester, x: f32, y: f32) void {
+        t.moveTo(x, y);
+        t.ctx.input.click_count = 1;
+        t.ctx.pointerDown();
+        t.frame();
+    }
+
+    /// The pointer moves to (x, y), held down or not.
+    pub fn move(t: *Tester, x: f32, y: f32) void {
+        t.ctx.input.mouse = .{ .x = x, .y = y };
+        if (!t.ctx.input.down) t.ctx.updateHot();
+        t.frame();
+    }
+
+    pub fn up(t: *Tester) void {
+        t.ctx.pointerUp();
+        t.frame();
+        t.ctx.updateHot();
+    }
+
     pub fn typeText(t: *Tester, s: []const u8) void {
         t.ctx.input.chars = s;
         t.frame();
