@@ -99,7 +99,20 @@ pub const State = struct {
     /// A divider drag that changed the weights ended (or VoiceOver nudged
     /// one): for the app to persist the layout.
     resized: u32 = 0,
+    /// A tab dragged from another window (a floating panel's header), the
+    /// pointer in this dock's window points: its landing zone and ghost
+    /// are drawn as for one of the dock's own. The app sets it on each
+    /// move of that drag and docks it with `dropExternal` on release
+    /// (null: none).
+    external_drag: ?ExternalDrag = null,
 };
+
+pub const ExternalDrag = struct { panel: dock.PanelId, point: types.Point };
+
+/// Where `State.external_drag` would land now (the last frame's layout).
+pub const externalTarget = drag.externalTarget;
+/// Docks `State.external_drag` where it is and ends it: where it landed.
+pub const dropExternal = drag.dropExternal;
 
 /// `Style.drag_threshold`'s default.
 pub const drag_threshold: f32 = 6;
@@ -127,6 +140,7 @@ pub fn view(c: *Context, t: *dock.Tree, st: *State, style: Style, ctx: anytype, 
         for (l.dividers[0..l.divider_count]) |d| dividerHook(c, st, d, hot, bounds, ctx, Hooks);
     } else glow.draw(c, st, style, &l);
     drag.overlay(c, t, st, style, &l, bounds, ctx, Hooks);
+    drag.external(c, t, st, style, &l, bounds, ctx, Hooks);
     c.end();
 }
 

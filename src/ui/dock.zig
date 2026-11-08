@@ -13,6 +13,7 @@
 const std = @import("std");
 const types = @import("types.zig");
 const layout_mod = @import("dock_layout.zig");
+const resize = @import("dock_resize.zig");
 
 pub const Rect = types.Rect;
 pub const PanelId = u8;
@@ -265,6 +266,11 @@ pub const Tree = struct {
     pub const dropTarget = layout_mod.dropTarget;
     pub const adjustDivider = layout_mod.adjustDivider;
     pub const nodeMin = layout_mod.nodeMin;
+    /// Resizing by the app (`dock_resize.zig`).
+    pub const groupSize = resize.groupSize;
+    pub const groupRect = resize.groupRect;
+    pub const adjustDividerFor = resize.adjustDividerFor;
+    pub const setGroupExtent = resize.setGroupExtent;
 };
 
 pub const Layout = layout_mod.Layout;
