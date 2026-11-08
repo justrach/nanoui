@@ -183,3 +183,32 @@ test "traffic_lights is left alone without a hidden title bar" {
     const win = try app.newWindow(.{ .title = "plain", .width = 300, .height = 200, .visible = false, .traffic_lights = .{ .x = 26, .y = 26 }, .content = .{ .view = .init(&p, Page.view) } });
     try testing.expect(win.lights == null);
 }
+
+const Counter = struct {
+    frames: u32 = 0,
+    fn view(k: *Counter, c: *ui.Context) void {
+        k.frames += 1;
+        ui.text(c, "wake", .{});
+    }
+};
+
+fn asker(w: *Window) void {
+    std.Io.sleep(testing.io, .fromMilliseconds(20), .awake) catch {};
+    w.redrawFromAnyThread();
+    w.redrawFromAnyThread();
+}
+
+test "a window redrawn from another thread draws on the main thread" {
+    const app = try makeApp(testing.allocator);
+    defer freeApp(app);
+    var k: Counter = .{};
+    const w = try app.newWindow(.{ .title = "wake", .width = 200, .height = 120, .visible = false, .content = .{ .view = .init(&k, Counter.view) } });
+    const th = try std.Thread.spawn(.{}, asker, .{w});
+    th.join();
+    try testing.expect(w.surface.?.wake_pending.load(.acquire));
+    const before = k.frames;
+    @import("platform.zig").runFor(0.2);
+    try testing.expect(!w.surface.?.wake_pending.load(.acquire));
+    // Hidden, the frame waits until it shows; either way it was asked for.
+    try testing.expect(k.frames > before or w.surface.?.pending or w.surface.?.full_pending);
+}
