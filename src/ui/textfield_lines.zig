@@ -117,7 +117,9 @@ pub fn draw(c: *Context, s: []const u8, e: *EditState, style: types.TextStyle, l
             _ = c.leaf(.{ .absolute = true, .width = .{ .px = x1 - x0 }, .height = .{ .px = 1.5 }, .background = th.text, .offset = .{ .x = x0, .y = y + lh - 1 } }, .none, null);
         };
     }
-    if (s.len == 0) _ = c.leaf(.{ .absolute = true }, .{ .text = .{ .str = placeholder, .style = style, .color = placeholder_color } }, null);
+    // Only an empty field shows the placeholder. A second visual line is
+    // still `s.len > 0`; painting the placeholder there covers the draft.
+    if (s.len == 0 and placeholder.len > 0) _ = c.leaf(.{ .absolute = true }, .{ .text = .{ .str = placeholder, .style = style, .color = placeholder_color } }, null);
     if (suggestion.len > 0 and focused and e.caret == s.len)
         _ = c.leaf(.{ .absolute = true, .offset = .{ .x = cx, .y = cy } }, .{ .text = .{ .str = suggestion, .style = style, .color = th.muted.alpha(0.8) } }, null);
     if (show_caret) {
