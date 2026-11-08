@@ -245,6 +245,7 @@ test {
     _ = @import("dock.zig");
     _ = @import("dock_layout.zig");
     _ = @import("tests_dock.zig");
+    _ = @import("tests_dock_hooks.zig");
     _ = @import("layout.zig");
     _ = textfield;
     _ = @import("tests.zig");
