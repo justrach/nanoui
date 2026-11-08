@@ -165,6 +165,9 @@ pub const textArea = @import("textarea.zig").textArea;
 pub const AreaOptions = @import("textarea.zig").AreaOptions;
 /// Focuses the field built next (`c.focusNext`), selecting all its text if asked.
 pub const focusNext = @import("context_hooks.zig").focusNext;
+/// Rich text from a little Markdown (`markdown.zig`): bold, italic,
+/// code, headings and bullets as spans.
+pub const markdown = @import("markdown.zig");
 /// What a drop from another app brought (`Context.dropAt`).
 pub const Drop = @import("input.zig").Drop;
 pub const MouseButton = @import("input.zig").Button;
@@ -220,6 +223,7 @@ test {
     _ = types;
     _ = device;
     _ = @import("panes.zig");
+    _ = @import("markdown.zig");
     _ = @import("layout.zig");
     _ = textfield;
     _ = @import("tests.zig");
