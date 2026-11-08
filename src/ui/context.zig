@@ -146,6 +146,11 @@ pub const Context = struct {
     input: Input = .{},
     /// `applyScroll` moved an offset. A quiet next frame may shift the scene.
     scroll_delta: bool = false,
+    /// The app says this animation only moved a clip. The next frame may
+    /// reuse the last scene instead of rebuilding the window.
+    clip_shift: bool = false,
+    clip_dx: f32 = 0,
+    clip_slot: f32 = 0,
     /// `ui.list` built this frame: its rows are not all in the tree.
     virtual_list: bool = false,
     /// Last painted scene, for a scroll that only moved.
@@ -471,6 +476,15 @@ pub const Context = struct {
     /// Asks for another frame as soon as the display can show it: for
     /// views that animate from `time` every frame.
     pub fn animationFrame(c: *Context) void {
+        c.animating = true;
+    }
+
+    /// This frame only slid a clip (a sidebar seam). The next display-link
+    /// tick may translate the last scene by `dx` instead of rebuilding.
+    pub fn clipShift(c: *Context, slot: f32, dx: f32) void {
+        c.clip_shift = true;
+        c.clip_slot = slot;
+        c.clip_dx = dx;
         c.animating = true;
     }
 
