@@ -22,6 +22,7 @@ pub const FrameLog = frame_log_mod.FrameLog;
 pub const KeysReleased = struct { ctx: ?*anyopaque, func: *const fn (ctx: ?*anyopaque, s: *Surface) void };
 extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
 const pacing = @import("pacing.zig");
+const link_pace = @import("surface_pacing.zig");
 pub const Surface = struct {
     gpa: std.mem.Allocator,
     window: *Window,
@@ -226,23 +227,9 @@ pub const Surface = struct {
         self.updateMaxFps();
     }
 
-    fn updateMaxFps(self: *Surface) void {
-        const screen = objc.msg(?objc.Object, self.window.nswindow, "screen", .{});
-        const screen_fps: f32 = if (screen) |sc| @floatFromInt(@max(60, objc.msg(objc.NSInteger, sc, "maximumFramesPerSecond", .{}))) else 60;
-        const fps = if (self.fps_cap > 0) @min(self.fps_cap, screen_fps) else screen_fps;
-        if (fps != self.max_fps) {
-            self.max_fps = fps;
-            const cur = self.link_fps;
-            self.link_fps = -1;
-            if (cur >= 0) self.setRate(if (cur == 0) null else 1 / cur);
-        }
-    }
-
+    const updateMaxFps = link_pace.updateMaxFps;
     /// Caps the display link's pace at `fps` (0 lifts the cap).
-    pub fn setFpsCap(self: *Surface, fps: f32) void {
-        self.fps_cap = fps;
-        self.updateMaxFps();
-    }
+    pub const setFpsCap = link_pace.setFpsCap;
 
     pub fn refreshAppearance(self: *Surface) void {
         const appearance = objc.msg(objc.Object, self.nsview, "effectiveAppearance", .{});
