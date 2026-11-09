@@ -1,12 +1,20 @@
 //! Native UI drawn with OpenGL on Linux: a GtkGLArea (GTK makes the
-//! context, GLX or EGL) whose frames the OpenGL renderer draws. Where
-//! there is no OpenGL 3.3, or `NANOUI_RENDERER=cpu`, the surface keeps the
-//! CPU renderer's drawing area. GTK's GL functions are loaded apart from
-//! the rest (`gtk.zig`), so a GTK without them still runs.
+//! context, GLX or EGL) whose frames the OpenGL renderer draws. GTK may give
+//! an OpenGL ES context even when desktop GL is asked for, so the API is
+//! read from the context and the ES shaders are used for it. There is no
+//! CPU fallback: `NANOUI_RENDERER=cpu` is the only way to draw on the CPU.
+//! GTK's GL functions are loaded apart from the rest (`gtk.zig`), so a GTK
+//! without them reports the missing OpenGL instead.
 const std = @import("std");
 const gtk = @import("gtk.zig");
 const gl = @import("../ui/gl.zig");
 const opengl = @import("../ui/opengl.zig");
+
+const GError = extern struct {
+    domain: u32,
+    code: c_int,
+    message: [*:0]u8,
+};
 
 const Api = struct {
     gtk_gl_area_new: *const fn () callconv(.c) *gtk.Widget,
@@ -25,7 +33,6 @@ var state: enum { unknown, loaded, missing } = .unknown;
 
 fn load() bool {
     if (state == .unknown) state = blk: {
-        if (!gl.load()) break :blk .missing;
         // The GTK that's loaded (gtk.zig): GtkGLArea is the same in 3 and 4.
         const lib = std.c.dlopen(if (gtk.v4) "libgtk-4.so.1" else "libgtk-3.so.0", .{ .NOW = true }) orelse break :blk .missing;
         inline for (@typeInfo(Api).@"struct".field_names) |name| {
@@ -38,28 +45,41 @@ fn load() bool {
     return state == .loaded;
 }
 
-/// A GL area asking for OpenGL 3.3 core, opaque unless `alpha` (a
-/// transparent window's); null without OpenGL.
+/// A GL area asking for OpenGL 3.0, opaque unless `alpha` (a transparent
+/// window's); null without OpenGL.
 pub fn new(alpha: bool) ?*gtk.Widget {
     if (!load()) return null;
     const area = api.gtk_gl_area_new();
     api.gtk_gl_area_set_use_es(area, 0);
-    api.gtk_gl_area_set_required_version(area, 3, 3);
+    api.gtk_gl_area_set_required_version(area, 3, 0);
     if (set_has_alpha) |f| f(area, @intFromBool(alpha));
     return area;
 }
 
-/// The renderer for a GL area that was just realized, its context
-/// current; null when GTK made no context or the renderer can't run on it.
-pub fn start(area: *gtk.Widget) ?opengl.Renderer {
+/// The renderer for a GL area that was just realized, its context current.
+/// GTK's context can be desktop GL or OpenGL ES (NVIDIA's EGL gives ES 3.2
+/// for a 3.0 request); the version string decides which shaders to use.
+pub fn start(area: *gtk.Widget) !opengl.Renderer {
     api.gtk_gl_area_make_current(area);
-    if (api.gtk_gl_area_get_error(area) != null) {
-        std.log.warn("nanoui: no OpenGL context; drawing on the CPU", .{});
-        return null;
+    if (api.gtk_gl_area_get_error(area)) |err| {
+        const e: *GError = @ptrCast(@alignCast(err));
+        std.log.err("nanoui: GTK could not create a GL context: {s}", .{std.mem.span(e.message)});
+        return error.NoOpenGLContext;
     }
-    return opengl.Renderer.init() catch {
-        std.log.warn("nanoui: OpenGL renderer failed; drawing on the CPU", .{});
-        return null;
+    if (!gl.load() and !gl.loadEs()) {
+        std.log.err("nanoui: no OpenGL loader is available", .{});
+        return error.OpenGLUnavailable;
+    }
+    const version: []const u8 = if (gl.api.glGetString(gl.VERSION)) |v| std.mem.span(v) else "";
+    if (std.mem.startsWith(u8, version, "OpenGL ES")) {
+        return opengl.Renderer.initEs() catch |err| {
+            std.log.err("nanoui: OpenGL ES renderer failed: {s}", .{@errorName(err)});
+            return err;
+        };
+    }
+    return opengl.Renderer.init() catch |err| {
+        std.log.err("nanoui: OpenGL renderer failed: {s}", .{@errorName(err)});
+        return err;
     };
 }
 

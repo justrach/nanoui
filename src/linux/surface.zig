@@ -1,10 +1,9 @@
 //! Native UI on Linux: a GtkGLArea that the OpenGL renderer draws
-//! (`glarea.zig`), or, without OpenGL 3.3, a GtkDrawingArea showing frames
-//! the CPU renderer draws (only what changed: ui.Canvas; cairo puts them on
-//! screen, at the monitor's scale); fed the pointer, the wheel, keys and an
-//! input method's text. Frames run on input and while something animates
-//! (a tick callback); idle, nothing runs. GTK 3's event signals are here;
-//! GTK 4's controllers in surface_gtk4.zig.
+//! (`glarea.zig`). `NANOUI_RENDERER=cpu` (and a shaped window, which reads
+//! its shape from pixels) uses a GtkDrawingArea and the CPU renderer instead;
+//! there is no automatic fallback when OpenGL cannot start. Frames run on
+//! input and while something animates (a tick callback); idle, nothing runs.
+//! GTK 3's event signals are here; GTK 4's controllers in surface_gtk4.zig.
 const std = @import("std");
 const gtk = @import("gtk.zig");
 const ui = @import("../ui/ui.zig");
@@ -36,14 +35,13 @@ pub const Surface = struct {
     /// The area is a GL area: OpenGL draws it, once it is realized.
     gl: bool,
     renderer: ?opengl.Renderer = null,
-    /// OpenGL failed: the drawing area replaces the GL area soon.
-    fallback: c_uint = 0,
     size: types.Size = .{},
     scale: f32 = 1,
     last_frame_time: f64 = 0,
     start_time: f64,
     tick: c_uint = 0,
     idle: c_uint = 0,
+    close_idle: c_uint = 0,
     /// A frame asked for later (`frameIn`).
     later: c_uint = 0,
     theme_override: ?Theme = null,
@@ -63,8 +61,10 @@ pub const Surface = struct {
         const self = try gpa.create(Surface);
         errdefer gpa.destroy(self);
         const g = &gtk.api;
-        // A window shaped to its frame reads the shape from the CPU's pixels.
-        const gl_area = if (window.app.cpu_only or window.transparent == .shape) null else glarea.new(window.transparent == .alpha);
+        // A shaped window reads its shape from the CPU's pixels; otherwise
+        // OpenGL is required. There is no silent CPU fallback.
+        const use_cpu = window.app.cpu_only or window.transparent == .shape;
+        const gl_area = if (use_cpu) null else (glarea.new(window.transparent == .alpha) orelse return error.OpenGLUnavailable);
         const area = gl_area orelse g.gtk_drawing_area_new();
         self.* = .{
             .gpa = gpa,
@@ -120,8 +120,8 @@ pub const Surface = struct {
         self.watches.stop();
         if (self.tick != 0) g.gtk_widget_remove_tick_callback(self.area, self.tick);
         if (self.idle != 0) _ = g.g_source_remove(self.idle);
+        if (self.close_idle != 0) _ = g.g_source_remove(self.close_idle);
         if (self.later != 0) _ = g.g_source_remove(self.later);
-        if (self.fallback != 0) _ = g.g_source_remove(self.fallback);
         self.renderer = null;
         g.g_object_unref(self.im);
         self.instances.deinit(self.gpa);
@@ -272,41 +272,24 @@ fn onRealize(_: *gtk.Widget, data: ?*anyopaque) callconv(.c) void {
     glStart(s);
 }
 
-/// The GL area was realized: its renderer, or the CPU's if it can't be had.
+/// The GL area was realized: start its renderer. OpenGL is required; when it
+/// cannot start, the window closes instead of silently drawing on the CPU.
 pub fn glStart(s: *Surface) void {
     if (!s.gl) return;
-    s.renderer = glarea.start(s.area);
-    if (s.renderer != null) {
-        s.ctx.renderer = "OpenGL";
-        s.requestFrame();
-        if (s.window.app.debug) std.debug.print("nanoui: window {x} draws with OpenGL on {s}\n", .{ @intFromPtr(s.window), glarea.gpuName() });
-    } else if (s.fallback == 0) {
-        // Not from inside the area's own signal: the area is replaced soon.
-        s.fallback = gtk.api.g_idle_add(useCpu, s);
-    }
+    s.renderer = glarea.start(s.area) catch {
+        // Not from inside the area's own signal: closing destroys the surface.
+        if (s.close_idle == 0) s.close_idle = gtk.api.g_idle_add(closeWindow, s);
+        return;
+    };
+    s.ctx.renderer = if (s.renderer.?.es) "OpenGL ES" else "OpenGL";
+    s.requestFrame();
+    if (s.window.app.debug) std.debug.print("nanoui: window {x} draws with {s} on {s}\n", .{ @intFromPtr(s.window), s.ctx.renderer, glarea.gpuName() });
 }
 
-/// OpenGL failed: a drawing area, which the CPU renderer draws, replaces
-/// the GL area.
-fn useCpu(data: ?*anyopaque) callconv(.c) c_int {
+fn closeWindow(data: ?*anyopaque) callconv(.c) c_int {
     const s = of(data);
-    const g = &gtk.api;
-    s.fallback = 0;
-    if (s.tick != 0) g.gtk_widget_remove_tick_callback(s.area, s.tick);
-    s.tick = 0;
-    const old = s.area;
-    s.gl = false;
-    s.area = g.gtk_drawing_area_new();
-    if (gtk.v4) {
-        // The window's new child; the GL area goes with being replaced.
-        @import("surface_gtk4.zig").attachArea(s);
-    } else {
-        gtk.v3.gtk_widget_destroy(old);
-        s.attach(s.area);
-        gtk.v3.gtk_container_add(s.window.gtkwindow.?, s.area);
-        glarea.api.gtk_widget_show(s.area);
-    }
-    g.gtk_widget_grab_focus(s.area);
+    s.close_idle = 0;
+    s.window.close();
     return 0;
 }
 
