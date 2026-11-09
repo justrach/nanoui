@@ -175,6 +175,11 @@ pub const Surface = struct {
         const dt: f32 = if (self.last_frame_time > 0) @floatCast(@min(now - self.last_frame_time, 0.1)) else 1.0 / 60.0;
         self.last_frame_time = now;
         c.safe_area = self.safeArea();
+        // The IME's text, made into the focused field's text this frame.
+        if (self.keys.sync_pending) {
+            c.input.ops = self.keys.sync_ops[0..2];
+            self.keys.sync_pending = false;
+        }
         const root: ui.View = if (self.full_bleed) self.view else .init(self, insideSafeArea);
         const r = frame_mod.run(c, root, &self.text, &self.instances, self.size, self.scale, self.theme(), dt, now - self.start_time);
         if (self.dead) {
@@ -195,6 +200,8 @@ pub const Surface = struct {
         if (!c.animating) self.last_frame_time = 0;
         // After the pace: the keyboard coming or going changes the insets.
         keys.syncFocus(self);
+        // And the keyboard's text and the focused field's, kept in step.
+        keys.syncText(self);
     }
 
     /// The app's view inside the safe area; the view sees none left.
