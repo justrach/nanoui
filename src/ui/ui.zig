@@ -79,6 +79,28 @@ pub const Posture = device.Posture;
 pub const panes = @import("panes.zig").panes;
 pub const Panes = @import("panes.zig").Panes;
 pub const PanesOptions = @import("panes.zig").Options;
+/// Dockable panels: a tree of splits and tabbed groups (`dock.zig`), drawn
+/// with draggable dividers and tabs (`dock_view.zig`).
+pub const dock = struct {
+    const model = @import("dock.zig");
+    const lay = @import("dock_layout.zig");
+    const v = @import("dock_view.zig");
+    pub const Tree = model.Tree;
+    pub const Node = model.Node;
+    pub const PanelId = model.PanelId;
+    pub const PanelInfo = model.PanelInfo;
+    pub const Metrics = model.Metrics;
+    pub const DropZone = model.DropZone;
+    pub const DropTarget = model.DropTarget;
+    pub const Layout = lay.Layout;
+    pub const GroupItem = lay.GroupItem;
+    pub const DividerItem = lay.DividerItem;
+    pub const zoneRect = lay.zoneRect;
+    pub const Style = v.Style;
+    pub const State = v.State;
+    pub const TabState = v.TabState;
+    pub const view = v.view;
+};
 
 pub const key = widgets.key;
 pub const keyInt = widgets.keyInt;
@@ -224,6 +246,10 @@ test {
     _ = types;
     _ = device;
     _ = @import("panes.zig");
+    _ = @import("dock.zig");
+    _ = @import("dock_layout.zig");
+    _ = @import("tests_dock.zig");
+    _ = @import("tests_dock_hooks.zig");
     _ = @import("layout.zig");
     _ = textfield;
     _ = @import("tests.zig");
