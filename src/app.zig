@@ -29,12 +29,36 @@ pub const Options = struct {
     on_active: ?*const fn (ctx: ?*anyopaque, active: bool) void = null,
     /// What the About panel (the menu's `.about` role, `showAbout`) shows.
     about: extras.About = .{},
+    /// `.accessory`: a menu bar app (a tray, `LSUIElement`), with no Dock
+    /// icon and no menu bar of its own, which can still show windows: it
+    /// does not come forward at launch, and a window it shows comes
+    /// forward with `Window.focus`. `.regular`: a Dock icon and menus,
+    /// whatever the bundle's Info.plist says.
+    activation: Activation = .regular,
 };
 
 const extras = @import("app_extras.zig");
 pub const About = extras.About;
 pub const Presentation = extras.Presentation;
 pub const Screen = @import("screens.zig").Screen;
+pub const Activation = enum { regular, accessory };
+
+/// `NSApplicationActivationPolicy`: regular (0), accessory (1), or
+/// prohibited (2) for hidden runs, which never show anything.
+pub fn activationPolicy(hidden: bool, activation: Activation) objc.NSInteger {
+    if (hidden) return 2;
+    return switch (activation) {
+        .regular => 0,
+        .accessory => 1,
+    };
+}
+
+test "activation policies: accessory apps have no Dock icon, hidden runs nothing" {
+    try std.testing.expectEqual(@as(objc.NSInteger, 0), activationPolicy(false, .regular));
+    try std.testing.expectEqual(@as(objc.NSInteger, 1), activationPolicy(false, .accessory));
+    try std.testing.expectEqual(@as(objc.NSInteger, 2), activationPolicy(true, .accessory));
+    try std.testing.expectEqual(@as(objc.NSInteger, 2), activationPolicy(true, .regular));
+}
 
 pub const App = struct {
     gpa: std.mem.Allocator,
@@ -129,9 +153,9 @@ pub const App = struct {
             .quiet = std.mem.eql(u8, init.environ_map.get("NANOUI_RESTORE") orelse "", "quiet"),
         };
         // A plain binary (not an .app bundle) still gets a Dock icon and
-        // menus; hidden runs (tests, snapshots) get neither, nor focus.
-        const policy: objc.NSInteger = if (flags.hidden) 2 else 0;
-        _ = objc.msg(objc.BOOL, nsapp, "setActivationPolicy:", .{policy});
+        // menus; an accessory app (a menu bar app) neither; hidden runs
+        // (tests, snapshots) get neither, nor focus.
+        _ = objc.msg(objc.BOOL, nsapp, "setActivationPolicy:", .{activationPolicy(flags.hidden, options.activation)});
         objc.msg(void, nsapp, "setDelegate:", .{delegate});
         try self.setMenu(&default_menu);
         return self;
@@ -368,6 +392,9 @@ pub const App = struct {
 fn didFinishLaunching(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
     if (objc.getZig(App, self_obj)) |app| {
         if (app.flags.hidden) return;
+        // A menu bar app (launched at login, say) takes no focus until it
+        // shows a window with `Window.focus`.
+        if (app.options.activation == .accessory) return;
         // Opened quietly by an update's restart: launching takes no focus,
         // and windows made from now on come forward as usual.
         if (app.quiet) {
