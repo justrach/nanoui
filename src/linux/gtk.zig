@@ -78,6 +78,9 @@ pub const Api = struct {
     gdk_display_get_default: *const fn () callconv(.c) ?*anyopaque,
     gdk_display_get_default_seat: *const fn (display: *anyopaque) callconv(.c) *anyopaque,
     gdk_seat_get_pointer: *const fn (seat: *anyopaque) callconv(.c) ?*anyopaque,
+    // GObject's own, for reading a setting by name (`desktop.isDark`).
+    g_object_get: *const fn (obj: *anyopaque, first_property: [*:0]const u8, ...) callconv(.c) void,
+    gtk_settings_get_default: *const fn () callconv(.c) ?*anyopaque,
     // cairo.
     cairo_image_surface_create_for_data: *const fn (data: [*]u8, format: c_int, width: c_int, height: c_int, stride: c_int) callconv(.c) *anyopaque,
     cairo_surface_set_device_scale: *const fn (surface: *anyopaque, x: f64, y: f64) callconv(.c) void,
