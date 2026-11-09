@@ -131,6 +131,19 @@ fn peerState(vm: *Vm, _: Value, args: []const Value) Error!Value {
     return Value.fromInt(if (frames.sameOrigin(bind.world(vm).page, p)) 1 else 2);
 }
 
+fn carryArgs(from: *World, to: *World, v: Value) Error!Value {
+    if (!v.isObject()) return (try to.vm.newArray(&.{})).value();
+    const arr = v.asObject();
+    const n: u32 = if (arr.isArray()) arr.arr_len else @intFromFloat(@max(0, try from.vm.toNumber(try arr.get(from.vm, "length"))));
+    const out = try to.vm.newArray(&.{});
+    var i: u32 = 0;
+    while (i < n) : (i += 1) {
+        const item = try arr.getIdx(from.vm, i);
+        try out.setIdx(to.vm, i, try carry(from, to, item));
+    }
+    return out.value();
+}
+
 /// `$.remote(op, peer, id, a, b)`: the proxies' every operation.
 fn remote(vm: *Vm, _: Value, args: []const Value) Error!Value {
     const me = bind.world(vm);
@@ -142,13 +155,13 @@ fn remote(vm: *Vm, _: Value, args: []const Value) Error!Value {
     const id: usize = @intCast(@max(0, bind.arg(args, 2).asInt()));
     if (id > o.exports.items.len) return Value.undefined;
     const object = if (id == window_export) o.vm.global().value() else o.exports.items[id - 1];
-    const a = try carry(me, o, bind.arg(args, 3));
-    const b = try carry(me, o, bind.arg(args, 4));
-    o.enter();
-    defer o.leave();
+    const op_num = if (bind.arg(args, 0).isInt()) bind.arg(args, 0).asInt() else -1;
+    const a = if (op_num == 7) try carryArgs(me, o, bind.arg(args, 3)) else try carry(me, o, bind.arg(args, 3));
+    const b = if (op_num == 6) try carryArgs(me, o, bind.arg(args, 4)) else try carry(me, o, bind.arg(args, 4));
     const was = o.caller;
     o.caller = me.page;
-    defer o.caller = was;
+    o.enter();
+    defer o.leaveRemote(was);
     const out = o.vm.call(o.h.remoteOp, Value.undefined, &.{ bind.arg(args, 0), object, a, b }) catch |e| switch (e) {
         error.Thrown => {
             const text = o.vm.exceptionString();

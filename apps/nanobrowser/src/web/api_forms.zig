@@ -43,6 +43,7 @@ fn setInputValue(vm: *Vm, this: Value, args: []const Value) Error!Value {
         try mutate.setAttr(w, n, "value", s);
         return Value.undefined;
     }
+    if (std.mem.eql(u8, n.value orelse n.attr("value") orelse "", s)) return Value.undefined;
     n.value = try bind.dupe(w, s);
     n.doc.touchLayout();
     w.changed();
@@ -90,13 +91,17 @@ fn checked(vm: *Vm, this: Value, _: []const Value) Error!Value {
 fn setChecked(vm: *Vm, this: Value, args: []const Value) Error!Value {
     const n = try nodeOf(vm, this);
     const on = vm.toBoolean(bind.arg(args, 0));
+    const was = page_input.isChecked(n);
     if (on and typeIs(n, "radio")) {
         if (page_input.formOf(n)) |f| page_input.uncheckGroup(f, n) else page_input.uncheckGroup(n.doc.node, n);
     }
     n.checked = on;
-    // `:checked` and what follows it.
-    n.doc.touchStyle();
-    bind.world(vm).changed();
+    if (was != on) {
+        // `:checked` and what follows it.
+        n.doc.markStyle(n.parent orelse n);
+        n.doc.touchLayout();
+        bind.world(vm).changed();
+    }
     return Value.undefined;
 }
 

@@ -62,7 +62,9 @@ pub fn Matcher(comptime Unit: type) type {
         prog: *const Program,
         text: []const Unit,
         regs: []i32,
-        stack: std.ArrayList(Entry) = .empty,
+        buf: []Entry,
+        sp: usize = 0,
+        heap: bool = false,
         gpa: Allocator,
         steps: u64 = 0,
         unicode_mode: bool,
@@ -73,9 +75,23 @@ pub fn Matcher(comptime Unit: type) type {
             m.regs[i] = v;
         }
 
+        fn grow(m: *Self) Failure!void {
+            if (m.buf.len >= stack_limit) return error.TooComplex;
+            const next_cap = @min(m.buf.len * 2, stack_limit);
+            if (m.heap) {
+                m.buf = m.gpa.realloc(m.buf, next_cap) catch return error.OutOfMemory;
+            } else {
+                const nb = m.gpa.alloc(Entry, next_cap) catch return error.OutOfMemory;
+                @memcpy(nb[0..m.sp], m.buf[0..m.sp]);
+                m.buf = nb;
+                m.heap = true;
+            }
+        }
+
         inline fn push(m: *Self, e: Entry) Failure!void {
-            if (m.stack.items.len >= stack_limit) return error.TooComplex;
-            m.stack.append(m.gpa, e) catch return error.OutOfMemory;
+            if (m.sp >= m.buf.len) try m.grow();
+            m.buf[m.sp] = e;
+            m.sp += 1;
         }
 
         /// The code point (or unit) at pos reading forward; advance is its width.
@@ -126,7 +142,7 @@ pub fn Matcher(comptime Unit: type) type {
         /// Runs from pc at pos. True on match or look_end; `end_pos` holds where it ended.
         fn run(m: *Self, start_pc: u32, start_pos: u32, backward: bool, end_pos: *u32) Failure!bool {
             const insts = m.prog.insts;
-            const base = m.stack.items.len;
+            const base = m.sp;
             var pc = start_pc;
             var pos: u32 = start_pos;
             const len: u32 = @intCast(m.text.len);
@@ -199,7 +215,7 @@ pub fn Matcher(comptime Unit: type) type {
                             }
                         },
                         .look => |l| {
-                            const mark = m.stack.items.len;
+                            const mark = m.sp;
                             var p2: u32 = 0;
                             const hit = try m.run(pc + 1, pos, l.behind, &p2);
                             if (hit != l.negate) {
@@ -313,28 +329,28 @@ pub fn Matcher(comptime Unit: type) type {
                 }
                 // Failed: back up to the most recent choice since this run began.
                 while (true) {
-                    if (m.stack.items.len == base) return false;
-                    const top = &m.stack.items[m.stack.items.len - 1];
+                    if (m.sp == base) return false;
+                    const top = &m.buf[m.sp - 1];
                     switch (top.*) {
                         .reg => |r| {
                             m.regs[r.i] = r.old;
-                            m.stack.items.len -= 1;
+                            m.sp -= 1;
                         },
                         .branch => |b| {
                             pc = b.pc;
                             pos = b.pos;
-                            m.stack.items.len -= 1;
+                            m.sp -= 1;
                             break;
                         },
                         .range => |*r| {
                             r.cur -= 1;
                             pc = r.pc;
                             pos = r.cur;
-                            if (r.cur == r.low) m.stack.items.len -= 1;
+                            if (r.cur == r.low) m.sp -= 1;
                             break;
                         },
                         .lazy => |l| {
-                            m.stack.items.len -= 1;
+                            m.sp -= 1;
                             const inst = insts[l.pc + 1];
                             if (l.pos < len and m.single(inst, m.text[l.pos])) {
                                 const next_count = l.count + 1;
@@ -352,8 +368,9 @@ pub fn Matcher(comptime Unit: type) type {
         }
 
         fn undoTo(m: *Self, mark: usize) Failure!void {
-            while (m.stack.items.len > mark) {
-                const e = m.stack.pop().?;
+            while (m.sp > mark) {
+                m.sp -= 1;
+                const e = m.buf[m.sp];
                 if (e == .reg) m.regs[e.reg.i] = e.reg.old;
             }
         }
@@ -361,13 +378,13 @@ pub fn Matcher(comptime Unit: type) type {
         /// Removes choice points above mark, keeping the undo log.
         fn dropBranches(m: *Self, mark: usize) void {
             var w = mark;
-            for (m.stack.items[mark..]) |e| {
+            for (m.buf[mark..m.sp]) |e| {
                 if (e == .reg) {
-                    m.stack.items[w] = e;
+                    m.buf[w] = e;
                     w += 1;
                 }
             }
-            m.stack.items.len = w;
+            m.sp = w;
         }
     };
 }
@@ -375,18 +392,21 @@ pub fn Matcher(comptime Unit: type) type {
 /// Finds a match at or after `start` (exactly at it when sticky). regs receives capture
 /// pairs and is reset for each attempt. Returns whether it matched.
 pub fn exec(comptime Unit: type, gpa: Allocator, prog: *const Program, text: []const Unit, start: usize, sticky: bool, regs: []i32, tick: Tick) Failure!bool {
+    var inline_buf: [64]Entry = undefined;
     var m = Matcher(Unit){
         .prog = prog,
         .text = text,
         .regs = regs,
+        .buf = &inline_buf,
         .gpa = gpa,
         .unicode_mode = prog.flags.unicode or prog.flags.unicode_sets,
         .tick = tick,
     };
-    defer m.stack.deinit(gpa);
+    defer if (m.heap) gpa.free(m.buf);
     var pos = start;
     while (pos <= text.len) {
         if (!sticky) {
+            if (prog.anchored and !prog.flags.multiline and pos > 0) return false;
             if (prog.first_unit) |u| {
                 if (Unit == u8) {
                     if (u >= 0x80) return false;
@@ -396,16 +416,25 @@ pub fn exec(comptime Unit: type, gpa: Allocator, prog: *const Program, text: []c
                     const rel = std.mem.indexOfScalar(Unit, text[pos..], @intCast(u)) orelse return false;
                     pos += rel;
                 }
+            } else if (prog.first_class) |ci| {
+                const cl = &prog.classes[ci];
+                while (pos < text.len and !classHas(cl, text[pos])) pos += 1;
+                if (pos >= text.len) return false;
             }
         }
         @memset(regs, -1);
-        m.stack.clearRetainingCapacity();
+        m.sp = 0;
         var end: u32 = 0;
         if (try m.run(0, @intCast(pos), false, &end)) return true;
         if (sticky) return false;
+        if (prog.anchored and !prog.flags.multiline) return false;
         pos += 1;
-        // Unicode mode doesn't start a match inside a surrogate pair.
-        if (Unit == u16 and m.unicode_mode and pos < text.len and text[pos] >= 0xDC00 and text[pos] < 0xE000 and text[pos - 1] >= 0xD800 and text[pos - 1] < 0xDC00) pos += 1;
+        if (prog.anchored and prog.flags.multiline) {
+            while (pos <= text.len and !isLineTerm(text[pos - 1])) pos += 1;
+        } else if (Unit == u16 and m.unicode_mode and pos < text.len and text[pos] >= 0xDC00 and text[pos] < 0xE000 and text[pos - 1] >= 0xD800 and text[pos - 1] < 0xDC00) {
+            // Unicode mode doesn't start a match inside a surrogate pair.
+            pos += 1;
+        }
     }
     return false;
 }

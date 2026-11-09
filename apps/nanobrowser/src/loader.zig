@@ -99,7 +99,6 @@ pub const Sheets = struct {
         defer lists.deinit(gpa);
         for (trees.values()) |l| lists.append(gpa, l.items) catch {};
         p.engine.setScopedSheets(trees.keys()[0..lists.items.len], lists.items);
-        p.doc.touchStyle();
     }
 };
 
@@ -249,11 +248,16 @@ pub fn linkFrom(p: *Page, ref: []const u8) ?[]const u8 {
 
 /// Walks the document for sheets, pictures and the icon not yet asked for.
 pub fn scan(p: *Page) void {
-    var changed = false;
     const repick = pickChanged(p);
+    if (!p.doc.scan_dirty and !repick and (p.icon_asked or p.frame != null or p.worker != null)) return pump(p);
+    p.doc.scan_dirty = false;
+    var changed = false;
     var at = p.doc.node.first_child;
-    while (at) |n| : (at = n.nextDeep(p.doc.node)) {
-        if (n.kind != .element) continue;
+    while (at) |n| {
+        if (n.kind != .element or !n.has_resource) {
+            at = n.nextDeepSkipping(p.doc.node);
+            continue;
+        }
         if (n.isTag("style")) {
             changed = styleElement(p, n) or changed;
         } else if (n.isTag("link")) {
@@ -264,6 +268,7 @@ pub fn scan(p: *Page) void {
             if (repick) repickImage(p, n);
             if (!isLazy(n)) imageElement(p, n);
         }
+        at = n.nextDeep(p.doc.node);
     }
     if (dropGone(p)) changed = true;
     if (changed) p.sheets.apply(p);
@@ -340,6 +345,7 @@ pub fn forget(p: *Page, n: *dom.Node) void {
         p.sheets.slots.items[i].sheet = null;
         p.sheets.slots.items[i].imports.clearRetainingCapacity();
     }
+    p.doc.scan_dirty = true;
     p.doc.touchStyle();
 }
 

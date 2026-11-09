@@ -114,7 +114,7 @@ fn historyGo(vm: *Vm, _: Value, args: []const Value) Error!Value {
 
 fn fragment(vm: *Vm, _: Value, args: []const Value) Error!Value {
     const w = bind.world(vm);
-    _ = @import("api_geometry.zig").flushLayout(w);
+    _ = @import("api_geometry.zig").flushDisplayList(w);
     page_input.fragment(w.page, try bind.str(vm, args, 0));
     return Value.undefined;
 }

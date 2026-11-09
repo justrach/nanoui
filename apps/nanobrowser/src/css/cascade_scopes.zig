@@ -24,15 +24,29 @@ fn nearestContainer(n: *const dom.Node, name: []const u8) ?*const dom.Node {
 /// Every shadow tree's sheets, replacing what was set; `list`'s slices are
 /// copied. A root with none has no entry.
 pub fn setScopedSheets(e: *Engine, roots: []const *dom.Node, lists: []const []const *const Sheet) void {
-    var old = e.scoped.valueIterator();
-    while (old.next()) |l| e.gpa.free(l.*);
-    e.scoped.clearRetainingCapacity();
+    var next: std.AutoHashMapUnmanaged(*dom.Node, []const *const Sheet) = .empty;
     for (roots, lists) |r, l| {
+        if (e.scoped.fetchRemove(r)) |kv| {
+            if (std.mem.eql(*const Sheet, kv.value, l)) {
+                next.put(e.gpa, r, kv.value) catch e.gpa.free(kv.value);
+                continue;
+            }
+            e.gpa.free(kv.value);
+        }
         const copy = e.gpa.dupe(*const Sheet, l) catch continue;
-        e.scoped.put(e.gpa, r, copy) catch e.gpa.free(copy);
+        next.put(e.gpa, r, copy) catch {
+            e.gpa.free(copy);
+            continue;
+        };
+        e.doc.markStyle(r.parent orelse r);
     }
-    dropScopeIndexes(e);
-    e.doc.touchStyle();
+    var rem = e.scoped.iterator();
+    while (rem.next()) |kv| {
+        e.doc.markStyle(kv.key_ptr.*.parent orelse kv.key_ptr.*);
+        e.gpa.free(kv.value_ptr.*);
+    }
+    e.scoped.deinit(e.gpa);
+    e.scoped = next;
 }
 
 pub fn dropScopeIndexes(e: *Engine) void {

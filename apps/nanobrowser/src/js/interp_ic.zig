@@ -16,6 +16,21 @@ const props = @import("props.zig");
 const conv = @import("conv.zig");
 const str = @import("string.zig");
 const shape_mod = @import("shape.zig");
+const heap = @import("heap.zig");
+const interp_call = @import("interp_call.zig");
+
+pub inline fn callGetterSlot(vm: *Vm, slot_val: Value, receiver: Value) Error!Value {
+    return props.callGetter(vm, slot_val, receiver);
+}
+
+pub fn callSetterSlot(vm: *Vm, ic: *bc.IC, slot_val: Value, receiver: Value, v: Value, strict: bool) Error!void {
+    const a: *heap.Accessor = @fieldParentPtr("cell", slot_val.asCell());
+    if (a.set.isUndefined()) {
+        if (strict) return props.throwReadonly(vm, ic.key);
+        return;
+    }
+    _ = try interp_call.call(vm, a.set, receiver, &.{v});
+}
 
 pub fn getField(vm: *Vm, ic: *bc.IC, v: Value) Error!Value {
     if (!v.isObject()) return props.getV(vm, v, ic.key);
@@ -24,28 +39,40 @@ pub fn getField(vm: *Vm, ic: *bc.IC, v: Value) Error!Value {
         if (o.flags.lazy_fn) try props.touchLazy(vm, o, ic.key);
         const sh = o.shape;
         if (sh.find(ic.key)) |slot| {
-            if (!sh.flagsAt(slot).accessor) {
-                if (!sh.is_dict) {
-                    ic.shape = sh;
-                    ic.holder = null;
-                    ic.slot = slot;
-                }
-                return o.slots[slot];
+            const acc = sh.flagsAt(slot).accessor;
+            if (!sh.is_dict) {
+                ic.shape = sh;
+                ic.holder = null;
+                ic.holder_shape = null;
+                ic.slot = slot;
+                ic.epoch = 0;
+                ic.is_accessor = acc;
             }
-        } else if (sh.proto) |h| {
-            // A lazy function's name and length aren't in its shape yet, so "not found here" can't be cached.
-            const lazy_key = sh == vm.fn_root and (ic.key.eql(vm.k.name) or ic.key.eql(vm.k.length) or ic.key.eql(vm.k.prototype));
-            if (!h.flags.exotic and !sh.is_dict and !lazy_key and !(o.class == .array and ic.key.eql(vm.k.length))) {
+            if (acc) return props.callGetter(vm, o.slots[slot], v);
+            return o.slots[slot];
+        }
+        // A lazy function's name and length aren't in its shape yet, so "not found here" can't be cached.
+        const is_lazy_key = ic.key.eql(vm.k.name) or ic.key.eql(vm.k.length) or ic.key.eql(vm.k.prototype);
+        if (!sh.is_dict and !(sh == vm.fn_root and is_lazy_key) and !(o.class == .array and ic.key.eql(vm.k.length))) {
+            var cur = sh.proto;
+            while (cur) |h| : (cur = h.shape.proto) {
+                if (h.flags.exotic or h.shape.is_dict) break;
                 if (h.flags.lazy_fn) try props.touchLazy(vm, h, ic.key);
+                if (h.class == .array and ic.key.eql(vm.k.length)) break;
                 const hs = h.shape;
+                if (hs == vm.fn_root and is_lazy_key) break;
                 if (hs.find(ic.key)) |slot| {
-                    if (!hs.flagsAt(slot).accessor and !hs.is_dict) {
+                    const acc = hs.flagsAt(slot).accessor;
+                    if (!hs.is_dict) {
                         ic.shape = sh;
                         ic.holder = h;
                         ic.holder_shape = hs;
                         ic.slot = slot;
-                        return h.slots[slot];
+                        ic.epoch = vm.proto_epoch;
+                        ic.is_accessor = acc;
                     }
+                    if (acc) return props.callGetter(vm, h.slots[slot], v);
+                    return h.slots[slot];
                 }
             }
         }
@@ -60,14 +87,47 @@ pub fn putField(vm: *Vm, ic: *bc.IC, t: Value, v: Value, strict: bool) Error!voi
         const sh = o.shape;
         if (sh.find(ic.key)) |slot| {
             const f = sh.flagsAt(slot);
-            if (f.writable and !f.accessor) {
+            if (f.accessor) {
                 if (!sh.is_dict) {
                     ic.shape = sh;
                     ic.holder = null;
+                    ic.holder_shape = null;
                     ic.slot = slot;
+                    ic.epoch = 0;
+                    ic.is_accessor = true;
+                }
+                return callSetterSlot(vm, ic, o.slots[slot], t, v, strict);
+            }
+            if (f.writable) {
+                if (!sh.is_dict) {
+                    ic.shape = sh;
+                    ic.holder = null;
+                    ic.holder_shape = null;
+                    ic.slot = slot;
+                    ic.epoch = 0;
+                    ic.is_accessor = false;
                 }
                 o.slots[slot] = v;
                 return;
+            }
+        } else if (!sh.is_dict and !(o.class == .array and ic.key.eql(vm.k.length))) {
+            var cur = sh.proto;
+            while (cur) |h| : (cur = h.shape.proto) {
+                if (h.flags.exotic or h.shape.is_dict or h.flags.lazy_fn) break;
+                if (h.class == .array and ic.key.eql(vm.k.length)) break;
+                const hs = h.shape;
+                if (hs.find(ic.key)) |slot| {
+                    if (hs.flagsAt(slot).accessor and !hs.is_dict) {
+                        ic.shape = sh;
+                        ic.holder = h;
+                        ic.holder_shape = hs;
+                        ic.slot = slot;
+                        ic.epoch = vm.proto_epoch;
+                        ic.is_accessor = true;
+                        return callSetterSlot(vm, ic, h.slots[slot], t, v, strict);
+                    }
+                    break;
+                }
             }
         }
     }

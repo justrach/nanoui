@@ -196,7 +196,7 @@ fn replaceChild(vm: *Vm, this: Value, args: []const Value) Error!Value {
 pub fn clone(w: *bind.World, n: *Node, deep: bool, doc: *dom.Document) Error!*Node {
     const a = doc.arena;
     const copy = try a.create(Node);
-    copy.* = .{ .kind = n.kind, .doc = doc, .tag = n.tag, .ns = n.ns, .data = n.data };
+    copy.* = .{ .kind = n.kind, .doc = doc, .tag = n.tag, .ns = n.ns, .data = n.data, .has_resource = @import("../perf_rules.zig").isResourceTag(n.tag) };
     try copy.attrs.ensureTotalCapacity(a, n.attrs.items.len);
     for (n.attrs.items) |at| copy.attrs.appendAssumeCapacity(at);
     copy.value = n.value;
@@ -219,7 +219,7 @@ pub fn clone(w: *bind.World, n: *Node, deep: bool, doc: *dom.Document) Error!*No
         while (true) {
             if (k) |child| {
                 const c2 = try a.create(Node);
-                c2.* = .{ .kind = child.kind, .doc = doc, .tag = child.tag, .ns = child.ns, .data = child.data };
+                c2.* = .{ .kind = child.kind, .doc = doc, .tag = child.tag, .ns = child.ns, .data = child.data, .has_resource = @import("../perf_rules.zig").isResourceTag(child.tag) };
                 try c2.attrs.ensureTotalCapacity(a, child.attrs.items.len);
                 for (child.attrs.items) |at| c2.attrs.appendAssumeCapacity(at);
                 c2.value = child.value;

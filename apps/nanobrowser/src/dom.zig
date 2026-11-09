@@ -5,6 +5,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const style = @import("css/style.zig");
+const perf = @import("perf_rules.zig");
 
 pub const Kind = enum { document, fragment, element, text, comment, doctype };
 pub const Ns = enum { html, svg, mathml };
@@ -74,6 +75,10 @@ pub const Node = struct {
     popover_open: bool = false,
     /// Showing by `showModal()`: `:modal`.
     modal: bool = false,
+    /// Upward-closed summary: this element or a descendant is a resource/sheet tag.
+    has_resource: bool = false,
+    /// Queued in `Document.dirty_nodes` for the next `flushStyle` pass.
+    style_queued: bool = false,
     /// An inline split around blocks: its boxes, whose union its rect is.
     box_parts: []const *anyopaque = &.{},
 
@@ -114,14 +119,16 @@ pub const Node = struct {
     /// Sets an attribute; `name` and `value` are copied.
     pub fn setAttr(n: *Node, name: []const u8, value: []const u8) Allocator.Error!void {
         const gpa = n.doc.arena;
-        const v = try gpa.dupe(u8, value);
-        n.doc.touchAttr(n, name);
-        if (changesBoxes(n, name)) n.doc.touchLayout();
         for (n.attrs.items) |*a| if (std.mem.eql(u8, a.name, name)) {
-            a.value = v;
+            if (std.mem.eql(u8, a.value, value)) return;
+            a.value = try gpa.dupe(u8, value);
+            n.doc.touchAttr(n, name);
+            if (changesBoxes(n, name)) n.doc.touchLayout();
             return;
         };
-        try n.attrs.append(gpa, .{ .name = try gpa.dupe(u8, name), .value = v });
+        try n.attrs.append(gpa, .{ .name = try gpa.dupe(u8, name), .value = try gpa.dupe(u8, value) });
+        n.doc.touchAttr(n, name);
+        if (changesBoxes(n, name)) n.doc.touchLayout();
     }
 
     pub fn removeAttr(n: *Node, name: []const u8) void {
@@ -213,6 +220,11 @@ pub const Node = struct {
         child.prev = if (ref) |r| r.prev else n.last_child;
         if (child.prev) |p| p.next = child else n.first_child = child;
         if (ref) |r| r.prev = child else n.last_child = child;
+        if (child.has_resource or n.isTag("style")) {
+            var at: ?*Node = n;
+            while (at) |x| : (at = x.parent) x.has_resource = true;
+            n.doc.scan_dirty = true;
+        }
         n.doc.touchTree(n);
     }
 
@@ -228,6 +240,7 @@ pub const Node = struct {
         n.parent = null;
         n.prev = null;
         n.next = null;
+        if (n.has_resource or p.isTag("style")) n.doc.scan_dirty = true;
         n.doc.touchTree(p);
     }
 
@@ -316,7 +329,19 @@ pub const Node = struct {
 
     /// Sets a text's characters; `s` is copied.
     pub fn setData(n: *Node, s: []const u8) Allocator.Error!void {
+        if (std.mem.eql(u8, n.data, s)) return;
         n.data = try n.doc.arena.dupe(u8, s);
+        if (n.parent) |p| {
+            if (p.isTag("style")) {
+                n.doc.scan_dirty = true;
+                n.doc.markStyle(p);
+            }
+            if (p.ns == .svg) {
+                n.doc.svg_version +%= 1;
+                n.doc.svg_dirty = true;
+                return;
+            }
+        }
         n.doc.touchLayout();
     }
 };
@@ -330,6 +355,7 @@ pub const Document = struct {
     /// Style must be computed again; layout too, which that implies.
     style_dirty: bool = true,
     layout_dirty: bool = true,
+    scan_dirty: bool = true,
     /// What `:hover`, `:active` and `:focus` match; setting them restyles.
     hover: ?*Node = null,
     active: ?*Node = null,
@@ -338,6 +364,8 @@ pub const Document = struct {
     quirks: bool = false,
     /// Goes up as style is touched: what live collections know themselves by.
     generation: u32 = 0,
+    /// Goes up when non-SVG-interior tree structure changes (outermost `<svg>` roots).
+    svg_roots_generation: u32 = 0,
     /// Goes up when anything in an inline `<svg>` changes: what's drawn from
     /// their markup is made again (`paint/svg_markup.zig`).
     svg_version: u32 = 0,
@@ -359,6 +387,7 @@ pub const Document = struct {
     /// Everything's style may have changed.
     pub fn touchStyle(d: *Document) void {
         d.generation +%= 1;
+        d.svg_roots_generation +%= 1;
         d.style_dirty = true;
         d.layout_dirty = true;
         d.dirty_all = true;
@@ -379,11 +408,15 @@ pub const Document = struct {
     fn touchUnder(d: *Document, n: *Node) void {
         d.style_dirty = true;
         if (d.dirty_all) return;
-        if (d.dirty_nodes.items.len >= 256) {
+        const parent_queued = if (n.parent) |p| p.style_queued else false;
+        if (!perf.shouldQueueDirtyNode(n.style_queued, parent_queued)) return;
+        if (d.dirty_nodes.items.len >= 512) {
             d.dirty_all = true;
             return;
         }
+        n.style_queued = true;
         d.dirty_nodes.append(d.arena, n) catch {
+            n.style_queued = false;
             d.dirty_all = true;
         };
     }
@@ -392,6 +425,7 @@ pub const Document = struct {
     /// selects by it reaches its siblings at most, unless it is the inline style.
     fn touchAttr(d: *Document, n: *Node, name: []const u8) void {
         d.generation +%= 1;
+        if (n.has_resource) d.scan_dirty = true;
         if (!d.inDocument(n)) return;
         d.touchUnder(if (std.mem.eql(u8, name, "style")) n else n.parent orelse n);
     }
@@ -400,7 +434,11 @@ pub const Document = struct {
     fn touchTree(d: *Document, n: *Node) void {
         d.generation +%= 1;
         if (!d.inDocument(n)) return;
-        d.layout_dirty = true;
+        const disp_contents = n.computed != null and n.computed.?.display == .contents;
+        if (!perf.isSvgInterior(n.ns == .svg, false, disp_contents)) {
+            d.layout_dirty = true;
+            d.svg_roots_generation +%= 1;
+        }
         d.touchUnder(n);
     }
 
@@ -440,7 +478,7 @@ pub const Document = struct {
         const n = try d.arena.create(Node);
         const name = try d.arena.dupe(u8, tag);
         if (ns == .html) _ = std.ascii.lowerString(name, name);
-        n.* = .{ .kind = .element, .doc = d, .tag = name, .ns = ns };
+        n.* = .{ .kind = .element, .doc = d, .tag = name, .ns = ns, .has_resource = perf.isResourceTag(name) };
         return n;
     }
 

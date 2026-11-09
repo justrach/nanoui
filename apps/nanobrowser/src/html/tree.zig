@@ -346,7 +346,7 @@ pub const Builder = struct {
 
     pub fn newElement(b: *Builder, name: []const u8, ns: dom.Ns, attrs: []dom.Attr) Error!*dom.Node {
         const n = try b.arena.create(dom.Node);
-        n.* = .{ .kind = .element, .doc = b.doc, .tag = name, .ns = ns };
+        n.* = .{ .kind = .element, .doc = b.doc, .tag = name, .ns = ns, .has_resource = @import("../perf_rules.zig").isResourceTag(name) };
         if (attrs.len > 0) n.attrs = .fromOwnedSlice(attrs);
         return n;
     }

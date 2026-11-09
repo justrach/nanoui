@@ -106,8 +106,9 @@ pub fn lineMetrics(c: *ui.Context, style: ui.TextStyle) box.Metrics {
     return .{ .ascent = ascent, .descent = descent, .gap = @round(m.leading), .x_height = m.x_height };
 }
 
-/// Style and layout brought up to date for a viewport of `w` × `h`.
-pub fn prepare(p: *Page, c: *ui.Context, w: f32, h: f32) void {
+/// Style and box layout (`p.tree`) brought up to date for a viewport of `w` × `h`,
+/// deferring display-list construction (`makeList`) until `prepare`.
+pub fn flushLayoutOnly(p: *Page, c: *ui.Context, w: f32, h: f32) void {
     loader.sheetsDue(p, c);
     webfonts.catchUp(p, c);
     p.engine.now = c.time;
@@ -125,14 +126,16 @@ pub fn prepare(p: *Page, c: *ui.Context, w: f32, h: f32) void {
     }
     defer if (resize_from) |from| resize.done(p, from);
     flushStyle(p);
-    if (p.doc.layout_dirty or p.list == null) {
-        relayout(p, c);
-    } else if (p.list_dirty or p.doc.svg_dirty) {
-        // What an SVG's markup comes to is on the list, and its colors may be
-        // what a paint-only change changed.
+    if (p.doc.layout_dirty or p.tree == null) relayoutTree(p, c);
+}
+
+/// Style, layout and display list brought up to date for a viewport of `w` × `h`.
+pub fn prepare(p: *Page, c: *ui.Context, w: f32, h: f32) void {
+    flushLayoutOnly(p, c, w, h);
+    if (p.tree) |tree| if (p.list == null or p.list_dirty or p.doc.svg_dirty) {
         var fonts: Fonts = .{ .p = p, .c = c };
-        makeList(p, p.tree.?, fonts.measurer());
-    }
+        makeList(p, tree, fonts.measurer());
+    };
 }
 
 /// What the page wants of frames from what runs on it, and the changes they made.
@@ -168,24 +171,22 @@ pub fn flushStyle(p: *Page) void {
     p.title_stale = true;
     d.style_dirty = false;
     if (d.dirty_all) {
+        for (d.dirty_nodes.items) |n| n.style_queued = false;
         p.engine.restyleAll() catch {};
         d.dirty_all = false;
         d.dirty_nodes.clearRetainingCapacity();
         d.layout_dirty = true;
         return;
     }
-    var seen: std.AutoHashMapUnmanaged(*dom.Node, void) = .empty;
-    defer seen.deinit(p.gpa);
-    for (d.dirty_nodes.items) |n| seen.put(p.gpa, n, {}) catch {};
     for (d.dirty_nodes.items) |n| {
-        if (!seen.remove(n)) continue;
+        if (!n.style_queued) continue;
         // Under one already done, or no longer in the document: nothing to do.
         var covered = false;
         var connected = false;
         var at: ?*dom.Node = n;
         while (at) |x| : (at = x.parent) {
             if (x.kind == .document) connected = true;
-            if (x != n and seen.contains(x)) covered = true;
+            if (x != n and x.style_queued) covered = true;
         }
         if (covered or !connected) continue;
         const target = if (n.kind == .document) d.documentElement() orelse continue else n;
@@ -197,11 +198,12 @@ pub fn flushStyle(p: *Page) void {
             .layout => d.layout_dirty = true,
         }
     }
+    for (d.dirty_nodes.items) |n| n.style_queued = false;
     d.dirty_nodes.clearRetainingCapacity();
     d.style_dirty = false;
 }
 
-pub fn relayout(p: *Page, c: *ui.Context) void {
+pub fn relayoutTree(p: *Page, c: *ui.Context) void {
     _ = p.layout_arena.reset(.retain_capacity);
     const a = p.layout_arena.allocator();
     var fonts: Fonts = .{ .p = p, .c = c };
@@ -225,7 +227,15 @@ pub fn relayout(p: *Page, c: *ui.Context) void {
     }
     p.doc.layout_dirty = false;
     p.tree = tree;
-    makeList(p, tree, m);
+    p.list_dirty = true;
+}
+
+pub fn relayout(p: *Page, c: *ui.Context) void {
+    relayoutTree(p, c);
+    if (p.tree) |tree| {
+        var fonts: Fonts = .{ .p = p, .c = c };
+        makeList(p, tree, fonts.measurer());
+    }
 }
 
 fn makeList(p: *Page, tree: box.Tree, m: box.Measurer) void {

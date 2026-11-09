@@ -206,6 +206,8 @@ pub const IC = struct {
     holder: ?*Object = null,
     holder_shape: ?*Shape = null,
     slot: u32 = 0,
+    epoch: u32 = 0,
+    is_accessor: bool = false,
 };
 
 pub const LineEntry = struct { pc: u32, pos: u32 };
@@ -290,6 +292,8 @@ pub const FuncProto = struct {
             ic.shape = null;
             ic.holder = null;
             ic.holder_shape = null;
+            ic.epoch = 0;
+            ic.is_accessor = false;
         }
         m.markStr(p.name);
         m.markCell(&p.source.cell);

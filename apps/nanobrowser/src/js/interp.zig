@@ -191,13 +191,15 @@ pub fn run(vm: *Vm) Error!Value {
                         if (v.isObject()) {
                             const obj = v.asObject();
                             if (obj.shape == ic.shape) {
-                                if (ic.holder) |h| {
-                                    if (h.shape == ic.holder_shape) {
-                                        r = h.slots[ic.slot];
+                                const h_ok = if (ic.holder) |h| (h.shape == ic.holder_shape and ic.epoch == vm.proto_epoch) else true;
+                                if (h_ok) {
+                                    const sv = (ic.holder orelse obj).slots[ic.slot];
+                                    if (!ic.is_accessor) {
+                                        r = sv;
                                         break :get;
                                     }
-                                } else {
-                                    r = obj.slots[ic.slot];
+                                    sync(vm, f, pc, sp);
+                                    r = ok(Value, icache.callGetterSlot(vm, sv, v), &err) orelse break :dispatch;
                                     break :get;
                                 }
                             }
@@ -218,9 +220,22 @@ pub fn run(vm: *Vm) Error!Value {
                     const ic = &f.fp.ics[u32At(pc + 1)];
                     const t = (sp - 2)[0];
                     const v = (sp - 1)[0];
-                    if (t.isObject() and t.asObject().shape == ic.shape and ic.holder == null) {
-                        t.asObject().slots[ic.slot] = v;
-                    } else {
+                    put: {
+                        if (t.isObject()) {
+                            const obj = t.asObject();
+                            if (obj.shape == ic.shape) {
+                                if (ic.holder == null and !ic.is_accessor) {
+                                    obj.slots[ic.slot] = v;
+                                    break :put;
+                                }
+                                const h_ok = if (ic.holder) |h| (h.shape == ic.holder_shape and ic.epoch == vm.proto_epoch) else true;
+                                if (ic.is_accessor and h_ok) {
+                                    sync(vm, f, pc, sp);
+                                    ok(void, icache.callSetterSlot(vm, ic, (ic.holder orelse obj).slots[ic.slot], t, v, f.fp.strict), &err) orelse break :dispatch;
+                                    break :put;
+                                }
+                            }
+                        }
                         sync(vm, f, pc, sp);
                         ok(void, icache.putField(vm, ic, t, v, f.fp.strict), &err) orelse break :dispatch;
                     }

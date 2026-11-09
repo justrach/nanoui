@@ -331,7 +331,14 @@ pub const Page = struct {
             p.maybeFree();
         }
         if (final.len > 0 and !std.mem.eql(u8, final, p.final_url)) {
-            const copy = p.gpa.dupe(u8, final) catch p.final_url;
+            const hash = if (std.mem.indexOfScalar(u8, final, '#') == null)
+                if (std.mem.indexOfScalar(u8, p.final_url, '#')) |i| p.final_url[i..] else ""
+            else
+                "";
+            const copy = if (hash.len > 0)
+                std.fmt.allocPrint(p.gpa, "{s}{s}", .{ final, hash }) catch p.final_url
+            else
+                p.gpa.dupe(u8, final) catch p.final_url;
             if (copy.ptr != p.final_url.ptr) {
                 p.gpa.free(p.final_url);
                 p.final_url = copy;

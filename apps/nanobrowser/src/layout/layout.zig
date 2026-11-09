@@ -75,7 +75,11 @@ fn clearBoxes(doc: *dom.Document) void {
     while (at) |n| {
         n.box = null;
         n.box_parts = &.{};
-        at = n.nextDeep(doc.node);
+        if (n.kind == .element and n.ns == .svg and n.isTag("svg") and (n.computed == null or n.computed.?.display != .contents)) {
+            at = n.nextDeepSkipping(doc.node);
+        } else {
+            at = n.nextDeep(doc.node);
+        }
     }
 }
 

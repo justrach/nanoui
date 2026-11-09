@@ -43,7 +43,7 @@ pub fn refresh(p: *Page) void {
     p.doc.svg_dirty = false;
     // Every rebuild of the list comes here: walk the document only when it changed.
     const c = &p.svgs;
-    if (!c.roots_known or c.roots_of != p.doc.generation) {
+    if (!c.roots_known or c.roots_of != p.doc.svg_roots_generation) {
         c.roots.clearRetainingCapacity();
         var at = p.doc.node.first_child;
         while (at) |n| {
@@ -52,7 +52,7 @@ pub fn refresh(p: *Page) void {
                 at = n.nextSkippingChildren(p.doc.node);
             } else at = n.nextInTree(p.doc.node);
         }
-        c.roots_of = p.doc.generation;
+        c.roots_of = p.doc.svg_roots_generation;
         c.roots_known = true;
     }
     for (c.roots.items) |n| one(p, n);

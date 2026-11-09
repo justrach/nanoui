@@ -192,6 +192,7 @@ fn newShape(vm: *Vm, proto: ?*Object, table: *Table, count: u32) Error!*Shape {
 
 /// The empty shape for objects with this prototype.
 pub fn rootFor(vm: *Vm, proto: ?*Object) Error!*Shape {
+    if (proto) |p| p.flags.is_proto = true;
     if (vm.root_shapes.get(proto)) |s| return s;
     const t = try vm.gpa.create(Table);
     t.* = .{};
@@ -203,6 +204,7 @@ pub fn rootFor(vm: *Vm, proto: ?*Object) Error!*Shape {
 /// The empty shape for exotic objects with this prototype. Ordinary objects never share
 /// it, so an inline cache filled from an ordinary object can't answer for an exotic one.
 pub fn exoticRootFor(vm: *Vm, proto: ?*Object) Error!*Shape {
+    if (proto) |p| p.flags.is_proto = true;
     if (vm.exotic_root_shapes.get(proto)) |s| return s;
     const t = try vm.gpa.create(Table);
     t.* = .{};
@@ -252,6 +254,7 @@ pub fn transition(vm: *Vm, s: *Shape, key: PropKey, flags: PropFlags) Error!*Sha
 
 /// A private dictionary shape with the same layout as s, for one object to own.
 pub fn toDict(vm: *Vm, s: *Shape, proto: ?*Object) Error!*Shape {
+    if (proto) |p| p.flags.is_proto = true;
     const gpa = vm.gpa;
     const t = try gpa.create(Table);
     t.* = .{};

@@ -82,7 +82,9 @@ pub const Flags = packed struct(u16) {
     /// `document.all`: an object that answers `typeof` as undefined, is false in
     /// a condition and `== null`, as the language keeps it for old pages.
     html_dda: bool = false,
-    _pad: u3 = 0,
+    /// An object that is or was another object's [[Prototype]]; mutating its shape bumps `vm.proto_epoch`.
+    is_proto: bool = false,
+    _pad: u2 = 0,
 };
 
 pub const NativeData = struct {

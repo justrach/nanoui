@@ -55,6 +55,49 @@ pub fn preFocus(focus: *u64, wants_focus: *bool, peeked_id: u64) void {
     }
 }
 
+/// Theorem 8 (`NanoUI.BrowserPerf.proto_epoch_ic_sound`):
+/// Whether a multi-hop prototype inline cache entry hits under `vm_epoch`.
+pub inline fn protoIcHits(obj_shape: ?*const anyopaque, ic_shape: ?*const anyopaque, holder_shape: ?*const anyopaque, ic_holder_shape: ?*const anyopaque, vm_epoch: u32, ic_epoch: u32) bool {
+    return obj_shape == ic_shape and holder_shape == ic_holder_shape and vm_epoch == ic_epoch;
+}
+
+/// Theorem 9 (`NanoUI.BrowserPerf.resource_bit_skip_sound`):
+/// Whether an HTML tag is a subresource or sheet carrier that `loader.scan` inspects.
+pub fn isResourceTag(tag: []const u8) bool {
+    return switch (tag.len) {
+        3 => std.mem.eql(u8, tag, "img"),
+        4 => std.mem.eql(u8, tag, "link") or std.mem.eql(u8, tag, "base"),
+        5 => std.mem.eql(u8, tag, "style"),
+        6 => std.mem.eql(u8, tag, "iframe") or std.mem.eql(u8, tag, "source"),
+        7 => std.mem.eql(u8, tag, "picture"),
+        else => false,
+    };
+}
+
+/// Theorem 10 (`NanoUI.BrowserPerf.layout_only_flush_sound`):
+/// Whether `flushLayoutOnly` needs to recompute style or box layout for `getBoundingClientRect` / `offsetWidth`.
+pub fn needsLayoutFlush(style_dirty: bool, layout_dirty: bool, has_tree: bool, vw_same: bool, vh_same: bool) bool {
+    return style_dirty or layout_dirty or !has_tree or !vw_same or !vh_same;
+}
+
+/// Theorem 11 (`NanoUI.BrowserPerf.agent_microtask_checkpoint_sound`):
+/// Whether exiting `World.leave` at `depth` with `has_caller` is an Agent microtask checkpoint.
+pub inline fn isAgentMicrotaskCheckpoint(depth: u32, has_caller: bool) bool {
+    return depth == 1 and !has_caller;
+}
+
+/// Theorem 12 (`NanoUI.BrowserPerf.style_queued_dedup_sound`):
+/// Whether `Document.touchUnder` should append `n` to `dirty_nodes`.
+pub inline fn shouldQueueDirtyNode(self_queued: bool, parent_queued: bool) bool {
+    return !self_queued and !parent_queued;
+}
+
+/// Theorem 14 (`NanoUI.BrowserPerf.svg_interior_mutation_paint_only`):
+/// Whether a node is strictly inside a replaced `<svg>` subtree (has no CSS layout box).
+pub inline fn isSvgInterior(in_svg_ns: bool, is_svg_root: bool, display_contents: bool) bool {
+    return in_svg_ns and !is_svg_root and !display_contents;
+}
+
 test "hover hold is quiescent when element under pointer matches old hover" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -99,4 +142,21 @@ test "preFocus assigns focus id and clears wants_focus in one pass" {
     preFocus(&focus, &wants_focus, 42);
     try std.testing.expectEqual(@as(u64, 42), focus);
     try std.testing.expect(!wants_focus);
+}
+
+test "protoIcHits validates epoch and resource tags and layout-only flush" {
+    const s1: usize = 10;
+    const s2: usize = 20;
+    const p1: *const anyopaque = @ptrFromInt(s1);
+    const p2: *const anyopaque = @ptrFromInt(s2);
+    try std.testing.expect(protoIcHits(p1, p1, p2, p2, 5, 5));
+    try std.testing.expect(!protoIcHits(p1, p1, p2, p2, 6, 5));
+    try std.testing.expect(isResourceTag("style"));
+    try std.testing.expect(isResourceTag("link"));
+    try std.testing.expect(isResourceTag("iframe"));
+    try std.testing.expect(isResourceTag("img"));
+    try std.testing.expect(!isResourceTag("div"));
+    try std.testing.expect(!isResourceTag("span"));
+    try std.testing.expect(!needsLayoutFlush(false, false, true, true, true));
+    try std.testing.expect(needsLayoutFlush(false, true, true, true, true));
 }

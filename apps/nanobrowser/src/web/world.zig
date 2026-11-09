@@ -262,9 +262,21 @@ pub const World = struct {
     }
 
     pub fn leave(w: *World) void {
+        w.leaveInner(w.caller);
+    }
+
+    pub fn leaveRemote(w: *World, prev_caller: ?*Page) void {
+        w.leaveInner(prev_caller);
+    }
+
+    fn leaveInner(w: *World, prev_caller: ?*Page) void {
         const vm = w.vm;
+        const has_caller = w.caller != null;
+        w.caller = prev_caller;
         // Microtasks are still this task: for them, JS is running.
-        if (w.depth == 1) vm.runJobs();
+        if (@import("../perf_rules.zig").isAgentMicrotaskCheckpoint(w.depth, has_caller)) {
+            w.drainAgentJobs();
+        }
         w.depth -= 1;
         if (w.depth != 0) return;
         vm.setDeadline(0);
@@ -290,6 +302,38 @@ pub const World = struct {
         }
         p.busy -= 1;
         p.maybeFree();
+    }
+
+    fn drainAgentJobs(w: *World) void {
+        w.vm.runJobs();
+        const top = @import("../frames.zig").topOf(w.page);
+        if (top == w.page and top.frames.list.items.len == 0) return;
+        while (drainFrameTree(w, top)) {
+            w.vm.runJobs();
+        }
+    }
+
+    fn drainFrameTree(root: *World, p: *Page) bool {
+        if (p.dead) return false;
+        var ran = false;
+        if (p.js) |cw| if (cw != root and !cw.stopped) {
+            if (cw.vm.jobs_head < cw.vm.jobs.items.len or cw.vm.pending_rejections.items.len != 0) {
+                const was = cw.caller;
+                cw.caller = root.page;
+                cw.enter();
+                cw.vm.runJobs();
+                cw.leaveRemote(was);
+                ran = true;
+            }
+        };
+        if (p.dead) return ran;
+        var i: usize = 0;
+        while (i < p.frames.list.items.len) : (i += 1) {
+            if (p.frames.list.items[i].page) |child| {
+                if (drainFrameTree(root, child)) ran = true;
+            }
+        }
+        return ran;
     }
 
     /// Calls `f` as a task of its own. Holds the page while it runs, and the

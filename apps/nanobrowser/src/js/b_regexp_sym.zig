@@ -41,6 +41,28 @@ fn hasFlag(f: []const u8, c: u8) bool {
 fn matchFn(vm: *Vm, this: Value, args: []const Value) Error!Value {
     const o = try thisObj(vm, this);
     const s = try conv.toStr(vm, u.arg(args, 0));
+    if (re.hasBuiltinExec(vm, o)) {
+        const prog = o.payload.regexp.prog;
+        const pf = prog.flags;
+        if (!pf.global) return re.builtinExec(vm, o, s);
+        const full = pf.unicode or pf.unicode_sets;
+        try re.setLastIndex(vm, o, 0);
+        const out = try objmod.newArray(vm, &.{});
+        const total = prog.ncaps * 2 + prog.nregs;
+        var stack_regs: [64]i32 = undefined;
+        const regs = if (total <= stack_regs.len) stack_regs[0..total] else try vm.gpa.alloc(i32, total);
+        defer if (total > stack_regs.len) vm.gpa.free(regs);
+        var pos: usize = 0;
+        while (pos <= s.len16) {
+            if (!try re.matchAt(vm, prog, s, pos, pf.sticky, regs)) break;
+            const a: usize = @intCast(regs[0]);
+            const b: usize = @intCast(regs[1]);
+            try objmod.arrayPush(vm, out, Value.fromString(try str.substring(vm, s, a, b)));
+            pos = if (a == b) try advance(s, b, full, vm) else b;
+        }
+        try re.setLastIndex(vm, o, 0);
+        return if (out.arr_len == 0) Value.null else out.value();
+    }
     const f = try flagsOf(vm, o);
     if (!hasFlag(f, 'g')) return re.regExpExec(vm, o, s);
     const full = hasFlag(f, 'u') or hasFlag(f, 'v');
@@ -244,6 +266,15 @@ fn replaceFn(vm: *Vm, this: Value, args: []const Value) Error!Value {
 fn searchFn(vm: *Vm, this: Value, args: []const Value) Error!Value {
     const o = try thisObj(vm, this);
     const s = try conv.toStr(vm, u.arg(args, 0));
+    if (re.hasBuiltinExec(vm, o) and o.slots[0].isInt()) {
+        const prog = o.payload.regexp.prog;
+        const total = prog.ncaps * 2 + prog.nregs;
+        var stack_regs: [64]i32 = undefined;
+        const regs = if (total <= stack_regs.len) stack_regs[0..total] else try vm.gpa.alloc(i32, total);
+        defer if (total > stack_regs.len) vm.gpa.free(regs);
+        if (!try re.matchAt(vm, prog, s, 0, prog.flags.sticky, regs)) return Value.fromInt(-1);
+        return Value.fromInt(regs[0]);
+    }
     const prev = try props.get(vm, o, vm.k.lastIndex);
     if (!conv.sameValue(vm, prev, Value.fromInt(0))) try props.put(vm, o, vm.k.lastIndex, Value.fromInt(0));
     const r = try re.regExpExec(vm, o, s);

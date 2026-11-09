@@ -129,8 +129,8 @@ $.hook("remoteOp", (op, o, a, b) => {
     // Preserve hidden properties, including Object.prototype.__proto__: for-in
     // must not turn an attributes copy across frames into prototype replacement.
     case 5: return Object.getOwnPropertyDescriptor(o, a)?.enumerable;
-    case 6: return Reflect.apply(o, a, argumentList(b));
-    case 7: return Reflect.construct(o, argumentList(a));
+    case 6: return Reflect.apply(o, a, b);
+    case 7: return Reflect.construct(o, a);
     case 8: return Object.getPrototypeOf(o);
     case 9: return o[Symbol[a]];
     case 10: return o instanceof g.MessagePort || $.remotePort(o);

@@ -146,8 +146,22 @@ pub fn matchAt(vm: *Vm, prog: *const rc.Program, s: *JSString, start: usize, sti
     };
 }
 
-fn setLastIndex(vm: *Vm, o: *Object, n: usize) Error!void {
+pub fn setLastIndex(vm: *Vm, o: *Object, n: usize) Error!void {
+    if (o.class == .regexp and o.shape.count >= 1) {
+        const flags = o.shape.table.entries.items[0].flags;
+        if (flags.writable and !flags.accessor) {
+            o.slots[0] = Value.fromUsize(n);
+            return;
+        }
+    }
     try props.put(vm, o, vm.k.lastIndex, Value.fromUsize(n));
+}
+
+pub fn hasBuiltinExec(vm: *Vm, o: *Object) bool {
+    if (o.class != .regexp or o.shape.count != 1 or o.shape.proto != vm.protos.regexp) return false;
+    const slot = vm.protos.regexp.shape.find(vm.k.exec) orelse return false;
+    const flags = vm.protos.regexp.shape.flagsAt(slot);
+    return !flags.accessor and vm.protos.regexp.slots[slot].isObject() and vm.protos.regexp.slots[slot].asObject() == vm.protos.regexp_exec;
 }
 
 fn matchIndicesArray(vm: *Vm, regs: []const i32, ncaps: u32, names: []const rp.GroupName) Error!Value {
@@ -174,12 +188,36 @@ fn matchIndicesArray(vm: *Vm, regs: []const i32, ncaps: u32, names: []const rp.G
     return arr.value();
 }
 
+/// Fast boolean match for RegExp.prototype.test without allocating a match Array.
+pub fn builtinTest(vm: *Vm, o: *Object, s: *JSString) Error!bool {
+    const d = o.payload.regexp;
+    const prog = d.prog;
+    const f = prog.flags;
+    const li: usize = if (o.slots[0].isInt()) @intCast(@max(0, o.slots[0].asInt())) else try conv.toLength(vm, o.slots[0]);
+    const uses_last = f.global or f.sticky;
+    const start = if (uses_last) li else 0;
+    if (start > s.len16) {
+        if (uses_last) try setLastIndex(vm, o, 0);
+        return false;
+    }
+    const total = prog.ncaps * 2 + prog.nregs;
+    var stack_regs: [64]i32 = undefined;
+    const regs = if (total <= stack_regs.len) stack_regs[0..total] else try vm.gpa.alloc(i32, total);
+    defer if (total > stack_regs.len) vm.gpa.free(regs);
+    if (!try matchAt(vm, prog, s, start, f.sticky, regs)) {
+        if (uses_last) try setLastIndex(vm, o, 0);
+        return false;
+    }
+    if (uses_last) try setLastIndex(vm, o, @intCast(regs[1]));
+    return true;
+}
+
 /// RegExpBuiltinExec: a match array, or null.
 pub fn builtinExec(vm: *Vm, o: *Object, s: *JSString) Error!Value {
     const d = o.payload.regexp;
     const prog = d.prog;
     const f = prog.flags;
-    const li = try conv.toLength(vm, o.slots[0]);
+    const li: usize = if (o.slots[0].isInt()) @intCast(@max(0, o.slots[0].asInt())) else try conv.toLength(vm, o.slots[0]);
     const uses_last = f.global or f.sticky;
     const start = if (uses_last) li else 0;
     if (start > s.len16) {
@@ -187,8 +225,9 @@ pub fn builtinExec(vm: *Vm, o: *Object, s: *JSString) Error!Value {
         return Value.null;
     }
     const total = prog.ncaps * 2 + prog.nregs;
-    const regs = try vm.gpa.alloc(i32, total);
-    defer vm.gpa.free(regs);
+    var stack_regs: [64]i32 = undefined;
+    const regs = if (total <= stack_regs.len) stack_regs[0..total] else try vm.gpa.alloc(i32, total);
+    defer if (total > stack_regs.len) vm.gpa.free(regs);
     if (!try matchAt(vm, prog, s, start, f.sticky, regs)) {
         if (uses_last) try setLastIndex(vm, o, 0);
         return Value.null;
@@ -226,6 +265,7 @@ pub fn builtinExec(vm: *Vm, o: *Object, s: *JSString) Error!Value {
 
 /// RegExpExec: honours a user-replaced exec method.
 pub fn regExpExec(vm: *Vm, o: *Object, s: *JSString) Error!Value {
+    if (hasBuiltinExec(vm, o)) return builtinExec(vm, o, s);
     const e = try props.get(vm, o, vm.k.exec);
     if (e.isCallable() and !(e.asObject() == vm.protos.regexp_exec and o.class == .regexp)) {
         const r = try calls.call(vm, e, o.value(), &.{Value.fromString(s)});
@@ -247,8 +287,17 @@ fn execFn(vm: *Vm, this: Value, args: []const Value) Error!Value {
 
 fn testFn(vm: *Vm, this: Value, args: []const Value) Error!Value {
     if (!this.isObject()) return vm.throwError(.TypeError, "RegExp.prototype.test called on non-object");
-    const r = try regExpExec(vm, this.asObject(), try conv.toStr(vm, u.arg(args, 0)));
-    return Value.fromBool(!r.isNull());
+    const o = this.asObject();
+    const s = try conv.toStr(vm, u.arg(args, 0));
+    if (hasBuiltinExec(vm, o)) return Value.fromBool(try builtinTest(vm, o, s));
+    const e = try props.get(vm, o, vm.k.exec);
+    if (e.isCallable() and !(e.asObject() == vm.protos.regexp_exec and o.class == .regexp)) {
+        const r = try calls.call(vm, e, o.value(), &.{Value.fromString(s)});
+        if (!r.isObject() and !r.isNull()) return vm.throwError(.TypeError, "object null or function expected");
+        return Value.fromBool(!r.isNull());
+    }
+    if (o.class != .regexp) return vm.throwError(.TypeError, "RegExp.prototype.exec called on incompatible receiver");
+    return Value.fromBool(try builtinTest(vm, o, s));
 }
 
 /// EscapeRegExpPattern for the source getter: a newline or bare slash must not appear raw.

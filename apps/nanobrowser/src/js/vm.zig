@@ -263,8 +263,16 @@ pub const Vm = struct {
     rng: u64 = 0x9E3779B97F4A7C15,
     /// Scratch for JSON and join cycle detection.
     visiting: std.ArrayList(*Object) = .empty,
+    /// Bumped whenever an object with `flags.is_proto` changes shape or prototype,
+    /// invalidating multi-hop prototype inline cache entries in O(1).
+    proto_epoch: u32 = 1,
 
     pub const interrupt_interval = 16384;
+
+    pub inline fn bumpProtoEpoch(vm: *Vm) void {
+        vm.proto_epoch +%= 1;
+        if (vm.proto_epoch == 0) vm.proto_epoch = 1;
+    }
 
     pub fn create(gpa_in: Allocator) Error!*Vm {
         const vm = try gpa_in.create(Vm);

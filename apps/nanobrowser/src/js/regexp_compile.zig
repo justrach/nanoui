@@ -57,6 +57,10 @@ pub const Program = struct {
     flags: rp.Flags,
     /// When every match must start with this unit: a fast scan for the first position.
     first_unit: ?u16,
+    /// When every match must start with a unit in `classes[first_class]`.
+    first_class: ?u32 = null,
+    /// When every match must begin at `.line_start` (`^`).
+    anchored: bool = false,
     arena: std.heap.ArenaAllocator,
     refs: u32 = 1,
 
@@ -291,17 +295,57 @@ const C = struct {
     }
 };
 
-fn firstUnit(insts: []const Inst, flags: rp.Flags) ?u16 {
-    if (flags.ignore_case) return null;
-    var i: usize = 0;
+fn instFirstUnit(insts: []const Inst, pc: u32, depth: u8) ?u16 {
+    if (depth > 8) return null;
+    var i: usize = pc;
     while (i < insts.len) : (i += 1) {
         switch (insts[i]) {
             .save => continue,
             .char => |cp| return if (cp < 0x10000 and !(cp >= 0xD800 and cp < 0xE000)) @intCast(cp) else null,
+            .single_loop => |l| {
+                if (l.min >= 1 and i + 1 < insts.len) return instFirstUnit(insts, @intCast(i + 1), depth + 1);
+                return null;
+            },
+            .split => |s| {
+                const a = instFirstUnit(insts, s.first, depth + 1) orelse return null;
+                const b = instFirstUnit(insts, s.second, depth + 1) orelse return null;
+                return if (a == b) a else null;
+            },
             else => return null,
         }
     }
     return null;
+}
+
+fn instFirstClass(insts: []const Inst, unicode_mode: bool) ?u32 {
+    if (unicode_mode) return null;
+    var i: usize = 0;
+    while (i < insts.len) : (i += 1) {
+        switch (insts[i]) {
+            .save => continue,
+            .class => |ci| return ci,
+            .single_loop => |l| {
+                if (l.min >= 1 and i + 1 < insts.len and insts[i + 1] == .class) return insts[i + 1].class;
+                return null;
+            },
+            else => return null,
+        }
+    }
+    return null;
+}
+
+fn instAnchored(insts: []const Inst, pc: u32, depth: u8) bool {
+    if (depth > 8) return false;
+    var i: usize = pc;
+    while (i < insts.len) : (i += 1) {
+        switch (insts[i]) {
+            .save => continue,
+            .line_start => return true,
+            .split => |s| return instAnchored(insts, s.first, depth + 1) and instAnchored(insts, s.second, depth + 1),
+            else => return false,
+        }
+    }
+    return false;
 }
 
 pub const CompileResult = union(enum) { program: *Program, err: []const u8 };
@@ -350,7 +394,9 @@ pub fn compile(gpa: Allocator, pattern: []const u32, flags: rp.Flags) Allocator.
         .nregs = c.nregs,
         .names = p.names.items,
         .flags = flags,
-        .first_unit = firstUnit(c.insts.items, flags),
+        .first_unit = instFirstUnit(c.insts.items, 0, 0),
+        .first_class = instFirstClass(c.insts.items, umode),
+        .anchored = instAnchored(c.insts.items, 0, 0),
         .arena = arena,
     };
     return .{ .program = prog };

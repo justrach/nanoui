@@ -14,6 +14,7 @@ const classes = @import("classes.zig");
 const display = @import("../paint/display.zig");
 const css_transform = @import("../css/transform.zig");
 const css_style = @import("../css/style.zig");
+const perf = @import("../perf_rules.zig");
 const Node = dom.Node;
 const Value = js.Value;
 const Vm = js.Vm;
@@ -26,7 +27,7 @@ pub fn flushStyle(w: *World) void {
     view.flushStyle(w.page);
 }
 
-/// Style and layout up to date. False when there is no context to measure with.
+/// Style and box layout (`p.tree`) up to date. False when there is no context to measure with.
 pub fn flushLayout(w: *World) bool {
     const p = w.page;
     if (w.painting) return p.tree != null;
@@ -34,11 +35,26 @@ pub fn flushLayout(w: *World) bool {
     const size = p.host.viewport(p.host.ctx);
     const vw = if (p.viewport_w > 0) p.viewport_w else size[0];
     const vh = if (p.viewport_h > 0) p.viewport_h else size[1];
-    if (!p.doc.style_dirty and !p.doc.layout_dirty and !p.list_dirty and p.list != null and vw == p.viewport_w and vh == p.viewport_h) return true;
+    if (!perf.needsLayoutFlush(p.doc.style_dirty, p.doc.layout_dirty, p.tree != null, vw == p.viewport_w, vh == p.viewport_h)) return true;
     const c = p.host.uiContext(p.host.ctx) orelse return false;
-    view.prepare(p, c, vw, vh);
-    if (p.list) |*l| l.resolve(p.origin[0], p.origin[1], p.viewport_w, p.viewport_h);
+    view.flushLayoutOnly(p, c, vw, vh);
     return p.tree != null;
+}
+
+/// Style, layout and display list (`p.list`) up to date, for hit testing and scrolling.
+pub fn flushDisplayList(w: *World) bool {
+    const p = w.page;
+    if (w.painting) return p.list != null;
+    page_loader.sheetsNow(p);
+    const size = p.host.viewport(p.host.ctx);
+    const vw = if (p.viewport_w > 0) p.viewport_w else size[0];
+    const vh = if (p.viewport_h > 0) p.viewport_h else size[1];
+    if (perf.needsPrepare(p.doc.style_dirty, p.doc.layout_dirty, p.list_dirty, p.doc.svg_dirty, p.list != null) or vw != p.viewport_w or vh != p.viewport_h) {
+        const c = p.host.uiContext(p.host.ctx) orelse return false;
+        view.prepare(p, c, vw, vh);
+    }
+    if (p.list) |*l| l.resolve(p.origin[0], p.origin[1], p.viewport_w, p.viewport_h);
+    return p.list != null;
 }
 
 fn thisElement(vm: *Vm, this: Value) Error!*Node {
@@ -235,9 +251,9 @@ fn scrollSize(vm: *Vm, this: Value, height: bool) Error!Value {
     const w = bind.world(vm);
     if (!flushLayout(w)) return Value.fromInt(0);
     const p = w.page;
-    if (clipOf(p, n)) |i| {
-        const c = p.list.?.clips[i];
-        return bind.num(@max(if (height) c.content_h else c.content_w, if (height) c.rect.h else c.rect.w));
+    if (isRootElement(n)) {
+        const tree = p.tree orelse return Value.fromInt(0);
+        return bind.num(@max(if (height) tree.doc_h else tree.doc_w, if (height) p.viewport_h else p.viewport_w));
     }
     const b = layout.boxOfNode(n) orelse return Value.fromInt(0);
     const inner = b.paddingRect();
@@ -263,7 +279,7 @@ fn scrollGet(vm: *Vm, this: Value, axis: usize) Error!Value {
 
 /// Moves a scroller to `x`, `y` (null: where it is), asking for the frame.
 fn scrollTo(w: *World, n: *Node, x: ?f32, y: ?f32) void {
-    if (!flushLayout(w)) return;
+    if (!flushDisplayList(w)) return;
     const p = w.page;
     const i = clipOf(p, n) orelse return;
     const l = &p.list.?;
@@ -312,7 +328,7 @@ fn scrollArgs(vm: *Vm, n: *Node, args: []const Value, by: bool) Error!void {
         y = try numArg(vm, bind.arg(args, 1));
     }
     if (by) {
-        if (!flushLayout(w)) return;
+        if (!flushDisplayList(w)) return;
         const i = clipOf(w.page, n) orelse return;
         const c = w.page.list.?.clips[i];
         if (x) |v| x = v + c.scroll_x;
@@ -334,7 +350,7 @@ fn elScrollBy(vm: *Vm, this: Value, args: []const Value) Error!Value {
 fn scrollIntoView(vm: *Vm, this: Value, args: []const Value) Error!Value {
     const n = try thisElement(vm, this);
     const w = bind.world(vm);
-    if (!flushLayout(w)) return Value.undefined;
+    if (!flushDisplayList(w)) return Value.undefined;
     const b = layout.boxOfNode(n) orelse return Value.undefined;
     var block: []const u8 = "start";
     if (bind.arg(args, 0).isObject()) {
@@ -367,7 +383,7 @@ fn scrollIntoView(vm: *Vm, this: Value, args: []const Value) Error!Value {
 
 fn elementFromPoint(vm: *Vm, _: Value, args: []const Value) Error!Value {
     const w = bind.world(vm);
-    if (!flushLayout(w)) return Value.null;
+    if (!flushDisplayList(w)) return Value.null;
     const p = w.page;
     const x: f32 = @floatCast(try vm.toNumber(bind.arg(args, 0)));
     const y: f32 = @floatCast(try vm.toNumber(bind.arg(args, 1)));

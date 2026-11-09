@@ -150,6 +150,7 @@ pub const Engine = struct {
     /// sheets must outlive the engine's use of them. Out of memory keeps the
     /// sheets it had.
     pub fn setSheets(e: *Engine, sheets: []const *const Sheet) void {
+        if (std.mem.eql(*const Sheet, e.sheets, sheets)) return;
         const copy = e.gpa.dupe(*const Sheet, sheets) catch return;
         e.gpa.free(e.sheets);
         e.sheets = copy;
@@ -403,11 +404,12 @@ pub const Engine = struct {
         const r = if (n.is_shadow) compute.shadowRoot(parent_style, parent_scope, &fresh) else try compute.element(e, n, parent_style, parent_scope, &fresh);
         if (fresh.container_type != .normal) try e.containers.put(e.gpa, n, {});
         try e.anim.styled(e, n, .none, parent_style, r.scope, e.previous(n, .none), &fresh);
+        const in_svg = n.ns == .svg and !n.isTag("svg");
         var compared: Change = .layout;
         if (old) |o| {
             compared = diff.compare(o, &fresh);
-            if (change) |c| c.* = c.max(compared);
-        } else if (change) |c| c.* = .layout;
+            if (change) |c| c.* = c.max(if (in_svg and compared == .layout) .paint else compared);
+        } else if (change) |c| c.* = c.max(if (in_svg) .paint else .layout);
         const stored: *const Style = blk: {
             if (old) |o| {
                 if (compared == .none) break :blk o;
@@ -490,7 +492,7 @@ pub const Engine = struct {
     /// No styles under `display: none`.
     fn clearSubtree(e: *Engine, top: *dom.Node, change: ?*Change, had_style: bool) void {
         if (change) |c| if (had_style) {
-            c.* = c.max(.layout);
+            c.* = c.max(if (top.ns == .svg and !top.isTag("svg")) .paint else .layout);
         };
         var at: ?*dom.Node = top;
         while (at) |n| : (at = n.nextDeep(top)) {
