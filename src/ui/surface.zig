@@ -79,6 +79,9 @@ pub const Surface = struct {
     reduce_motion: bool = false,
     is_visible: bool = false,
     released: bool = false,
+    /// When the live resize last changed the size: the link stays awake a
+    /// little after it (`resizeStepping`), not for the whole drag.
+    resize_step_at: f64 = 0,
     geometry_changed: bool = false,
     transparent: bool = false,
     after_frame_ctx: ?*anyopaque = null,
@@ -154,14 +157,7 @@ pub const Surface = struct {
             for (events.drag_types) |t| objc.msg(void, arr, "addObject:", .{objc.nsString(t)});
             objc.msg(void, nsview, "registerForDraggedTypes:", .{arr});
         }
-        {
-            const link = objc.msg(objc.Object, objc.alloc("CAMetalDisplayLink"), "initWithMetalLayer:", .{self.renderer.layer});
-            objc.msg(void, link, "setDelegate:", .{nsview});
-            objc.msg(void, link, "setPaused:", .{objc.YES});
-            const loop = objc.msg(objc.Object, objc.class("NSRunLoop"), "mainRunLoop", .{});
-            objc.msg(void, link, "addToRunLoop:forMode:", .{ loop, NSRunLoopCommonModes });
-            self.display_link = link;
-        }
+        self.startLink();
         {
             const ws = objc.msg(objc.Object, objc.class("NSWorkspace"), "sharedWorkspace", .{});
             self.reduce_motion = objc.msg(objc.BOOL, ws, "accessibilityDisplayShouldReduceMotion", .{});
@@ -174,6 +170,9 @@ pub const Surface = struct {
         self.frame();
         return self;
     }
+    pub const startLink = link_pace.startLink;
+    pub const stopLink = link_pace.stopLink;
+
     pub fn destroy(self: *Surface) void {
         self.dead = true;
         self.force_destroy = !self.window.app.running;
@@ -322,7 +321,9 @@ pub const Surface = struct {
         const native_changed = if (self.after_frame) |af| af(self.after_frame_ctx, self) else false;
         if (self.dead) return;
         const after_frame_ms = if (self.frame_log != null) (cf.CACurrentMediaTime() - t_af0) * 1000 else 0;
-        const sync = native_changed or self.ctx.live_resizing or self.geometry_changed or self.pending_sync;
+        // In the window's transaction only when native views moved with
+        // the frame: a resize alone presents on the link's schedule.
+        const sync = native_changed or self.pending_sync;
         self.geometry_changed = false;
         self.pending_sync = false;
         self.afterFocus();
@@ -366,7 +367,7 @@ pub const Surface = struct {
 
     pub fn updatePacing(self: *Surface, now: f64, hot_changed: bool) void {
         const c = &self.ctx;
-        const more = c.animating or hot_changed or c.input.down or self.scroll.active(now);
+        const more = self.resizeStepping() or c.animating or hot_changed or c.input.down or self.scroll.active(now);
         if (self.display_link != null) {
             if (more) {
                 self.setRate(null);
@@ -383,6 +384,10 @@ pub const Surface = struct {
             if (self.frame_log) |*fl| fl.last_t = 0;
         }
     }
+
+    pub const resizeStepping = link_pace.resizeStepping;
+    pub const resizeSyncEnabled = link_pace.resizeSyncEnabled;
+    pub const resizeInTransaction = link_pace.resizeInTransaction;
 
     pub fn redrawRetained(self: *Surface, target_in: f64, duration_in: f64) void {
         if (self.in_frame or self.dead) return;
@@ -435,6 +440,7 @@ pub const Surface = struct {
         self.renderer.syncImages(&self.text.images);
         self.renderer.textures = c.textures.items;
         const clear = if (self.transparent) types.Color.transparent else c.theme.background;
+        self.renderer.setBackdrop(clear);
         const present_at = if (target_in > 0) target_in else if (self.last_present_target > 0) @max(wall_now, self.last_present_target + dur) else wall_now;
         self.renderer.present_at = present_at;
         self.renderer.time = @floatCast(now - self.start_time);
@@ -593,4 +599,3 @@ pub const Surface = struct {
         return .{ .x = @floatCast(local.x), .y = @floatCast(local.y) };
     }
 };
-extern "c" const NSRunLoopCommonModes: objc.Object;
