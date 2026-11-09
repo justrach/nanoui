@@ -10,6 +10,7 @@ const std = @import("std");
 const wv = @import("windows/webview2.zig");
 const profile = @import("page_webview2_profile.zig");
 const serve = @import("page_webview2_serve.zig");
+const dock = @import("page_webview2_dock.zig");
 const page = @import("page.zig");
 const window_mod = @import("windows/window.zig");
 const app_mod = @import("windows/app.zig");
@@ -48,15 +49,25 @@ pub const Page = struct {
     token_resource: i64 = 0,
     token_message: i64 = 0,
     token_nav: i64 = 0,
+    /// Docked in a native-UI window (`Window.dockPage`): placed by the app
+    /// (`setFrame`) rather than covering the client area.
+    docked: bool = false,
+    /// The docked page's bounds in pixels, once `setFrame` placed it.
+    frame_px: ?wv.Rect = null,
+    /// Shown (`show`, `hide`): kept for a controller that is not there yet.
+    shown: bool = true,
 
     pub fn create(window: *Window, options: window_mod.PageOptions) !*Page {
         const gpa = window.app.gpa;
-        const hwnd = window.hwnd orelse return error.NoWindow;
+        // A docked page's parent is the window's own HWND (native UI draws
+        // into it; `PageOptions.parent` names it, or the window does).
+        const hwnd: w.HWND = if (options.parent) |pp| @ptrCast(pp) else window.hwnd orelse return error.NoWindow;
         const self = try gpa.create(Page);
         errdefer gpa.destroy(self);
         self.* = .{
             .queue = page.Queue(Window).init(window, options),
             .hwnd = hwnd,
+            .docked = options.parent != null,
             .data_dir = try profile.userDataDir(window, gpa, window.app.options.name),
         };
         errdefer gpa.free(self.data_dir);
@@ -119,6 +130,9 @@ pub const Page = struct {
     }
 
     pub fn destroy(self: *Page) void {
+        // A docked page leaves the window's list (the app may destroy it
+        // before the window goes).
+        if (self.docked) self.queue.window.undock(self);
         self.queue.deinit();
         // Close the controller first, and give back the reference
         // `controllerReady` took: the view goes with it.
@@ -206,7 +220,7 @@ pub const Page = struct {
             return;
         }
         self.pending_flush = false;
-        window_mod.postFlush(self.hwnd);
+        window_mod.postFlush(self.hwnd, self);
     }
 
     pub fn startDrag(self: *Page) void {
@@ -265,7 +279,7 @@ pub const Page = struct {
         _ = env.addRef();
         self.environment = env;
         if (self.queue.window.app.debug) std.debug.print("nanoui: webview2 environment ready\n", .{});
-        window_mod.postController(self.hwnd);
+        window_mod.postController(self.hwnd, self);
     }
 
     /// Asks for the controller, when the loop reaches `WM_NANOUI_CONTROLLER`.
@@ -315,8 +329,10 @@ pub const Page = struct {
         const v = view orelse return;
         self.webview = v;
 
-        self.applyBounds();
-        _ = wv.Controller.setIsVisible(ctl, 1);
+        if (self.docked) dock.ready(self, ctl) else {
+            self.applyBounds();
+            _ = wv.Controller.setIsVisible(ctl, 1);
+        }
 
         // WebView2's own settings: the inspectable page keeps its menus and
         // developer tools, as WKWebView's does.
@@ -361,12 +377,38 @@ pub const Page = struct {
         self.load(self.queue.options.url);
         if (self.pending_flush) {
             self.pending_flush = false;
-            window_mod.postFlush(self.hwnd);
+            window_mod.postFlush(self.hwnd, self);
         }
     }
 
-    /// The view covers the window's client area.
+    /// Places a docked page (points, the window's client coordinates). Call
+    /// from the surface's `after_frame` with the box's laid-out rect, as on
+    /// macOS.
+    pub fn setFrame(self: *Page, x: f64, y: f64, width: f64, height: f64) void {
+        const r = dock.pixelRect(x, y, width, height, dock.scaleOf(self.hwnd));
+        if (self.frame_px) |old| if (std.meta.eql(old, r)) return;
+        self.frame_px = r;
+        if (self.controller) |c| _ = wv.Controller.setBounds(c, r);
+    }
+
+    /// Shows or hides the page (a docked one's view; the window stays).
+    pub fn setHidden(self: *Page, hidden: bool) void {
+        if (self.shown == !hidden) return;
+        self.shown = !hidden;
+        if (self.controller) |c| _ = wv.Controller.setIsVisible(c, if (self.shown) 1 else 0);
+    }
+
+    pub fn show(self: *Page) void {
+        self.setHidden(false);
+    }
+
+    pub fn hide(self: *Page) void {
+        self.setHidden(true);
+    }
+
+    /// The view covers the client area; a docked one keeps its frame.
     pub fn applyBounds(self: *Page) void {
+        if (self.docked) return;
         const c = self.controller orelse return;
         var rect: w.RECT = undefined;
         if (w.GetClientRect(self.hwnd, &rect) == 0) return;

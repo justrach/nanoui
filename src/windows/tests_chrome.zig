@@ -1,6 +1,6 @@
 //! A title bar the app draws (`chrome.zig`), the frame kept between
-//! launches (`window_place.zig`) and the surface's `after_frame`, on real
-//! hidden windows: `WM_NCCALCSIZE`'s client area, the codes
+//! launches (`window_place.zig`), the surface's `after_frame` and docked
+//! pages, on real hidden windows: `WM_NCCALCSIZE`'s client area, the codes
 //! `WM_NCHITTEST` answers at the edges, the caption and the maximize
 //! button, the pointer over that button reaching the view, and a
 //! placement written and given back. The idioms are `tests_window.zig`'s.
@@ -236,7 +236,7 @@ const Hook = struct {
     }
 };
 
-test "after_frame runs after each frame with its layout" {
+test "after_frame runs after each frame with its layout; a dock without WebView2 says so" {
     const gpa = testing.allocator;
     const app = try makeApp(gpa);
     defer app.destroy();
@@ -253,4 +253,15 @@ test "after_frame runs after each frame with its layout" {
     try testing.expectEqual(@as(?*anyopaque, @ptrCast(h)), s.nativeHandle());
     const r = hook.content orelse return error.NoContentRect;
     try testing.expectEqual(@as(f32, 40), r.y);
+    // Docking makes the window clip its children, whether or not WebView2
+    // is here to make the page; without it, the error says why.
+    if (win.dockPage(.{ .url = "/", .transparent = true })) |p| {
+        p.setFrame(r.x, r.y, r.w, r.h);
+        p.hide();
+        p.show();
+        p.destroy();
+        try testing.expectEqual(@as(usize, 0), win.docked.items.len);
+    } else |err| try testing.expectEqual(error.WebView2Missing, err);
+    const style: u32 = @bitCast(@as(i32, @truncate(w.GetWindowLongPtrW(h, w.GWL_STYLE))));
+    try testing.expect(style & 0x02000000 != 0);
 }

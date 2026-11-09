@@ -113,8 +113,9 @@ pub const Screen = if (mac) @import("screens.zig").Screen else void;
 pub const screens = if (mac) @import("screens.zig") else struct {};
 pub const About = if (mac) @import("app_extras.zig").About else void;
 pub const Presentation = if (mac) @import("app_extras.zig").Presentation else void;
-/// A page docked in a native-UI window (`Window.dockPage`), macOS.
-pub const Page = if (mac) @import("page_webkit.zig").Page else void;
+/// A page docked in a native-UI window (`Window.dockPage`): WKWebView on
+/// macOS, WebView2 on Windows.
+pub const Page = if (mac) @import("page_webkit.zig").Page else if (builtin.os.tag == .windows) @import("page_webview2.zig").Page else void;
 pub const Asset = plat.window.Asset;
 /// Typed IPC for pages: wherever a webview draws them (macOS, iOS, Windows, Linux).
 const has_pages = mac or builtin.os.tag == .ios or builtin.os.tag == .windows or (builtin.os.tag == .linux and !is_android);
@@ -225,6 +226,7 @@ test {
             _ = @import("windows/window_place.zig");
             _ = @import("windows/tests_chrome.zig");
             _ = @import("windows/cursor.zig");
+            _ = @import("page_webview2_dock.zig");
             _ = @import("windows/app.zig");
             // The notification area's icon: the shell calls and the popup.
             std.testing.refAllDecls(@import("windows/tray.zig").Tray);

@@ -19,14 +19,17 @@ pub const WM_NANOUI_CONTROLLER: u32 = w.WM_APP + 0x4001;
 /// An encoded event from any thread (`sendOwned`), the message on board.
 pub const WM_NANOUI_JOB: u32 = w.WM_APP + 0x4002;
 
-/// Asks the window to run its page's queued messages once the loop turns.
-pub fn postFlush(hwnd: w.HWND) void {
-    _ = w.PostMessageW(hwnd, WM_NANOUI_FLUSH, 0, 0);
+/// Asks the window to run `page`'s queued messages once the loop turns.
+/// The page rides in wParam: a window holds its own page and the ones
+/// docked in it, and the message must reach the one that asked (a page
+/// gone by then is not found, and the message is dropped).
+pub fn postFlush(hwnd: w.HWND, page: *Page) void {
+    _ = w.PostMessageW(hwnd, WM_NANOUI_FLUSH, @intFromPtr(page), 0);
 }
 
-/// Asks the window to make its page's controller on the loop's next turn.
-pub fn postController(hwnd: w.HWND) void {
-    _ = w.PostMessageW(hwnd, WM_NANOUI_CONTROLLER, 0, 0);
+/// Asks the window to make `page`'s controller on the loop's next turn.
+pub fn postController(hwnd: w.HWND, page: *Page) void {
+    _ = w.PostMessageW(hwnd, WM_NANOUI_CONTROLLER, @intFromPtr(page), 0);
 }
 const ui = @import("../ui/ui.zig");
 
@@ -85,6 +88,8 @@ pub const Window = struct {
     /// The pointer is over the app's maximize button (`chrome.zig`), with
     /// the non-client leave asked for.
     max_hover: bool = false,
+    /// Pages docked in the native UI (`dockPage`), freed with the window.
+    docked: std.ArrayList(*Page) = .empty,
 
     /// Resizing changes geometry only, never the foreground window.
     pub const set_size_flags: u32 = w.SWP_NOMOVE | w.SWP_NOZORDER | w.SWP_NOACTIVATE;
@@ -275,11 +280,11 @@ pub const Window = struct {
         }
         // A page's queued messages go out on the turn this message lands on.
         if (msg == WM_NANOUI_FLUSH) {
-            if (self.page) |p| p.flush();
+            if (self.pageFor(wp)) |p| p.flush();
             return 0;
         }
         if (msg == WM_NANOUI_CONTROLLER) {
-            if (self.page) |p| p.makeController();
+            if (self.pageFor(wp)) |p| p.makeController();
             return 0;
         }
         if (msg == WM_NANOUI_JOB) {
@@ -300,6 +305,21 @@ pub const Window = struct {
         }
         if ((msg == w.WM_SETFOCUS or msg == w.WM_KILLFOCUS) and self.on_key != null) self.onKey();
         return w.DefWindowProcW(hwnd, msg, wp, lp);
+    }
+
+    /// The page a posted message names (`postFlush`): the window's own or
+    /// a docked one, if it is still there.
+    fn pageFor(self: *Window, wp: w.WPARAM) ?*Page {
+        if (wp == 0) return self.page;
+        if (self.page) |p| if (@intFromPtr(p) == wp) return p;
+        for (self.docked.items) |p| if (@intFromPtr(p) == wp) return p;
+        return null;
+    }
+
+    /// Asks WebView2 for every page of the window, once the loop runs.
+    pub fn startPages(self: *Window) void {
+        if (self.page) |p| p.start();
+        for (self.docked.items) |p| p.start();
     }
 
     fn onResize(self: *Window) void {
@@ -343,6 +363,10 @@ pub const Window = struct {
         if (self.autosave) |n| self.app.gpa.free(n);
         self.autosave = null;
         if (self.on_close) |cb| cb.func(cb.ctx, self);
+        // Docked pages first: their views are children of this window.
+        // `destroy` takes each out of the list (`undock`).
+        while (self.docked.pop()) |p| p.destroy();
+        self.docked.deinit(self.app.gpa);
         // The page first: WebView2's view is a child window, gone with its
         // controller before the window that holds it.
         if (self.page) |p| p.destroy();
@@ -481,6 +505,35 @@ pub const Window = struct {
         if (i >= p.queue.options.pages.len) return;
         p.load(p.queue.options.pages[i].url);
     }
+
+    /// A web page docked in this native-UI window: a WebView2 child of its
+    /// HWND, its own bridge, the app's services, freed with the window.
+    /// Place it with `Page.setFrame` (from the surface's `after_frame`),
+    /// show and hide it with `Page.show`/`hide`.
+    pub fn dockPage(self: *Window, options: PageOptions) !*Page {
+        const h = self.hwnd orelse return error.NoWindow;
+        var o = options;
+        if (o.parent == null) o.parent = @ptrCast(h);
+        // The page's view is a child window: the frame's own painting
+        // must leave it alone.
+        const style = w.GetWindowLongPtrW(h, w.GWL_STYLE);
+        if (style & ws_clipchildren == 0) _ = w.SetWindowLongPtrW(h, w.GWL_STYLE, style | ws_clipchildren);
+        const p = try Page.create(self, o);
+        errdefer p.destroy();
+        try self.docked.append(self.app.gpa, p);
+        if (self.app.running) p.start();
+        return p;
+    }
+
+    /// A docked page going away (`Page.destroy`): out of the list.
+    pub fn undock(self: *Window, p: *Page) void {
+        for (self.docked.items, 0..) |item, i| if (item == p) {
+            _ = self.docked.swapRemove(i);
+            return;
+        };
+    }
+
+    const ws_clipchildren: isize = 0x02000000;
 
     const SendJob = struct { msg: []u8 };
 
