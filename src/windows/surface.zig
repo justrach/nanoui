@@ -3,8 +3,9 @@
 //! presented through a Direct3D 11 flip swap chain
 //! (d3d.zig; GDI copies them where there's no Direct3D), fed the mouse,
 //! the wheel, keys and typed characters from the window procedure. Frames
-//! run on input and while something animates (a 60 Hz timer); idle,
-//! nothing runs.
+//! run on input and while something animates, on the display's beat
+//! (`surface_pace.zig`: a thread waiting for each vertical blank, moves
+//! between beats gathered into one frame); idle, nothing runs.
 const std = @import("std");
 const w = @import("win32.zig");
 const ui = @import("../ui/ui.zig");
@@ -22,10 +23,14 @@ const d3d = @import("d3d.zig");
 const d3d11 = @import("../ui/d3d11.zig");
 const gpu_side = @import("surface_gpu.zig");
 const ime = @import("ime.zig");
+const keys = @import("surface_win_keys.zig");
+const pace_side = @import("surface_pace.zig");
+const vblank = @import("vblank.zig");
+const frame_log = @import("../ui/frame_log.zig");
 
 /// Posted for a frame requested from outside the view.
 pub const WM_FRAME = w.WM_APP + 1;
-const tick_timer = 1;
+const tick_timer = pace_side.tick_timer;
 /// A frame asked for later (`frameIn`).
 const later_timer: usize = 2;
 
@@ -95,6 +100,17 @@ pub const Surface = struct {
     /// The frames built, and the paints done: the trace's frame number.
     frames: u64 = 0,
     paints: u64 = 0,
+    /// The display's beat (`vblank.zig`), made when frames are first paced;
+    /// `no_vclock` once it couldn't be (the 16 ms timer stands in).
+    vclock: ?*vblank.Clock = null,
+    no_vclock: bool = false,
+    pace: @import("../ui/frame_pace.zig").Pace = .{},
+    /// The last frame changed what is hot: keep the beat for its hover.
+    hot_moving: bool = false,
+    /// `NANOUI_FRAMES` / `recordFrames`: every frame's timings.
+    frame_log: ?frame_log.FrameLog = null,
+    frame_kind: frame_log.Kind = .input,
+    log_index: ?usize = null,
 
     pub fn create(window: *Window, view: ui.View, theme_override: ?Theme) !*Surface {
         const gpa = window.app.gpa;
@@ -115,6 +131,7 @@ pub const Surface = struct {
         // from the first frame; if no device can be made, `paintGpu` says CPU
         // and the next frame reads that instead.
         if (!self.no_d3d) self.ctx.renderer = "Direct3D 11";
+        pace_side.openLog(self);
         // The system's appearance now, and again if it changes while the app
         // runs (a window without a theme of its own follows it).
         self.system_theme_dark = @import("desktop.zig").isDark();
@@ -122,6 +139,7 @@ pub const Surface = struct {
     }
 
     pub fn destroy(self: *Surface) void {
+        pace_side.deinit(self);
         gpu_side.release(self);
         // The IME's scratch buffers: three ArrayLists that outlive a frame.
         self.ime.deinit(self.gpa);
@@ -211,18 +229,13 @@ pub const Surface = struct {
             self.window.close();
         }
         self.updateCursor();
+        pace_side.logFrame(self, now, raw_dt, 0);
         const more = c.animating or r.hot_changed;
-        if (more and !self.ticking) if (self.hwnd()) |h| {
-            _ = w.SetTimer(h, tick_timer, 16, null);
-            self.ticking = true;
-            self.trace("tick timer on", .{});
-        };
+        self.hot_moving = r.hot_changed;
+        if (more and !self.ticking) pace_side.startTicking(self);
         // Cancel superseded caret deadlines, even on blur or selection.
         if (self.hwnd()) |h| _ = w.KillTimer(h, later_timer);
-        if (!more and self.ticking) if (self.hwnd()) |h| {
-            _ = w.KillTimer(h, tick_timer);
-            self.ticking = false;
-        };
+        // Something changes now and then: one frame, that much later.
         if (!more) if (c.frame_in) |s| if (self.hwnd()) |h| {
             _ = w.SetTimer(h, later_timer, @intFromFloat(@max(1, s * 1000)), null);
             self.trace("later timer {d} ms", .{@as(u32, @intFromFloat(@max(1, s * 1000)))});
@@ -235,6 +248,13 @@ pub const Surface = struct {
         const an = a orelse return b == null;
         const bn = b orelse return false;
         return std.meta.eql(an, bn);
+    }
+
+    /// The frame log, recording from now on (`NANOUI_FRAMES` opens one
+    /// that writes a file).
+    pub fn recordFrames(self: *Surface, gpa: std.mem.Allocator) !*frame_log.FrameLog {
+        if (self.frame_log == null) self.frame_log = try frame_log.FrameLog.init(gpa, null);
+        return &self.frame_log.?;
     }
 
     pub fn requestFrame(self: *Surface) void {
@@ -290,7 +310,10 @@ pub const Surface = struct {
                 self.frame();
             },
             w.WM_SHOWWINDOW => if (wp != 0) self.requestFrame(),
-            w.WM_DISPLAYCHANGE => self.requestFrame(),
+            w.WM_DISPLAYCHANGE => {
+                pace_side.updateOutput(self);
+                self.requestFrame();
+            },
             w.WM_SETTINGCHANGE => {
                 // The system's appearance may have changed under
                 // Personalization > Colors: a window that follows it is redrawn.
@@ -314,6 +337,7 @@ pub const Surface = struct {
                 // A window moved onto another monitor has a client area there.
                 // One left at the old monitor's would never be painted again,
                 // and a move is not always a resize: read it here too.
+                pace_side.updateOutput(self);
                 if (w.IsIconic(h) == 0 and self.updateSize(h)) {
                     self.size_dirty = true;
                     _ = w.InvalidateRect(h, null, 0);
@@ -361,14 +385,8 @@ pub const Surface = struct {
                 _ = w.KillTimer(h, later_timer);
                 self.trace("later timer fired", .{});
                 self.frame();
-            } else if (wp == tick_timer) {
-                self.frame();
-                if (!self.ctx.animating) {
-                    _ = w.KillTimer(h, tick_timer);
-                    self.ticking = false;
-                    self.trace("tick timer off", .{});
-                }
-            },
+            } else if (wp == tick_timer) pace_side.onTimer(self),
+            vblank.WM_VBLANK => pace_side.onBeat(self),
             WM_FRAME => {
                 self.frame_posted = false;
                 self.frame();
@@ -389,7 +407,8 @@ pub const Surface = struct {
                 const before = self.ctx.hot;
                 self.ctx.updateHot();
                 if (self.ctx.input.down or self.ctx.hot != before or self.ctx.wants_moves) {
-                    self.frame();
+                    // On the beat: the moves between two refreshes are one frame.
+                    pace_side.onInput(self);
                 } else if (self.ctx.pointerOverText() != self.ctx.cursor_text) {
                     // Onto or off text that selects: the cursor only.
                     self.ctx.cursor_text = !self.ctx.cursor_text;
@@ -437,12 +456,14 @@ pub const Surface = struct {
                 self.ctx.input.mouse = .{ .x = @as(f32, @floatFromInt(p.x)) / self.scale, .y = @as(f32, @floatFromInt(p.y)) / self.scale };
                 const notches: f32 = @as(f32, @floatFromInt(@as(i16, @truncate(@as(isize, @bitCast(wp)) >> 16)))) / 120;
                 const delta = notches * 48;
+                // Turns between two refreshes are one frame: a scroll box's
+                // offset moves at once, a view's wheel adds up until built.
                 if (self.ctx.applyScroll(delta)) {
-                    self.frame();
+                    pace_side.onInput(self);
                     self.ctx.updateHot();
                 } else if (self.ctx.wants_wheel) {
-                    self.ctx.input.scroll = .{ .y = delta };
-                    self.frame();
+                    self.ctx.input.scroll.y += delta;
+                    pace_side.onInput(self);
                 }
             },
             // The sideways wheel (tilt, trackpads): the same as the vertical
@@ -452,8 +473,8 @@ pub const Surface = struct {
                 _ = w.ScreenToClient(h, &p);
                 self.ctx.input.mouse = .{ .x = @as(f32, @floatFromInt(p.x)) / self.scale, .y = @as(f32, @floatFromInt(p.y)) / self.scale };
                 const notches: f32 = @as(f32, @floatFromInt(@as(i16, @truncate(@as(isize, @bitCast(wp)) >> 16)))) / 120;
-                self.ctx.input.scroll = .{ .x = notches * 48 };
-                self.frame();
+                self.ctx.input.scroll.x += notches * 48;
+                pace_side.onInput(self);
             },
             w.WM_KEYDOWN, w.WM_SYSKEYDOWN => {
                 // F12, with NANOUI_DUMP set: what the canvas holds, and what
@@ -468,7 +489,7 @@ pub const Surface = struct {
                 // A *system* key is another matter: Alt+F4 and its friends must
                 // keep working, so they go to the default handling.
                 if (self.ime.composing) return if (msg == w.WM_SYSKEYDOWN) null else 0;
-                if (self.keyDown(@intCast(wp))) {
+                if (keys.keyDown(self, @intCast(wp))) {
                     // An arrow key or a delete moved the caret: the IME's windows
                     // follow it, outside `frame` where its callbacks re-enter.
                     if (self.ctx.focused_text != null) ime.follow(h, &self.ctx, self.scale, &self.ime);
@@ -481,110 +502,6 @@ pub const Surface = struct {
             else => if (ime.handle(self, h, msg, wp, lp)) |r| return r else return null,
         }
         return 0;
-    }
-
-    /// Keys that are not text, and key combinations; true if taken.
-    fn keyDown(self: *Surface, vk: u32) bool {
-        const in = &self.ctx.input;
-        const ctrl = w.GetKeyState(0x11) < 0;
-        const alt = w.GetKeyState(0x12) < 0;
-        in.shift = w.GetKeyState(0x10) < 0;
-        in.cmd = false;
-        in.ctrl = ctrl;
-        in.alt = alt;
-        const key: ?ctx_mod.Key = switch (vk) {
-            0x08 => .backspace,
-            0x2E => .delete,
-            0x25 => .left,
-            0x26 => .up,
-            0x27 => .right,
-            0x28 => .down,
-            0x24 => .home,
-            0x23 => .end,
-            0x0D => .enter,
-            0x09 => .tab,
-            0x1B => .escape,
-            0x21 => .page_up,
-            0x22 => .page_down,
-            0x70...0x7B => @fromBackingInt(@intCast(@backingInt(ctx_mod.Key.f1) + (vk - 0x70))),
-            else => null,
-        };
-        const S = ui.Shortcut;
-        const special: ?u21 = if (key) |k| switch (k) {
-            .up => S.up,
-            .down => S.down,
-            .left => S.left,
-            .right => S.right,
-            .tab => S.tab,
-            .escape => S.escape,
-            .enter => S.enter,
-            else => null,
-        } else null;
-        // Letters and digits by their virtual key; other characters come as WM_CHAR.
-        const letter: u21 = if ((vk >= 'A' and vk <= 'Z') or (vk >= '0' and vk <= '9')) std.ascii.toLower(@intCast(vk)) else switch (vk) {
-            0xBC => ',',
-            0xBE => '.',
-            0xBF => '/',
-            0xDB => '[',
-            0xDD => ']',
-            0xDC => '\\',
-            0xBD => '-',
-            0xBB => '=',
-            0x20 => ' ',
-            else => 0,
-        };
-        const base: u21 = special orelse letter;
-        const offer = base != 0 and (ctrl or alt or base == S.up or base == S.down or base == S.tab or base == S.escape);
-        if (offer) {
-            const sc: S = .{ .key = base, .ctrl = ctrl, .alt = alt, .shift = in.shift };
-            if (self.window.app.accelerator(sc)) return true;
-            if (ctrl and self.ctx.focused_text != null and self.editShortcut(base)) return true;
-            self.ctx.shortcut_taken = false;
-            in.shortcut = sc;
-            // Restored, not cleared: building the view can pump messages (the
-            // shell does), and an IME character that arrives inside the pump
-            // sets its own ops — which must not be thrown away with ours.
-            const prev_ops = self.ctx.input.ops;
-            self.frame();
-            self.ctx.input.ops = prev_ops;
-            in.shortcut = null;
-            if (self.ctx.shortcut_taken) return true;
-        }
-        if (key) |k| {
-            in.key = k;
-            self.frame();
-            return true;
-        }
-        return false;
-    }
-
-    /// Ctrl+C, X, V and A in a text field: copy, cut, paste, select all.
-    fn editShortcut(self: *Surface, key: u21) bool {
-        var ops: [1]ctx_mod.TextOp = undefined;
-        var pasted: ?[]u8 = null;
-        defer if (pasted) |p| self.gpa.free(p);
-        ops[0] = switch (key) {
-            'c' => .{ .command = .copy },
-            'x' => .{ .command = .cut },
-            'a' => .{ .command = .select_all },
-            'v' => blk: {
-                pasted = @import("desktop.zig").clipboard.readText(self.gpa) catch null;
-                // No text: the view may take Ctrl+V for something else (an image).
-                const t = pasted orelse return false;
-                for (t) |*ch| if (ch.* == '\n' or ch.* == '\r') {
-                    ch.* = ' ';
-                };
-                break :blk .{ .insert = t };
-            },
-            else => return false,
-        };
-        // Restored, not cleared, for the same reason as in `keyDown`: a message
-        // pumped during the frame may set ops of its own.
-        const prev_ops = self.ctx.input.ops;
-        self.ctx.input.ops = &ops;
-        self.frame();
-        self.ctx.input.ops = prev_ops;
-        return true;
     }
 };
 

@@ -98,6 +98,30 @@ pub fn startsWindowDrag(c: *const Context) bool {
     return n.id == c.hot and n.style.window_drag;
 }
 
+/// What a point of the view is to the window's frame (Windows'
+/// WM_NCHITTEST asks): the caption where a press moves the window — a
+/// `window_drag` box on top, or, under a hidden title bar
+/// (`title_band`), the top `title_bar_height` where no box takes the
+/// pointer, as macOS's surface treats it — the maximize button where the
+/// view drew one (`Style.window_maximize`), else the view's own.
+pub const FramePart = enum { client, caption, maximize };
+
+pub fn framePartAt(c: *const Context, p: types.Point, title_band: bool) FramePart {
+    var i = c.hits.items.len;
+    while (i > 0) {
+        i -= 1;
+        const h = c.hits.items[i];
+        if (h.scroll or !h.rect.contains(p)) continue;
+        if (h.index < c.nodes.items.len and c.nodes.items[h.index].id == h.id) {
+            const st = c.nodes.items[h.index].style;
+            if (st.window_maximize) return .maximize;
+            if (st.window_drag) return .caption;
+        }
+        return .client;
+    }
+    return if (title_band and p.y >= 0 and p.y < c.title_bar_height) .caption else .client;
+}
+
 /// Box `index` as VoiceOver sees it (a button, a field…).
 pub fn addA11y(c: *Context, index: u32, role: ctx_mod.A11yRole, label: []const u8, value: []const u8, selected: bool, enabled: bool) void {
     c.a11y_items.append(c.gpa, .{

@@ -201,6 +201,11 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip_
                 .kind = metal.Kind.texture,
                 .border_width = @floatFromInt(tx.slot),
                 .clip = clip4,
+                // A texture's border colour is free: it carries its linear
+                // map (`gpu.affine`), about the pivot set here, which the
+                // rotation below then leaves as it is.
+                .border_color = tx.affine,
+                .xf = if (std.mem.eql(f32, &tx.affine, &.{ 0, 0, 0, 0 })) .{ 0, 0, 0, 0 } else .{ st.rotation, st.spin, r.x + r.w * st.rotation_anchor.x, r.y + r.h * st.rotation_anchor.y },
             }),
             .hole => |radius| push(c, out, .{ .rect = rect4, .color = .{ 0, 0, 0, 1 }, .radius = radius, .kind = metal.Kind.hole, .clip = clip4 }),
             .canvas => |cv| paintCanvas(c, out, cv, r, visible, opacity),

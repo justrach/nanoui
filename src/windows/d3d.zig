@@ -6,10 +6,11 @@
 //! content stays anchored at the top left (no stretching), and the edge a
 //! resize uncovers shows the background color until the next frame.
 //!
-//! A hardware device, else WARP (Windows' software one: virtual machines,
-//! CI). A lost device (a driver update, a GPU reset) is dropped and made
-//! again for the next frame; where none can be made the surface keeps
-//! drawing with GDI. COM is called through each interface's vtable, by
+//! The device is the app's one (`ui/d3d11_device.zig`: hardware, else
+//! WARP — Windows' software one: virtual machines, CI), shared by every
+//! window so the app's textures draw in any of them. A lost device (a
+//! driver update, a GPU reset) is dropped and made again for the next
+//! frame; where none can be made the surface keeps drawing with GDI. COM is called through each interface's vtable, by
 //! slot, in the order the SDK's headers declare them.
 const std = @import("std");
 const w = @import("win32.zig");
@@ -23,7 +24,7 @@ const iid_texture2d: Guid = .{ .a = 0x6f15aaf2, .b = 0xd208, .c = 0x4e89, .d = .
 
 const format_bgra8: u32 = 87; // DXGI_FORMAT_B8G8R8A8_UNORM, as the renderer writes
 
-extern "d3d11" fn D3D11CreateDevice(adapter: ?*anyopaque, driver: u32, software: ?*anyopaque, flags: u32, levels: ?[*]const u32, n_levels: u32, sdk: u32, device: *?*Com, level: ?*u32, context: *?*Com) callconv(.winapi) HRESULT;
+const shared_device = @import("../ui/d3d11_device.zig");
 
 /// A COM object: its first field points at its vtable.
 pub const Com = extern struct {
@@ -120,17 +121,12 @@ pub const Presenter = struct {
     /// The HRESULT of the last `present` (for `NANOUI_TRACE`).
     last_hr: u32 = 0,
 
-    /// A device (hardware, else WARP) and a flip-sequential swap chain for
-    /// `hwnd`, `width` × `height` pixels.
+    /// A flip-sequential swap chain for `hwnd`, `width` × `height` pixels,
+    /// on the app's shared device (a reference of its own to it).
     pub fn init(hwnd: w.HWND, width: u32, height: u32) !Presenter {
-        var device: ?*Com = null;
-        var context: ?*Com = null;
-        const bgra: u32 = 0x20; // D3D11_CREATE_DEVICE_BGRA_SUPPORT
-        // D3D_DRIVER_TYPE_HARDWARE, then D3D_DRIVER_TYPE_WARP.
-        if (D3D11CreateDevice(null, 1, null, bgra, null, 0, 7, &device, null, &context) < 0)
-            try check(D3D11CreateDevice(null, 5, null, bgra, null, 0, 7, &device, null, &context));
-        const dev = device orelse return error.Direct3D;
-        const ctx = context orelse return error.Direct3D;
+        const pair = shared_device.shared() orelse return error.Direct3D;
+        const dev: *Com = @ptrCast(shared_device.addRef(pair.device));
+        const ctx: *Com = @ptrCast(shared_device.addRef(pair.context));
         errdefer {
             ctx.release();
             dev.release();

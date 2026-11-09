@@ -106,6 +106,42 @@ const HMODULE = *opaque {};
 extern "kernel32" fn LoadLibraryW(name: [*:0]const u16) callconv(.winapi) ?HMODULE;
 extern "kernel32" fn GetProcAddress(module: HMODULE, name: [*:0]const u8) callconv(.winapi) ?*const anyopaque;
 
+extern "kernel32" fn GetModuleHandleW(name: ?[*:0]const u16) callconv(.winapi) ?HMODULE;
+
+/// Whether this is Wine rather than Windows (`ntdll`'s `wine_get_version`).
+/// Wine's `d3dcompiler_47` compiles too little HLSL for nanoui's shaders (no
+/// `StructuredBuffer`): there a shader that will not compile means "no
+/// compiler", and the GPU tests skip; on Windows it is a bug, and they fail.
+pub fn underWine() bool {
+    const ntdll = GetModuleHandleW(std.unicode.utf8ToUtf16LeStringLiteral("ntdll.dll")) orelse return false;
+    return GetProcAddress(ntdll, "wine_get_version") != null;
+}
+
+/// A shader of `source`, entry point `entry`, as `create` (one of
+/// ID3D11Device's slots) makes it. `error.ShaderCompilerMissing` without a
+/// compiler, `error.ShaderCompilerUnavailable` when Wine's cannot compile
+/// it (`underWine`), `error.ShaderCompile` for a shader that is wrong.
+pub fn shaderFrom(device: *Com, source: []const u8, comptime name: [:0]const u8, comptime entry: [:0]const u8, comptime target: [:0]const u8, comptime create: usize) !*Com {
+    var blob: ?*Blob = null;
+    var errors: ?*Blob = null;
+    const compile = d3dCompile() orelse return error.ShaderCompilerMissing;
+    const hr = compile(source.ptr, source.len, name, null, null, entry, target, 0, 0, &blob, &errors);
+    const wine = hr < 0 and underWine();
+    if (errors) |e| {
+        // Under Wine a failed compile is the compiler's limits, said once
+        // as a warning; on Windows it is a bug in the shader.
+        if (hr < 0 and wine) std.log.warn("nanoui: Wine's HLSL compiler can't compile {s} ({s}): Direct3D 11 stands down", .{ entry, target }) //
+        else if (hr < 0) std.log.err("nanoui: HLSL {s} ({s}):\n{s}", .{ entry, target, e.bytes()[0..e.size()] });
+        e.release();
+    }
+    if (hr < 0) return if (wine) error.ShaderCompilerUnavailable else error.ShaderCompile;
+    const b = blob orelse return error.ShaderCompile;
+    defer b.release();
+    var out: ?*Com = null;
+    try check(device.slot(*const fn (*Com, [*]const u8, usize, ?*anyopaque, *?*Com) callconv(.winapi) HRESULT, create)(device, b.bytes(), b.size(), null, &out));
+    return out orelse error.ShaderCompile;
+}
+
 pub fn d3dCompile() ?CompileFn {
     if (compile_tried) return compile_fn;
     compile_tried = true;

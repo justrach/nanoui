@@ -1,6 +1,6 @@
 //! A texture made BGRA for the CPU renderer (`raster_picture.zig`): its
-//! bytes as they are, or a CVPixelBuffer's planes (locked for reading)
-//! or an app's MTLTexture (read back) converted at the frame's own size as
+//! bytes as they are, or a CVPixelBuffer's planes (locked for reading),
+//! an app's MTLTexture or ID3D11Texture2D (read back) converted at the frame's own size as
 //! the colour stage converts them on the GPU (`color.zig`): luma nearest,
 //! chroma bilinear at the texel's centre, then the transfer, the tone map
 //! and the LUTs, stored as 8-bit unorms.
@@ -31,6 +31,9 @@ pub const Held = struct {
 
 /// `t` as BGRA; null if it has no pixels the CPU can read.
 pub fn resolve(gpa: std.mem.Allocator, t: gpu.Texture) ?Held {
+    if (comptime @import("builtin").os.tag == .windows) {
+        if (t.d3d11_texture != null) return @import("d3d11_video.zig").readBack(gpa, t);
+    }
     if (comptime pixel_buffer.enabled) {
         if (t.mtl_texture) |mt| return readBack(gpa, t, mt);
         if (t.pixel_buffer) |pb| return fromPixelBuffer(gpa, t, pb);
@@ -126,6 +129,40 @@ fn convert(gpa: std.mem.Allocator, t: gpu.Texture, u: color.Uniforms, src: *cons
     return .{ .pixels = out, .width = w, .height = h, .stride = w * 4 };
 }
 
+/// One plane of a frame in memory: its first row, its size in texels and
+/// the bytes a row takes.
+pub const Plane = struct {
+    bytes: [*]const u8,
+    width: usize,
+    height: usize,
+    stride: usize,
+};
+
+/// A frame's planes (`t.format`'s: one for BGRA and half floats, luma then
+/// interleaved chroma for Y'CbCr) converted as the colour stage converts
+/// them, into memory of its own. BGRA that needs no stage is copied.
+pub fn fromPlanes(gpa: std.mem.Allocator, t: gpu.Texture, p0: Plane, p1: ?Plane) ?Held {
+    if (!t.needsPost()) {
+        const copy = gpa.alloc(u8, p0.width * p0.height * 4) catch return null;
+        for (0..p0.height) |y| @memcpy(copy[y * p0.width * 4 ..][0 .. p0.width * 4], p0.bytes[y * p0.stride ..][0 .. p0.width * 4]);
+        return .{ .bgra = .{ .pixels = copy, .width = p0.width, .height = p0.height, .stride = p0.width * 4 }, .owned = copy };
+    }
+    const out = convertPlanes(gpa, t, p0, p1) orelse return null;
+    return .{ .bgra = out, .owned = @constCast(out.pixels) };
+}
+
+fn convertPlanes(gpa: std.mem.Allocator, t: gpu.Texture, p0: Plane, p1: ?Plane) ?Bgra {
+    const ten = t.format == .ycbcr420_10 or t.format == .ycbcr422_10 or t.format == .ycbcr444_10;
+    const planar = t.format != .bgra8 and t.format != .rgba16f;
+    const luma: Source = .{ .bytes = p0.bytes, .width = p0.width, .height = p0.height, .stride = p0.stride, .kind = if (!planar) (if (t.format == .rgba16f) .rgba16f else .bgra8) else if (ten) .r16 else .r8 };
+    var chroma: ?Source = null;
+    if (planar) {
+        const c = p1 orelse return null;
+        chroma = .{ .bytes = c.bytes, .width = c.width, .height = c.height, .stride = c.stride, .kind = if (ten) .rg16 else .rg8 };
+    }
+    return convert(gpa, t, color.uniforms(t, color.sourceMode(t.format)), &luma, if (chroma) |*c| c else null);
+}
+
 fn fromPixelBuffer(gpa: std.mem.Allocator, t: gpu.Texture, pb: *anyopaque) ?Held {
     const locked = pixel_buffer.Locked.lock(pb) orelse return null;
     var held: Held = .{ .bgra = undefined, .locked = locked };
@@ -137,18 +174,8 @@ fn fromPixelBuffer(gpa: std.mem.Allocator, t: gpu.Texture, pb: *anyopaque) ?Held
         held.bgra = .{ .pixels = p0.bytes[0 .. p0.stride * p0.height], .width = p0.width, .height = p0.height, .stride = p0.stride };
         return held;
     }
-    const ten = t.format == .ycbcr420_10 or t.format == .ycbcr422_10 or t.format == .ycbcr444_10;
-    const planar = t.format != .bgra8 and t.format != .rgba16f;
-    const luma: Source = .{ .bytes = p0.bytes, .width = p0.width, .height = p0.height, .stride = p0.stride, .kind = if (!planar) (if (t.format == .rgba16f) .rgba16f else .bgra8) else if (ten) .r16 else .r8 };
-    var chroma: ?Source = null;
-    if (planar) {
-        const p1 = locked.planes[1] orelse {
-            locked.unlock();
-            return null;
-        };
-        chroma = .{ .bytes = p1.bytes, .width = p1.width, .height = p1.height, .stride = p1.stride, .kind = if (ten) .rg16 else .rg8 };
-    }
-    const out = convert(gpa, t, color.uniforms(t, color.sourceMode(t.format)), &luma, if (chroma) |*c| c else null);
+    const p1: ?Plane = if (locked.planes[1]) |c| .{ .bytes = c.bytes, .width = c.width, .height = c.height, .stride = c.stride } else null;
+    const out = convertPlanes(gpa, t, .{ .bytes = p0.bytes, .width = p0.width, .height = p0.height, .stride = p0.stride }, p1);
     locked.unlock();
     held.locked = null;
     held.bgra = out orelse return null;
@@ -170,4 +197,21 @@ fn readBack(gpa: std.mem.Allocator, t: gpu.Texture, mt: *anyopaque) ?Held {
     }
     const out = convert(gpa, t, color.uniforms(t, mode), &src, null) orelse return null;
     return .{ .bgra = out, .owned = @constCast(out.pixels) };
+}
+
+test "fromPlanes: NV12 white and black, and BGRA copied as it is" {
+    const gpa = std.testing.allocator;
+    // Video range: 235 is white, 16 black; chroma at its middle.
+    const luma = [_]u8{ 235, 16, 0, 16, 235, 0 };
+    const chroma = [_]u8{ 128, 128, 0, 0 };
+    const t: gpu.Texture = .{ .width = 2, .height = 2, .format = .ycbcr420_8 };
+    var held = fromPlanes(gpa, t, .{ .bytes = &luma, .width = 2, .height = 2, .stride = 3 }, .{ .bytes = &chroma, .width = 1, .height = 1, .stride = 4 }).?;
+    defer held.deinit(gpa);
+    try std.testing.expectEqualSlices(u8, &.{ 255, 255, 255, 255, 0, 0, 0, 255 }, held.bgra.pixels[0..8]);
+    try std.testing.expectEqualSlices(u8, &.{ 0, 0, 0, 255, 255, 255, 255, 255 }, held.bgra.pixels[8..16]);
+    try std.testing.expect(fromPlanes(gpa, t, .{ .bytes = &luma, .width = 2, .height = 2, .stride = 3 }, null) == null);
+    const px = [_]u8{ 1, 2, 3, 4, 9, 9, 5, 6, 7, 8, 9, 9 };
+    var same = fromPlanes(gpa, .{ .width = 1, .height = 2 }, .{ .bytes = &px, .width = 1, .height = 2, .stride = 6 }, null).?;
+    defer same.deinit(gpa);
+    try std.testing.expectEqualSlices(u8, &.{ 1, 2, 3, 4, 5, 6, 7, 8 }, same.bgra.pixels);
 }

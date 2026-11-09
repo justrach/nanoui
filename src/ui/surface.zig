@@ -17,11 +17,9 @@ const ui = @import("ui.zig");
 const Window = @import("../window.zig").Window;
 const a11y = @import("a11y.zig");
 const events = @import("surface_events.zig");
-<<<<<<< HEAD
 const wake = @import("surface_wake.zig");
-=======
 const thread_wake = @import("surface_thread_wake.zig");
->>>>>>> refs/prs/pr-143
+const pointer = @import("surface_pointer.zig");
 const frame_log_mod = @import("frame_log.zig");
 pub const FrameLog = frame_log_mod.FrameLog;
 pub const KeysReleased = struct { ctx: ?*anyopaque, func: *const fn (ctx: ?*anyopaque, s: *Surface) void };
@@ -80,11 +78,8 @@ pub const Surface = struct {
     resizing: bool = false,
     cursor: ctx_mod.Cursor = .arrow,
     custom_cursor: ?*anyopaque = null,
-<<<<<<< HEAD
-=======
     /// The app's GPU passes before each frame's (`gpu.BeforeEncode`).
     before_encode: ?@import("gpu.zig").BeforeEncode = null,
->>>>>>> refs/prs/pr-146
     cursor_dirty: bool = false,
     theme_override: ?Theme = null,
     cached_theme: Theme = Theme.light,
@@ -556,35 +551,15 @@ pub const Surface = struct {
         }
     }
 
-    pub const updateCursor = @import("surface_pointer.zig").updateCursor;
-    pub const applyCursor = @import("surface_pointer.zig").applyCursor;
+    pub const updateCursor = pointer.updateCursor;
+    pub const applyCursor = pointer.applyCursor;
+    const afterFocus = pointer.afterFocus;
+    pub const refreshTip = pointer.refreshTip;
 
-    /// After a frame: a box newly focused takes the keyboard for the view
-    /// (`focusNext` while a page had it), and the hot box's help shows.
-    fn afterFocus(self: *Surface) void {
-        const c = &self.ctx;
-        if (c.focus != 0) {
-            const first = objc.msg(?objc.Object, self.window.nswindow, "firstResponder", .{});
-            if (first == null or first.? != self.nsview) _ = objc.msg(objc.BOOL, self.window.nswindow, "makeFirstResponder:", .{self.nsview});
-        } else if (self.last_focus != 0 and c.focus == 0) {
-            const first = objc.msg(?objc.Object, self.window.nswindow, "firstResponder", .{});
-            if (first != null and first.? == self.nsview and c.selection.hit == null and !c.selection.dragging and c.selection.text.items.len == 0) {
-                if (self.keys_released) |kr| kr.func(kr.ctx, self);
-            }
-        }
-        self.last_focus = c.focus;
-        self.refreshTip();
-    }
-
-    /// Shows the help under the pointer: after a frame, and on a move
-    /// within one box onto a marker with its own.
-    pub fn refreshTip(self: *Surface) void {
-        const tip = self.ctx.hotHelp();
-        const same = if (tip) |t| (if (self.tip) |old| std.mem.eql(u8, t, old) else false) else self.tip == null;
-        if (same) return;
-        if (self.tip) |old| self.gpa.free(old);
-        self.tip = if (tip) |t| self.gpa.dupe(u8, t) catch null else null;
-        objc.msg(void, self.nsview, "setToolTip:", .{if (self.tip) |t| objc.nsString(t) else @as(?objc.Object, null)});
+    /// The native view the surface draws into (`nsview`): the parent a
+    /// docked page goes in, as Windows' surface names its HWND.
+    pub fn nativeHandle(self: *Surface) ?*anyopaque {
+        return @ptrCast(self.nsview);
     }
 
     const scheduleTick = thread_wake.scheduleTick;

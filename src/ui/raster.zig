@@ -219,6 +219,15 @@ pub inline fn pixelAt(i: *const gpu.Instance, inv: f32) f32 {
 
 pub inline fn unrotate(i: *const gpu.Instance, wx_in: f32, wy_in: f32) [2]f32 {
     const p = unmatrix(i, wx_in, wy_in);
+    if (i.kind == gpu.Kind.texture) if (gpu.affine(i)) |m| {
+        // The map's inverse, about the pivot: back into the box's own
+        // coordinates. A map that flattens the box to a line shows nothing.
+        const det = m[0] * m[3] - m[1] * m[2];
+        if (@abs(det) < 1e-9) return .{ -1e9, -1e9 };
+        const dx = p[0] - i.xf[2];
+        const dy = p[1] - i.xf[3];
+        return .{ i.xf[2] + (m[3] * dx - m[1] * dy) / det, i.xf[3] + (-m[2] * dx + m[0] * dy) / det };
+    };
     const a = i.xf[0];
     if (a == 0) return p;
     const dx = p[0] - i.xf[2];
@@ -236,9 +245,11 @@ fn bounds(out: gpu.Pixels, i: *const gpu.Instance, scale: f32) ?[4]usize {
     var ry0 = i.rect[1] - grow;
     var rx1 = i.rect[0] + i.rect[2] + grow;
     var ry1 = i.rect[1] + i.rect[3] + grow;
-    if (i.xf[0] != 0) {
+    const map = gpu.affine(i);
+    if (i.xf[0] != 0 or map != null) {
         const ca = @cos(i.xf[0]);
         const sa = @sin(i.xf[0]);
+        const m = map orelse [4]f32{ ca, -sa, sa, ca };
         const px = i.xf[2];
         const py = i.xf[3];
         const xs = [4]f32{ rx0, rx1, rx0, rx1 };
@@ -250,8 +261,8 @@ fn bounds(out: gpu.Pixels, i: *const gpu.Instance, scale: f32) ?[4]usize {
         for (0..4) |k| {
             const dx = xs[k] - px;
             const dy = ys[k] - py;
-            const tx = px + ca * dx - sa * dy;
-            const ty = py + sa * dx + ca * dy;
+            const tx = px + m[0] * dx + m[1] * dy;
+            const ty = py + m[2] * dx + m[3] * dy;
             rx0 = @min(rx0, tx);
             ry0 = @min(ry0, ty);
             rx1 = @max(rx1, tx);

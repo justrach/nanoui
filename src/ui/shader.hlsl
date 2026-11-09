@@ -6,7 +6,7 @@
 // whole source and drops what its stage cannot reach.
 //
 // D3D's differences, none of them in the math: the instances come from a
-// StructuredBuffer at t0 (gpu.zig's Instance, 96 bytes) rather than vertex
+// StructuredBuffer at t0 (gpu.zig's Instance, 160 bytes) rather than vertex
 // attributes, so there is no input layout; there is no gl_VertexID, so
 // SV_VertexID and SV_InstanceID are passed into the vertex shader; `flat` is
 // `nointerpolation`, texelFetch is Load, mix is lerp, fract is frac, mod is
@@ -70,6 +70,10 @@ StructuredBuffer<Instance> instances : register(t0);
 Texture2D<float4> atlas : register(t1);
 Texture2D<float4> images : register(t2);
 Texture2D<float4> native_atlas : register(t4);
+// The texture the app gave this frame (`ui.texture`, kind 8): one slot's,
+// bound by d3d11.zig for that instance's draw alone, as shader.metal's
+// `frame` is. Sampled as pictures are (linear, clamped).
+Texture2D<float4> frame_tex : register(t5);
 SamplerState sampler_atlas : register(s1);
 SamplerState sampler_images : register(s2);
 
@@ -127,6 +131,18 @@ Varyings quad_vs(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     float2 local = p - a.rect.xy;
     // The reverse of a card is seen through it: mirrored across its middle.
     if (a.vel.z == 2.0 && a.kind != 6.0 && a.kind != 7.0) p.x = 2.0 * a.vel.w - p.x;
+    // A box turned about its pivot (`xf`: the angle, the pivot's x, y), as
+    // shader.metal turns it; the spin (`xf.y`) is the CPU's, as raster.zig
+    // reads only the angle. The box's own coordinates stay unturned.
+    bool mapped = a.kind == 8.0 && any(a.border_color != float4(0.0, 0.0, 0.0, 0.0));
+    if ((a.xf.x != 0.0 || mapped) && a.kind != 6.0 && a.kind != 7.0) {
+        float2 d = p - a.xf.zw;
+        float ca = cos(a.xf.x), sa = sin(a.xf.x);
+        d = float2(ca * d.x - sa * d.y, sa * d.x + ca * d.y);
+        // A texture's linear map (`gpu.affine`), after its turn.
+        if (mapped) d = float2(a.border_color.x * d.x + a.border_color.y * d.y, a.border_color.z * d.x + a.border_color.w * d.y);
+        p = a.xf.zw + d;
+    }
     // A turn about the vertical axis through the pivot, in perspective.
     float2 landed = float2(a.m.x * p.x + a.m.z * p.y + a.mt.x, a.m.y * p.x + a.m.w * p.y + a.mt.y);
     float2 seen = landed;
@@ -384,6 +400,11 @@ float4 shade(Varyings v) {
             return float4(v.i_border_color.rgb * a, a);
         }
         return px * (coverage * v.i_color.a);
+    }
+    if (kind == 8.0) {
+        // An app's texture: its corners rounded as a picture's, its opacity.
+        float4 tx = frame_tex.SampleLevel(sampler_images, v.v_uv, 0);
+        return tx * (coverage * v.i_color.a);
     }
     if (kind == 2.0 || kind == 5.0) {
         float sigma = max(v.i_misc.y, 0.25);

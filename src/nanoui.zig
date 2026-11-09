@@ -191,6 +191,8 @@ test {
             _ = @import("windows/tests_surface.zig");
             // The window's own: styles, sizes, the close veto, the timers.
             _ = @import("windows/tests_window.zig");
+            // Frames on the display's beat, gathered input, the frame log.
+            _ = @import("windows/tests_pace.zig");
             // File drops: path/URL conversion and one HDROP as one event.
             _ = @import("windows/drop_files.zig");
             _ = @import("windows/tests_drop_files.zig");
