@@ -21,6 +21,12 @@ pub const Run = struct {
         try r.t.init(testing.allocator, ui.View.init(&r.b, Browser.view), .{ .width = 900, .height = 600, .scale = 1 });
     }
 
+    fn pageBusy(p: *const Page) bool {
+        if (p.pending > 0) return true;
+        for (p.frames.list.items) |f| if (f.page) |c| if (pageBusy(c)) return true;
+        return false;
+    }
+
     pub fn stop(r: *Run) void {
         // What's on its way must land, or it holds its page past the test.
         var waited: u32 = 0;
@@ -28,7 +34,10 @@ pub const Run = struct {
             r.t.frame();
             var busy = false;
             for (r.b.tabs.items) |t| if (t.page) |p| {
-                if (p.pending > 0) busy = true;
+                if (pageBusy(p)) busy = true;
+            };
+            for (r.b.retired.items) |p| if (pageBusy(p)) {
+                busy = true;
             };
             if (!busy and waited >= 8) break;
             nanoui.runFor(0.002);

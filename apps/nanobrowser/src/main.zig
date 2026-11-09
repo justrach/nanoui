@@ -44,6 +44,7 @@ pub fn main(init: std.process.Init) !void {
         break;
     }
     try app.run();
+    browser.context = null;
     if (init.environ_map.get("NANOBROWSER_EVAL")) |source| {
         if (browser.tabs.items[browser.current].page) |page| @import("dump.zig").eval(page, source);
     }

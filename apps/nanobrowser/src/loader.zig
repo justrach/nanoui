@@ -205,7 +205,6 @@ fn answered(r: *Req, res: http.Response) void {
     }
     if (p.dead) return;
     p.finishLoadCheck();
-    if (p.state == .done) p.host.loaded(p.host.ctx, p);
     p.redraw();
 }
 
@@ -269,7 +268,7 @@ pub fn scan(p: *Page) void {
     if (dropGone(p)) changed = true;
     if (changed) p.sheets.apply(p);
     frames.sweep(p);
-    if (!p.icon_asked and p.worker == null and p.state != .failed and !std.mem.startsWith(u8, p.final_url, "file:")) {
+    if (!p.icon_asked and p.frame == null and p.worker == null and p.state != .failed and !std.mem.startsWith(u8, p.final_url, "file:")) {
         p.icon_asked = true;
         if (resolve(p, "/favicon.ico")) |u| send(p, u, "GET", "", .{ .icon = u });
     }
@@ -348,7 +347,7 @@ fn linkElement(p: *Page, n: *dom.Node, changed: *bool) void {
     const rel = n.attr("rel") orelse return;
     const href = n.attr("href") orelse return;
     if (hasWord(rel, "icon")) {
-        if (!p.icon_asked or p.icon == null) if (resolve(p, href)) |u| {
+        if (p.frame == null and (!p.icon_asked or p.icon == null)) if (resolve(p, href)) |u| {
             p.icon_asked = true;
             send(p, u, "GET", "", .{ .icon = u });
         };

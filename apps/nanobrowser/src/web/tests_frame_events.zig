@@ -64,3 +64,16 @@ test "cross-frame events retain cancellation propagation and identity" {
     });
     try r.expectNoErrors();
 }
+
+test "iframe onload fires when external classic or module scripts finish after document parse" {
+    var r: u.Run = undefined;
+    try r.start();
+    defer r.stop();
+    try r.html(
+        \\<!doctype html><body><script>var loads = 0;</script>
+        \\<iframe id=f srcdoc="<script src='data:text/javascript,window.a=1'></script><script type='module' src='data:text/javascript,window.b=2'></script>" onload="loads++"></iframe>
+    );
+    try r.waitJs("loads === 1");
+    try r.expectJs("loads + ':' + f.contentWindow.a + ':' + f.contentWindow.b", "1:1:2");
+    try r.expectNoErrors();
+}

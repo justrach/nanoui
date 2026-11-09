@@ -354,14 +354,20 @@ pub const Page = struct {
         web.begin(p);
         if (p.dead) return;
         p.finishLoadCheck();
-        p.host.loaded(p.host.ctx, p);
+        if (p.dead) return;
+        if (p.state != .done) p.host.loaded(p.host.ctx, p);
         p.redraw();
     }
 
     /// Everything it asked for has come.
     pub fn finishLoadCheck(p: *Page) void {
-        if (p.state == .parsed and p.pending == 0) p.state = .done;
         web.loadCheck(p);
+        if (p.dead) return;
+        const scripts_own: u32 = if (p.js) |w| w.net_pending else 0;
+        if (p.state == .parsed and p.pending <= scripts_own) {
+            p.state = .done;
+            p.host.loaded(p.host.ctx, p);
+        }
     }
 };
 

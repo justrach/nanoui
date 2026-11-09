@@ -292,4 +292,60 @@ theorem defer_lifetime_order_sound (dead : Bool) (pending busy : Nat) :
   simp [soundDeferExit, stepTouchPageField, stepMaybeFree]
   split <;> rfl
 
+/-! ## 7. Subresource-Agnostic `finishLoadCheck` (`iframe.onload` Completion) -/
+
+inductive SubresourceKind where
+  | loaderResource   -- stylesheet, picture, icon (`loader.zig`)
+  | classicScript    -- `<script src="...">` (`scripts.zig`)
+  | moduleScript     -- `<script type="module" src="...">` (`modules.zig`)
+  deriving DecidableEq, Repr
+
+structure LoadState where
+  parsed : Bool
+  done : Bool
+  dead : Bool
+  pending : Nat
+  scripts_own : Nat
+  host_notified : Bool
+  deriving DecidableEq, Repr
+
+/-- Buggy `finishLoadCheck` where `host.loaded` was only called in `loader.answered`
+    when `pending == 0`, missing `scripts.answered` and `modules.answered`. -/
+def buggyFinishLoadCheck (k : SubresourceKind) (s : LoadState) : LoadState :=
+  let done' := if s.parsed && !s.done && s.pending == 0 then true else s.done
+  let notify := match k with
+    | .loaderResource => done' && !s.dead
+    | .classicScript | .moduleScript => false
+  { s with done := done', host_notified := s.host_notified || notify }
+
+/-- Unified `Page.finishLoadCheck`: transitions `.parsed -> .done` and notifies
+    `host.loaded` (`frames.childLoaded` / `iframe.onload`) regardless of which
+    subresource kind finished last. -/
+def unifiedFinishLoadCheck (_k : SubresourceKind) (s : LoadState) : LoadState :=
+  if s.dead then s
+  else if s.parsed && !s.done && decide (s.pending ≤ s.scripts_own) then
+    { s with done := true, host_notified := true }
+  else s
+
+/-- Theorem 7a: Under the old split check, an iframe whose last subresource is an
+    external classic script or ES module script transitions to `done = true` without
+    ever notifying `host.loaded` (`host_notified = false`), hanging `iframe.onload`
+    (as in Speedometer 3.1 `TodoMVC-Backbone` and `Editor-CodeMirror`). -/
+theorem buggy_finish_load_misses_scripts :
+    let s0 : LoadState := { parsed := true, done := false, dead := false, pending := 0, scripts_own := 0, host_notified := false }
+    (buggyFinishLoadCheck .classicScript s0).done = true ∧
+    (buggyFinishLoadCheck .classicScript s0).host_notified = false ∧
+    (buggyFinishLoadCheck .moduleScript s0).done = true ∧
+    (buggyFinishLoadCheck .moduleScript s0).host_notified = false := by
+  decide
+
+/-- Theorem 7b: The unified `finishLoadCheck` notifies `host.loaded` for every
+    subresource kind whenever a live parsed page reaches `pending ≤ scripts_own`. -/
+theorem unified_finish_load_notifies_all_kinds (k : SubresourceKind) (pending scripts_own : Nat)
+    (h_done : pending ≤ scripts_own) :
+    let s0 : LoadState := { parsed := true, done := false, dead := false, pending := pending, scripts_own := scripts_own, host_notified := false }
+    (unifiedFinishLoadCheck k s0).done = true ∧
+    (unifiedFinishLoadCheck k s0).host_notified = true := by
+  simp [unifiedFinishLoadCheck, h_done]
+
 end NanoUI.BrowserPerf

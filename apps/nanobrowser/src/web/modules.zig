@@ -170,6 +170,7 @@ fn answered(r: *Req, res: http.Response) void {
     check(w);
     scripts.pump(w);
     p.finishLoadCheck();
+    p.redraw();
 }
 
 fn compiled(w: *World, rec: *Rec, source: []const u8) void {
