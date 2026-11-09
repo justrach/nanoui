@@ -82,14 +82,45 @@ pub fn requestRead() void {
 
 fn readJob(_: ?*anyopaque, env: jni.Env) void {
     if (edit == null) return;
-    const frame = jni.Frame.push(env, 8);
+    const frame = jni.Frame.push(env, 16);
     defer frame.pop();
     const editable = jni.call(env, edit, "getText", "()Landroid/text/Editable;", &.{}) orelse return;
     defer jni.deleteLocal(env, editable);
-    const text = (jni.toString(env, c_alloc, editable) catch return) orelse return;
+    const text = committed(env, editable) orelse return;
     if (read_text) |old| c_alloc.free(old);
     read_text = text;
     read_ready.store(true, .release);
+}
+
+/// The EditText's text without the run the IME is still composing (the
+/// pinyin letters): only committed text reaches the field, so tapping a
+/// candidate shows the Chinese at once, not the pinyin it was typed as.
+fn committed(env: jni.Env, editable: jni.Object) ?[]u8 {
+    const len = jni.call(env, editable, "length", "()I", &.{}) orelse 0;
+    const cs = composingEdge(env, editable, "getComposingSpanStart");
+    const ce = composingEdge(env, editable, "getComposingSpanEnd");
+    if (cs < 0 or ce <= cs or ce > len) return jni.toString(env, c_alloc, editable) catch null;
+    const a = textOf(env, editable, 0, cs) orelse return null;
+    defer c_alloc.free(a);
+    const b = textOf(env, editable, ce, len) orelse return null;
+    defer c_alloc.free(b);
+    const out = c_alloc.alloc(u8, a.len + b.len) catch return null;
+    @memcpy(out[0..a.len], a);
+    @memcpy(out[a.len..], b);
+    return out;
+}
+
+/// The IME's composing span on `editable`: a start or end offset (in the
+/// Editable's own units), -1 when nothing is composing.
+fn composingEdge(env: jni.Env, editable: jni.Object, name: [*:0]const u8) i32 {
+    return jni.callStatic(env, "android/view/inputmethod/BaseInputConnection", name, "(Landroid/text/Spannable;)I", &.{jni.ref(editable)}) orelse -1;
+}
+
+/// `editable[a..b]`, as UTF-8 in `c_alloc`'s memory.
+fn textOf(env: jni.Env, editable: jni.Object, a: i32, b: i32) ?[]u8 {
+    const cs = jni.call(env, editable, "subSequence", "(II)Ljava/lang/CharSequence;", &.{ jni.int(a), jni.int(b) }) orelse return null;
+    defer jni.deleteLocal(env, cs);
+    return jni.toString(env, c_alloc, cs) catch null;
 }
 
 /// The EditText's text as last read, if a read has landed since the last

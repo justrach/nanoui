@@ -281,8 +281,9 @@ pub fn syncText(s: *Surface) void {
         return;
     }
 
-    // Ask the EditText for its text, a frame apart, one at a time.
-    if (!st.read_in_flight and !st.sync_pending and !ime.readPending() and st.tick == 0) {
+    // Ask the EditText for its text, one read at a time. Every frame: a
+    // commit becomes the field within a frame or two, no visible lag.
+    if (!st.read_in_flight and !st.sync_pending and !ime.readPending()) {
         st.read_epoch = st.epoch;
         st.read_in_flight = true;
         ime.requestRead();
