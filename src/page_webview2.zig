@@ -139,8 +139,14 @@ pub const Page = struct {
         self.controller = null;
         self.webview = null;
         self.environment = null;
+        // Closed by a call it is still answering: `ipc` frees it when the
+        // call returns (`freeClosed`).
+        if (self.queue.dispatching) return;
         self.freeNow();
     }
+
+    /// After `destroy`, once the call that closed the page has returned.
+    pub const freeClosed = freeNow;
 
     /// Frees the page and its profile path. The handlers need nothing from
     /// it any more: each is alive until WebView2's own references drop.
@@ -151,6 +157,8 @@ pub const Page = struct {
     }
 
     pub fn enqueue(self: *Page, msg: []const u8, hold: bool) void {
+        // Closed by the call being answered: nobody is left to read it.
+        if (self.queue.dead) return;
         self.queue.enqueue(msg, hold);
         // One post a turn: only the call that scheduled the flush asks for it.
         if (self.queue.schedule()) self.requestFlush();

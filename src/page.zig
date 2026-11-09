@@ -56,6 +56,9 @@ pub fn Queue(comptime Window: type) type {
         dom_ready: bool = false,
         flush_scheduled: bool = false,
         dead: bool = false,
+        /// Inside `ipc.handleMessage`: a call may close the window, and the
+        /// reply still goes through this queue, so the free waits for it.
+        dispatching: bool = false,
         /// Set once the platform's view exists: `eval` runs through it.
         send: ?*const fn (ctx: *anyopaque, js: []const u8) void = null,
         ctx: ?*anyopaque = null,

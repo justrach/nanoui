@@ -164,6 +164,14 @@ pub fn ipc(comptime Window: type, comptime App: type) type {
             return @intFromFloat(@min(id, 9007199254740992.0));
         }
 
+        /// A page its own call closed, freed once the call has returned: as
+        /// its platform frees one (`freeClosed`), or when no flush is left
+        /// to free it (WebKit's flush frees a dead page as it runs).
+        fn freeClosed(page: anytype) void {
+            if (@hasDecl(@TypeOf(page.*), "freeClosed")) return page.freeClosed();
+            if (!page.queue.flush_scheduled) page.queue.gpa.destroy(page);
+        }
+
         /// Handles one message from the window's page, on the main thread.
         pub fn handleMessage(window: *Window, body: []const u8) void {
             const page = window.page orelse return;
@@ -183,6 +191,13 @@ pub fn ipc(comptime Window: type, comptime App: type) type {
                 std.log.warn("nanoui: malformed message from page", .{});
                 return;
             };
+            // A method may close `window` (freeing it) and its page: only
+            // `page` is used after `callMethod`, and it outlives this call.
+            page.queue.dispatching = true;
+            defer {
+                page.queue.dispatching = false;
+                if (page.queue.dead) freeClosed(page);
+            }
             if (std.mem.eql(u8, env.t, "call")) {
                 var aw: std.Io.Writer.Allocating = .init(a);
                 aw.writer.print("{{\"t\":\"reply\",\"id\":{d},", .{pageId(env.id)}) catch return;

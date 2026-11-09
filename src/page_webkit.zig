@@ -100,12 +100,15 @@ pub const Page = struct {
         objc.release(self.handler);
         if (self.last_mouse_down) |e| objc.release(e);
         self.queue.deinit();
-        // A scheduled flush frees the page when it runs; without one, now.
-        if (self.queue.flush_scheduled) return;
+        // A scheduled flush frees the page when it runs, a message being
+        // handled when it returns; without either, now.
+        if (self.queue.flush_scheduled or self.queue.dispatching) return;
         self.queue.gpa.destroy(self);
     }
 
     pub fn enqueue(self: *Page, msg: []const u8, hold: bool) void {
+        // Closed by the call being answered: nobody is left to read it.
+        if (self.queue.dead) return;
         self.queue.enqueue(msg, hold);
         // One block a turn: only the call that scheduled the flush dispatches.
         if (self.queue.schedule()) objc.dispatchMain(self, flushJob);
