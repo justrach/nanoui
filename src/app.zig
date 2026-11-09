@@ -320,9 +320,13 @@ pub const App = struct {
         std.log.info("nanoui: wrote {s}/nanoui.js and nanoui.d.ts", .{dir_path});
     }
 
-    /// From any thread: calls `func(ctx)` on the main thread soon.
-    pub fn onMain(ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) void {
+    /// From any thread: calls `func(ctx)` on the main thread soon. True
+    /// when the call is queued; false when it never will run (on the Mac
+    /// GCD's main queue always takes it), so a caller that keeps a "wake in
+    /// flight" flag can lower it and retry.
+    pub fn onMain(ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) bool {
         objc.dispatchMain(ctx, func);
+        return true;
     }
 
     /// Calls `func(ctx)` on the main thread after `ms` milliseconds.

@@ -255,7 +255,9 @@ pub const Updater = struct {
             std.log.info("nanoui: no update: {t}", .{e});
             break :blk false;
         };
-        if (got) App.onMain(u, adopted) else u.working.store(false, .release);
+        // A call that cannot be posted lowers `working` here, or no check
+        // would ever start again.
+        if (!got or !App.onMain(u, adopted)) u.working.store(false, .release);
     }
 
     fn adopted(ctx: ?*anyopaque) callconv(.c) void {

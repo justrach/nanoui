@@ -57,14 +57,18 @@ pub fn stop() void {
 var timers: std.ArrayList(*Timer) = .empty;
 
 /// Calls `func(ctx)` on the app's thread after `ms` milliseconds (0: as
-/// soon as its loop runs), from any thread. Dropped when there is no loop.
-pub fn after(ms: u64, ctx: ?*anyopaque, func: Func) void {
+/// soon as its loop runs), from any thread. Dropped when there is no loop
+/// or no memory to queue it, and then false. Once queued it runs: the
+/// eventfd's counter only needs to be nonzero, so a failed write (already
+/// counting) still leaves the loop a wake.
+pub fn after(ms: u64, ctx: ?*anyopaque, func: Func) bool {
     _ = std.c.pthread_mutex_lock(&mutex);
     defer _ = std.c.pthread_mutex_unlock(&mutex);
-    if (fd < 0) return;
-    queue.append(std.heap.c_allocator, .{ .ms = ms, .ctx = ctx, .func = func }) catch return;
+    if (fd < 0) return false;
+    queue.append(std.heap.c_allocator, .{ .ms = ms, .ctx = ctx, .func = func }) catch return false;
     const one: u64 = 1;
     _ = std.c.write(fd, std.mem.asBytes(&one), 8);
+    return true;
 }
 
 fn drain(_: *activity.Source, _: c_int) void {

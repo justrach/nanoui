@@ -179,7 +179,10 @@ fn canPost() bool {
 fn post(ctx: *anyopaque, deliver: *const fn (?*anyopaque) callconv(.c) void) void {
     switch (builtin.os.tag) {
         .linux => if (builtin.abi.isAndroid()) {
-            if (@import("android/activity.zig").looper != null) return @import("android/calls.zig").after(0, ctx, deliver);
+            if (@import("android/activity.zig").looper != null) {
+                _ = @import("android/calls.zig").after(0, ctx, deliver);
+                return;
+            }
         } else if (@import("linux/gtk.zig").load()) return @import("linux/app.zig").App.after(0, ctx, deliver),
         .windows => if (@import("windows/fdwatch.zig").post(ctx, deliver)) return,
         else => {},
