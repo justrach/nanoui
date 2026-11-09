@@ -213,10 +213,11 @@ fn answered(r: *Req, res: http.Response) void {
 pub fn readFile(p: *Page, url: []const u8) void {
     const path = url["file://".len..];
     const io = std.Io.Threaded.global_single_threaded.io();
-    const body = std.Io.Dir.cwd().readFileAlloc(io, path, p.gpa, .limited(64 << 20)) catch |e| {
+    const gpa = p.gpa;
+    const body = std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .limited(64 << 20)) catch |e| {
         return p.documentArrived(0, "", url, "", @errorName(e));
     };
-    defer p.gpa.free(body);
+    defer gpa.free(body);
     const kind = if (std.mem.endsWith(u8, path, ".txt")) "text/plain" else "";
     p.documentArrived(200, body, url, kind, "");
 }

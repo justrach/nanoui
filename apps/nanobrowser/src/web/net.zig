@@ -200,13 +200,14 @@ fn request(vm: *Vm, _: Value, args: []const Value) Error!Value {
 
 fn answered(r: *Req, res: http.Response) void {
     const p = r.page;
+    const gpa = p.gpa;
     const cb = r.callback;
     const asked = r.url;
-    p.gpa.destroy(r);
-    defer p.gpa.free(asked);
+    gpa.destroy(r);
     p.pending -= 1;
     p.busy += 1;
     defer {
+        gpa.free(asked);
         p.busy -= 1;
         p.maybeFree();
     }

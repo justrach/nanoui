@@ -231,4 +231,9 @@ test "external scripts in order, fetch, XHR, cookies over loopback" {
         try testing.expect(s.seen_cookie.load(.acquire));
     }
     try r.expectNoErrors();
+    // An in-flight fetch whose page navigates away before the answer lands must
+    // free its request URL before `maybeFree` destroys the page (`net.zig:answered`).
+    _ = try r.eval("fetch('/slow.js'); 0");
+    try r.html("<!doctype html><body>moved on");
+    r.spin(0.08);
 }

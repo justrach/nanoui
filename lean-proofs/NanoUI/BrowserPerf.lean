@@ -245,4 +245,51 @@ theorem pre_focus_single_pass (target_id : Nat) (h_nonzero : target_id ≠ 0) :
     passesForFrame (preFocusPass target_id h_nonzero) < passesForFrame (postFocusPass target_id) := by
   simp [preFocusPass, postFocusPass, passesForFrame]
 
+/-! ## 6. LIFO `defer` Lifetime Ordering around `Page.maybeFree` / `World.leave` -/
+
+structure TeardownState where
+  dead : Bool
+  pending : Nat
+  busy : Nat
+  alive : Bool
+  uaf : Bool
+  deriving DecidableEq, Repr
+
+/-- `Page.maybeFree`: frees `Page` when `dead && pending == 0 && busy == 0`. -/
+def stepMaybeFree (s : TeardownState) : TeardownState :=
+  let next_busy := s.busy - 1
+  if s.dead && s.pending == 0 && next_busy == 0 then
+    { s with busy := 0, alive := false }
+  else
+    { s with busy := next_busy }
+
+/-- Touching a field of `Page` or `World` (e.g. `p.gpa` or `o.caller`) in a `defer`. -/
+def stepTouchPageField (s : TeardownState) : TeardownState :=
+  if s.alive then s else { s with uaf := true }
+
+/-- Buggy LIFO order (`defer p.gpa.free(asked)` registered BEFORE `defer p.maybeFree()`):
+    `stepMaybeFree` runs first at scope exit, followed by `stepTouchPageField`. -/
+def buggyDeferExit (s : TeardownState) : TeardownState :=
+  stepTouchPageField (stepMaybeFree s)
+
+/-- Sound LIFO order (cleanup runs while `busy >= 1` or via stack-copied `gpa` BEFORE
+    `stepMaybeFree` is the final operation on `Page`). -/
+def soundDeferExit (s : TeardownState) : TeardownState :=
+  stepMaybeFree (stepTouchPageField s)
+
+/-- Theorem 6a: Registering `defer p.gpa.free(...)` or `defer o.caller = ...` before
+    `defer maybeFree()` / `defer leave()` causes a use-after-free when the last
+    in-flight request finishes on a dead page (`dead = true, pending = 0, busy = 1`). -/
+theorem buggy_defer_order_causes_uaf :
+    (buggyDeferExit { dead := true, pending := 0, busy := 1, alive := true, uaf := false }).uaf = true := by
+  rfl
+
+/-- Theorem 6b: Performing field/allocator cleanup before `stepMaybeFree` (or copying
+    `gpa` to the stack before `maybeFree`) never triggers a use-after-free on any
+    initially alive `Page`. -/
+theorem defer_lifetime_order_sound (dead : Bool) (pending busy : Nat) :
+    (soundDeferExit { dead := dead, pending := pending, busy := busy, alive := true, uaf := false }).uaf = false := by
+  simp [soundDeferExit, stepTouchPageField, stepMaybeFree]
+  split <;> rfl
+
 end NanoUI.BrowserPerf

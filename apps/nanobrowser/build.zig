@@ -10,7 +10,6 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
-        .strip = optimize != .debug,
         .imports = &.{.{ .name = "nanoui", .module = nanoui }},
     });
     const exe = b.addExecutable(.{ .name = "nanobrowser", .root_module = root });
@@ -32,7 +31,6 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/js/test262_host.zig"),
         .target = target,
         .optimize = optimize,
-        .strip = optimize != .debug,
         .link_libc = true,
     }) });
     host262.use_llvm = true;
@@ -43,7 +41,6 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/tests.zig"),
         .target = target,
         .optimize = optimize,
-        .strip = optimize != .debug,
         .imports = &.{.{ .name = "nanoui", .module = nanoui }},
     }) });
     tests.use_llvm = true;

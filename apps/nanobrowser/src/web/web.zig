@@ -131,8 +131,9 @@ pub fn animationEvents(p: *Page) void {
         anim.events.clearRetainingCapacity();
         return;
     };
-    const list = anim.gpa.dupe(@TypeOf(anim.events.items[0]), anim.events.items) catch return;
-    defer anim.gpa.free(list);
+    const gpa = anim.gpa;
+    const list = gpa.dupe(@TypeOf(anim.events.items[0]), anim.events.items) catch return;
+    defer gpa.free(list);
     anim.events.clearRetainingCapacity();
     if (!w.h.fireAnimation.isCallable()) return;
     const vm = w.vm;
@@ -166,8 +167,9 @@ pub fn frameStart(p: *Page) void {
         if (p.host.uiContext(p.host.ctx)) |c| c.focus = 0;
     }
     if (w.animation.items.len == 0) return;
-    const list = w.gpa.dupe(world_mod.AnimationFrame, w.animation.items) catch return;
-    defer w.gpa.free(list);
+    const gpa = w.gpa;
+    const list = gpa.dupe(world_mod.AnimationFrame, w.animation.items) catch return;
+    defer gpa.free(list);
     w.animation.clearRetainingCapacity();
     const vm = w.vm;
     // They stay marked through `list` only while in this task: no collection
@@ -191,8 +193,9 @@ pub fn frameLaid(p: *Page) void {
         if (!first and w.h.viewportChanged.isCallable()) w.task(w.h.viewportChanged, Value.undefined, &.{});
     }
     if (w.scrolled.items.len > 0) {
-        const list = w.gpa.dupe(*dom.Node, w.scrolled.items) catch return;
-        defer w.gpa.free(list);
+        const gpa = w.gpa;
+        const list = gpa.dupe(*dom.Node, w.scrolled.items) catch return;
+        defer gpa.free(list);
         w.scrolled.clearRetainingCapacity();
         for (list) |n| {
             if (p.dead) return;
@@ -216,8 +219,9 @@ pub fn paintEnd(p: *Page) void {
     const w = p.js orelse return;
     w.painting = false;
     if (w.deferred_events.items.len > 0) {
-        const list = w.gpa.dupe(world_mod.Deferred, w.deferred_events.items) catch return;
-        defer w.gpa.free(list);
+        const gpa = w.gpa;
+        const list = gpa.dupe(world_mod.Deferred, w.deferred_events.items) catch return;
+        defer gpa.free(list);
         w.deferred_events.clearRetainingCapacity();
         for (list) |d| {
             if (p.dead) break;
@@ -317,11 +321,12 @@ pub fn runUrl(p: *Page, code: []const u8) void {
         w.runner.dom_ready = true;
         w.runner.load_fired = true;
     }
-    var buf: std.ArrayList(u8) = .empty;
-    defer buf.deinit(w.gpa);
-    percentDecode(w.gpa, code, &buf) catch return;
+    const gpa = w.gpa;
     w.enter();
     defer w.leave();
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(gpa);
+    percentDecode(gpa, code, &buf) catch return;
     _ = w.vm.eval(buf.items, "javascript:") catch |e| w.report(e);
 }
 

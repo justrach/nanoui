@@ -144,11 +144,11 @@ fn remote(vm: *Vm, _: Value, args: []const Value) Error!Value {
     const object = if (id == window_export) o.vm.global().value() else o.exports.items[id - 1];
     const a = try carry(me, o, bind.arg(args, 3));
     const b = try carry(me, o, bind.arg(args, 4));
+    o.enter();
+    defer o.leave();
     const was = o.caller;
     o.caller = me.page;
     defer o.caller = was;
-    o.enter();
-    defer o.leave();
     const out = o.vm.call(o.h.remoteOp, Value.undefined, &.{ bind.arg(args, 0), object, a, b }) catch |e| switch (e) {
         error.Thrown => {
             const text = o.vm.exceptionString();
