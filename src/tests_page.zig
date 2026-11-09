@@ -30,4 +30,5 @@ test "the bridge posts through whichever webview the page is in" {
 
 test {
     _ = @import("ipc.zig");
+    _ = @import("tests_ipc.zig");
 }

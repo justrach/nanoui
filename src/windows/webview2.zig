@@ -263,6 +263,22 @@ pub fn coTaskMemFree(p: ?*anyopaque) void {
 /// `ICoreWebView2WebMessageReceivedEventArgs`: 3 = `get_Source`,
 /// 4 = `get_WebMessageAsJson`, 5 = `TryGetWebMessageAsString`.
 pub const MessageArgs = struct {
+    /// The URL of the document that posted the message.
+    pub fn getSource(a: *Com, out: *PWSTR) HRESULT {
+        return a.slot(*const fn (*Com, *PWSTR) callconv(.winapi) HRESULT, 3)(a, out);
+    }
+
+    /// `getSource` as UTF-8 in `out`, or "" when WebView2 gives none.
+    pub fn sourceUtf8(a: *Com, gpa: std.mem.Allocator, out: *std.ArrayList(u8)) []const u8 {
+        var raw: PWSTR = null;
+        if (getSource(a, &raw) < 0) return "";
+        defer coTaskMemFree(raw);
+        const units = std.mem.span(raw orelse return "");
+        out.ensureTotalCapacity(gpa, units.len * 3) catch return "";
+        const n = std.unicode.utf16LeToUtf8(out.allocatedSlice(), units) catch return "";
+        return out.allocatedSlice()[0..n];
+    }
+
     /// The message as JSON text. `bridge.js` posts an object, so this is the
     /// JSON it becomes (`{"t":"call",...}`), not a quoted string.
     pub fn getWebMessageAsJson(a: *Com, out: *PWSTR) HRESULT {

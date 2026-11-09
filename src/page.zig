@@ -65,8 +65,12 @@ pub fn Queue(comptime Window: type) type {
         current_buf: [2048]u8 = undefined,
 
         /// Records the page now showing, for the bar's "current" mark.
+        /// A URL too long to keep clears it: an old one would be a lie.
         pub fn setCurrent(self: *Self, url: []const u8) void {
-            if (url.len > self.current_buf.len) return;
+            if (url.len > self.current_buf.len) {
+                self.current_url = "";
+                return;
+            }
             @memcpy(self.current_buf[0..url.len], url);
             self.current_url = self.current_buf[0..url.len];
         }

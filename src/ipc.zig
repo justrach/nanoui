@@ -6,6 +6,7 @@
 //!     pub const ipc = @import("ipc.zig").ipc(Window, App);
 const std = @import("std");
 const tsgen = @import("tsgen.zig");
+const page_mod = @import("page.zig");
 
 /// The scheme, `://` and host of `url`; "" for a URL without them.
 pub fn originOf(url: []const u8) []const u8 {
@@ -36,8 +37,13 @@ pub fn ipc(comptime Window: type, comptime App: type) type {
             page: ?*anyopaque = null,
             /// That page's `PageOptions.label`.
             label: []const u8 = "",
-            /// The URL that page was last told to load (`origin` and a path
-            /// for the app's own assets, else a remote page's).
+            /// The URL of the document that sent the call, as the webview
+            /// reports it with the message (WKWebView's frame request,
+            /// WebView2's message `Source`), so a page that navigated itself
+            /// is seen where it went. Absolute: the app's own assets are on
+            /// `origin` (`nanoui://localhost/code.html`). Only when the
+            /// webview gives none is it the URL the page was last told to
+            /// load, resolved the same way.
             url: []const u8 = "",
 
             /// The scheme and host of `url` (`nanoui://localhost`,
@@ -161,12 +167,14 @@ pub fn ipc(comptime Window: type, comptime App: type) type {
         /// Handles one message from the window's page, on the main thread.
         pub fn handleMessage(window: *Window, body: []const u8) void {
             const page = window.page orelse return;
-            handlePageMessage(window, page, body);
+            handlePageMessage(window, page, body, "");
         }
 
         /// Handles one message from `page`, one of `window`'s (its `page`
-        /// or a docked one), on the main thread.
-        pub fn handlePageMessage(window: *Window, page: anytype, body: []const u8) void {
+        /// or a docked one), on the main thread. `source` is the URL of the
+        /// document that posted it, as the webview reports it ("" when it
+        /// reports none): what `Call.url` and `Call.origin` say.
+        pub fn handlePageMessage(window: *Window, page: anytype, body: []const u8, source: []const u8) void {
             const app = window.app;
             var arena: std.heap.ArenaAllocator = .init(app.gpa);
             defer arena.deinit();
@@ -179,7 +187,11 @@ pub fn ipc(comptime Window: type, comptime App: type) type {
                 var aw: std.Io.Writer.Allocating = .init(a);
                 aw.writer.print("{{\"t\":\"reply\",\"id\":{d},", .{pageId(env.id)}) catch return;
                 const mark = aw.written().len;
-                var call: Call = .{ .arena = a, .window = window, .page = @ptrCast(page), .label = page.queue.options.label, .url = page.queue.current_url };
+                const url = if (source.len > 0)
+                    source
+                else
+                    page_mod.fullUrl(a.alloc(u8, page.queue.current_url.len + page_mod.origin.len + 1) catch return, page.queue.current_url);
+                var call: Call = .{ .arena = a, .window = window, .page = @ptrCast(page), .label = page.queue.options.label, .url = url };
                 callMethod(app, &call, env.m, env.a, &aw.writer) catch |err| {
                     aw.shrinkRetainingCapacity(mark);
                     aw.writer.writeAll("\"ok\":false,\"e\":") catch return;
