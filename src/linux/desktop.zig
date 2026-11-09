@@ -1,6 +1,7 @@
 //! The desktop around the app on Linux: the clipboard (GTK's), opening
 //! URLs and files with `xdg-open`, the XDG directories, and the theme.
 const std = @import("std");
+const appearance = @import("appearance.zig");
 const gtk = @import("gtk.zig");
 
 extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
@@ -126,12 +127,11 @@ pub fn path(gpa: std.mem.Allocator, dir: Directory, app_name: []const u8) ![]u8 
     return full;
 }
 
-/// Whether the desktop asks for dark colors (a GTK theme named dark).
+/// Whether the desktop asks for dark colors: `GTK_THEME`, where it is set (as
+/// GTK itself reads it), else the portal's scheme, else GtkSettings — see
+/// `appearance.zig`.
 pub fn isDark() bool {
-    const theme = env("GTK_THEME") orelse return false;
-    var i: usize = 0;
-    while (i + 4 <= theme.len) : (i += 1) if (std.ascii.eqlIgnoreCase(theme[i .. i + 4], "dark")) return true;
-    return false;
+    return appearance.dark(env("GTK_THEME"));
 }
 
 pub fn accentColor() [3]f32 {

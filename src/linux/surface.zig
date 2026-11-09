@@ -11,6 +11,7 @@ const ui = @import("../ui/ui.zig");
 const types = @import("../ui/types.zig");
 const gpu = @import("../ui/gpu.zig");
 const canvas = @import("../ui/canvas.zig");
+const appearance = @import("appearance.zig");
 const glarea = @import("glarea.zig");
 const transparent = @import("transparent.zig");
 const opengl = @import("../ui/opengl.zig");
@@ -46,6 +47,8 @@ pub const Surface = struct {
     /// A frame asked for later (`frameIn`).
     later: c_uint = 0,
     theme_override: ?Theme = null,
+    /// Follows the system's appearance (`appearance.zig`).
+    watches: appearance.Watch = .{},
     cursor: ctx_mod.Cursor = .arrow,
     /// Text the input method committed during this key event.
     committed: std.ArrayList(u8) = .empty,
@@ -81,6 +84,7 @@ pub const Surface = struct {
         self.active_signal = g.g_signal_connect_data(window.gtkwindow.?, "notify::is-active", @ptrCast(&onActive), self, null, 0);
         // No theme background under a transparent window's view.
         self.ctx.transparent_root = window.transparent != .none;
+        self.watches.start(self, &appearanceChanged);
         if (gtk.v4) {
             @import("surface_gtk4.zig").attach(self);
             return self;
@@ -113,15 +117,12 @@ pub const Surface = struct {
     pub fn destroy(self: *Surface) void {
         const g = &gtk.api;
         if (self.active_signal != 0) g.g_signal_handler_disconnect(self.window.gtkwindow.?, self.active_signal);
+        self.watches.stop();
         if (self.tick != 0) g.gtk_widget_remove_tick_callback(self.area, self.tick);
         if (self.idle != 0) _ = g.g_source_remove(self.idle);
         if (self.later != 0) _ = g.g_source_remove(self.later);
         if (self.fallback != 0) _ = g.g_source_remove(self.fallback);
-        // While the area is still realized: its context frees the renderer's.
-        if (self.renderer) |*r| {
-            glarea.api.gtk_gl_area_make_current(self.area);
-            r.deinit();
-        }
+        self.renderer = null;
         g.g_object_unref(self.im);
         self.instances.deinit(self.gpa);
         self.committed.deinit(self.gpa);
@@ -184,6 +185,12 @@ pub const Surface = struct {
     /// A frame soon, for changes from outside the view (a process's output).
     pub fn requestFrame(self: *Surface) void {
         if (self.idle == 0) self.idle = gtk.api.g_idle_add(onIdle, self);
+    }
+
+    /// The system's appearance may have changed: the next frame draws it.
+    fn appearanceChanged(ctx: ?*anyopaque) void {
+        const self: *Surface = @ptrCast(@alignCast(ctx.?));
+        self.requestFrame();
     }
 
     fn onLater(data: ?*anyopaque) callconv(.c) c_int {
@@ -492,19 +499,9 @@ fn onCommit(_: *anyopaque, str: [*:0]const u8, data: ?*anyopaque) callconv(.c) v
 /// GDK key values of the keys that are not text.
 fn keyOf(keyval: c_uint) ?ctx_mod.Key {
     return switch (keyval) {
-        0xff08 => .backspace,
-        0xffff => .delete,
-        0xff51 => .left,
-        0xff52 => .up,
-        0xff53 => .right,
-        0xff54 => .down,
-        0xff50 => .home,
-        0xff57 => .end,
-        0xff0d, 0xff8d => .enter,
-        0xff09, 0xfe20 => .tab,
-        0xff1b => .escape,
-        0xff55 => .page_up,
-        0xff56 => .page_down,
+        0xff08 => .backspace, 0xffff => .delete, 0xff51 => .left, 0xff52 => .up, 0xff53 => .right, 0xff54 => .down,
+        0xff50 => .home, 0xff57 => .end, 0xff0d, 0xff8d => .enter, 0xff09, 0xfe20 => .tab, 0xff1b => .escape,
+        0xff55 => .page_up, 0xff56 => .page_down,
         0xffbe...0xffc9 => @enumFromInt(@intFromEnum(ctx_mod.Key.f1) + (keyval - 0xffbe)),
         else => null,
     };
