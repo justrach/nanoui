@@ -94,7 +94,9 @@ pub const directions = @import("basics/directions.zig");
 /// Components after GPUI Kit: buttons, overlays, tabs, forms, toasts.
 pub const kit = @import("kit/kit.zig");
 pub const tsgen = @import("tsgen.zig");
-pub const Surface = if (mac) @import("ui/surface.zig").Surface else void;
+/// A native-UI window's surface: macOS's NSView, Windows' HWND client
+/// (`after_frame`, `nativeHandle`, `ctx`).
+pub const Surface = if (mac) @import("ui/surface.zig").Surface else if (builtin.os.tag == .windows) @import("windows/surface.zig").Surface else void;
 pub const a11y = if (mac) @import("ui/a11y.zig") else struct {};
 
 pub const App = plat.app.App;
@@ -193,6 +195,13 @@ test {
             _ = @import("windows/tests_window.zig");
             // Frames on the display's beat, gathered input, the frame log.
             _ = @import("windows/tests_pace.zig");
+            // A title bar the app draws, frames kept between launches,
+            // the icon, cursors and launch URLs.
+            _ = @import("windows/chrome.zig");
+            _ = @import("windows/window_place.zig");
+            _ = @import("windows/tests_chrome.zig");
+            _ = @import("windows/cursor.zig");
+            _ = @import("windows/app.zig");
             // File drops: path/URL conversion and one HDROP as one event.
             _ = @import("windows/drop_files.zig");
             _ = @import("windows/tests_drop_files.zig");

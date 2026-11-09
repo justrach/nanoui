@@ -48,12 +48,14 @@ pub fn d3d11DeviceGeneration() u64 {
     return @import("d3d11_device.zig").generation();
 }
 
-/// A cursor made from pixels (an NSCursor on macOS): `rgba` straight
-/// alpha, `w` × `h`, shown at one point a pixel with its hot spot at
-/// (`hot_x`, `hot_y`) from its top left. Show it with `setCursor`; free it
-/// with `freeCursor` once nothing shows it. Null where custom cursors
-/// aren't drawn (the arrow stays).
+/// A cursor made from pixels (an NSCursor on macOS, an HCURSOR from
+/// `CreateIconIndirect` on Windows): `rgba` straight alpha, `w` × `h`,
+/// shown at one point a pixel (on Windows too, made larger at 150% or 200%) with its hot
+/// spot at (`hot_x`, `hot_y`) from its top left. Show it with `setCursor`;
+/// free it with `freeCursor` once nothing shows it. Null where custom
+/// cursors aren't drawn (the arrow stays).
 pub fn makeCursor(rgba: []const u8, w: u32, h: u32, hot_x: f32, hot_y: f32) ?*anyopaque {
+    if (comptime builtin.os.tag == .windows) return @import("../windows/cursor.zig").make(rgba, w, h, hot_x, hot_y);
     if (comptime builtin.os.tag != .macos) return null;
     if (w == 0 or h == 0 or rgba.len < @as(usize, w) * h * 4) return null;
     const objc = @import("../objc.zig");
@@ -86,6 +88,10 @@ pub fn setCursor(c: *Context, cursor: ?*anyopaque) void {
 
 /// Frees a cursor `makeCursor` made.
 pub fn freeCursor(cursor: ?*anyopaque) void {
+    if (comptime builtin.os.tag == .windows) {
+        if (cursor) |cur| @import("../windows/cursor.zig").free(cur);
+        return;
+    }
     if (comptime builtin.os.tag != .macos) return;
     const objc = @import("../objc.zig");
     if (cursor) |cur| objc.release(@ptrCast(cur));
@@ -96,6 +102,24 @@ test "makeCursor makes a cursor from pixels" {
     for (0..16 * 16) |k| px[k * 4 ..][0..4].* = .{ 255, 255, 255, if (k % 3 == 0) 255 else 0 };
     const cur = makeCursor(&px, 16, 16, 8, 8);
     defer freeCursor(cur);
+    if (comptime builtin.os.tag == .windows) {
+        // An HCURSOR, not an icon, with the hot spot it was given.
+        try std.testing.expect(cur != null);
+        const wc = @import("../windows/cursor.zig");
+        const s = wc.systemScale();
+        const at = struct {
+            fn f(v: f32, k: f32) u32 {
+                return @intFromFloat(@round(if (k > 1.01) v * k else v));
+            }
+        }.f;
+        const hot = wc.hotSpot(cur.?) orelse return error.NotACursor;
+        try std.testing.expectEqual([2]u32{ at(8, s), at(8, s) }, hot);
+        const corner = makeCursor(&px, 16, 16, 0, 15);
+        defer freeCursor(corner);
+        try std.testing.expectEqual([2]u32{ 0, at(15, s) }, wc.hotSpot(corner.?).?);
+        try std.testing.expect(makeCursor(px[0..10], 16, 16, 0, 0) == null);
+        return;
+    }
     if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
     try std.testing.expect(cur != null);
     const objc = @import("../objc.zig");

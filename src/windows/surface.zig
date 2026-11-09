@@ -66,6 +66,8 @@ pub const Surface = struct {
     /// appearance until the view resets it to null.
     theme_chosen: ?Theme = null,
     cursor: ctx_mod.Cursor = .arrow,
+    /// The app's cursor (`ui.makeCursor`) shown with `.custom`.
+    shown_custom: ?*anyopaque = null,
     /// A UTF-16 high surrogate waiting for its other half.
     high: u16 = 0,
     /// The IME's state for this window: a composition running, the guard that
@@ -111,6 +113,12 @@ pub const Surface = struct {
     frame_log: ?frame_log.FrameLog = null,
     frame_kind: frame_log.Kind = .input,
     log_index: ?usize = null,
+    /// Called after each frame is built, with its layout (`ctx.rects`)
+    /// current: where an app places native views over its boxes (a docked
+    /// page's `setFrame`), as macOS's surface calls it. Its result says
+    /// native views moved; here they move with the window's next paint.
+    after_frame_ctx: ?*anyopaque = null,
+    after_frame: ?*const fn (ctx: ?*anyopaque, s: *Surface) bool = null,
 
     pub fn create(window: *Window, view: ui.View, theme_override: ?Theme) !*Surface {
         const gpa = window.app.gpa;
@@ -153,6 +161,12 @@ pub const Surface = struct {
 
     fn hwnd(self: *Surface) ?w.HWND {
         return self.window.hwnd;
+    }
+
+    /// The native view the surface draws into (its window's HWND): the
+    /// parent a docked page goes in, as macOS's `nsview`.
+    pub fn nativeHandle(self: *Surface) ?*anyopaque {
+        return if (self.window.hwnd) |h| @ptrCast(h) else null;
     }
 
     /// The theme the frame is drawn with: a window's own when it named one,
@@ -229,7 +243,11 @@ pub const Surface = struct {
             self.window.close();
         }
         self.updateCursor();
-        pace_side.logFrame(self, now, raw_dt, 0);
+        // Native views over the view's boxes (a docked page) follow this
+        // frame's layout, whichever path built it (an input, a resize's paint).
+        const t_af = clock.now();
+        if (self.after_frame) |af| _ = af(self.after_frame_ctx, self);
+        pace_side.logFrame(self, now, raw_dt, (clock.now() - t_af) * 1000);
         const more = c.animating or r.hot_changed;
         self.hot_moving = r.hot_changed;
         if (more and !self.ticking) pace_side.startTicking(self);
@@ -265,7 +283,14 @@ pub const Surface = struct {
     }
 
     fn updateCursor(self: *Surface) void {
+        const was = self.cursor;
+        const was_custom = self.shown_custom;
         self.cursor = self.ctx.cursor orelse if (self.ctx.cursor_text) .text else if (self.ctx.cursor_hand) .hand else .arrow;
+        self.shown_custom = if (self.cursor == .custom) self.ctx.custom_cursor else null;
+        // A cursor that changed under a pointer that is still over the
+        // client: shown now, not at the next move (WM_SETCURSOR comes
+        // only with one).
+        if ((was != self.cursor or was_custom != self.shown_custom) and self.tracking) self.setCursor();
     }
 
     fn setCursor(self: *Surface) void {

@@ -20,9 +20,11 @@ const coinit_apartment_threaded: u32 = 0x2;
 pub const Options = struct {
     name: []const u8 = "nanoui",
     quit_on_last_window_closed: bool = true,
-    // The macOS app's hooks, accepted here and not called yet.
     ctx: ?*anyopaque = null,
+    /// URLs the app was launched with (a registered scheme's handler is
+    /// started as `app.exe "scheme://…"`), delivered once the loop runs.
     on_open_urls: ?*const fn (ctx: ?*anyopaque, urls: []const []const u8) void = null,
+    // The macOS app's other hooks, accepted here and not called yet.
     on_reopen: ?*const fn (ctx: ?*anyopaque) void = null,
     /// A menu bar app with no Dock icon, on the Mac.
     activation: enum { regular, accessory } = .regular,
@@ -71,6 +73,12 @@ pub const App = struct {
     webview_profile: ?[]const u8 = null,
     /// Whether this thread holds a COM apartment (`CoInitializeEx`).
     com: bool = false,
+    /// The command line's URLs (`urlArgs`), for `on_open_urls`; delivered
+    /// once, when the loop first runs.
+    launch_urls: [][]u8 = &.{},
+    /// Where `frame_autosave` keeps window frames: the app's data folder
+    /// when null (`window_place.zig`). Tests point it at a temporary one.
+    placement_dir: ?[]const u8 = null,
     gui: bool = false,
     running: bool = false,
     stopping: bool = false,
@@ -85,6 +93,7 @@ pub const App = struct {
         if (init.environ_map.get("LOCALAPPDATA")) |v| self.local_appdata = v;
         if (init.environ_map.get("NANOUI_WEBVIEW_PROFILE")) |v| self.webview_profile = v;
         self.gui = flags.snapshot == null and flags.generate_dir == null;
+        self.launch_urls = urlArgs(gpa, try init.minimal.args.toSlice(init.arena.allocator())) catch &.{};
         // A GUI app (pages, dialogs, the shell) calls COM: the main thread's
         // apartment is made here, before any window asks for it.
         if (self.gui) {
@@ -122,6 +131,8 @@ pub const App = struct {
         self.services.deinit(self.gpa);
         self.events.deinit(self.gpa);
         if (self.client_js) |js| self.gpa.free(js);
+        for (self.launch_urls) |u| self.gpa.free(u);
+        if (self.launch_urls.len > 0) self.gpa.free(self.launch_urls);
         if (self.com) CoUninitialize();
         self.gpa.destroy(self);
     }
@@ -228,6 +239,7 @@ pub const App = struct {
         }
         if (self.stopping or !self.gui) return;
         self.running = true;
+        self.deliverLaunchUrls();
         var msg: w.MSG = undefined;
         // A page's WebView2 is asked for now, with a loop to hear its answer.
         for (self.windows.items) |win| if (win.page) |p| p.start();
@@ -248,6 +260,7 @@ pub const App = struct {
     /// arrive, and nothing is drawn to the screen.
     pub fn runSeconds(self: *App, seconds: f64) !void {
         self.running = true;
+        self.deliverLaunchUrls();
         for (self.windows.items) |win| if (win.page) |p| p.start();
         const clock = @import("../ui/clock.zig");
         const start = clock.now();
@@ -266,6 +279,17 @@ pub const App = struct {
             _ = w.MsgWaitForMultipleObjects(0, null, 0, 10, w.QS_ALLINPUT);
         }
         self.running = false;
+    }
+
+    /// The launch's URLs to `on_open_urls`, once.
+    fn deliverLaunchUrls(self: *App) void {
+        if (self.launch_urls.len == 0) return;
+        const f = self.options.on_open_urls orelse return;
+        const urls: []const []const u8 = @ptrCast(self.launch_urls);
+        f(self.options.ctx, urls);
+        for (self.launch_urls) |u| self.gpa.free(u);
+        self.gpa.free(self.launch_urls);
+        self.launch_urls = &.{};
     }
 
     pub fn quit(self: *App) void {
@@ -344,3 +368,39 @@ pub const App = struct {
         return true;
     }
 };
+
+/// The arguments that are URLs (`scheme://…`, the scheme two or more
+/// letters, digits, `+`, `-` or `.` from a letter: never a drive's `C:\`),
+/// copied: what a protocol handler's launch carries, for `on_open_urls`.
+/// The program's own name and `--` flags are not.
+pub fn urlArgs(gpa: std.mem.Allocator, args: []const [:0]const u8) ![][]u8 {
+    var out: std.ArrayList([]u8) = .empty;
+    errdefer {
+        for (out.items) |u| gpa.free(u);
+        out.deinit(gpa);
+    }
+    for (args, 0..) |arg, i| {
+        if (i == 0 or !isUrl(arg)) continue;
+        try out.append(gpa, try gpa.dupe(u8, arg));
+    }
+    return out.toOwnedSlice(gpa);
+}
+
+pub fn isUrl(arg: []const u8) bool {
+    const at = std.mem.indexOf(u8, arg, "://") orelse return false;
+    if (at < 2 or !std.ascii.isAlphabetic(arg[0])) return false;
+    for (arg[0..at]) |ch| if (!(std.ascii.isAlphanumeric(ch) or ch == '+' or ch == '-' or ch == '.')) return false;
+    return arg.len > at + 3;
+}
+
+test "a launch's URLs are its scheme:// arguments" {
+    const gpa = std.testing.allocator;
+    const urls = try urlArgs(gpa, &.{ "C:\\app.exe", "alchemist://open?project=1", "--nanoui-hidden", "C:\\x\\y.mov", "https://example.com/a", "x://", "1a://b" });
+    defer {
+        for (urls) |u| gpa.free(u);
+        gpa.free(urls);
+    }
+    try std.testing.expectEqual(@as(usize, 2), urls.len);
+    try std.testing.expectEqualStrings("alchemist://open?project=1", urls[0]);
+    try std.testing.expectEqualStrings("https://example.com/a", urls[1]);
+}

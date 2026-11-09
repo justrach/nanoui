@@ -324,3 +324,27 @@ test "onMain lands the call on the thread that pumps" {
     loop.runFor(0.2);
     try testing.expectEqual(@as(u32, 1), c.n);
 }
+
+test "runSeconds hands the launch's URLs to on_open_urls, once" {
+    const gpa = testing.allocator;
+    const app = try makeApp(gpa);
+    defer app.destroy();
+    const Got = struct {
+        var calls: usize = 0;
+        var first: [64]u8 = undefined;
+        var len: usize = 0;
+        fn on(_: ?*anyopaque, urls: []const []const u8) void {
+            calls += 1;
+            len = @min(urls[0].len, first.len);
+            @memcpy(first[0..len], urls[0][0..len]);
+        }
+    };
+    app.options.on_open_urls = Got.on;
+    const urls = try gpa.alloc([]u8, 1);
+    urls[0] = try gpa.dupe(u8, "alchemist://open?project=1");
+    app.launch_urls = urls;
+    try app.runSeconds(0.02);
+    try app.runSeconds(0.01);
+    try testing.expectEqual(@as(usize, 1), Got.calls);
+    try testing.expectEqualStrings("alchemist://open?project=1", Got.first[0..Got.len]);
+}
