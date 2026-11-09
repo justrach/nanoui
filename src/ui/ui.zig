@@ -113,6 +113,13 @@ pub fn setInlinePredictions(on: bool) void {
 /// Holds the menu bar's key equivalents back while a view captures key
 /// combinations (a shortcut editor): ⌘ chords reach the view instead.
 pub const suspendMenuKeyEquivalents = keys.suspendMenuKeyEquivalents;
+/// Whether light text on dark is thickened as macOS's font smoothing does
+/// (the default follows the user's `AppleFontSmoothing`). Off draws every
+/// glyph at its outline's own weight, as a renderer of its own would. Set it
+/// before the first frame: glyphs already in the atlas keep their weight.
+pub fn setFontSmoothing(on: bool) void {
+    if (comptime !@import("text.zig").portable) @import("atlas.zig").smoothing_allowed = on;
+}
 
 pub const key = widgets.key;
 pub const keyInt = widgets.keyInt;
