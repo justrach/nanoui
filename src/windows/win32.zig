@@ -85,6 +85,8 @@ pub extern "user32" fn IsZoomed(hwnd: HWND) callconv(.winapi) BOOL;
 pub extern "user32" fn IsIconic(hwnd: HWND) callconv(.winapi) BOOL;
 pub extern "user32" fn SetForegroundWindow(hwnd: HWND) callconv(.winapi) BOOL;
 pub extern "user32" fn GetForegroundWindow() callconv(.winapi) ?HWND;
+/// The calling thread's active window: a dialog's owner, kept beneath it.
+pub extern "user32" fn GetActiveWindow() callconv(.winapi) ?HWND;
 pub extern "user32" fn SetFocus(hwnd: HWND) callconv(.winapi) ?HWND;
 pub extern "user32" fn GetMessageW(msg: *MSG, hwnd: ?HWND, min: u32, max: u32) callconv(.winapi) BOOL;
 pub extern "user32" fn PeekMessageW(msg: *MSG, hwnd: ?HWND, min: u32, max: u32, remove: u32) callconv(.winapi) BOOL;

@@ -190,6 +190,8 @@ test {
             // decode/mapping units.
             _ = @import("windows/ime.zig");
             _ = @import("windows/tests_ime.zig");
+            // The open dialog, made and asked what it is, never shown.
+            _ = @import("windows/tests_dialog.zig");
         }
         // The GTK window's: decorations, the taskbar hint, opacity.
         if (builtin.os.tag == .linux) _ = @import("linux/tests_window.zig");
