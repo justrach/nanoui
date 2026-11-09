@@ -94,17 +94,80 @@ pub const Kind = struct {
 };
 
 /// Pixels the app gives a frame to show (`ui.texture`), changing as often
-/// as it likes: a video's frames. On macOS a CVPixelBuffer (BGRA, Metal
-/// compatible) is wrapped as a texture without a copy; else, or for the
-/// CPU renderer, `bgra` (premultiplied, `stride` bytes a row, 0 for
-/// `width * 4`) is drawn.
+/// as it likes: a video's frames. On macOS a CVPixelBuffer (Metal
+/// compatible) is wrapped as a texture without a copy, a plane at a time;
+/// an app's own MTLTexture (`mtl_texture`) is drawn as it is; else, or for
+/// the CPU renderer, `bgra` (premultiplied, `stride` bytes a row, 0 for
+/// `width * 4`) is drawn. A frame that isn't BGRA, or that has a LUT, is
+/// first made display sRGB at its own size by the colour stage
+/// (`texture_post.metal`, mirrored on the CPU by `color.zig`).
 pub const Texture = struct {
     width: u32,
     height: u32,
     bgra: []const u8 = &.{},
     stride: usize = 0,
     /// A CVPixelBufferRef, kept alive by the app until the frame is drawn.
+    /// `pixel_buffer.texture` fills in its format, range, matrix and
+    /// transfer from the buffer itself.
     pixel_buffer: ?*anyopaque = null,
+    /// An app's MTLTexture (made on `ui.metalDevice()`, filled in its own
+    /// passes: `Surface.before_encode`), kept alive by the app until the
+    /// frame is drawn. A float or sRGB one holds linear light and is
+    /// encoded for the display; any other is shown as its values are.
+    mtl_texture: ?*anyopaque = null,
+    format: Format = .bgra8,
+    range: Range = .video,
+    matrix: Matrix = .bt709,
+    transfer: Transfer = .rec709,
+    /// HDR (PQ, HLG) and linear half-float frames: highlights compressed
+    /// into SDR (`hdr_to_sdr`), else clipped at 100 nits.
+    tone_map: bool = true,
+    /// A look applied first (a camera's log to Rec. 709), then the output
+    /// LUT (`ui.lut`), both on display-encoded colour.
+    source_lut: ?Lut = null,
+    lut: ?Lut = null,
+
+    /// Whether the colour stage must run before the frame is drawn.
+    pub fn needsPost(t: Texture) bool {
+        return t.format != .bgra8 or t.lut != null or t.source_lut != null;
+    }
+};
+
+/// What a texture's pixels are: BGRA (display sRGB, premultiplied), two-
+/// plane Y'CbCr (luma, then interleaved chroma: NV12, P010 and the 10-bit
+/// 4:2:2 and 4:4:4 the ProRes decoders make), or linear half floats.
+pub const Format = enum { bgra8, ycbcr420_8, ycbcr420_10, ycbcr422_10, ycbcr444_10, rgba16f };
+/// Video (16-235) or full (0-255) code values, as the post shader's `rangeMode`.
+pub const Range = enum(u32) { video = 0, full = 1 };
+/// The Y'CbCr matrix, as the post shader's `matrixMode`.
+pub const Matrix = enum(u32) { bt709 = 0, bt601 = 1, bt2020 = 2 };
+/// How the frame's values encode light, as the post shader's `transferMode`.
+pub const Transfer = enum(u32) { rec709 = 0, srgb = 1, linear = 2, pq = 3, hlg = 4 };
+
+/// A 3D LUT (`ui.lut`): `size`³ RGBA half floats, red fastest (a .cube's
+/// order), over `domain_min` to `domain_max`. Its data is kept by the app;
+/// the GPU's copy is made once per key.
+pub const Lut = struct {
+    key: u64,
+    size: u16,
+    data: []const f16,
+    domain_min: [3]f32 = .{ 0, 0, 0 },
+    domain_max: [3]f32 = .{ 1, 1, 1 },
+
+    pub const max_size = 65;
+
+    pub fn valid(l: Lut) bool {
+        const n: usize = l.size;
+        return l.size >= 2 and l.size <= max_size and l.data.len >= n * n * n * 4;
+    }
+};
+
+/// Called with the frame's MTLCommandBuffer before nanoui encodes into it
+/// (`Surface.before_encode`): an app's own compute or render passes, whose
+/// textures the frame then shows (`Texture.mtl_texture`).
+pub const BeforeEncode = struct {
+    ctx: *anyopaque,
+    func: *const fn (ctx: *anyopaque, cmd_buffer: *anyopaque) void,
 };
 
 /// The last instance that is a plain, opaque quad covering all of `size`
@@ -160,6 +223,49 @@ pub fn gradientUv(dashed: bool, bottom: ?types.Color) [4]f32 {
         }
     };
     return .{ d, 1, q.b(c.r) * 256 + q.b(c.g), q.b(c.b) * 256 + q.b(c.a) };
+}
+
+/// A quad's gradient of many stops (`Style.gradient_stops`): uv's y 2, z
+/// where its data starts in the frame's gradients, w how many stops.
+/// The data (`gradientData`) is a header (the anchor's y from the quad's
+/// top and its height, in points, and the count), then each stop's `at`
+/// and its color (straight alpha).
+pub fn gradientStopsUv(dashed: bool, at: usize, count: usize) [4]f32 {
+    return .{ if (dashed) 1 else 0, 2, @floatFromInt(at), @floatFromInt(count) };
+}
+
+/// Appends a gradient's data to `out` (`gradientStopsUv`).
+pub fn gradientData(gpa: std.mem.Allocator, out: *std.ArrayList([4]f32), stops: []const types.GradientStop, anchor_y: f32, anchor_h: f32, opacity: f32) !usize {
+    const at = out.items.len;
+    try out.append(gpa, .{ anchor_y, anchor_h, @floatFromInt(stops.len), 0 });
+    for (stops) |st| {
+        try out.append(gpa, .{ st.at, 0, 0, 0 });
+        try out.append(gpa, color4(st.color.alpha(opacity)));
+    }
+    return at;
+}
+
+/// The color of a gradient of many stops `y` points below its quad's top,
+/// straight alpha: what `shader.metal`'s `gradient_stops` computes.
+pub fn gradientAt(data: []const [4]f32, uv: [4]f32, y: f32) [4]f32 {
+    const at: usize = @intFromFloat(uv[2]);
+    if (at >= data.len) return .{ 0, 0, 0, 0 };
+    const h = data[at];
+    const n: usize = @min(@as(usize, @intFromFloat(h[2])), (data.len - at - 1) / 2);
+    if (n == 0) return .{ 0, 0, 0, 0 };
+    const t = (y - h[0]) / @max(h[1], 1e-4);
+    if (t <= data[at + 1][0]) return data[at + 2];
+    for (1..n) |k| {
+        const p0 = data[at + 1 + 2 * (k - 1)][0];
+        const p1 = data[at + 1 + 2 * k][0];
+        if (t <= p1) {
+            const c0 = data[at + 2 + 2 * (k - 1)];
+            const c1 = data[at + 2 + 2 * k];
+            const f = (t - p0) / @max(p1 - p0, 1e-6);
+            return .{ c0[0] + (c1[0] - c0[0]) * f, c0[1] + (c1[1] - c0[1]) * f, c0[2] + (c1[2] - c0[2]) * f, c0[3] + (c1[3] - c0[3]) * f };
+        }
+    }
+    return data[at + 2 * n];
 }
 
 /// `gradientUv`'s bottom color, unpacked (straight alpha).

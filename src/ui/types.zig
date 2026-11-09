@@ -143,6 +143,13 @@ pub const Weight = enum {
     }
 };
 
+/// One color of a gradient of many stops (`Style.gradient_stops`), at `at`
+/// (0 the anchor's top, 1 its bottom).
+pub const GradientStop = struct {
+    at: f32,
+    color: Color,
+};
+
 pub const Shadow = struct {
     color: Color = .{ .a = 0.18 },
     blur: f32 = 12,
@@ -282,6 +289,15 @@ pub const Style = struct {
     /// The background fades from `background` at the top to this at the
     /// bottom (a lit bar, a button's sheen), in 8-bit steps.
     gradient: ?Color = null,
+    /// A vertical gradient of many stops instead (a meter's green, yellow
+    /// and red), interpolated in full precision; with a background, it
+    /// takes the background's place. Its `at`s run 0 to 1 down
+    /// `gradient_anchor`.
+    gradient_stops: []const GradientStop = &.{},
+    /// What the stops are laid along, from the box's own top left (only y
+    /// and h count): a fill that is part of a track (a meter's level)
+    /// shows the track's colors where it is. Null: the box itself.
+    gradient_anchor: ?Rect = null,
     border: ?Color = null,
     border_width: f32 = 1,
     /// Dashed: dashes twice the border's width, gaps once it, spaced evenly

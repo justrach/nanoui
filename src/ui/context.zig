@@ -151,6 +151,8 @@ pub const Context = struct {
     scroll_holding: bool = false,
     /// The textures this frame shows (`ui.texture`), by slot.
     textures: std.ArrayList(@import("gpu.zig").Texture) = .empty,
+    /// The frame's gradients of many stops (`gpu.gradientData`).
+    gradients: std.ArrayList([4]f32) = .empty,
     edits: std.AutoHashMapUnmanaged(u64, EditState) = .empty,
     /// The largest scroll offset of each scrolling box in the last layout
     /// (follow_end and scroll-linked motion both read it).
@@ -278,6 +280,7 @@ pub const Context = struct {
     pub fn deinit(c: *Context) void {
         c.arena.deinit();
         c.textures.deinit(c.gpa);
+        c.gradients.deinit(c.gpa);
         c.nodes.deinit(c.gpa);
         c.stack.deinit(c.gpa);
         c.a11y_items.deinit(c.gpa);
@@ -337,6 +340,7 @@ pub const Context = struct {
         scroll_mod.updateScrollbarDrag(c);
         _ = c.arena.reset(.retain_capacity);
         c.textures.clearRetainingCapacity();
+        c.gradients.clearRetainingCapacity();
         c.nodes.clearRetainingCapacity();
         c.stack.clearRetainingCapacity();
         c.next_hits.clearRetainingCapacity();

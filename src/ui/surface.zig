@@ -80,6 +80,11 @@ pub const Surface = struct {
     resizing: bool = false,
     cursor: ctx_mod.Cursor = .arrow,
     custom_cursor: ?*anyopaque = null,
+<<<<<<< HEAD
+=======
+    /// The app's GPU passes before each frame's (`gpu.BeforeEncode`).
+    before_encode: ?@import("gpu.zig").BeforeEncode = null,
+>>>>>>> refs/prs/pr-146
     cursor_dirty: bool = false,
     theme_override: ?Theme = null,
     cached_theme: Theme = Theme.light,
@@ -450,6 +455,8 @@ pub const Surface = struct {
         if (atlas_reset) self.renderer.waitIdle();
         self.renderer.syncImages(&self.text.images);
         self.renderer.textures = c.textures.items;
+        self.renderer.gradients = c.gradients.items;
+        self.renderer.before_encode = self.before_encode;
         const clear = if (self.transparent) types.Color.transparent else c.theme.background;
         self.renderer.setBackdrop(clear);
         const present_at = if (target_in > 0) target_in else if (self.last_present_target > 0) @max(wall_now, self.last_present_target + dur) else wall_now;
@@ -549,27 +556,8 @@ pub const Surface = struct {
         }
     }
 
-    pub fn updateCursor(self: *Surface) void {
-        if (self.transparent and self.ctx.inStageHoleAt(self.ctx.input.mouse)) {
-            self.cursor_dirty = true;
-            return;
-        }
-        const want: ctx_mod.Cursor = self.ctx.cursor orelse if (self.ctx.cursor_text) .text else if (self.ctx.cursor_hand) .hand else .arrow;
-        const custom = if (want == .custom) self.ctx.custom_cursor else null;
-        if (want == self.cursor and custom == self.custom_cursor and !self.cursor_dirty) return;
-        self.cursor = want;
-        self.custom_cursor = custom;
-        self.cursor_dirty = false;
-        self.applyCursor();
-    }
-
-    pub fn applyCursor(self: *Surface) void {
-        if (self.cursor == .custom) if (self.custom_cursor) |cur| {
-            return objc.msg(void, @as(objc.Object, @ptrCast(cur)), "set", .{});
-        };
-        const name = @import("surface_cursor.zig").name(self.cursor);
-        objc.msg(void, objc.msg(objc.Object, objc.class("NSCursor"), name, .{}), "set", .{});
-    }
+    pub const updateCursor = @import("surface_pointer.zig").updateCursor;
+    pub const applyCursor = @import("surface_pointer.zig").applyCursor;
 
     /// After a frame: a box newly focused takes the keyboard for the view
     /// (`focusNext` while a page had it), and the hot box's help shows.

@@ -396,7 +396,7 @@ vec4 shade() {
     }
     // Premultiplied: the border is laid over the fill (see shader.metal).
     vec4 fill = i_color;
-    if (i_uv.y > 0.5) {
+    if (i_uv.y > 0.5 && i_uv.y < 1.5) {
         float gr = floor(i_uv.z / 256.0), gb = floor(i_uv.w / 256.0);
         vec4 bottom = vec4(gr, i_uv.z - gr * 256.0, gb, i_uv.w - gb * 256.0) / 255.0;
         fill = mix(fill, bottom, clamp(v_local.y / max(i_rect.w, 1e-4), 0.0, 1.0));

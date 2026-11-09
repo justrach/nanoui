@@ -394,7 +394,7 @@ float4 shade(Varyings v) {
     }
     // Premultiplied: the border is laid over the fill (see shader.metal).
     float4 fill = v.i_color;
-    if (v.i_uv.y > 0.5) {
+    if (v.i_uv.y > 0.5 && v.i_uv.y < 1.5) {
         float gr = floor(v.i_uv.z / 256.0), gb = floor(v.i_uv.w / 256.0);
         float4 bottom = float4(gr, v.i_uv.z - gr * 256.0, gb, v.i_uv.w - gb * 256.0) / 255.0;
         fill = lerp(fill, bottom, saturate(v.v_local.y / max(v.i_rect.w, 1e-4)));

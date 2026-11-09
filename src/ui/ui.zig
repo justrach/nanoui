@@ -144,6 +144,26 @@ pub const Canvas = @import("draw.zig").Canvas;
 pub const Stroke = @import("draw.zig").Stroke;
 pub const triangulate = @import("draw.zig").triangulate;
 pub const Texture = @import("gpu.zig").Texture;
+/// A texture's pixels, their range, matrix and transfer (`Texture`).
+pub const TextureFormat = @import("gpu.zig").Format;
+pub const VideoRange = @import("gpu.zig").Range;
+pub const VideoMatrix = @import("gpu.zig").Matrix;
+pub const VideoTransfer = @import("gpu.zig").Transfer;
+/// A 3D LUT for a texture's colour stage (`ui.lut`).
+pub const Lut = @import("gpu.zig").Lut;
+pub const lut = @import("ui_gpu.zig").lut;
+/// A texture showing a CVPixelBuffer, its format, range, matrix and
+/// transfer read from the buffer (Apple platforms).
+pub const pixelBufferTexture = @import("pixel_buffer.zig").texture;
+/// The app's own GPU passes before each frame's (`Surface.before_encode`).
+pub const BeforeEncode = @import("gpu.zig").BeforeEncode;
+pub const metalDevice = @import("ui_gpu.zig").metalDevice;
+/// Cursors from the app's pixels (`Cursor.custom`).
+pub const makeCursor = @import("ui_gpu.zig").makeCursor;
+pub const setCursor = @import("ui_gpu.zig").setCursor;
+pub const freeCursor = @import("ui_gpu.zig").freeCursor;
+/// One color of a gradient of many stops (`Style.gradient_stops`).
+pub const GradientStop = types.GradientStop;
 pub const ImageOptions = widgets.ImageOptions;
 /// Where a picture comes from: encoded bytes, or premultiplied BGRA pixels.
 pub const ImageSource = @import("images.zig").Source;
@@ -306,6 +326,11 @@ test {
     _ = @import("tests_multiline.zig");
     _ = @import("tests_handles.zig");
     _ = @import("tests_texture.zig");
+    _ = @import("tests_texture_color.zig");
+    _ = @import("tests_lut.zig");
+    _ = @import("tests_gpu_hook.zig");
+    _ = @import("color.zig");
+    _ = @import("ui_gpu.zig");
     _ = @import("tests_hole.zig");
     _ = @import("tests_canvas.zig");
     _ = @import("triangulate.zig");

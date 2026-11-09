@@ -11,6 +11,7 @@ const Source = pictures_mod.Source;
 const types = @import("types.zig");
 const gpu = @import("gpu.zig");
 const glass = @import("glass.zig");
+const pic = @import("raster_picture.zig");
 
 /// The glyph atlas, as the shader samples it: one byte per texel.
 pub const Mask = struct {
@@ -24,8 +25,11 @@ pub const Mask = struct {
 pub const Pictures = struct {
     pixels: []const u8 = &.{},
     size: u32 = 0,
-    /// The frame's textures (`ui.texture`): their `bgra` is drawn.
+    /// The frame's textures (`ui.texture`): their `bgra` is drawn, or
+    /// their pixel buffer's planes made display sRGB (`texture_cpu.zig`).
     textures: []const gpu.Texture = &.{},
+    /// The frame's gradients of many stops (`Context.gradients`).
+    gradients: []const [4]f32 = &.{},
 };
 
 /// Draws `instances` over `clear` into `out` (sized `out.width` ×
@@ -292,16 +296,16 @@ fn drawOne(out: gpu.Pixels, i: *const gpu.Instance, mask: Mask, pictures: Pictur
     const b: [4]usize = .{ @max(all[0], region[0]), @max(all[1], region[1]), @min(all[2], region[2]), @min(all[3], region[3]) };
     if (b[2] <= b[0] or b[3] <= b[1]) return;
     if (i.kind == gpu.Kind.text) return glyph(out, i, mask, scale, b);
-    if (i.kind == gpu.Kind.image) return picture(out, i, .atlas(pictures), scale, b);
+    if (i.kind == gpu.Kind.image) return pic.picture(out, i, .atlas(pictures), scale, b);
     if (i.kind == gpu.Kind.texture) {
         const slot: usize = @intFromFloat(i.border_width);
-        if (slot < pictures.textures.len) picture(out, i, .texture(pictures.textures[slot]), scale, b);
+        if (slot < pictures.textures.len) pic.texture(out, i, pictures.textures[slot], scale, b);
         return;
     }
     if (i.kind == gpu.Kind.shadow or i.kind == gpu.Kind.shadow_out) return shadow(out, i, scale, b);
     if (i.kind == gpu.Kind.glass) return pane(out, i, scale, b);
     if (i.kind == gpu.Kind.segment or i.kind == gpu.Kind.triangle or i.kind == gpu.Kind.hole) return shapes.draw(out, i, scale, b);
-    quad(out, i, scale, b);
+    quad(out, i, pictures.gradients, scale, b);
 }
 
 /// Blends a premultiplied color over the pixel at byte `at`.
@@ -394,7 +398,7 @@ fn mixColor(a: [4]f32, b: [4]f32, t_in: f32) [4]f32 {
     return .{ a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t, a[3] + (b[3] - a[3]) * t };
 }
 
-fn quad(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize) void {
+fn quad(out: gpu.Pixels, i: *const gpu.Instance, gradients: []const [4]f32, scale: f32, b: [4]usize) void {
     const hw = i.rect[2] * 0.5;
     const hh = i.rect[3] * 0.5;
     const cx = i.rect[0] + hw;
@@ -403,7 +407,9 @@ fn quad(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize) void {
     const r: f32 = if (i.radius < 0) -r_abs else r_abs;
     const bw = i.border_width;
     const has_border = bw > 0 and i.border_color[3] > 0;
-    const grad = i.uv[1] > 0.5;
+    // A gradient of many stops (uv's y 2), or of two (1).
+    const stops = i.uv[1] > 1.5;
+    const grad = i.uv[1] > 0.5 and !stops;
     const bottom = if (grad) gpu.gradientBottom(i.uv) else i.color;
     var c = i.color;
     const bc = i.border_color;
@@ -418,11 +424,13 @@ fn quad(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize) void {
         const row = y * out.width * 4;
         const inner_y = !rot and @abs(wy - cy) < hh - solid;
         if (grad and !rot) c = mixColor(i.color, bottom, (wy - i.rect[1]) / @max(i.rect[3], 1e-4));
+        if (stops and !rot) c = gpu.gradientAt(gradients, i.uv, wy - i.rect[1]);
         for (b[0]..b[2]) |x| {
             const wx = (@as(f32, @floatFromInt(x)) + 0.5) * inv;
             const u = unrotate(i, wx, wy);
             if (rot and (u[0] < i.rect[0] or u[1] < i.rect[1] or u[0] > i.rect[0] + i.rect[2] or u[1] > i.rect[1] + i.rect[3])) continue;
             if (grad and rot) c = mixColor(i.color, bottom, (u[1] - i.rect[1]) / @max(i.rect[3], 1e-4));
+            if (stops and rot) c = gpu.gradientAt(gradients, i.uv, u[1] - i.rect[1]);
             const pxl = u[0] - cx;
             const py = u[1] - cy;
             const cut = clipCover(i, wx, wy, inv);

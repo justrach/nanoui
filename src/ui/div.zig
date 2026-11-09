@@ -142,6 +142,12 @@ pub const Div = struct {
     pub fn gradient(d: Div, color: Color) Div {
         return d.set("gradient", color);
     }
+    /// The background is a gradient of many stops down `anchor` (from
+    /// the box's top left; null the box itself): `Style.gradient_stops`.
+    pub fn gradientStops(d: Div, stops: []const types.GradientStop, anchor: ?types.Rect) Div {
+        _ = d.set("gradient_anchor", anchor);
+        return d.set("gradient_stops", stops);
+    }
     pub fn border(d: Div, color: Color) Div {
         return d.set("border", @as(?Color, color));
     }
