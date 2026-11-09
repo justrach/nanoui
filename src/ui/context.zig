@@ -188,6 +188,8 @@ pub const Context = struct {
     building: bool = false,
     right_press: bool = false,
     drag_request: ?@import("context_hooks.zig").DragRequest = null,
+    /// A drag inside the window carrying the app's value (`ui.dragSource`).
+    payload_drag: @import("drag_payload.zig").State = .{},
     close_request: bool = false,
     focusable_ids: std.ArrayList(u64) = .empty,
     last_focusable_ids: std.ArrayList(u64) = .empty,
