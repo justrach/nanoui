@@ -21,11 +21,35 @@ pub const State = struct {
     /// The text field the keyboard was brought up for (0: none).
     keyboard_for: u64 = 0,
 
+    /// The text last known to be in the EditText (mirrored there from the
+    /// field, or read back from it): the base the IME composed on. C heap,
+    /// as the field's text may be long.
+    mirror: std.ArrayList(u8) = .empty,
+    have_mirror: bool = false,
+    /// A read asked of the EditText but not yet taken, and the epoch it was
+    /// asked at (a write bumps the epoch, so a read that ran before it is
+    /// stale and dropped).
+    read_in_flight: bool = false,
+    read_epoch: u32 = 0,
+    epoch: u32 = 0,
+    /// Ops to give the focused field next frame (the IME's text), and the
+    /// text they insert (owned, kept alive until the frame runs).
+    sync_pending: bool = false,
+    sync_ops: [2]ctx_mod.TextOp = undefined,
+    sync_text: std.ArrayList(u8) = .empty,
+    /// Applying the IME's text runs a frame; guards against re-entry.
+    applying: bool = false,
+    /// Reads only every other frame: a getText that often is enough.
+    tick: u1 = 0,
+
     pub fn init(_: std.mem.Allocator) State {
         return .{};
     }
 
-    pub fn deinit(_: *State, _: std.mem.Allocator) void {}
+    pub fn deinit(s: *State, _: std.mem.Allocator) void {
+        s.mirror.deinit(std.heap.c_allocator);
+        s.sync_text.deinit(std.heap.c_allocator);
+    }
 };
 
 const KEYCODE_BACK = 4;
@@ -200,10 +224,77 @@ pub fn syncFocus(s: *Surface) void {
     if (want == s.keys.keyboard_for) return;
     const had = s.keys.keyboard_for != 0;
     s.keys.keyboard_for = want;
+    // A different field (or none): the mirror no longer describes it.
+    s.keys.have_mirror = false;
+    s.keys.read_in_flight = false;
+    s.keys.sync_pending = false;
+    ime.dropRead();
     if (want != 0 and !had) {
         _ = activity.onUiThread(null, ime.show);
     } else if (want == 0) {
         _ = activity.onUiThread(null, ime.hide);
+    }
+}
+
+/// Keeps the hidden EditText and the focused nanoui field in step, so an
+/// input method's composed text (Chinese, Japanese, Korean, emoji, voice)
+/// reaches the field, and the field's own edits reach the IME. Runs on the
+/// app's thread after a frame; the View reads and writes it posts run on
+/// Java's. One direction a frame: read the IME's text, or push the field's.
+pub fn syncText(s: *Surface) void {
+    const c_alloc = std.heap.c_allocator;
+    const st = &s.keys;
+    if (st.keyboard_for == 0) return;
+    if (st.applying) return;
+    const f = s.ctx.focused_text orelse return;
+    st.tick +%= 1;
+    // While a field has the keyboard, keep a frame coming: a candidate tap
+    // touches the IME's own window, not this view, so without a tick the
+    // app would sit idle and show the commit only on the next stray frame.
+    s.app.wantFrameIn(0.033);
+
+    // A read landed: the IME's text, if it changed the mirror.
+    if (st.read_in_flight) {
+        if (ime.takeRead()) |text| {
+            defer c_alloc.free(text);
+            st.read_in_flight = false;
+            // A read asked before a write is stale: the write's text is
+            // newer than what it saw.
+            if (st.read_epoch == st.epoch and st.have_mirror and !std.mem.eql(u8, text, st.mirror.items)) {
+                st.mirror.clearRetainingCapacity();
+                st.mirror.appendSlice(c_alloc, text) catch {};
+                st.have_mirror = true;
+                // Hand it to the field on the next frame (a tick is always
+                // coming while the keyboard is up), not a nested one here.
+                st.sync_text.clearRetainingCapacity();
+                st.sync_text.appendSlice(c_alloc, text) catch {};
+                st.sync_ops[0] = .{ .command = .select_all };
+                st.sync_ops[1] = .{ .insert = st.sync_text.items };
+                st.sync_pending = true;
+                s.app.wantFrame();
+                return;
+            }
+        } else {
+            return; // not landed yet
+        }
+    }
+
+    // The field changed (typing, a paste): give the IME its new base.
+    if (!st.have_mirror or !std.mem.eql(u8, f.text, st.mirror.items)) {
+        st.mirror.clearRetainingCapacity();
+        st.mirror.appendSlice(c_alloc, f.text) catch {};
+        st.have_mirror = true;
+        st.epoch +%= 1;
+        ime.postWrite(f.text, f.caret);
+        return;
+    }
+
+    // Ask the EditText for its text, one read at a time. Every frame: a
+    // commit becomes the field within a frame or two, no visible lag.
+    if (!st.read_in_flight and !st.sync_pending and !ime.readPending()) {
+        st.read_epoch = st.epoch;
+        st.read_in_flight = true;
+        ime.requestRead();
     }
 }
 
