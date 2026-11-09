@@ -274,16 +274,34 @@ fn doCommand(obj: objc.Object, _: objc.SEL, sel: objc.SEL) callconv(.c) void {
     }
 }
 
+/// An Edit-menu action with no field focused is offered to the view as its
+/// shortcut, as `paste:` is (surface_events.zig): the menu always takes
+/// ⌘Z/⌘C/⌘X/⌘A before `keyDown:`, so an app's own (an editor's undo, copying
+/// clips) would otherwise never see them. True if the view took it.
+fn offerShortcut(s: *Surface, key: u21, shift: bool) bool {
+    s.ctx.shortcut_taken = false;
+    s.ctx.input.shortcut = .{ .key = key, .cmd = true, .shift = shift };
+    s.frame();
+    s.ctx.input.shortcut = null;
+    return s.ctx.shortcut_taken;
+}
+
 fn undoAction(obj: objc.Object, _: objc.SEL, _: ?objc.Object) callconv(.c) void {
     const s = objc.getZig(Surface, obj) orelse return;
-    if (s.ctx.focused_text == null) return;
+    if (s.ctx.focused_text == null) {
+        _ = offerShortcut(s, 'z', false);
+        return;
+    }
     s.ctx.undo_op = .undo;
     if (!s.text_queue.collecting) flush(s);
 }
 
 fn redoAction(obj: objc.Object, _: objc.SEL, _: ?objc.Object) callconv(.c) void {
     const s = objc.getZig(Surface, obj) orelse return;
-    if (s.ctx.focused_text == null) return;
+    if (s.ctx.focused_text == null) {
+        _ = offerShortcut(s, 'z', true);
+        return;
+    }
     s.ctx.undo_op = .redo;
     if (!s.text_queue.collecting) flush(s);
 }
@@ -302,11 +320,13 @@ pub fn selectAll(s: *Surface) void {
 
 fn copyAction(obj: objc.Object, _: objc.SEL, _: ?objc.Object) callconv(.c) void {
     const s = objc.getZig(Surface, obj) orelse return;
+    if (s.ctx.focused_text == null and offerShortcut(s, 'c', false)) return;
     copy(s);
 }
 
 fn cutAction(obj: objc.Object, _: objc.SEL, _: ?objc.Object) callconv(.c) void {
     const s = objc.getZig(Surface, obj) orelse return;
+    if (s.ctx.focused_text == null and offerShortcut(s, 'x', false)) return;
     cut(s);
 }
 
@@ -317,6 +337,7 @@ fn deleteAction(obj: objc.Object, _: objc.SEL, _: ?objc.Object) callconv(.c) voi
 
 fn selectAllAction(obj: objc.Object, _: objc.SEL, _: ?objc.Object) callconv(.c) void {
     const s = objc.getZig(Surface, obj) orelse return;
+    if (s.ctx.focused_text == null and offerShortcut(s, 'a', false)) return;
     selectAll(s);
 }
 
