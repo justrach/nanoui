@@ -37,6 +37,8 @@ pub const State = struct {
     sync_pending: bool = false,
     sync_ops: [2]ctx_mod.TextOp = undefined,
     sync_text: std.ArrayList(u8) = .empty,
+    /// Applying the IME's text runs a frame; guards against re-entry.
+    applying: bool = false,
     /// Reads only every other frame: a getText that often is enough.
     tick: u1 = 0,
 
@@ -243,8 +245,13 @@ pub fn syncText(s: *Surface) void {
     const c_alloc = std.heap.c_allocator;
     const st = &s.keys;
     if (st.keyboard_for == 0) return;
+    if (st.applying) return;
     const f = s.ctx.focused_text orelse return;
     st.tick +%= 1;
+    // While a field has the keyboard, keep a frame coming: a candidate tap
+    // touches the IME's own window, not this view, so without a tick the
+    // app would sit idle and show the commit only on the next stray frame.
+    s.app.wantFrameIn(0.033);
 
     // A read landed: the IME's text, if it changed the mirror.
     if (st.read_in_flight) {
@@ -257,7 +264,8 @@ pub fn syncText(s: *Surface) void {
                 st.mirror.clearRetainingCapacity();
                 st.mirror.appendSlice(c_alloc, text) catch {};
                 st.have_mirror = true;
-                // Hand it to the field next frame as a replace.
+                // Hand it to the field on the next frame (a tick is always
+                // coming while the keyboard is up), not a nested one here.
                 st.sync_text.clearRetainingCapacity();
                 st.sync_text.appendSlice(c_alloc, text) catch {};
                 st.sync_ops[0] = .{ .command = .select_all };
