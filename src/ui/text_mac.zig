@@ -470,7 +470,8 @@ pub const TextSystem = struct {
         const t = gop.value_ptr.*;
         var gs: [256]u16 = undefined;
         var xs: [256]f32 = undefined;
-        const w = t.layout(self.gpa, s, gs[0..s.len], xs[0..s.len]) orelse return null;
+        var w: f32 = 0;
+        if (!t.layout(self.gpa, s, gs[0..s.len], xs[0..s.len], &w)) return null;
         const fid = self.fontId(@ptrCast(t.run_font orelse return null));
         const glyphs = try self.gpa.alloc(Glyph, s.len);
         for (glyphs, gs[0..s.len], xs[0..s.len], 0..) |*g, id, x, i| g.* = .{ .font = fid, .glyph = id, .x = x, .y = 0, .index = @intCast(i) };
