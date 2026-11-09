@@ -482,10 +482,20 @@ fn onCommit(_: *anyopaque, str: [*:0]const u8, data: ?*anyopaque) callconv(.c) v
 /// GDK key values of the keys that are not text.
 fn keyOf(keyval: c_uint) ?ctx_mod.Key {
     return switch (keyval) {
-        0xff08 => .backspace, 0xffff => .delete, 0xff51 => .left, 0xff52 => .up, 0xff53 => .right, 0xff54 => .down,
-        0xff50 => .home, 0xff57 => .end, 0xff0d, 0xff8d => .enter, 0xff09, 0xfe20 => .tab, 0xff1b => .escape,
-        0xff55 => .page_up, 0xff56 => .page_down,
-        0xffbe...0xffc9 => @enumFromInt(@intFromEnum(ctx_mod.Key.f1) + (keyval - 0xffbe)),
+        0xff08 => .backspace,
+        0xffff => .delete,
+        0xff51 => .left,
+        0xff52 => .up,
+        0xff53 => .right,
+        0xff54 => .down,
+        0xff50 => .home,
+        0xff57 => .end,
+        0xff0d, 0xff8d => .enter,
+        0xff09, 0xfe20 => .tab,
+        0xff1b => .escape,
+        0xff55 => .page_up,
+        0xff56 => .page_down,
+        0xffbe...0xffc9 => @fromBackingInt(@intCast(@backingInt(ctx_mod.Key.f1) + (keyval - 0xffbe))),
         else => null,
     };
 }

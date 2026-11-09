@@ -118,20 +118,20 @@ pub fn assemble(gpa: std.mem.Allocator, flavor: u32, tables: []Table) Error![]u8
     var at: usize = 12 + 16 * tables.len;
     var head_at: ?usize = null;
     for (tables, 0..) |t, i| {
-        const rec = out[12 + 16 * i..][0..16];
+        const rec = out[12 + 16 * i ..][0..16];
         std.mem.writeInt(u32, rec[0..4], t.tag, .big);
         @memcpy(out[at..][0..t.data.len], t.data);
         if (t.tag == tag("head") and t.data.len >= 12) {
             head_at = at;
             // The adjustment is worked out with it as zero.
-            @memset(out[at + 8..][0..4], 0);
+            @memset(out[at + 8 ..][0..4], 0);
         }
         std.mem.writeInt(u32, rec[4..8], checksum(out[at..][0..t.data.len]), .big);
         std.mem.writeInt(u32, rec[8..12], @intCast(at), .big);
         std.mem.writeInt(u32, rec[12..16], @intCast(t.data.len), .big);
         at += (t.data.len + 3) & ~@as(usize, 3);
     }
-    if (head_at) |h| std.mem.writeInt(u32, out[h + 8..][0..4], 0xB1B0AFBA -% checksum(out), .big);
+    if (head_at) |h| std.mem.writeInt(u32, out[h + 8 ..][0..4], 0xB1B0AFBA -% checksum(out), .big);
     return out;
 }
 
@@ -212,7 +212,7 @@ pub const Stream = struct {
     pub fn take(s: *Stream, n: usize) Error![]const u8 {
         if (n > s.left()) return error.Corrupt;
         s.at += n;
-        return s.d[s.at - n..][0..n];
+        return s.d[s.at - n ..][0..n];
     }
 
     /// UIntBase128.

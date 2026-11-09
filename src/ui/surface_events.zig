@@ -279,9 +279,6 @@ fn scrollWheel(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) v
     }
 }
 
-
-
-
 fn backingChanged(obj: objc.Object, _: objc.SEL) callconv(.c) void {
     const s = surfaceOf(obj) orelse return;
     s.updateGeometry();

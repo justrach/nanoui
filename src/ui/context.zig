@@ -326,7 +326,9 @@ pub const Context = struct {
 
     pub fn alloc(c: *Context) std.mem.Allocator {
         if (@import("../rt.zig").enabled) {
-            const Ext = struct { extern fn nanoui_rt_ctx_alloc(c: *Context, out: *std.mem.Allocator) callconv(.c) void; };
+            const Ext = struct {
+                extern fn nanoui_rt_ctx_alloc(c: *Context, out: *std.mem.Allocator) callconv(.c) void;
+            };
             var out: std.mem.Allocator = undefined;
             Ext.nanoui_rt_ctx_alloc(c, &out);
             return out;
@@ -336,7 +338,9 @@ pub const Context = struct {
 
     pub fn print(c: *Context, comptime fmt: []const u8, args: anytype) []const u8 {
         if (@import("../rt.zig").enabled and comptime std.mem.eql(u8, fmt, "{d}") and args.len == 1 and @typeInfo(@TypeOf(args[0])) == .int) {
-            const Ext = struct { extern fn nanoui_rt_ctx_print_i64(c: *Context, val: i64, out_ptr: *[*]const u8, out_len: *usize) callconv(.c) void; };
+            const Ext = struct {
+                extern fn nanoui_rt_ctx_print_i64(c: *Context, val: i64, out_ptr: *[*]const u8, out_len: *usize) callconv(.c) void;
+            };
             var ptr: [*]const u8 = undefined;
             var len: usize = undefined;
             Ext.nanoui_rt_ctx_print_i64(c, @intCast(args[0]), &ptr, &len);
@@ -446,7 +450,9 @@ pub const Context = struct {
     /// Opens a box; its children follow until `end`.
     pub fn open(c: *Context, style: types.Style, key: ?[]const u8) u32 {
         if (@import("../rt.zig").enabled) {
-            const Ext = struct { extern fn nanoui_rt_ctx_open(c: *Context, s: *const types.Style, kp: ?[*]const u8, kl: usize) callconv(.c) u32; };
+            const Ext = struct {
+                extern fn nanoui_rt_ctx_open(c: *Context, s: *const types.Style, kp: ?[*]const u8, kl: usize) callconv(.c) u32;
+            };
             return Ext.nanoui_rt_ctx_open(c, &style, if (key) |k| k.ptr else null, if (key) |k| k.len else 0);
         }
         return c.openImpl(style, key);
@@ -460,7 +466,9 @@ pub const Context = struct {
 
     pub fn end(c: *Context) void {
         if (@import("../rt.zig").enabled) {
-            const Ext = struct { extern fn nanoui_rt_ctx_end(c: *Context) callconv(.c) void; };
+            const Ext = struct {
+                extern fn nanoui_rt_ctx_end(c: *Context) callconv(.c) void;
+            };
             return Ext.nanoui_rt_ctx_end(c);
         }
         c.endImpl();
@@ -474,7 +482,9 @@ pub const Context = struct {
     /// Adds a box without children.
     pub fn leaf(c: *Context, style: types.Style, content: Content, key: ?[]const u8) u32 {
         if (@import("../rt.zig").enabled) {
-            const Ext = struct { extern fn nanoui_rt_ctx_leaf(c: *Context, s: *const types.Style, ct: *const Content, kp: ?[*]const u8, kl: usize) callconv(.c) u32; };
+            const Ext = struct {
+                extern fn nanoui_rt_ctx_leaf(c: *Context, s: *const types.Style, ct: *const Content, kp: ?[*]const u8, kl: usize) callconv(.c) u32;
+            };
             return Ext.nanoui_rt_ctx_leaf(c, &style, &content, if (key) |k| k.ptr else null, if (key) |k| k.len else 0);
         }
         return c.leafImpl(style, content, key);
@@ -544,13 +554,7 @@ pub const Context = struct {
         if (c.waker) |w| w.wake(w.ctx);
     }
 
-    /// Whether the pointer is over text that selects (as last painted):
-    /// for the cursor when it moves without a frame being drawn.
-    pub fn pointerOverText(c: *Context) bool {
-        for (c.selection.lines.items) |r| if (r.contains(c.input.mouse)) return true;
-        return c.selection.dragging;
-    }
-
+    pub const pointerOverText = hit_mod.pointerOverText;
     pub const capScroll = scroll_mod.capScroll;
     pub const scrollMoved = scroll_mod.scrollMoved;
     /// Asks for another frame within `seconds`: for what changes now and
@@ -568,28 +572,9 @@ pub const Context = struct {
     pub const applyScroll = scroll_mod.applyScroll;
     pub const wheelAt = scroll_mod.wheelAt;
     pub const hasOverscroll = scroll_mod.hasOverscroll;
-
-    pub fn pointerUp(c: *Context) void {
-        c.input.down = false;
-        c.input.released = true;
-    }
-
-    /// The secondary button went down (`Input.secondary`): no press, and
-    /// the focus stays where it was.
-    pub fn secondaryDown(c: *Context) void {
-        c.updateHot();
-        c.input.secondary = true;
-    }
-
-    pub fn pointerDown(c: *Context) void {
-        c.updateHot();
-        c.input.down = true;
-        c.input.pressed = true;
-        c.right_press = c.input.button == .right or (@import("keys.zig").mac and c.input.button == .left and c.input.ctrl);
-        if (scroll_mod.tryPressScrollbar(c)) return;
-        if (c.hot == 0) c.focus = 0;
-    }
-
+    pub const pointerUp = hit_mod.pointerUp;
+    pub const secondaryDown = hit_mod.secondaryDown;
+    pub const pointerDown = hit_mod.pointerDown;
     pub const addStageHole = hooks.addStageHole;
     pub const addStageHoleNode = hooks.addStageHoleNode;
     pub const hitAt = hooks.hitAt;

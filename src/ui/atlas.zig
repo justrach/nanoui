@@ -155,7 +155,6 @@ pub const Atlas = struct {
         return s;
     }
 
-
     fn rasterize(a: *Atlas, font: cf.CTFontRef, g: u16, bin: u8, dilation: u8, stroke: f32) ?Sprite {
         const scale = a.scale;
         var glyphs = [1]u16{g};

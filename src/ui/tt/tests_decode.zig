@@ -208,7 +208,7 @@ test "what isn't a font says so" {
     defer gpa.free(plain);
     const bad = try gpa.dupe(u8, plain);
     defer gpa.free(bad);
-    std.mem.writeInt(u32, bad[12 + 8..][0..4], 0xfffffff0, .big);
+    std.mem.writeInt(u32, bad[12 + 8 ..][0..4], 0xfffffff0, .big);
     try std.testing.expectError(error.Corrupt, sfnt.validate(bad));
 }
 
@@ -225,7 +225,7 @@ test "a glyph of a hostile font can't nest or repeat components without end" {
     var p: usize = at + 10;
     for (0..8) |_| {
         std.mem.writeInt(u16, data[p..][0..2], 0x0020, .big); // more follow, byte args
-        std.mem.writeInt(u16, data[p + 2..][0..2], 0, .big);
+        std.mem.writeInt(u16, data[p + 2 ..][0..2], 0, .big);
         p += 6;
     }
     _ = outlinePoints(&f, 0);

@@ -15,7 +15,7 @@ pub fn impact(weight: Impact) void {
     if (!ios) return;
     const pool = objc.Pool.push();
     defer pool.pop();
-    const g = objc.msg(objc.Object, objc.alloc("UIImpactFeedbackGenerator"), "initWithStyle:", .{@as(objc.NSInteger, @intFromEnum(weight))});
+    const g = objc.msg(objc.Object, objc.alloc("UIImpactFeedbackGenerator"), "initWithStyle:", .{@as(objc.NSInteger, @backingInt(weight))});
     defer objc.release(g);
     objc.msg(void, g, "impactOccurred", .{});
 }
@@ -37,7 +37,7 @@ pub fn notify(n: Notice) void {
     defer pool.pop();
     const g = objc.new("UINotificationFeedbackGenerator");
     defer objc.release(g);
-    objc.msg(void, g, "notificationOccurred:", .{@as(objc.NSInteger, @intFromEnum(n))});
+    objc.msg(void, g, "notificationOccurred:", .{@as(objc.NSInteger, @backingInt(n))});
 }
 
 test "no haptic engine: calls do nothing" {

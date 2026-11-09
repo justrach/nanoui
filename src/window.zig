@@ -87,6 +87,7 @@ pub const Window = struct {
         var behavior: objc.NSUInteger = 0;
         // NSWindowCollectionBehaviorCanJoinAllSpaces | FullScreenAuxiliary.
         if (options.all_spaces) behavior |= (1 << 0) | (1 << 8);
+        if (options.stationary) behavior |= 1 << 4; // Stationary (unaffected by Exposé)
         // The Mac has no taskbar, and the Dock and Command-Tab list apps, not
         // windows: what a window can leave is Command-` and the Window menu.
         if (options.skip_taskbar) behavior |= 1 << 6; // IgnoresCycle
@@ -152,7 +153,8 @@ pub const Window = struct {
             objc.msg(void, nswindow, "setLevel:", .{@as(objc.NSInteger, 101)}); // NSPopUpMenuWindowLevel
             objc.msg(void, nswindow, "setHidesOnDeactivate:", .{objc.NO});
             // On every space, over full screen apps, out of Exposé.
-            objc.msg(void, nswindow, "setCollectionBehavior:", .{@as(objc.NSUInteger, (1 << 0) | (1 << 3) | (1 << 8))});
+            const pop_behavior: objc.NSUInteger = (1 << 0) | (1 << 3) | (1 << 8) | (if (options.stationary) @as(objc.NSUInteger, 1 << 4) else 0);
+            objc.msg(void, nswindow, "setCollectionBehavior:", .{pop_behavior});
             const content = objc.msg(objc.Object, nswindow, "contentView", .{});
             objc.msg(void, content, "setWantsLayer:", .{objc.YES});
             if (objc.msg(?objc.Object, content, "layer", .{})) |layer| {
@@ -221,6 +223,12 @@ pub const Window = struct {
         return .{ .x = f.origin.x, .y = primaryHeight() - f.origin.y - f.size.height, .width = f.size.width, .height = f.size.height };
     }
 
+    /// Pointer location in screen points from the primary screen's top left.
+    pub fn mouseLocation() [2]f64 {
+        const at = objc.msg(objc.CGPoint, objc.class("NSEvent"), "mouseLocation", .{});
+        return .{ at.x, primaryHeight() - at.y };
+    }
+
     /// The size of the window's content, without its title bar.
     pub fn contentSize(self: *Window) [2]f64 {
         const v = objc.msg(objc.Object, self.nswindow, "contentView", .{});
@@ -268,11 +276,11 @@ pub const Window = struct {
 
     /// Stacks the window at `level` (above the menu bar at `.status`).
     pub fn setLevel(self: *Window, lv: Level) void {
-        objc.msg(void, self.nswindow, "setLevel:", .{@as(objc.NSInteger, @intFromEnum(lv))});
+        objc.msg(void, self.nswindow, "setLevel:", .{@as(objc.NSInteger, @backingInt(lv))});
     }
 
     pub fn level(self: *Window) Level {
-        return @enumFromInt(@as(i32, @intCast(objc.msg(objc.NSInteger, self.nswindow, "level", .{}))));
+        return @fromBackingInt(@intCast(@as(i32, @intCast(objc.msg(objc.NSInteger, self.nswindow, "level", .{})))));
     }
 
     /// Lets clicks and the pointer through to what is behind the window.

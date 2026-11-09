@@ -9,6 +9,8 @@ const objc = @import("objc.zig");
 
 pub const Rect = struct { x: f64 = 0, y: f64 = 0, width: f64 = 0, height: f64 = 0 };
 
+const EdgeInsets = extern struct { top: f64 = 0, left: f64 = 0, bottom: f64 = 0, right: f64 = 0 };
+
 pub const Screen = struct {
     /// The display's id (NSScreenNumber, a CGDirectDisplayID): stable
     /// while it is connected.
@@ -16,6 +18,9 @@ pub const Screen = struct {
     frame: Rect,
     /// Without the menu bar and the Dock.
     visible: Rect,
+    /// The camera housing's cutout at the top of the screen, in points from
+    /// the primary screen's top left; null on displays without a notch.
+    notch: ?Rect = null,
     /// Pixels per point (2 on a Retina display).
     scale: f64,
     primary: bool,
@@ -24,6 +29,25 @@ pub const Screen = struct {
 
     pub fn name(s: *const Screen) []const u8 {
         return s.name_buf[0..s.name_len];
+    }
+
+    /// Height of the menu bar / top inset on this screen, in points.
+    pub fn menuBarHeight(s: *const Screen) f64 {
+        return @max(0, s.visible.y - s.frame.y);
+    }
+
+    /// True when this screen has a physical camera housing cutout (notch).
+    pub fn hasNotch(s: *const Screen) bool {
+        return s.notch != null;
+    }
+
+    /// Top-centered Dynamic Island / notch frame on this screen, at least as
+    /// wide and tall as the physical notch when one is present.
+    pub fn islandFrame(s: *const Screen, min_width: f64, min_height: f64) Rect {
+        const w = if (s.notch) |n| @max(min_width, n.width) else min_width;
+        const h = if (s.notch) |n| @max(min_height, n.height) else min_height;
+        const cx = if (s.notch) |n| n.x + n.width / 2 else s.frame.x + s.frame.width / 2;
+        return .{ .x = cx - w / 2, .y = s.frame.y, .width = w, .height = h };
     }
 };
 
@@ -59,13 +83,46 @@ pub fn primary() ?Screen {
     return if (got.len > 0) got[0] else null;
 }
 
+/// The active screen (`[NSScreen mainScreen]`), if there is one.
+pub fn mainScreen() ?Screen {
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    const sc = objc.msg(?objc.Object, objc.class("NSScreen"), "mainScreen", .{}) orelse return primary();
+    const all = objc.msg(objc.Object, objc.class("NSScreen"), "screens", .{});
+    const n = objc.msg(objc.NSUInteger, all, "count", .{});
+    if (n == 0) return null;
+    const primary_obj = objc.msg(objc.Object, all, "objectAtIndex:", .{@as(objc.NSUInteger, 0)});
+    const primary_h = objc.msg(objc.CGRect, primary_obj, "frame", .{}).size.height;
+    return describe(sc, primary_h, sc == primary_obj);
+}
+
+/// True only when the active Mac screen has a physical camera notch
+/// (built-in MacBook display with `safeAreaInsets.top > 0`). False on
+/// desktop Macs and external monitors.
+pub fn mainHasNotch() bool {
+    const s = mainScreen() orelse return false;
+    return s.notch != null;
+}
+
 fn describe(sc: objc.Object, primary_h: f64, is_primary: bool) Screen {
     const f = objc.msg(objc.CGRect, sc, "frame", .{});
     const v = objc.msg(objc.CGRect, sc, "visibleFrame", .{});
+    const screen_frame = flip(f, primary_h);
+    var safe_top: f64 = 0;
+    var left_aux: Rect = .{};
+    var right_aux: Rect = .{};
+    if (objc.msg(objc.BOOL, sc, "respondsToSelector:", .{objc.sel("safeAreaInsets")})) {
+        safe_top = objc.msg(EdgeInsets, sc, "safeAreaInsets", .{}).top;
+    }
+    if (safe_top > 0 and objc.msg(objc.BOOL, sc, "respondsToSelector:", .{objc.sel("auxiliaryTopLeftArea")})) {
+        left_aux = flip(objc.msg(objc.CGRect, sc, "auxiliaryTopLeftArea", .{}), primary_h);
+        right_aux = flip(objc.msg(objc.CGRect, sc, "auxiliaryTopRightArea", .{}), primary_h);
+    }
     var s: Screen = .{
         .id = displayId(sc),
-        .frame = flip(f, primary_h),
+        .frame = screen_frame,
         .visible = flip(v, primary_h),
+        .notch = computeNotch(screen_frame, safe_top, left_aux, right_aux),
         .scale = objc.msg(f64, sc, "backingScaleFactor", .{}),
         .primary = is_primary,
     };
@@ -76,6 +133,18 @@ fn describe(sc: objc.Object, primary_h: f64, is_primary: bool) Screen {
         s.name_len = @intCast(len);
     }
     return s;
+}
+
+/// Computes the camera notch rectangle from the screen's top-left `frame`,
+/// `safeAreaInsets.top`, and the menu bar areas flanking the housing.
+pub fn computeNotch(frame: Rect, safe_top: f64, left_aux: Rect, right_aux: Rect) ?Rect {
+    if (safe_top <= 0 or frame.width <= 0) return null;
+    const left_end = left_aux.x + left_aux.width;
+    if (left_aux.width > 0 and right_aux.width > 0 and right_aux.x > left_end) {
+        return .{ .x = left_end, .y = frame.y, .width = right_aux.x - left_end, .height = safe_top };
+    }
+    const fallback_w = @min(frame.width, 184.0);
+    return .{ .x = frame.x + (frame.width - fallback_w) / 2, .y = frame.y, .width = fallback_w, .height = safe_top };
 }
 
 fn displayId(sc: objc.Object) u32 {
@@ -108,4 +177,33 @@ test "screens: one at least, the first the primary, with an id, a size and a sca
     try std.testing.expectEqual(@as(f64, 0), all[0].frame.y);
     try std.testing.expectEqual(all[0].id, (byId(all[0].id) orelse return error.NotFound).id);
     try std.testing.expectEqual(all[0].id, primary().?.id);
+}
+
+test "screens: notch geometry and top-centered island frame" {
+    const frame: Rect = .{ .x = 0, .y = 0, .width = 1512, .height = 982 };
+    // External display: no safe-area top inset -> no physical notch.
+    try std.testing.expect(computeNotch(frame, 0, .{}, .{}) == null);
+    const ext: Screen = .{ .id = 1, .frame = frame, .visible = .{ .x = 0, .y = 25, .width = 1512, .height = 957 }, .scale = 2, .primary = true };
+    try std.testing.expectEqual(@as(f64, 25), ext.menuBarHeight());
+    const ext_isl = ext.islandFrame(260, 36);
+    try std.testing.expectEqual(@as(f64, (1512.0 - 260.0) / 2.0), ext_isl.x);
+    try std.testing.expectEqual(@as(f64, 0), ext_isl.y);
+    try std.testing.expectEqual(@as(f64, 260), ext_isl.width);
+
+    // Notched MacBook Pro: auxiliary areas flank a 184x38 notch.
+    const notch = computeNotch(
+        frame,
+        38,
+        .{ .x = 0, .y = 0, .width = 664, .height = 38 },
+        .{ .x = 848, .y = 0, .width = 664, .height = 38 },
+    ).?;
+    try std.testing.expectEqual(@as(f64, 664), notch.x);
+    try std.testing.expectEqual(@as(f64, 184), notch.width);
+    try std.testing.expectEqual(@as(f64, 38), notch.height);
+    const mbp: Screen = .{ .id = 2, .frame = frame, .visible = .{ .x = 0, .y = 38, .width = 1512, .height = 944 }, .notch = notch, .scale = 2, .primary = true };
+    const compact = mbp.islandFrame(160, 30);
+    // Clamped to at least the physical notch's 184x38 housing.
+    try std.testing.expectEqual(@as(f64, 184), compact.width);
+    try std.testing.expectEqual(@as(f64, 38), compact.height);
+    try std.testing.expectEqual(@as(f64, 664), compact.x);
 }

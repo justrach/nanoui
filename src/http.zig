@@ -137,8 +137,7 @@ fn Pending(comptime Ctx: type, comptime done: fn (Ctx, Response) void) type {
             defer pool.pop();
             const p = &s.answer;
             if (response) |res| {
-                if (objc.msg(objc.BOOL, res, "isKindOfClass:", .{objc.class("NSHTTPURLResponse")}) != objc.NO)
-                {
+                if (objc.msg(objc.BOOL, res, "isKindOfClass:", .{objc.class("NSHTTPURLResponse")}) != objc.NO) {
                     p.status = @intCast(std.math.clamp(objc.msg(objc.NSInteger, res, "statusCode", .{}), 0, 999));
                     s.keepHeaders(res);
                 } else p.status = 200; // A `data:` address has no HTTP in it, as on the portable path.

@@ -358,7 +358,7 @@ fn sendPlain(io: Io, job: *Job, hop: Hop) anyerror!void {
         else => |e| return e,
     };
     job.answer.body = try aw.toOwnedSlice();
-    job.answer.status = @intFromEnum(status);
+    job.answer.status = @backingInt(status);
 }
 
 test "URLs split for a request; data URLs read" {

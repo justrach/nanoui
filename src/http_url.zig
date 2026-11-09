@@ -25,7 +25,7 @@ pub fn resolve(gpa: std.mem.Allocator, base: []const u8, ref_in: []const u8) ![]
     const joined = if (ref[0] == '/')
         try gpa.dupe(u8, ref[0..ref_end])
     else
-        try std.fmt.allocPrint(gpa, "{s}{s}", .{ base_path[0 .. if (std.mem.lastIndexOfScalar(u8, base_path, '/')) |i| i + 1 else 0], ref[0..ref_end] });
+        try std.fmt.allocPrint(gpa, "{s}{s}", .{ base_path[0..if (std.mem.lastIndexOfScalar(u8, base_path, '/')) |i| i + 1 else 0], ref[0..ref_end] });
     defer gpa.free(joined);
     // At most as many segments as slashes, plus the first.
     const segments = try gpa.alloc([]const u8, std.mem.count(u8, joined, "/") + 2);

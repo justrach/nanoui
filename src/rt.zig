@@ -11,7 +11,7 @@ const types = @import("ui/types.zig");
 const Content = @import("ui/content.zig").Content;
 const hooks = @import("ui/context_hooks.zig");
 
-pub const desktop = (builtin.os.tag == .macos or builtin.os.tag == .linux or builtin.os.tag == .windows) and !builtin.abi.isAndroid();
+pub const desktop = builtin.os.tag == .macos;
 pub const enabled = desktop and !@import("build_options").in_rt and !builtin.is_test;
 
 comptime {

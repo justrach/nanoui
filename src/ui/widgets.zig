@@ -124,7 +124,9 @@ pub const ImageOptions = struct {
     key: []const u8,
     /// Encoded bytes, or caller-held premultiplied BGRA pixels. Kept by the
     /// caller while the picture is shown.
-    source: @import("images.zig").Source,
+    source: @import("images.zig").Source = .{ .encoded = "" },
+    /// Shorthand for `source = .{ .encoded = bytes }`.
+    bytes: ?[]const u8 = null,
     /// The most room it takes, in points; it keeps its proportions and is
     /// never drawn larger than its pixels at `scale`.
     max_width: f32 = 480,
@@ -166,17 +168,18 @@ pub fn imageSize(c: *Context, key_name: []const u8, bytes: []const u8) ?types.Si
 
 /// A picture; false (and nothing drawn) if its source can't be read.
 pub fn image(c: *Context, opts: ImageOptions) bool {
+    const src: @import("images.zig").Source = if (opts.bytes) |b| .{ .encoded = b } else opts.source;
     const k = @import("images.zig").Images.key(opts.key);
     // Sized from the picture's header; decoded at device size and packed only when drawn.
-    const e = c.text.images.info(k, opts.source) orelse return false;
+    const e = c.text.images.info(k, src) orelse return false;
     if (opts.box) |b| {
-        _ = c.leaf(.{ .width = .{ .px = b.w }, .height = .{ .px = b.h }, .radius = opts.radius }, .{ .image = .{ .key = k, .source = opts.source, .opacity = opts.opacity, .tint = opts.tint, .part = opts.part } }, null);
+        _ = c.leaf(.{ .width = .{ .px = b.w }, .height = .{ .px = b.h }, .radius = opts.radius }, .{ .image = .{ .key = k, .source = src, .opacity = opts.opacity, .tint = opts.tint, .part = opts.part } }, null);
         return true;
     }
     const w: f32 = @as(f32, @floatFromInt(e.width)) / @max(opts.scale, 0.5);
     const h: f32 = @as(f32, @floatFromInt(e.height)) / @max(opts.scale, 0.5);
     const s = @min(1, @min(opts.max_width / @max(w, 1), opts.max_height / @max(h, 1)));
-    _ = c.leaf(.{ .width = .{ .px = @round(w * s) }, .height = .{ .px = @round(h * s) }, .radius = opts.radius }, .{ .image = .{ .key = k, .source = opts.source, .opacity = opts.opacity, .tint = opts.tint, .part = opts.part } }, null);
+    _ = c.leaf(.{ .width = .{ .px = @round(w * s) }, .height = .{ .px = @round(h * s) }, .radius = opts.radius }, .{ .image = .{ .key = k, .source = src, .opacity = opts.opacity, .tint = opts.tint, .part = opts.part } }, null);
     return true;
 }
 
@@ -274,7 +277,9 @@ pub const ButtonOptions = struct {
 
 pub fn button(c: *Context, title: []const u8, opts: ButtonOptions) Interaction {
     if (@import("../rt.zig").enabled) {
-        const Ext = struct { extern fn nanoui_rt_widget_button(c: *Context, lbl_ptr: [*]const u8, lbl_len: usize, opts_ptr: *const ButtonOptions, out: *Interaction) callconv(.c) void; };
+        const Ext = struct {
+            extern fn nanoui_rt_widget_button(c: *Context, lbl_ptr: [*]const u8, lbl_len: usize, opts_ptr: *const ButtonOptions, out: *Interaction) callconv(.c) void;
+        };
         var out: Interaction = undefined;
         Ext.nanoui_rt_widget_button(c, title.ptr, title.len, &opts, &out);
         return out;

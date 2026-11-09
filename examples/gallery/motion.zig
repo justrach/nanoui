@@ -217,8 +217,8 @@ pub const Demo = struct {
             if (ui.button(c, "Play", .{}).clicked) d.played = !d.played;
         }
         const all = [_]struct { []const u8, motion.Easing }{
-            .{ "linear", .linear },       .{ "ease out", .ease_out },   .{ "ease in out", .ease_in_out },
-            .{ "back out", .back_out },   .{ "circ in out", .circ_in_out }, .{ "anticipate", .anticipate },
+            .{ "linear", .linear },     .{ "ease out", .ease_out },       .{ "ease in out", .ease_in_out },
+            .{ "back out", .back_out }, .{ "circ in out", .circ_in_out }, .{ "anticipate", .anticipate },
         };
         for (all) |e| {
             ui.key(c, e[0]);

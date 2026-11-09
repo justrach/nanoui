@@ -89,7 +89,7 @@ fn hingeMoved(s: *Surface, _: objc.Object, update: objc.Object) void {
     const d = &s.ctx.device;
     if (objc.msg(?objc.Object, update, "hinge", .{})) |hinge| {
         const st = objc.msg(objc.NSInteger, hinge, "status", .{});
-        d.hinge = @enumFromInt(@as(u8, @intCast(std.math.clamp(st, 0, 3))));
+        d.hinge = @fromBackingInt(@intCast(@as(u8, @intCast(std.math.clamp(st, 0, 3)))));
         // UIHinge's angle is in radians; Device keeps degrees.
         d.hinge_angle = @floatCast(std.math.radiansToDegrees(objc.msg(f64, hinge, "angle", .{})));
         d.foldable = true;

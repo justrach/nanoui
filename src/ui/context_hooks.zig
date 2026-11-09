@@ -255,7 +255,9 @@ pub const InteractOptions = struct { focusable: bool = false, text: bool = false
 
 pub fn interact(c: *Context, index: u32, opts: InteractOptions) ctx_mod.Interaction {
     if (@import("../rt.zig").enabled) {
-        const Ext = struct { extern fn nanoui_rt_ctx_interact(c: *Context, index: u32, opts_ptr: *const InteractOptions, out: *ctx_mod.Interaction) callconv(.c) void; };
+        const Ext = struct {
+            extern fn nanoui_rt_ctx_interact(c: *Context, index: u32, opts_ptr: *const InteractOptions, out: *ctx_mod.Interaction) callconv(.c) void;
+        };
         var out: ctx_mod.Interaction = undefined;
         Ext.nanoui_rt_ctx_interact(c, index, &opts, &out);
         return out;
@@ -359,7 +361,9 @@ pub fn state(c: *Context, comptime T: type, key: []const u8) *T {
 
 pub fn animate(c: *Context, id: u64, salt: u32, target: f32, speed: f32) f32 {
     if (@import("../rt.zig").enabled) {
-        const Ext = struct { extern fn nanoui_rt_ctx_animate(c: *Context, id: u64, salt: u32, target: f32, speed: f32) callconv(.c) f32; };
+        const Ext = struct {
+            extern fn nanoui_rt_ctx_animate(c: *Context, id: u64, salt: u32, target: f32, speed: f32) callconv(.c) f32;
+        };
         return Ext.nanoui_rt_ctx_animate(c, id, salt, target, speed);
     }
     return animateImpl(c, id, salt, target, speed);

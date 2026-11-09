@@ -120,14 +120,16 @@ pub const LayerShell = struct {
 };
 
 /// How high a window stacks (NSWindowLevel on macOS): above the menu bar
-/// at `status`, over everything at `screen_saver`. Any other level is a
-/// value of its own (`@enumFromInt`).
+/// at `status`, over the notch / menu bar as a Dynamic Island at `island`,
+/// over everything at `screen_saver`. Any other level is a value of its own
+/// (`@enumFromInt`).
 pub const Level = enum(i32) {
     normal = 0,
     floating = 3,
     modal_panel = 8,
     main_menu = 24,
     status = 25,
+    island = 26,
     pop_up_menu = 101,
     screen_saver = 1000,
     _,
@@ -241,6 +243,9 @@ pub fn Options(comptime Window: type) type {
         floating: bool = false,
         /// On every Space, and beside full-screen windows.
         all_spaces: bool = false,
+        /// Unaffected by Exposé / Mission Control (`NSWindowCollectionBehaviorStationary`),
+        /// for a notch island or desktop overlay. macOS.
+        stationary: bool = false,
         /// A panel that takes clicks without making its app active.
         non_activating: bool = false,
         /// A panel with the small utility title bar (an inspector, a palette). macOS.

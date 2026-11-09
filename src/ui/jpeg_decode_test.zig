@@ -151,7 +151,7 @@ fn build(spec: Spec) ![]u8 {
             sos[1 + i * 2] = c.id;
             sos[2 + i * 2] = 0;
         }
-        const tail = sos[1 + spec.comps.len * 2..][0..3];
+        const tail = sos[1 + spec.comps.len * 2 ..][0..3];
         tail[0] = 0;
         tail[1] = if (spec.progressive) 0 else 63;
         tail[2] = pass[0] << 4 | pass[1];
@@ -197,7 +197,7 @@ fn decodeSpec(spec: Spec) !jpeg.Decoded {
 }
 
 fn expectNear(d: jpeg.Decoded, x: u32, y: u32, rgb: [3]u8, tolerance: u8) !void {
-    const p = d.bgra[(@as(usize, y) * d.width + x) * 4..][0..4];
+    const p = d.bgra[(@as(usize, y) * d.width + x) * 4 ..][0..4];
     try testing.expectEqual(@as(u8, 255), p[3]);
     for ([3]u8{ p[2], p[1], p[0] }, rgb) |got, want| {
         const gap = @abs(@as(i16, got) - want);
@@ -478,7 +478,7 @@ test "every byte mutated and every truncation: no crash, no leak" {
     defer gpa.free(made_420);
     const made_restart = try build(.{ .w = 32, .h = 8, .comps = &.{.{}}, .values = &.{&.{ 10, 20, 30, 40 }}, .restart = 1, .before = exifSegment(false, 6) });
     defer gpa.free(made_restart);
-    const made_progressive = try build(.{ .w = 16, .h = 16, .comps = &.{ .{ .id = 1 }, .{ .id = 2 }, .{ .id = 3 }, .{ .id = 4 } }, .values = &.{&.{33}, &.{44}, &.{55}, &.{66}}, .progressive = true });
+    const made_progressive = try build(.{ .w = 16, .h = 16, .comps = &.{ .{ .id = 1 }, .{ .id = 2 }, .{ .id = 3 }, .{ .id = 4 } }, .values = &.{ &.{33}, &.{44}, &.{55}, &.{66} }, .progressive = true });
     defer gpa.free(made_progressive);
     for ([_][]const u8{ &real_sips, &real_progressive, made_420, made_restart, made_progressive }) |file| {
         const copy = try gpa.dupe(u8, file);

@@ -110,6 +110,7 @@ pub const WindowLevel = @import("window_types.zig").Level;
 /// (`AppOptions.about`) and what full screen hides
 /// (`App.setPresentationOptions`): macOS.
 pub const Screen = if (mac) @import("screens.zig").Screen else void;
+pub const screens = if (mac) @import("screens.zig") else struct {};
 pub const About = if (mac) @import("app_extras.zig").About else void;
 pub const Presentation = if (mac) @import("app_extras.zig").Presentation else void;
 /// A page docked in a native-UI window (`Window.dockPage`), macOS.
@@ -159,7 +160,7 @@ pub const std_options: std.Options = .{
     .allow_stack_tracing = !@import("rt.zig").enabled,
     .unexpected_error_tracing = !@import("rt.zig").enabled,
 };
-pub const std_options_debug_threaded_io: ?*std.Io.Threaded = null;
+pub const std_options_debug_threaded_io: ?*std.Io.Threaded = if (@import("rt.zig").enabled) null else std.Io.Threaded.global_single_threaded;
 pub const panic = if (@import("rt.zig").enabled) std.debug.FullPanic(rtPanic) else std.debug.FullPanic(std.debug.defaultPanic);
 
 fn rtPanic(msg: []const u8, first_trace_addr: ?usize) noreturn {

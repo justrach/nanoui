@@ -202,7 +202,7 @@ const State = struct {
             if (at + 64 * entry > data.len) return error.Corrupt;
             var table: [64]u16 = undefined;
             for (0..64) |i| {
-                const p = data[at + i * entry..];
+                const p = data[at + i * entry ..];
                 table[scan.zigzag[i]] = if (pq == 1) std.mem.readInt(u16, p[0..2], .big) else p[0];
             }
             st.quant[tq] = table;
@@ -250,7 +250,7 @@ const State = struct {
             .comps = undefined,
         };
         for (0..count) |i| {
-            const p = data[6 + i * 3..][0..3];
+            const p = data[6 + i * 3 ..][0..3];
             const h = p[1] >> 4;
             const v = p[1] & 15;
             if (h < 1 or h > 4 or v < 1 or v > 4 or p[2] > 3) return error.Corrupt;
@@ -295,7 +295,7 @@ const State = struct {
         const f = &st.frame.?;
         const count = data[0];
         if (count < 1 or count > f.count or data.len < 1 + @as(usize, count) * 2 + 3) return error.Corrupt;
-        const tail = data[1 + @as(usize, count) * 2..][0..3];
+        const tail = data[1 + @as(usize, count) * 2 ..][0..3];
         var s: scan.Scan = .{
             .reader = .{ .bytes = bytes, .pos = start },
             .comps = undefined,
@@ -325,7 +325,7 @@ const State = struct {
         const needs_dc = !f.progressive or (s.ss == 0 and s.ah == 0);
         const needs_ac = !f.progressive or s.ss != 0;
         for (0..count) |i| {
-            const p = data[1 + i * 2..][0..2];
+            const p = data[1 + i * 2 ..][0..2];
             const c = for (f.comps[0..f.count]) |*c| {
                 if (c.id == p[0]) break c;
             } else return error.Corrupt;

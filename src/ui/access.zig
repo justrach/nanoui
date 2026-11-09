@@ -271,12 +271,12 @@ fn collectText(c: *Context, arena: std.mem.Allocator, i: u32, buf: *std.ArrayLis
 /// Common SF Symbols in words, for a button that is only an icon.
 pub fn iconWords(name: []const u8) []const u8 {
     const table = [_]struct { []const u8, []const u8 }{
-        .{ "chevron.left", "Back" },    .{ "arrow.left", "Back" },        .{ "xmark", "Close" },
-        .{ "plus", "Add" },              .{ "magnifyingglass", "Search" }, .{ "trash", "Delete" },
-        .{ "ellipsis", "More" },         .{ "gearshape", "Settings" },     .{ "gear", "Settings" },
-        .{ "star", "Favorite" },         .{ "star.fill", "Favorite" },     .{ "checkmark", "Done" },
+        .{ "chevron.left", "Back" },         .{ "arrow.left", "Back" },         .{ "xmark", "Close" },
+        .{ "plus", "Add" },                  .{ "magnifyingglass", "Search" },  .{ "trash", "Delete" },
+        .{ "ellipsis", "More" },             .{ "gearshape", "Settings" },      .{ "gear", "Settings" },
+        .{ "star", "Favorite" },             .{ "star.fill", "Favorite" },      .{ "checkmark", "Done" },
         .{ "square.and.arrow.up", "Share" }, .{ "arrow.clockwise", "Refresh" }, .{ "line.3.horizontal", "Menu" },
-        .{ "heart", "Like" },            .{ "pencil", "Edit" },            .{ "mic", "Dictate" },
+        .{ "heart", "Like" },                .{ "pencil", "Edit" },             .{ "mic", "Dictate" },
     };
     var base = name;
     for (table) |e| if (std.mem.eql(u8, e[0], base)) return e[1];

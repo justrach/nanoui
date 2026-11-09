@@ -217,5 +217,3 @@ test "toasts come and go; a collapsible opens to its content's height; a select 
     t.settle(1);
     try testing.expectEqual(@as(?usize, 1), a.choice);
 }
-
-

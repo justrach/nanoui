@@ -12,9 +12,9 @@ const Pair = struct { raw: []const u8, comp: []const u8 };
 fn next(at: *usize) ?Pair {
     if (at.* + 8 > fixtures.len) return null;
     const raw_len = std.mem.readInt(u32, fixtures[at.*..][0..4], .little);
-    const comp_len = std.mem.readInt(u32, fixtures[at.* + 4..][0..4], .little);
-    const raw = fixtures[at.* + 8..][0..raw_len];
-    const comp = fixtures[at.* + 8 + raw_len..][0..comp_len];
+    const comp_len = std.mem.readInt(u32, fixtures[at.* + 4 ..][0..4], .little);
+    const raw = fixtures[at.* + 8 ..][0..raw_len];
+    const comp = fixtures[at.* + 8 + raw_len ..][0..comp_len];
     at.* += 8 + raw_len + comp_len;
     return .{ .raw = raw, .comp = comp };
 }

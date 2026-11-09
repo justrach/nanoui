@@ -225,7 +225,7 @@ const Painter = struct {
         if (p.full) return;
         const f = p.frame;
         if (index < f.colors and f.transparent != index) {
-            const rgb = p.bytes[f.palette_at + @as(usize, index) * 3..][0..3];
+            const rgb = p.bytes[f.palette_at + @as(usize, index) * 3 ..][0..3];
             const o = (@as(usize, f.y + p.y)) * p.stride + @as(usize, f.x + p.x) * 4;
             const px = p.out[o..][0..4];
             px[0] = rgb[2];
@@ -386,17 +386,17 @@ const TestGif = struct {
 };
 
 fn expectPixel(d: Decoded, x: u32, y: u32, bgra: [4]u8) !void {
-    try testing.expectEqualSlices(u8, &bgra, d.bgra[(@as(usize, y) * d.width + x) * 4..][0..4]);
+    try testing.expectEqualSlices(u8, &bgra, d.bgra[(@as(usize, y) * d.width + x) * 4 ..][0..4]);
 }
 
 /// The worked example of the format's usual explanation, a real encoder's bytes.
 const sample = [_]u8{
-    'G', 'I', 'F', '8', '9', 'a', 10, 0, 10, 0, 0x91, 0, 0,
-    0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0, 0xFF, 0, 0, 0,
-    0x21, 0xF9, 4, 0, 0, 0, 0, 0,
-    0x2C, 0, 0, 0, 0, 10, 0, 10, 0, 0,
-    2, 22, 0x8C, 0x2D, 0x99, 0x87, 0x2A, 0x1C, 0xDC, 0x33, 0xA0, 0x02, 0x75, 0xEC, 0x95, 0xFA, 0xA8, 0xDE, 0x60, 0x8C, 0x04, 0x91, 0x4C, 0x01, 0,
-    0x3B,
+    'G',  'I',  'F',  '8',  '9',  'a',  10,   0,    10,   0,    0x91, 0,    0,
+    0xFF, 0xFF, 0xFF, 0xFF, 0,    0,    0,    0,    0xFF, 0,    0,    0,    0x21,
+    0xF9, 4,    0,    0,    0,    0,    0,    0x2C, 0,    0,    0,    0,    10,
+    0,    10,   0,    0,    2,    22,   0x8C, 0x2D, 0x99, 0x87, 0x2A, 0x1C, 0xDC,
+    0x33, 0xA0, 0x02, 0x75, 0xEC, 0x95, 0xFA, 0xA8, 0xDE, 0x60, 0x8C, 0x04, 0x91,
+    0x4C, 0x01, 0,    0x3B,
 };
 
 test "a real encoder's GIF, palette and LZW and its clear and end codes" {

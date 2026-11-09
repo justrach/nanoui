@@ -256,9 +256,14 @@ test "PNGs nanoui writes read back, and a palette with transparency" {
     // 1×2, palette (2 bits): red opaque, then index 1 half transparent green.
     const pal_png = [_]u8{
         0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n',
-        0, 0, 0, 13, 'I', 'H', 'D', 'R', 0, 0, 0, 1, 0, 0, 0, 2, 2, 3, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 6, 'P', 'L', 'T', 'E', 255, 0, 0, 0, 255, 0, 0, 0, 0, 0,
-        0, 0, 0, 2, 't', 'R', 'N', 'S', 255, 128, 0, 0, 0, 0,
+        0,    0,   0,   13,  'I',  'H',  'D',  'R',
+        0,    0,   0,   1,   0,    0,    0,    2,
+        2,    3,   0,   0,   0,    0,    0,    0,
+        0,    0,   0,   0,   6,    'P',  'L',  'T',
+        'E',  255, 0,   0,   0,    255,  0,    0,
+        0,    0,   0,   0,   0,    0,    2,    't',
+        'R',  'N', 'S', 255, 128,  0,    0,    0,
+        0,
     };
     var with_data: std.ArrayList(u8) = .empty;
     defer with_data.deinit(gpa);

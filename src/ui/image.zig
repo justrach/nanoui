@@ -105,7 +105,6 @@ pub fn dimensions(bytes: []const u8) ?Dimensions {
     return .{ .width = @intCast(width), .height = @intCast(height) };
 }
 
-
 /// A picture decoded straight to at most `max_side` pixels (ImageIO scales
 /// while it decodes: no full-size copy is made), with its own size.
 pub fn decodeFit(gpa: std.mem.Allocator, bytes: []const u8, max_side: u32) !Fitted {

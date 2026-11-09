@@ -70,7 +70,9 @@ pub const Tester = struct {
     /// the first frame.
     pub fn init(t: *Tester, gpa: std.mem.Allocator, view: View, opts: Options) !void {
         if (@import("../rt.zig").enabled) {
-            const Ext = struct { extern fn nanoui_rt_tester_init(t: *Tester, gpa_ptr: *const std.mem.Allocator, view_ptr: *const View, opts_ptr: *const Options) callconv(.c) u8; };
+            const Ext = struct {
+                extern fn nanoui_rt_tester_init(t: *Tester, gpa_ptr: *const std.mem.Allocator, view_ptr: *const View, opts_ptr: *const Options) callconv(.c) u8;
+            };
             if (Ext.nanoui_rt_tester_init(t, &gpa, &view, &opts) != 0) return error.TesterInitFailed;
             return;
         }
@@ -117,7 +119,9 @@ pub const Tester = struct {
 
     pub fn deinit(t: *Tester) void {
         if (@import("../rt.zig").enabled) {
-            const Ext = struct { extern fn nanoui_rt_tester_deinit(t: *Tester) callconv(.c) void; };
+            const Ext = struct {
+                extern fn nanoui_rt_tester_deinit(t: *Tester) callconv(.c) void;
+            };
             return Ext.nanoui_rt_tester_deinit(t);
         }
         t.deinitImpl();
@@ -133,7 +137,9 @@ pub const Tester = struct {
 
     pub fn frame(t: *Tester) void {
         if (@import("../rt.zig").enabled) {
-            const Ext = struct { extern fn nanoui_rt_tester_frame(t: *Tester) callconv(.c) void; };
+            const Ext = struct {
+                extern fn nanoui_rt_tester_frame(t: *Tester) callconv(.c) void;
+            };
             return Ext.nanoui_rt_tester_frame(t);
         }
         t.frameImpl();

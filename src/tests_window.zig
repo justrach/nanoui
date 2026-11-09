@@ -290,6 +290,12 @@ test "level and ignores_mouse are applied on a hidden window, on its screen, tol
     const plain = try app.newWindow(.{ .title = "plain", .width = 200, .height = 120, .visible = false, .content = .{ .view = .init(&p, Page.view) } });
     try testing.expectEqual(@import("window.zig").Level.normal, plain.level());
     try testing.expect(!yes(plain, "ignoresMouseEvents"));
+    // An island window sits above the menu bar (.island = 26) and stays stationary.
+    const isl = try app.newWindow(.{ .title = "island", .width = 280, .height = 38, .visible = false, .title_bar = .popover, .level = .island, .stationary = true, .content = .{ .view = .init(&p, Page.view) } });
+    try testing.expectEqual(@import("window.zig").Level.island, isl.level());
+    try testing.expect(objc.msg(objc.NSUInteger, isl.nswindow, "collectionBehavior", .{}) & (1 << 4) != 0);
+    const mouse = Window.mouseLocation();
+    try testing.expect(!std.math.isNan(mouse[0]) and !std.math.isNan(mouse[1]));
 }
 
 const Counter = struct {

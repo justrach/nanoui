@@ -8,7 +8,7 @@ fn tablesOf(a: std.mem.Allocator, font: []const u8) ![]sfnt.Table {
     const n = std.mem.readInt(u16, font[4..6], .big);
     const out = try a.alloc(sfnt.Table, n);
     for (out, 0..) |*t, i| {
-        const rec = font[12 + 16 * i..][0..16];
+        const rec = font[12 + 16 * i ..][0..16];
         const off = std.mem.readInt(u32, rec[8..12], .big);
         const len = std.mem.readInt(u32, rec[12..16], .big);
         t.* = .{ .tag = std.mem.readInt(u32, rec[0..4], .big), .data = font[off..][0..len] };

@@ -294,7 +294,7 @@ pub const Scan = struct {
             k += 1;
         }
         const stride = @as(usize, c.blocks_w) * 8;
-        pixels.idct(&coef, c.plane[@as(usize, by) * 8 * stride + @as(usize, bx) * 8..], stride);
+        pixels.idct(&coef, c.plane[@as(usize, by) * 8 * stride + @as(usize, bx) * 8 ..], stride);
     }
 
     fn dcFirst(s: *Scan, i: usize, coef: *[64]i16) BitError!void {

@@ -53,3 +53,31 @@ fn hotPath(c: *Context, h: context.Hit) void {
         at = n.parent;
     }
 }
+
+/// Whether the pointer is over text that selects (as last painted):
+/// for the cursor when it moves without a frame being drawn.
+pub fn pointerOverText(c: *Context) bool {
+    for (c.selection.lines.items) |r| if (r.contains(c.input.mouse)) return true;
+    return c.selection.dragging;
+}
+
+pub fn pointerUp(c: *Context) void {
+    c.input.down = false;
+    c.input.released = true;
+}
+
+/// The secondary button went down (`Input.secondary`): no press, and
+/// the focus stays where it was.
+pub fn secondaryDown(c: *Context) void {
+    c.updateHot();
+    c.input.secondary = true;
+}
+
+pub fn pointerDown(c: *Context) void {
+    c.updateHot();
+    c.input.down = true;
+    c.input.pressed = true;
+    c.right_press = c.input.button == .right or (@import("keys.zig").mac and c.input.button == .left and c.input.ctrl);
+    if (@import("scroll.zig").tryPressScrollbar(c)) return;
+    if (c.hot == 0) c.focus = 0;
+}

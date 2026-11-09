@@ -186,9 +186,9 @@ const Gallery = struct {
             {
                 defer ui.end(c);
                 ui.text(c, "Theme", .{ .color = c.theme.muted });
-                var choice: usize = @intFromEnum(g.appearance);
+                var choice: usize = @backingInt(g.appearance);
                 if (ui.segmented(c, &.{ "Light", "Dark", "System" }, &choice)) {
-                    g.appearance = @enumFromInt(choice);
+                    g.appearance = @fromBackingInt(@intCast(choice));
                     c.changed = true;
                 }
             }

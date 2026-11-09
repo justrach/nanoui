@@ -250,9 +250,9 @@ pub fn rebuild(a: std.mem.Allocator, data: []const u8, loca_len: u32) Error!Resu
     for (offsets, 0..) |o, i| {
         if (index_format == 0) {
             if (o / 2 > 0xffff) return error.Corrupt;
-            std.mem.writeInt(u16, loca[2 * i..][0..2], @intCast(o / 2), .big);
+            std.mem.writeInt(u16, loca[2 * i ..][0..2], @intCast(o / 2), .big);
         } else {
-            std.mem.writeInt(u32, loca[4 * i..][0..4], o, .big);
+            std.mem.writeInt(u32, loca[4 * i ..][0..4], o, .big);
         }
     }
     return .{ .glyf = w.out.items, .loca = loca, .x_mins = x_mins };

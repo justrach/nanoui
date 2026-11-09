@@ -59,7 +59,7 @@ pub fn idct(in: *const [64]i32, out: []u8, stride: usize) void {
     for (0..8) |r| {
         const w = ws[r * 8 ..][0..8];
         const t = idct1(w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]);
-        const dst = out[r * stride..][0..8];
+        const dst = out[r * stride ..][0..8];
         for (t, dst) |v, *d| d.* = clamp(((v +% row_round) >> row_shift) +% 128);
     }
 }
@@ -78,7 +78,7 @@ pub fn finishProgressive(c: *Component) void {
         for (0..c.blocks_w) |bx| {
             var block: [64]i32 = undefined;
             for (&block, c.coefs[at..][0..64], &c.quant) |*b, coef, q| b.* = @as(i32, coef) *% q;
-            idct(&block, c.plane[by * 8 * stride + bx * 8..], stride);
+            idct(&block, c.plane[by * 8 * stride + bx * 8 ..], stride);
             at += 64;
         }
     }
@@ -111,22 +111,22 @@ pub fn render(gpa: std.mem.Allocator, comps: []const Component, width: u32, heig
     const xmap = try gpa.alloc(u32, w * comps.len);
     defer gpa.free(xmap);
     for (comps, 0..) |c, i| {
-        for (xmap[i * w..][0..w], 0..) |*m, x| m.* = @intCast(x * c.h / hmax);
+        for (xmap[i * w ..][0..w], 0..) |*m, x| m.* = @intCast(x * c.h / hmax);
     }
     var lines: [4][]const u8 = @splat(&.{});
     for (0..height) |y| {
         for (comps, 0..) |c, i| {
             const stride = @as(usize, c.blocks_w) * 8;
-            const src = c.plane[(y * c.v / vmax) * stride..][0..stride];
+            const src = c.plane[(y * c.v / vmax) * stride ..][0..stride];
             if (c.h == hmax) {
                 lines[i] = src[0..w];
             } else {
-                const row = rows[i * w..][0..w];
-                for (row, xmap[i * w..][0..w]) |*d, sx| d.* = src[sx];
+                const row = rows[i * w ..][0..w];
+                for (row, xmap[i * w ..][0..w]) |*d, sx| d.* = src[sx];
                 lines[i] = row;
             }
         }
-        convertRow(out[y * w * 4..][0 .. w * 4], &lines, color);
+        convertRow(out[y * w * 4 ..][0 .. w * 4], &lines, color);
     }
     return out;
 }
@@ -146,7 +146,7 @@ fn convertRow(dst: []u8, lines: *const [4][]const u8, color: Color) void {
                 break :blk .{ scale(255 - c[0], k), scale(255 - c[1], k), scale(255 - c[2], k) };
             },
         };
-        const p = dst[x * 4..][0..4];
+        const p = dst[x * 4 ..][0..4];
         p[0] = rgb[2];
         p[1] = rgb[1];
         p[2] = rgb[0];
@@ -176,7 +176,7 @@ pub fn orient(gpa: std.mem.Allocator, src: []u8, width: u32, height: u32, orient
                 8 => .{ y, w - 1 - x },
                 else => .{ x, y },
             };
-            @memcpy(dst[(at[1] * dw + at[0]) * 4..][0..4], src[(y * w + x) * 4..][0..4]);
+            @memcpy(dst[(at[1] * dw + at[0]) * 4 ..][0..4], src[(y * w + x) * 4 ..][0..4]);
         }
     }
     gpa.free(src);

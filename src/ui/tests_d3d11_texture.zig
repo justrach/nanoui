@@ -94,7 +94,8 @@ test "d3d11: a texture draws as the CPU renderer draws it (uv, opacity, clip rad
     try testing.expect(mean <= 1.0);
     try testing.expect(off * 40 < cpu.len);
     // The texture is really there: the white square of the first one.
-    const at = (30 * ours.width + 30) * 4;
+    const px_at: usize = @intFromFloat(34 * t.scale);
+    const at = (px_at * ours.width + px_at) * 4;
     try testing.expect(ours.bytes[at] > 240 and ours.bytes[at + 1] > 240 and ours.bytes[at + 2] > 240);
 }
 

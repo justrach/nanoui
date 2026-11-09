@@ -501,7 +501,7 @@ pub const Renderer = struct {
     /// Back to the spares, clean.
     pub fn recycle(r: *Renderer, l: *Layer) void {
         const d = l.dirty;
-        for (d.y0..d.y1) |y| @memset(l.px[(y * r.w + d.x0) * 4..(y * r.w + d.x1) * 4], 0);
+        for (d.y0..d.y1) |y| @memset(l.px[(y * r.w + d.x0) * 4 .. (y * r.w + d.x1) * 4], 0);
         r.spare.append(r.gpa, l.px) catch r.gpa.free(l.px);
         r.gpa.destroy(l);
     }

@@ -68,8 +68,8 @@ fn nv12Frame(comptime w: usize, comptime h: usize) [w * h * 3 / 2]u8 {
         px[y * w + x] = @intCast(16 + (x * 219) / (w - 1));
     };
     for (0..h / 2) |y| for (0..w / 2) |x| {
-        px[w * h + y * w + x * 2] = @intCast(64 + x * 20);
-        px[w * h + y * w + x * 2 + 1] = @intCast(200 - y * 30);
+        px[w * h + y * w + x * 2] = @intCast((64 + x * 20) % 256);
+        px[w * h + y * w + x * 2 + 1] = @intCast((200 -| y * 30) % 256);
     };
     return px;
 }

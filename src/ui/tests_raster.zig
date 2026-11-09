@@ -365,7 +365,9 @@ test "rounded boxes, borders, glyphs and shadows" {
         .{ .rect = .{ 0, 0, 10, 10 }, .color = .{ 0, 0, 1, 1 }, .uv = .{ 0, 0, 1, 1 }, .kind = @import("gpu.zig").Kind.text, .clip = .{ 0, 0, 5, 20 } },
     }, .{ .pixels = &texels, .size = 2 }, .{}, 2, .{ .r = 1, .g = 1, .b = 1 });
     const at = struct {
-        fn f(o: @import("gpu.zig").Pixels, x: usize, y: usize) [4]u8 { return o.bytes[(y * o.width + x) * 4 ..][0..4].*; }
+        fn f(o: @import("gpu.zig").Pixels, x: usize, y: usize) [4]u8 {
+            return o.bytes[(y * o.width + x) * 4 ..][0..4].*;
+        }
     }.f;
     try std.testing.expectEqual([4]u8{ 0, 0, 255, 255 }, at(out, 20, 20));
     try std.testing.expectEqual([4]u8{ 255, 255, 255, 255 }, at(out, 4, 34));
@@ -382,7 +384,9 @@ test "a clip's rounded corners cut what it clips, only where asked" {
         .{ .rect = .{ 0, 0, 20, 20 }, .color = .{ 1, 0, 0, 1 }, .clip = .{ 0, 0, 20, 20 }, .clip_round = @import("gpu.zig").clipRound(8, 1 | 8) },
     }, .{ .pixels = &.{}, .size = 0 }, .{}, 2, .{ .r = 1, .g = 1, .b = 1 });
     const at = struct {
-        fn f(o: @import("gpu.zig").Pixels, x: usize, y: usize) [4]u8 { return o.bytes[(y * o.width + x) * 4 ..][0..4].*; }
+        fn f(o: @import("gpu.zig").Pixels, x: usize, y: usize) [4]u8 {
+            return o.bytes[(y * o.width + x) * 4 ..][0..4].*;
+        }
     }.f;
     try std.testing.expectEqual([4]u8{ 255, 255, 255, 255 }, at(out, 0, 0));
     try std.testing.expectEqual([4]u8{ 255, 255, 255, 255 }, at(out, 0, 39));

@@ -22,6 +22,7 @@ jobs:
         with:
           version: 0.17.0
       - run: zig build lines
+      - run: zig fmt --check src build.zig build.zig.zon examples tools
       - run: zig build test
       - run: zig build test -Dportable=true
       - run: zig build -Dtarget=x86_64-windows-gnu --prefix zig-out/windows
@@ -60,7 +61,7 @@ jobs:
           zig build
           for v in 4 3; do
             NANOUI_GTK=$v NANOUI_DEBUG=1 timeout 4 xvfb-run -a zig-out/bin/counter > gtk$v.txt 2>&1 || true
-            grep -q "nanoui: GTK $v" gtk$v.txt || { cat gtk$v.txt; exit 1; }
+            grep -q "nanoui: GTK $v" gtk$v.txt && ! grep -qi "panic\|exception" gtk$v.txt || { cat gtk$v.txt; exit 1; }
           done
       # A real page, sandbox as the system leaves it: its client served, a call
       # to Zig and back. In each world 6.0's sandbox can or can't start.

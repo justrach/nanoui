@@ -27,7 +27,7 @@ pub fn build(b: *std.Build) void {
     });
     nanoui.addOptions("build_options", options);
     const os = target.result.os.tag;
-    if (os != .ios and !target.result.abi.isAndroid()) {
+    if (os == .macos) {
         const rt_options = b.addOptions();
         rt_options.addOption(bool, "portable", portable);
         rt_options.addOption(bool, "in_rt", true);
@@ -39,14 +39,11 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         });
         rt_mod.addOptions("build_options", rt_options);
-        if (os == .macos and !target.query.isNative()) {
+        if (!target.query.isNative()) {
             if (std.zig.system.darwin.getSdk(b.allocator, b.graph.io, &target.result)) |sdk| {
                 rt_mod.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ sdk, "System/Library/Frameworks" }) });
                 rt_mod.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ sdk, "usr/lib" }) });
             }
-        }
-        if (os != .macos) {
-            if (b.lazyDependency("http_zig", .{ .target = target, .optimize = optimize })) |d| rt_mod.addImport("http_zig", d.module("http_zig"));
         }
         const rt_lib = b.addLibrary(.{ .linkage = .static, .name = "nanoui-rt", .root_module = rt_mod });
         nanoui.linkLibrary(rt_lib);

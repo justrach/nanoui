@@ -257,7 +257,7 @@ const Decoder = struct {
         d.out.items.len = start + n;
         const out = d.out.items;
         if (distance >= n) {
-            @memcpy(out[start..][0..n], out[start - distance..][0..n]);
+            @memcpy(out[start..][0..n], out[start - distance ..][0..n]);
         } else {
             for (0..n) |i| out[start + i] = out[start + i - distance];
         }
@@ -291,7 +291,7 @@ const Decoder = struct {
         const index = id & ((@as(usize, 1) << nbits) - 1);
         const transform = id >> nbits;
         if (transform >= tables.transforms.len) return error.Corrupt;
-        const word = dictionary[offsets[len] + index * len..][0..len];
+        const word = dictionary[offsets[len] + index * len ..][0..len];
         const t = tables.transforms[transform];
         const prefix = stringOf(t[0]);
         const suffix = stringOf(t[2]);
@@ -318,7 +318,7 @@ const Decoder = struct {
 fn stringOf(i: u8) []const u8 {
     const at = tables.prefix_suffix_map[i];
     const n = tables.prefix_suffix[at];
-    return tables.prefix_suffix[at + 1..][0..n];
+    return tables.prefix_suffix[at + 1 ..][0..n];
 }
 
 /// The RFC's simple uppercasing of the character at `p`'s start; its length.

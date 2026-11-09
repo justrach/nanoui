@@ -65,9 +65,9 @@ const moves = [_]Move{
 
 /// When the pointer shows.
 const shown = [_][2]f32{
-    .{ at.trade + 1.2, at.trade + 3.8 },     .{ at.chat + 1.7, at.chat + 3.0 },
-    .{ at.board + 0.2, at.board + 3.7 },     .{ at.music + 0.1, at.music + 3.0 },
-    .{ at.glass + 0.1, at.glass + 3.8 },     .{ at.weather + 0.6, at.weather + 3.2 },
+    .{ at.trade + 1.2, at.trade + 3.8 },       .{ at.chat + 1.7, at.chat + 3.0 },
+    .{ at.board + 0.2, at.board + 3.7 },       .{ at.music + 0.1, at.music + 3.0 },
+    .{ at.glass + 0.1, at.glass + 3.8 },       .{ at.weather + 0.6, at.weather + 3.2 },
     .{ at.settings + 0.1, at.settings + 2.9 },
 };
 

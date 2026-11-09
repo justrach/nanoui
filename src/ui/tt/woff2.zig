@@ -138,11 +138,11 @@ fn rebuildHmtx(a: std.mem.Allocator, data: []const u8, entries: []const Entry, p
     for (0..num_glyphs) |g| {
         var lsb: i16 = r.x_mins[g];
         if (g < num_h) {
-            @memcpy(out[w..][0..2], advances[2 * g..][0..2]);
+            @memcpy(out[w..][0..2], advances[2 * g ..][0..2]);
             w += 2;
-            if (prop_lsb) |p| lsb = std.mem.readInt(i16, p[2 * g..][0..2], .big);
+            if (prop_lsb) |p| lsb = std.mem.readInt(i16, p[2 * g ..][0..2], .big);
         } else if (mono_lsb) |m| {
-            lsb = std.mem.readInt(i16, m[2 * (g - num_h)..][0..2], .big);
+            lsb = std.mem.readInt(i16, m[2 * (g - num_h) ..][0..2], .big);
         }
         std.mem.writeInt(i16, out[w..][0..2], lsb, .big);
         w += 2;
