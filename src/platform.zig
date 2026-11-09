@@ -22,6 +22,38 @@ pub fn runFor(seconds: f64) void {
     }
 }
 
+extern "c" fn CFRunLoopStop(rl: *anyopaque) void;
+extern "c" fn CFRunLoopGetMain() *anyopaque;
+
+/// Runs the event loop for at most `seconds`, returning as soon as `flag`
+/// is set (by another thread, which then calls `wakeMain`).
+pub fn runUntil(seconds: f64, flag: *const std.atomic.Value(bool)) void {
+    const clock = @import("ui/clock.zig");
+    const end = clock.now() + seconds;
+    while (!flag.load(.acquire)) {
+        const left = end - clock.now();
+        if (left <= 0) return;
+        switch (os) {
+            .macos, .ios => _ = CFRunLoopRunInMode(kCFRunLoopDefaultMode, left, true),
+            // No wake-up of the loop here: it is looked at every 10 ms.
+            else => runFor(@min(left, 0.01)),
+        }
+    }
+}
+
+/// From any thread: wakes the main thread's loop, so `runUntil` looks at
+/// its flag.
+pub fn wakeMain() void {
+    switch (os) {
+        .macos, .ios => @import("objc.zig").dispatchMain(null, stopMainLoop),
+        else => {},
+    }
+}
+
+fn stopMainLoop(_: ?*anyopaque) callconv(.c) void {
+    CFRunLoopStop(CFRunLoopGetMain());
+}
+
 /// Writes text to the system's clipboard.
 pub fn clipboardWrite(text: []const u8) void {
     switch (os) {

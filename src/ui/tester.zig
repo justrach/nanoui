@@ -25,7 +25,9 @@ const ctx_mod = @import("context.zig");
 const Context = ctx_mod.Context;
 const View = @import("ui.zig").View;
 
-const runFor = @import("../platform.zig").runFor;
+const platform = @import("../platform.zig");
+const runFor = platform.runFor;
+const script = @import("tester_script.zig");
 
 pub const Options = struct {
     width: f32 = 480,
@@ -52,6 +54,17 @@ pub const Tester = struct {
     clipboard: std.ArrayList(u8) = .empty,
     /// The simulated clock, advanced by `dt` each frame.
     time: f64 = 0,
+    /// The app's own script steps (`cmd:…`), tried after nanoui's.
+    app_verbs: ?AppVerbs = null,
+    /// Another thread asked for a frame (`requestFrameFromAnyThread`).
+    woken: std.atomic.Value(bool) = .init(false),
+
+    /// A script step nanoui doesn't know, offered to the app: true if it
+    /// ran it (`op` is before the colon, `arg` after).
+    pub const AppVerbs = struct {
+        ctx: ?*anyopaque = null,
+        run: *const fn (ctx: ?*anyopaque, t: *Tester, op: []const u8, arg: []const u8) anyerror!bool,
+    };
 
     /// Initializes in place (the context points into the tester) and runs
     /// the first frame.
@@ -71,7 +84,20 @@ pub const Tester = struct {
         t.text.setScale(opts.scale);
         t.ctx = .init(gpa, &t.text);
         t.ctx.clipboard = .{ .ctx = t, .write = clipWrite };
+        t.ctx.waker = .{ .ctx = t, .wake = wakeFrom };
         t.frame();
+    }
+
+    fn wakeFrom(ctx: *anyopaque) void {
+        const t: *Tester = @ptrCast(@alignCast(ctx));
+        t.requestFrameFromAnyThread();
+    }
+
+    /// From any thread (a decoder's): a frame is wanted. `pump` returns
+    /// early to run it.
+    pub fn requestFrameFromAnyThread(t: *Tester) void {
+        if (t.woken.swap(true, .acq_rel)) return;
+        platform.wakeMain();
     }
 
     fn clipWrite(ctx: ?*anyopaque, text_: []const u8) void {
@@ -315,6 +341,37 @@ pub const Tester = struct {
         t.click(r.x + r.w / 2, r.y + r.h / 2);
     }
 
+    /// Runs the real event loop for `seconds` (replies, timers, work posted
+    /// to the main queue from other threads), then a frame; sooner if
+    /// another thread asks for a frame (`requestFrameFromAnyThread`).
+    pub fn pump(t: *Tester, seconds: f64) void {
+        platform.runUntil(seconds, &t.woken);
+        t.woken.store(false, .release);
+        t.frame();
+    }
+
+    /// The pointer goes down at (x, y) and stays down (`move`, `up`), with
+    /// the modifier keys `setMods` left.
+    pub fn down(t: *Tester, x: f32, y: f32) void {
+        t.moveTo(x, y);
+        t.ctx.input.click_count = 1;
+        t.ctx.pointerDown();
+        t.frame();
+    }
+
+    /// The pointer moves to (x, y), held down or not.
+    pub fn move(t: *Tester, x: f32, y: f32) void {
+        t.ctx.input.mouse = .{ .x = x, .y = y };
+        if (!t.ctx.input.down) t.ctx.updateHot();
+        t.frame();
+    }
+
+    pub fn up(t: *Tester) void {
+        t.ctx.pointerUp();
+        t.frame();
+        t.ctx.updateHot();
+    }
+
     /// Renders the last frame offscreen and writes it to a PNG file.
     pub fn screenshot(t: *Tester, path: []const u8) !void {
         const pixels = try t.render(t.gpa);
@@ -338,65 +395,12 @@ pub const Tester = struct {
         return out;
     }
 
-    /// Runs a script of steps separated by `;`: `click:TEXT`, `move:TEXT`,
-    /// `type:TEXT`, `key:enter|backspace|tab|escape|left|right`,
-    /// `scroll:DY` (at the pointer), `wait:SECONDS` (simulated time),
-    /// `live:SECONDS` (the real event loop: replies, processes, timers),
-    /// `resize:WxH`; `at:X,Y` and `hover:X,Y` (a click, or the pointer, at
-    /// points), `rclick:TEXT` and `rat:X,Y` (a right-click: a context menu),
-    /// `chord:cmd+shift+n` (a key combination, as a window offers it),
-    /// `snap:PNG` (the frame so far, written: one per step of a run).
-    pub fn runScript(t: *Tester, script: []const u8) !void {
-        var steps = std.mem.splitScalar(u8, script, ';');
-        while (steps.next()) |raw| {
-            const step = std.mem.trim(u8, raw, " ");
-            if (step.len == 0) continue;
-            const colon = std.mem.indexOfScalar(u8, step, ':') orelse step.len;
-            const op = step[0..colon];
-            const arg = if (colon < step.len) step[colon + 1 ..] else "";
-            if (std.mem.eql(u8, op, "click")) {
-                try t.clickText(arg);
-            } else if (std.mem.eql(u8, op, "rclick")) {
-                const r = t.findText(arg) orelse return error.TextNotFound;
-                t.rightClick(r.x + r.w / 2, r.y + r.h / 2);
-            } else if (std.mem.eql(u8, op, "rat")) {
-                const comma = std.mem.indexOfScalar(u8, arg, ',') orelse return error.BadPoint;
-                t.rightClick(try std.fmt.parseFloat(f32, std.mem.trim(u8, arg[0..comma], " ")), try std.fmt.parseFloat(f32, std.mem.trim(u8, arg[comma + 1 ..], " ")));
-            } else if (std.mem.eql(u8, op, "move")) {
-                const r = t.findText(arg) orelse return error.TextNotFound;
-                t.moveTo(r.x + r.w / 2, r.y + r.h / 2);
-            } else if (std.mem.eql(u8, op, "type")) {
-                t.typeText(arg);
-            } else if (std.mem.eql(u8, op, "key")) {
-                t.key(std.meta.stringToEnum(ctx_mod.Key, arg) orelse return error.UnknownKey);
-            } else if (std.mem.eql(u8, op, "scroll")) {
-                t.scroll(t.ctx.input.mouse.x, t.ctx.input.mouse.y, try std.fmt.parseFloat(f32, arg));
-            } else if (std.mem.eql(u8, op, "wait")) {
-                t.advance(try std.fmt.parseFloat(f32, arg));
-            } else if (std.mem.eql(u8, op, "live")) {
-                const seconds = try std.fmt.parseFloat(f64, arg);
-                var waited: f64 = 0;
-                while (waited < seconds) : (waited += 0.05) {
-                    runFor(0.05);
-                    t.frame();
-                }
-            } else if (std.mem.eql(u8, op, "at") or std.mem.eql(u8, op, "hover")) {
-                const comma = std.mem.indexOfScalar(u8, arg, ',') orelse return error.BadPoint;
-                const x = try std.fmt.parseFloat(f32, std.mem.trim(u8, arg[0..comma], " "));
-                const y = try std.fmt.parseFloat(f32, std.mem.trim(u8, arg[comma + 1 ..], " "));
-                if (op[0] == 'a') t.click(x, y) else t.moveTo(x, y);
-            } else if (std.mem.eql(u8, op, "chord")) {
-                const s = ctx_mod.Shortcut.parse(arg) orelse return error.UnknownKey;
-                _ = t.shortcut(s.native());
-            } else if (std.mem.eql(u8, op, "snap")) {
-                t.settle(2);
-                try t.screenshot(arg);
-                continue;
-            } else if (std.mem.eql(u8, op, "resize")) {
-                const x = std.mem.indexOfScalar(u8, arg, 'x') orelse return error.BadSize;
-                t.resize(try std.fmt.parseFloat(f32, arg[0..x]), try std.fmt.parseFloat(f32, arg[x + 1 ..]));
-            } else return error.UnknownStep;
-            t.settle(2);
-        }
+    /// Runs a script of steps separated by `;` (`tester_script.zig` lists
+    /// them): `click:TEXT`, `at:X,Y`, `down:X,Y`/`move:X,Y`/`up`,
+    /// `mods:cmd+shift`, `drop:X,Y,PATH|PATH`, `type:TEXT`, `key:enter`,
+    /// `chord:cmd+shift+n`, `wait:SECONDS`, `snap:PNG`, and the app's own
+    /// (`app_verbs`).
+    pub fn runScript(t: *Tester, steps: []const u8) !void {
+        return script.run(t, steps);
     }
 };

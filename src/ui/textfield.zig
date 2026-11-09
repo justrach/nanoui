@@ -327,7 +327,7 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
     }, null);
     defer c.end();
     rehome(c, buffer, c.node(i).id);
-    var it = c.interact(i, .{ .focusable = true });
+    var it = c.interact(i, .{ .focusable = true, .text = true });
     c.addA11y(i, .text_field, opts.placeholder, buffer.text(), it.focused, true);
     if (buffer.want_focus) {
         buffer.want_focus = false;

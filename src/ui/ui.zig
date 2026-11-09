@@ -295,6 +295,8 @@ test {
     _ = @import("tests_dock_hooks.zig");
     _ = @import("tests_scroll_api.zig");
     _ = @import("markdown.zig");
+    _ = @import("tests_tester_verbs.zig");
+    _ = @import("tester_script.zig");
     _ = @import("layout.zig");
     _ = textfield;
     _ = @import("textfield_tests.zig");

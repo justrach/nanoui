@@ -200,11 +200,19 @@ fn hotPath(c: *Context, h: ctx_mod.Hit) void {
     }
 }
 
-pub fn interact(c: *Context, index: u32, opts: struct { focusable: bool = false }) ctx_mod.Interaction {
+/// `focusable`: Tab reaches the box, and while it has the focus Return or
+/// Space clicks it and `Context.focus_ring` is drawn round it; `text`: a
+/// text field, which takes those keys itself.
+pub fn interact(c: *Context, index: u32, opts: struct { focusable: bool = false, text: bool = false }) ctx_mod.Interaction {
     const n = c.node(index);
     n.interactive = true;
     const id = n.id;
     if (opts.focusable) c.focusable_ids.append(c.gpa, id) catch {};
+    const key_press = opts.focusable and !opts.text and c.focus == id and keyActivate(c);
+    if (opts.focusable and !opts.text and c.focus == id) if (c.focus_ring) |ring| {
+        n.style.border = ring.color;
+        n.style.border_width = ring.width;
+    };
     const rect = c.rects.get(id);
     const top = c.hot == id;
     const hovered = top or std.mem.indexOfScalar(u64, c.hot_path.items, id) != null;
@@ -222,7 +230,7 @@ pub fn interact(c: *Context, index: u32, opts: struct { focusable: bool = false 
     // VoiceOver's activation: a click on this box, not on what is under the pointer.
     const a11y_press = id != 0 and c.input.a11y_press == id;
     if (a11y_press and opts.focusable) c.focus = id;
-    const clicked = (released and c.input.button == .left and !(ctrl_secondary and c.input.ctrl)) or a11y_press;
+    const clicked = (released and c.input.button == .left and !(ctrl_secondary and c.input.ctrl)) or a11y_press or key_press;
     if (top and c.hand_cursor) c.cursor_hand = true;
     return .{
         .id = id,
@@ -238,6 +246,25 @@ pub fn interact(c: *Context, index: u32, opts: struct { focusable: bool = false 
         .focused = c.focus == id,
         .a11y_step = if (c.input.a11y_step) |s| (if (s.id == id) s.dir else 0) else 0,
     };
+}
+
+/// Return or Space, without ⌘ ⌃ ⌥, as a key, typed text or the shortcut
+/// offered first: taken, it goes no further.
+fn keyActivate(c: *Context) bool {
+    if (c.input.shortcut) |s| if (!s.cmd and !s.ctrl and !s.alt and (s.key == ctx_mod.Shortcut.enter or s.key == ' ')) {
+        c.input.shortcut = null;
+        c.shortcut_taken = true;
+        c.changed = true;
+        return true;
+    };
+    if (c.input.cmd or c.input.ctrl or c.input.alt) return false;
+    if (c.input.key == .enter or std.mem.eql(u8, c.input.chars, " ")) {
+        c.input.key = null;
+        c.input.chars = "";
+        c.changed = true;
+        return true;
+    }
+    return false;
 }
 
 pub fn shortcut(c: *Context, want_in: ctx_mod.Shortcut) bool {
