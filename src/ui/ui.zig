@@ -202,6 +202,13 @@ pub const dragging = @import("drag_payload.zig").dragging;
 pub const cancelDrag = @import("drag_payload.zig").cancel;
 pub const DragSource = @import("drag_payload.zig").Source;
 pub const DragActive = @import("drag_payload.zig").Active;
+/// A scroll box's offset read back and set (`scroll_x.zig`).
+pub const scrollBox = @import("scroll_x.zig").scrollBox;
+pub const scrollOffset = @import("scroll_x.zig").scrollOffset;
+pub const setScrollOffset = @import("scroll_x.zig").setScrollOffset;
+pub const scrollMax = @import("scroll_x.zig").scrollMax;
+pub const scrollAtEnd = @import("scroll_x.zig").atEnd;
+pub const scrollToEnd = @import("scroll_x.zig").scrollToEnd;
 /// What a drop from another app brought (`Context.dropAt`).
 pub const Drop = @import("input.zig").Drop;
 pub const MouseButton = @import("input.zig").Button;
@@ -267,6 +274,7 @@ test {
     _ = @import("tests_drag_payload.zig");
     _ = @import("tests_dock.zig");
     _ = @import("tests_dock_hooks.zig");
+    _ = @import("tests_scroll_api.zig");
     _ = @import("layout.zig");
     _ = textfield;
     _ = @import("tests.zig");
