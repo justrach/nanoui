@@ -62,6 +62,16 @@ test "right click reports right_clicked only" {
     try testing.expectEqual(@as(u32, 1), s.right);
 }
 
+test "a script's rat step right-clicks at a point" {
+    var s: Clicks = .{};
+    var t: ui.Tester = undefined;
+    try start(&t, &s);
+    defer t.deinit();
+    try t.runScript("rat:70,40");
+    try testing.expectEqual(@as(u32, 1), s.right);
+    try testing.expectEqual(@as(u32, 0), s.left);
+}
+
 test "middle click reports middle_clicked" {
     var s: Clicks = .{};
     var t: ui.Tester = undefined;

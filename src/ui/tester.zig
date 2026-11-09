@@ -321,8 +321,9 @@ pub const Tester = struct {
     /// `scroll:DY` (at the pointer), `wait:SECONDS` (simulated time),
     /// `live:SECONDS` (the real event loop: replies, processes, timers),
     /// `resize:WxH`; `at:X,Y` and `hover:X,Y` (a click, or the pointer, at
-    /// points), `chord:cmd+shift+n` (a key combination, as a window offers
-    /// it), `snap:PNG` (the frame so far, written: one per step of a run).
+    /// points), `rclick:TEXT` and `rat:X,Y` (a right-click: a context menu),
+    /// `chord:cmd+shift+n` (a key combination, as a window offers it),
+    /// `snap:PNG` (the frame so far, written: one per step of a run).
     pub fn runScript(t: *Tester, script: []const u8) !void {
         var steps = std.mem.splitScalar(u8, script, ';');
         while (steps.next()) |raw| {
@@ -333,6 +334,12 @@ pub const Tester = struct {
             const arg = if (colon < step.len) step[colon + 1 ..] else "";
             if (std.mem.eql(u8, op, "click")) {
                 try t.clickText(arg);
+            } else if (std.mem.eql(u8, op, "rclick")) {
+                const r = t.findText(arg) orelse return error.TextNotFound;
+                t.rightClick(r.x + r.w / 2, r.y + r.h / 2);
+            } else if (std.mem.eql(u8, op, "rat")) {
+                const comma = std.mem.indexOfScalar(u8, arg, ',') orelse return error.BadPoint;
+                t.rightClick(try std.fmt.parseFloat(f32, std.mem.trim(u8, arg[0..comma], " ")), try std.fmt.parseFloat(f32, std.mem.trim(u8, arg[comma + 1 ..], " ")));
             } else if (std.mem.eql(u8, op, "move")) {
                 const r = t.findText(arg) orelse return error.TextNotFound;
                 t.moveTo(r.x + r.w / 2, r.y + r.h / 2);
