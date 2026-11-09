@@ -274,6 +274,7 @@ test {
     _ = @import("icons.zig");
     _ = keys;
     _ = @import("tests_textedit.zig");
+    _ = @import("tests_field.zig");
     _ = @import("tests_input.zig");
     _ = @import("tests_backtab.zig");
     if (@import("builtin").os.tag == .macos) {

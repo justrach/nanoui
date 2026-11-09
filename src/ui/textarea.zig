@@ -162,19 +162,21 @@ pub fn textArea(c: *Context, buffer: *tf.TextBuffer, opts: AreaOptions) tf.Resul
         }
         // Without an input method (tests, synthetic input): keys and chars.
         if (c.input.chars.len > 0) tf.apply(buffer, e, .{ .insert = c.input.chars }, field, c.clipboard, &result);
-        if (!took_undo) if (c.input.key) |k| switch (k) {
-            .backspace => tf.apply(buffer, e, .{ .command = .delete_backward }, field, c.clipboard, &result),
-            .delete => tf.apply(buffer, e, .{ .command = .delete_forward }, field, c.clipboard, &result),
-            .left => tf.apply(buffer, e, .{ .command = if (c.input.shift) .select_left else .move_left }, field, c.clipboard, &result),
-            .right => tf.apply(buffer, e, .{ .command = if (c.input.shift) .select_right else .move_right }, field, c.clipboard, &result),
-            .up, .down => vertical(c, buffer.text(), style, w, e, k == .down, c.input.shift),
-            .home => tf.apply(buffer, e, .{ .command = .move_line_start }, field, c.clipboard, &result),
-            .end => tf.apply(buffer, e, .{ .command = .move_line_end }, field, c.clipboard, &result),
-            .enter => if (newline) tf.apply(buffer, e, .{ .insert = "\n" }, field, c.clipboard, &result) else {
-                result.submitted = true;
-            },
-            .escape => c.focus = 0,
-            else => {},
+        if (!took_undo) if (c.input.key) |k| {
+            // Control (Option, as on the Mac) with ←, →, Delete and
+            // Backspace works a word at a time (`tf.commandOf`).
+            if (tf.commandOf(k, c.input.shift, c.input.ctrl or c.input.alt)) |cmd| {
+                tf.apply(buffer, e, .{ .command = cmd }, field, c.clipboard, &result);
+            } else switch (k) {
+                .up, .down => vertical(c, buffer.text(), style, w, e, k == .down, c.input.shift),
+                .home => tf.apply(buffer, e, .{ .command = .move_line_start }, field, c.clipboard, &result),
+                .end => tf.apply(buffer, e, .{ .command = .move_line_end }, field, c.clipboard, &result),
+                .enter => if (newline) tf.apply(buffer, e, .{ .insert = "\n" }, field, c.clipboard, &result) else {
+                    result.submitted = true;
+                },
+                .escape => c.focus = 0,
+                else => {},
+            }
         };
         textedit.commitUndo(c, buffer, e, &result, false, took_undo);
         textedit.updateCaretBlink(c, was_focused, result.changed, e.caret != prev_caret);
