@@ -195,6 +195,7 @@ pub const View = struct {
 
 test {
     _ = @import("tests_ruler.zig");
+    _ = @import("tests_caret_activity.zig");
     _ = @import("tests_motion.zig");
     _ = @import("motion/tests_catalog.zig");
     _ = @import("motion/tests_reduced_motion.zig");

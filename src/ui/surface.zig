@@ -302,7 +302,8 @@ pub const Surface = struct {
         self.frame_kind = kind;
         self.ctx.transparent_root = self.transparent;
         a11y.beforeFrame(self);
-        c.window_focused = if (vis) self.window.isFocused() else true;
+        c.input.window_active = self.window.isFocused();
+        c.window_focused = c.input.window_active;
         self.pacing_log.note(now);
         // What scrolling gathered since the last frame, applied at once.
         const dy = self.scroll.take();
@@ -312,6 +313,7 @@ pub const Surface = struct {
         a11y.afterFrame(self);
         @import("../play.zig").paint(self.gpa, &self.instances);
         self.frame_in_due = if (c.frame_in) |fi| now + @as(f64, fi) else 0;
+        if (c.frame_in == null) self.wake.due = 0;
         const t_af0 = if (self.frame_log != null) cf.CACurrentMediaTime() else 0;
         const native_changed = if (self.after_frame) |af| af(self.after_frame_ctx, self) else false;
         if (self.dead) return;
@@ -360,9 +362,7 @@ pub const Surface = struct {
 
     pub fn updatePacing(self: *Surface, now: f64, hot_changed: bool) void {
         const c = &self.ctx;
-        const elapsed = (now - self.start_time) - c.caret_moved_at;
-        const recent_typing = c.focused_text != null and c.caret_moved_at > 0 and elapsed >= 0 and elapsed < 0.35;
-        const more = c.animating or hot_changed or c.input.down or recent_typing or self.scroll.active(now);
+        const more = c.animating or hot_changed or c.input.down or self.scroll.active(now);
         if (self.display_link != null) {
             if (more) {
                 self.setRate(null);

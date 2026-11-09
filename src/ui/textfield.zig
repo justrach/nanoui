@@ -312,21 +312,19 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
         c.cursor_hand = false;
         c.cursor_text = true;
     }
-    const focus_t = c.animate(it.id, 0, if (it.focused) 1 else 0, 20);
     const n = c.node(i);
     n.layout_dependent = multi and buffer.text().len > 0;
     if (!opts.bare) {
+        const focus_t = c.animate(it.id, 0, if (it.focused) 1 else 0, 20);
         n.style.border = th.border.mix(th.accent, focus_t);
         n.style.border_width = 1 + focus_t;
         if (focus_t > 0.01) n.style.shadow = .{ .color = th.accent.alpha(0.25 * focus_t), .blur = 6, .y = 0 };
     }
-
     var result: Result = .{ .focused = it.focused };
+    const requested = buffer.want_caret != null or buffer.want_selection != null;
     const e = editState(c, it.id, buffer) orelse return result;
-    // A multiline field wraps at last frame's width (unknown at first).
     const wrap_w: f32 = if (it.rect) |r| @max(1, r.w - 2 * pad_x) else 1e6;
     const lh_ = c.text.lineHeight(style);
-    // Where the wheel scrolled a multiline field; the caret before edits.
     if (multi) if (c.scroll.get(it.id)) |v| {
         e.scroll_y = v;
     };
@@ -445,8 +443,9 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
     result.caret = e.caret;
     result.vim_normal = opts.keys == .vim and e.keys.vim_normal;
     result.vim_visual = result.vim_normal and e.keys.vim_visual;
-    // A copy for the frame: the app may set the buffer (moving it) before
-    // the frame is painted, or the input method asks about it.
+    const edited = requested or result.changed or e.caret != caret_before[0] or e.anchor != caret_before[1] or c.input.pressed;
+    const caret_shown = textedit.caretShown(c, e, focused, edited, result.vim_normal);
+    // Copy before the app can move the buffer or the input method asks.
     const s = c.alloc().dupe(u8, buffer.text()) catch buffer.text();
     if (multi) {
         const lines = lines_mod.layout(c, s, style, wrap_w);
@@ -456,7 +455,7 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
         // Past its most lines it scrolls: the wheel's, and a scrollbar.
         c.node(i).style.scroll = lines.len > opts.max_lines;
         const follow = result.changed or e.caret != caret_before[0] or e.anchor != caret_before[1] or s.len != caret_before[2];
-        const d = lines_mod.draw(c, s, e, style, lines, view_h, focused, follow, result.vim_normal, opts.placeholder, opts.placeholder_color orelse th.muted, opts.suggestion, opts.caret, opts.caret_color orelse th.accent);
+        const d = lines_mod.draw(c, s, e, style, lines, view_h, focused, follow, result.vim_normal, caret_shown, opts.placeholder, opts.placeholder_color orelse th.muted, opts.suggestion, opts.caret, opts.caret_color orelse th.accent);
         c.scroll.put(c.gpa, it.id, e.scroll_y) catch {};
         result.line = d.line;
         result.lines = d.lines;
@@ -505,7 +504,7 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
         const x1 = c.text.caretX(shown, style, shownIndex(s, opts.password, m[1]));
         _ = c.leaf(.{ .absolute = true, .width = .{ .px = x1 - x0 }, .height = .{ .px = 1.5 }, .background = opts.color orelse th.text, .offset = .{ .x = x0 - e.scroll_x, .y = lh - 1 } }, .none, null);
     };
-    if (focused and hi == lo and (result.vim_normal or textedit.caretVisible(c))) {
+    if (caret_shown) {
         // Vim's normal mode: a block over the character under the caret.
         const block = result.vim_normal;
         const w: f32 = if (!block) opts.caret.width else if (e.caret < s.len) @max(4, c.text.caretX(shown, style, shownIndex(s, opts.password, @min(s.len, e.caret + 1))) - caret_x) else c.text.width("m", style);
@@ -535,7 +534,6 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
 pub const rehome = textedit.rehome;
 pub const editState = textedit.editState;
 pub const focusSelect = textedit.focusSelect;
-
 test "buffer edits" {
     var b: TextBuffer = .{};
     defer b.deinit();

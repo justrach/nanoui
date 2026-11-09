@@ -150,6 +150,7 @@ pub const EditState = struct {
     scroll_y: f32 = 0,
     /// Had the focus in the last frame: gaining it may select all.
     had_focus: bool = false,
+    blink: @import("caret.zig").Blink = .{},
     /// Pressed in the field: dragging extends the selection.
     selecting: bool = false,
     /// Emacs's and Vim's keys (keymap.zig) and the undo history.
@@ -199,6 +200,8 @@ pub const Drop = struct {
 };
 
 pub const Input = struct {
+    /// Persistent host activation, not an event edge. Inactive windows sleep.
+    window_active: bool = true,
     mouse: types.Point = .{ .x = -1e6, .y = -1e6 },
     down: bool = false,
     /// The button went down / up in this event.

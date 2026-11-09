@@ -7,7 +7,6 @@ const types = @import("types.zig");
 const utf8 = @import("utf8.zig");
 const Context = @import("context.zig").Context;
 const EditState = @import("context.zig").EditState;
-const textedit = @import("textedit.zig");
 
 /// The caret's bar: `width` points wide, `inset` points short of the line
 /// box at its top and bottom, its corners rounded `radius`. A chat composer
@@ -112,7 +111,7 @@ pub const Drawn = struct {
 /// over a spacer as tall as the lines): selection, text, composition and
 /// caret. When `follow` (the caret moved, the text changed), scrolled to
 /// keep the caret in view within `view_h`; else where the wheel left it.
-pub fn draw(c: *Context, s: []const u8, e: *EditState, style: types.TextStyle, lines: []const Line, view_h: f32, focused: bool, follow: bool, block: bool, placeholder: []const u8, placeholder_color: types.Color, suggestion: []const u8, caret: Caret, caret_color: types.Color) Drawn {
+pub fn draw(c: *Context, s: []const u8, e: *EditState, style: types.TextStyle, lines: []const Line, view_h: f32, focused: bool, follow: bool, block: bool, caret_shown: bool, placeholder: []const u8, placeholder_color: types.Color, suggestion: []const u8, caret: Caret, caret_color: types.Color) Drawn {
     const th = c.theme;
     const lh = c.text.lineHeight(style);
     const k = lineOf(lines, e.caret);
@@ -147,9 +146,8 @@ pub fn draw(c: *Context, s: []const u8, e: *EditState, style: types.TextStyle, l
     if (s.len == 0) _ = c.leaf(.{ .absolute = true }, .{ .text = .{ .str = placeholder, .style = style, .color = placeholder_color } }, null);
     if (suggestion.len > 0 and focused and e.caret == s.len)
         _ = c.leaf(.{ .absolute = true, .offset = .{ .x = cx, .y = cy } }, .{ .text = .{ .str = suggestion, .style = style, .color = th.muted.alpha(0.8) } }, null);
-    // Vim's normal mode keeps its block in place; otherwise the caret
-    // blinks, as a terminal's does, and asks for the frame that turns it.
-    if (focused and hi == lo and (block or textedit.caretVisible(c))) {
+    // The field owns blink timing, including when this bar is not drawn.
+    if (caret_shown) {
         const l = lines[k];
         const w: f32 = if (!block) caret.width else if (e.caret < l.end) @max(4, caretX(c, s, style, l, e.caret + 1) - cx) else c.text.width("m", style);
         const inset: f32 = if (block) 0 else caret.inset;

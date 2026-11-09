@@ -54,7 +54,7 @@ pub const Surface = struct {
     /// A frame is being built, and another was asked for meanwhile.
     in_frame: bool = false,
     pending: bool = false,
-
+    active_signal: c_ulong = 0,
     pub fn create(window: *Window, view: ui.View, theme_override: ?Theme) !*Surface {
         const gpa = window.app.gpa;
         const self = try gpa.create(Surface);
@@ -77,6 +77,8 @@ pub const Surface = struct {
         };
         if (window.app.gui and !window.app.flags.hidden) self.text.enablePersistence(window.app.options.name);
         self.ctx = .init(gpa, &self.text);
+        self.ctx.input.window_active = window.isFocused();
+        self.active_signal = g.g_signal_connect_data(window.gtkwindow.?, "notify::is-active", @ptrCast(&onActive), self, null, 0);
         // No theme background under a transparent window's view.
         self.ctx.transparent_root = window.transparent != .none;
         if (gtk.v4) {
@@ -110,6 +112,7 @@ pub const Surface = struct {
 
     pub fn destroy(self: *Surface) void {
         const g = &gtk.api;
+        if (self.active_signal != 0) g.g_signal_handler_disconnect(self.window.gtkwindow.?, self.active_signal);
         if (self.tick != 0) g.gtk_widget_remove_tick_callback(self.area, self.tick);
         if (self.idle != 0) _ = g.g_source_remove(self.idle);
         if (self.later != 0) _ = g.g_source_remove(self.later);
@@ -166,6 +169,8 @@ pub const Surface = struct {
         }
         self.updateCursor();
         const more = c.animating or r.hot_changed;
+        if (self.later != 0) _ = gtk.api.g_source_remove(self.later);
+        self.later = 0;
         if (more and self.tick == 0) {
             self.tick = gtk.api.gtk_widget_add_tick_callback(self.area, onTick, self, null);
         } else if (!more and self.later == 0) if (c.frame_in) |s| {
@@ -458,13 +463,24 @@ pub fn scrolled(s: *Surface, delta: f32) void {
     }
 }
 
+fn onActive(_: *gtk.Widget, _: *anyopaque, data: ?*anyopaque) callconv(.c) void {
+    const s = of(data);
+    s.ctx.input.window_active = s.window.isFocused();
+    s.frame();
+}
 fn onFocusIn(_: *gtk.Widget, _: *gtk.Event, data: ?*anyopaque) callconv(.c) c_int {
-    gtk.api.gtk_im_context_focus_in(of(data).im);
+    const s = of(data);
+    gtk.api.gtk_im_context_focus_in(s.im);
+    s.ctx.input.window_active = s.window.isFocused();
+    s.frame();
     return 0;
 }
 
 fn onFocusOut(_: *gtk.Widget, _: *gtk.Event, data: ?*anyopaque) callconv(.c) c_int {
-    gtk.api.gtk_im_context_focus_out(of(data).im);
+    const s = of(data);
+    gtk.api.gtk_im_context_focus_out(s.im);
+    s.ctx.input.window_active = false;
+    s.frame();
     return 0;
 }
 
