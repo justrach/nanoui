@@ -273,6 +273,16 @@ pub const ButtonOptions = struct {
 };
 
 pub fn button(c: *Context, title: []const u8, opts: ButtonOptions) Interaction {
+    if (@import("../rt.zig").enabled) {
+        const Ext = struct { extern fn nanoui_rt_widget_button(c: *Context, lbl_ptr: [*]const u8, lbl_len: usize, opts_ptr: *const ButtonOptions, out: *Interaction) callconv(.c) void; };
+        var out: Interaction = undefined;
+        Ext.nanoui_rt_widget_button(c, title.ptr, title.len, &opts, &out);
+        return out;
+    }
+    return buttonImpl(c, title, opts);
+}
+
+pub fn buttonImpl(c: *Context, title: []const u8, opts: ButtonOptions) Interaction {
     const th = c.theme;
     const i = c.open(.{
         .direction = .row,

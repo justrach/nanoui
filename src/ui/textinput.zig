@@ -105,10 +105,12 @@ fn dupe(s: *Surface, str: []const u8) []const u8 {
 
 /// Runs a frame with the queued operations.
 pub fn flush(s: *Surface) void {
+    const tok = s.token();
     const q = &s.text_queue;
     if (q.ops.items.len == 0 and s.ctx.undo_op == .none) return;
     s.ctx.input.ops = q.ops.items;
     s.frame();
+    if (!Surface.alive(tok)) return;
     s.ctx.input.ops = &.{};
     s.ctx.undo_op = .none;
     q.pending = null;
@@ -321,9 +323,11 @@ fn doCommand(obj: objc.Object, _: objc.SEL, sel: objc.SEL) callconv(.c) void {
 /// ⌘Z/⌘C/⌘X/⌘A before `keyDown:`, so an app's own (an editor's undo, copying
 /// clips) would otherwise never see them. True if the view took it.
 fn offerShortcut(s: *Surface, key: u21, shift: bool) bool {
+    const tok = s.token();
     s.ctx.shortcut_taken = false;
     s.ctx.input.shortcut = .{ .key = key, .cmd = true, .shift = shift };
     s.frame();
+    if (!Surface.alive(tok)) return true;
     s.ctx.input.shortcut = null;
     return s.ctx.shortcut_taken;
 }

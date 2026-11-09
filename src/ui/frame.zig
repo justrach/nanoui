@@ -12,13 +12,26 @@ const Theme = @import("theme.zig").Theme;
 const Context = @import("context.zig").Context;
 const View = @import("ui.zig").View;
 const now = @import("clock.zig").now;
+const retain = @import("retain.zig");
 
 pub const Result = struct {
     /// The box under a still pointer changed: another frame should follow.
     hot_changed: bool,
+    /// The scene was the previous frame's, shifted by a scroll. The view
+    /// was not built and text was not shaped again.
+    retained: bool = false,
 };
 
 pub fn run(c: *Context, view: View, ts: *text.TextSystem, instances: *std.ArrayList(gpu.Instance), size: types.Size, scale: f32, theme: Theme, dt: f32, time: f64) Result {
+    if (retain.shift(c, instances, size, scale)) {
+        c.stats.retained = true;
+        c.stats.build_ms = 0;
+        c.stats.layout_ms = 0;
+        c.stats.paint_ms = 0;
+        c.dt = dt;
+        c.time = time;
+        return .{ .hot_changed = false, .retained = true };
+    }
     c.dt = dt;
     c.time = time;
     c.size = size;
@@ -94,5 +107,7 @@ pub fn run(c: *Context, view: View, ts: *text.TextSystem, instances: *std.ArrayL
     const hot_before = c.hot;
     c.commitHits();
     c.finish();
+    c.stats.retained = false;
+    retain.store(c, instances);
     return .{ .hot_changed = c.hot != hot_before };
 }

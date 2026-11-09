@@ -1,0 +1,10 @@
+name = "nanoui-proofs"
+version = "0.1.0"
+defaultTargets = ["NanoUI", "nanoui-spec-report"]
+
+[[lean_lib]]
+name = "NanoUI"
+
+[[lean_exe]]
+name = "nanoui-spec-report"
+root = "Main"

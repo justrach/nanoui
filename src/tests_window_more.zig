@@ -126,3 +126,45 @@ test "with menu key equivalents held back, a chord goes to the focused view" {
     defer m.destroy();
     try testing.expect(objc.msg(objc.BOOL, m.ns, "performKeyEquivalent:", .{ev}) == objc.NO);
 }
+
+test "a view that closes its window inside an event frame does not touch the freed surface" {
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    const app = try makeApp(testing.allocator);
+    defer freeApp(app);
+
+    const Closer = struct {
+        w: ?*Window = null,
+        buf: ui.TextBuffer = .{},
+        fn view(self: *@This(), c: *ui.Context) void {
+            const tf = ui.textField(c, &self.buf, .{ .width = .{ .px = 160 } });
+            if (c.focus == 0) c.focusCycle(false);
+            if (tf.submitted or c.shortcut(.{ .key = 'w', .cmd = true }) or ui.button(c, "Close", .{}).clicked) {
+                if (self.w) |win| {
+                    self.w = null;
+                    win.close();
+                }
+            }
+        }
+    };
+
+    // 1. Closing on a shortcut inside keyDown:
+    {
+        var cl: Closer = .{};
+        defer cl.buf.deinit();
+        cl.w = try app.newWindow(.{ .title = "close-key", .width = 200, .height = 120, .visible = false, .content = .{ .view = .init(&cl, Closer.view) } });
+        const nsview = cl.w.?.surface.?.nsview;
+        objc.msg(void, nsview, "keyDown:", .{keyEvent(13, cmd, "w", "w")});
+        try testing.expect(cl.w == null);
+    }
+
+    // 2. Closing on insertNewline: inside textinput.flush
+    {
+        var cl: Closer = .{};
+        defer cl.buf.deinit();
+        cl.w = try app.newWindow(.{ .title = "close-enter", .width = 200, .height = 120, .visible = false, .content = .{ .view = .init(&cl, Closer.view) } });
+        const nsview = cl.w.?.surface.?.nsview;
+        objc.msg(void, nsview, "doCommandBySelector:", .{objc.sel("insertNewline:")});
+        try testing.expect(cl.w == null);
+    }
+}

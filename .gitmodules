@@ -19,3 +19,6 @@
 [submodule "apps/nanolight"]
 	path = apps/nanolight
 	url = https://github.com/justrach/nanolight.git
+[submodule "apps/nanodocs"]
+	path = apps/nanodocs
+	url = https://github.com/justrach/nanodocs.git

@@ -15,6 +15,7 @@ pub fn build(b: *std.Build) void {
     const portable = b.option(bool, "portable", "Use portable text and CPU rendering instead of native rasterization (for tests)") orelse false;
     const options = b.addOptions();
     options.addOption(bool, "portable", portable);
+    options.addOption(bool, "in_rt", false);
     // The one place the version is kept: build.zig.zon (tools/version.sh).
     options.addOption([]const u8, "version", @import("build.zig.zon").version);
 
@@ -26,6 +27,30 @@ pub fn build(b: *std.Build) void {
     });
     nanoui.addOptions("build_options", options);
     const os = target.result.os.tag;
+    if (os != .ios and !target.result.abi.isAndroid()) {
+        const rt_options = b.addOptions();
+        rt_options.addOption(bool, "portable", portable);
+        rt_options.addOption(bool, "in_rt", true);
+        rt_options.addOption([]const u8, "version", @import("build.zig.zon").version);
+        const rt_mod = b.createModule(.{
+            .root_source_file = b.path("src/rt.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        rt_mod.addOptions("build_options", rt_options);
+        if (os == .macos and !target.query.isNative()) {
+            if (std.zig.system.darwin.getSdk(b.allocator, b.graph.io, &target.result)) |sdk| {
+                rt_mod.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ sdk, "System/Library/Frameworks" }) });
+                rt_mod.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ sdk, "usr/lib" }) });
+            }
+        }
+        if (os != .macos) {
+            if (b.lazyDependency("http_zig", .{ .target = target, .optimize = optimize })) |d| rt_mod.addImport("http_zig", d.module("http_zig"));
+        }
+        const rt_lib = b.addLibrary(.{ .linkage = .static, .name = "nanoui-rt", .root_module = rt_mod });
+        nanoui.linkLibrary(rt_lib);
+    }
     if (os == .macos) {
         // A target other than this Mac's (an older macOS for a release,
         // `-Dtarget=aarch64-macos.13.0`) gets no SDK from Zig: use Xcode's.
@@ -65,7 +90,7 @@ pub fn build(b: *std.Build) void {
         // system's; d3dcompiler_47 turns the HLSL into shaders at startup,
         // and the Windows SDK has no import library for it (only the DLL),
         // so `ui/d3d11_glue.zig` loads it when it first compiles one.
-        for ([_][]const u8{ "d3d11", "dxgi" }) |l| nanoui.linkSystemLibrary(l, .{});
+        for ([_][]const u8{ "d3d11", "dxgi", "dwrite", "gdi32", "ole32", "dwmapi", "imm32", "user32", "shell32", "comdlg32", "shlwapi" }) |l| nanoui.linkSystemLibrary(l, .{});
     }
     // WebView2 (pages on Windows) is linked the way `d3dcompiler_47` is: at
     // no link time at all. `windows/webview2.zig` loads `WebView2Loader.dll`

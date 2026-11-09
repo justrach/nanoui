@@ -87,6 +87,8 @@ pub const FrameStats = struct {
     passes: u32 = 0,
     nodes: usize = 0,
     instances: usize = 0,
+    /// The scene was the last frame's, shifted: nothing was built or painted.
+    retained: bool = false,
 };
 const Anim = struct { value: f32, frame: u64 };
 /// A widget's own state (`Context.state`): a few bytes, kept while it's drawn.
@@ -116,6 +118,7 @@ pub const Context = struct {
     time: f64 = 0,
     frame: u64 = 0,
     input: Input = .{},
+    retain: @import("retain.zig").State = .{},
 
     nodes: std.ArrayList(Node) = .empty,
     stack: std.ArrayList(u32) = .empty,
@@ -311,6 +314,7 @@ pub const Context = struct {
         c.helps.deinit(c.gpa);
         c.drop_targets.deinit(c.gpa);
         c.truncates.deinit(c.gpa);
+        c.retain.deinit(c.gpa);
     }
 
     /// Memory that lives until the end of the frame, for formatted text.
@@ -321,17 +325,30 @@ pub const Context = struct {
     }
 
     pub fn alloc(c: *Context) std.mem.Allocator {
+        if (@import("../rt.zig").enabled) {
+            const Ext = struct { extern fn nanoui_rt_ctx_alloc(c: *Context, out: *std.mem.Allocator) callconv(.c) void; };
+            var out: std.mem.Allocator = undefined;
+            Ext.nanoui_rt_ctx_alloc(c, &out);
+            return out;
+        }
         return c.arena.allocator();
     }
 
     pub fn print(c: *Context, comptime fmt: []const u8, args: anytype) []const u8 {
+        if (@import("../rt.zig").enabled and comptime std.mem.eql(u8, fmt, "{d}") and args.len == 1 and @typeInfo(@TypeOf(args[0])) == .int) {
+            const Ext = struct { extern fn nanoui_rt_ctx_print_i64(c: *Context, val: i64, out_ptr: *[*]const u8, out_len: *usize) callconv(.c) void; };
+            var ptr: [*]const u8 = undefined;
+            var len: usize = undefined;
+            Ext.nanoui_rt_ctx_print_i64(c, @intCast(args[0]), &ptr, &len);
+            return ptr[0..len];
+        }
         return std.fmt.allocPrint(c.alloc(), fmt, args) catch "…";
     }
     /// Starts building a frame: the root fills the window.
     pub fn begin(c: *Context) void {
         c.noteModality();
         c.tooltip = .{};
-        if (c.frame == 0 and c.nodes.capacity == 0) c.warmMaps();
+        if (c.frame == 0 and c.nodes.capacity == 0) hooks.warmMaps(c);
         // Tab moves the focus on, unless a text field has it (it takes Tab).
         if (c.input.key == .tab and (c.focus == 0 or !c.focus_is_text) and c.last_focusable_ids.items.len > 0) {
             hooks.focusCycle(c, c.input.shift);
@@ -355,6 +372,7 @@ pub const Context = struct {
         c.focused_password = false;
         c.wants_wheel = false;
         c.wants_moves = false;
+        c.retain.virtual_list = false;
         c.scroll_cap.clearRetainingCapacity();
         c.helps.clearRetainingCapacity();
         c.drop_targets.clearRetainingCapacity();
@@ -392,63 +410,9 @@ pub const Context = struct {
         c.focus_select_all = false;
         c.frame += 1;
         // Forget animations of widgets gone for a while.
-        if (c.frame % 120 == 0) {
-            var stale: [64]u64 = undefined;
-            var n: usize = 0;
-            var it = c.anims.iterator();
-            while (it.next()) |e| {
-                if (n == stale.len) break;
-                if (c.frame - e.value_ptr.frame > 120) {
-                    stale[n] = e.key_ptr.*;
-                    n += 1;
-                }
-            }
-            for (stale[0..n]) |k| _ = c.anims.remove(k);
-            c.motion_store.forget(c.frame, 120);
-            n = 0;
-            var mit = c.memory.iterator();
-            while (mit.next()) |e| {
-                if (n == stale.len) break;
-                if (c.frame - e.value_ptr.frame > 120) {
-                    stale[n] = e.key_ptr.*;
-                    n += 1;
-                }
-            }
-            for (stale[0..n]) |k| _ = c.memory.remove(k);
-        }
+        if (c.frame % 120 == 0) hooks.forgetStale(c);
         c.motion.prune(c.frame);
         if (@hasField(@TypeOf(c.text.images), "wants_frame") and c.text.images.wants_frame) c.animationFrame();
-    }
-
-    fn warmMaps(c: *Context) void {
-        c.nodes.ensureTotalCapacity(c.gpa, 4096) catch {};
-        c.stack.ensureTotalCapacity(c.gpa, 128) catch {};
-        c.rects.ensureTotalCapacity(c.gpa, 4096) catch {};
-        c.prev_rects.ensureTotalCapacity(c.gpa, 4096) catch {};
-        c.hits.ensureTotalCapacity(c.gpa, 1024) catch {};
-        c.next_hits.ensureTotalCapacity(c.gpa, 1024) catch {};
-        c.a11y_items.ensureTotalCapacity(c.gpa, 1024) catch {};
-        c.helps.ensureTotalCapacity(c.gpa, 1024) catch {};
-        c.motion.entries.ensureTotalCapacity(c.gpa, 4096) catch {};
-        c.anims.ensureTotalCapacity(c.gpa, 512) catch {};
-        c.scroll.ensureTotalCapacity(c.gpa, 64) catch {};
-        c.scroll_x.ensureTotalCapacity(c.gpa, 32) catch {};
-        c.overscroll.ensureTotalCapacity(c.gpa, 64) catch {};
-        c.scrollbars.ensureTotalCapacity(c.gpa, 64) catch {};
-        c.scroll_max.ensureTotalCapacity(c.gpa, 64) catch {};
-        c.scroll_follow.ensureTotalCapacity(c.gpa, 64) catch {};
-        c.scroll_seen.ensureTotalCapacity(c.gpa, 64) catch {};
-        c.scroll_cap.ensureTotalCapacity(c.gpa, 64) catch {};
-        c.scroll_moved.ensureTotalCapacity(c.gpa, 64) catch {};
-        c.hot_path.ensureTotalCapacity(c.gpa, 64) catch {};
-        c.focusable_ids.ensureTotalCapacity(c.gpa, 64) catch {};
-        c.last_focusable_ids.ensureTotalCapacity(c.gpa, 64) catch {};
-        c.drop_targets.ensureTotalCapacity(c.gpa, 64) catch {};
-        c.selection.order.ensureTotalCapacity(c.gpa, 1024) catch {};
-        c.selection.next_order.ensureTotalCapacity(c.gpa, 1024) catch {};
-        c.selection.lines.ensureTotalCapacity(c.gpa, 1024) catch {};
-        c.truncates.ensureTotalCapacity(c.gpa, 4096) catch {};
-        _ = c.arena.allocator().alloc(u8, 64 * 1024) catch {};
     }
 
     fn childId(c: *Context, key: ?[]const u8) u64 {
@@ -481,18 +445,42 @@ pub const Context = struct {
 
     /// Opens a box; its children follow until `end`.
     pub fn open(c: *Context, style: types.Style, key: ?[]const u8) u32 {
+        if (@import("../rt.zig").enabled) {
+            const Ext = struct { extern fn nanoui_rt_ctx_open(c: *Context, s: *const types.Style, kp: ?[*]const u8, kl: usize) callconv(.c) u32; };
+            return Ext.nanoui_rt_ctx_open(c, &style, if (key) |k| k.ptr else null, if (key) |k| k.len else 0);
+        }
+        return c.openImpl(style, key);
+    }
+
+    pub fn openImpl(c: *Context, style: types.Style, key: ?[]const u8) u32 {
         const index = c.add(.{ .id = c.childId(key), .style = style });
         c.stack.append(c.gpa, index) catch @panic("OOM");
         return index;
     }
 
     pub fn end(c: *Context) void {
+        if (@import("../rt.zig").enabled) {
+            const Ext = struct { extern fn nanoui_rt_ctx_end(c: *Context) callconv(.c) void; };
+            return Ext.nanoui_rt_ctx_end(c);
+        }
+        c.endImpl();
+    }
+
+    pub fn endImpl(c: *Context) void {
         std.debug.assert(c.stack.items.len > 1);
         _ = c.stack.pop();
     }
 
     /// Adds a box without children.
     pub fn leaf(c: *Context, style: types.Style, content: Content, key: ?[]const u8) u32 {
+        if (@import("../rt.zig").enabled) {
+            const Ext = struct { extern fn nanoui_rt_ctx_leaf(c: *Context, s: *const types.Style, ct: *const Content, kp: ?[*]const u8, kl: usize) callconv(.c) u32; };
+            return Ext.nanoui_rt_ctx_leaf(c, &style, &content, if (key) |k| k.ptr else null, if (key) |k| k.len else 0);
+        }
+        return c.leafImpl(style, content, key);
+    }
+
+    pub fn leafImpl(c: *Context, style: types.Style, content: Content, key: ?[]const u8) u32 {
         return c.add(.{ .id = c.childId(key), .style = style, .content = content });
     }
 
@@ -537,6 +525,15 @@ pub const Context = struct {
     /// Asks for another frame as soon as the display can show it: for
     /// views that animate from `time` every frame.
     pub fn animationFrame(c: *Context) void {
+        c.animating = true;
+    }
+
+    /// This frame only slid a clip (a sidebar seam). The next display-link
+    /// tick may translate the last scene by `dx` instead of rebuilding.
+    pub fn clipShift(c: *Context, slot: f32, dx: f32) void {
+        c.retain.clip_shift = true;
+        c.retain.clip_slot = slot;
+        c.retain.clip_dx = dx;
         c.animating = true;
     }
 

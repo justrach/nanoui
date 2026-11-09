@@ -150,6 +150,25 @@ pub const runFor = @import("platform.zig").runFor;
 /// nanoui's version, from build.zig.zon (set with tools/version.sh).
 pub const version = @import("build_options").version;
 
+/// Minimal process entry (`main(init: nanoui.Init)`), with `panic` and
+/// `std_options` delegated to `libnanoui-rt.a` so rebuilds after an edit
+/// skip recompiling `std.Io.Threaded` and DWARF unwinding in the app's unit.
+pub const Init = if (@import("rt.zig").desktop) std.process.Init.Minimal else std.process.Init;
+pub const std_options: std.Options = .{
+    .enable_segfault_handler = !@import("rt.zig").enabled,
+    .allow_stack_tracing = !@import("rt.zig").enabled,
+    .unexpected_error_tracing = !@import("rt.zig").enabled,
+};
+pub const std_options_debug_threaded_io: ?*std.Io.Threaded = null;
+pub const panic = if (@import("rt.zig").enabled) std.debug.FullPanic(rtPanic) else std.debug.FullPanic(std.debug.defaultPanic);
+
+fn rtPanic(msg: []const u8, first_trace_addr: ?usize) noreturn {
+    const Ext = struct {
+        extern fn nanoui_rt_panic(ptr: [*]const u8, len: usize, addr: usize, has_addr: u8) callconv(.c) noreturn;
+    };
+    Ext.nanoui_rt_panic(msg.ptr, msg.len, first_trace_addr orelse 0, if (first_trace_addr != null) 1 else 0);
+}
+
 test {
     _ = tsgen;
     _ = ui;

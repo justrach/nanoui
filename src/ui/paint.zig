@@ -409,7 +409,7 @@ fn textRunLimit(c: *Context, out: *std.ArrayList(metal.Instance), t: ctx_mod.Con
                 g.value_ptr.* = count;
             };
         };
-        return;
+        if (y > clip4[3] + 128 or y + lh < clip4[1] - 128 or x > clip4[2]) return;
     }
     const styled = t.spans.len > 0 and rich.styled(t.spans);
     const lay = t.cut_lay orelse if (styled) rich.layout(c.text, t.str[start..end], style, t.spans, start) else c.text.layout(t.str[start..end], style);
@@ -423,7 +423,7 @@ fn textRunLimit(c: *Context, out: *std.ArrayList(metal.Instance), t: ctx_mod.Con
         y + (lh - f.lineHeight()) / 2 + f.leading / 2 + f.ascent;
     const baseline = if (gpui_snap) halfTowardZero(raw_baseline * scale) / scale else if (moving) raw_baseline else snap(raw_baseline, scale);
     const base = metal.color4(t.color.alpha(opacity));
-    if (sel) |s| @import("selection.zig").line(c, out, s.id, s.index, t.str, start, end, lay, x, y, lh, s.x0, s.x1, clip4);
+    if (sel) |s| if (y <= clip4[3] and y + lh >= clip4[1]) @import("selection.zig").line(c, out, s.id, s.index, t.str, start, end, lay, x, y, lh, s.x0, s.x1, clip4);
     if (t.spans.len > 0) @import("paint_decor.zig").decorations(c, out, &t, lay, start, end, x, .{ .top = y, .h = lh, .baseline = baseline }, f, clip4, opacity);
     var span_i: usize = 0;
     for (lay.glyphs) |g| {

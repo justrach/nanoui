@@ -60,6 +60,7 @@ pub fn shortcutKey(event: objc.Object, code: u16, ignoring: u21, shift: bool) u2
 
 /// A key press, as `keyDown:` has it.
 pub fn deliver(s: *Surface, event: objc.Object) void {
+    const tok = s.token();
     const code = objc.msg(u16, event, "keyCode", .{});
     const flags = objc.msg(objc.NSUInteger, event, "modifierFlags", .{});
     const in = &s.ctx.input;
@@ -80,6 +81,7 @@ pub fn deliver(s: *Surface, event: objc.Object) void {
             s.ctx.shortcut_taken = false;
             in.shortcut = .{ .key = key, .cmd = in.cmd, .ctrl = in.ctrl, .alt = in.alt, .shift = in.shift };
             s.frame();
+            if (!Surface.alive(tok)) return;
             in.shortcut = null;
             if (s.ctx.shortcut_taken) return;
             if (in.cmd and !in.ctrl and !in.alt and !in.shift) switch (key) {
@@ -189,11 +191,13 @@ fn pasteText(s: *Surface) void {
 
 fn paste(obj: objc.Object, _: objc.SEL, _: ?objc.Object) callconv(.c) void {
     const s = surfaceOf(obj) orelse return;
+    const tok = s.token();
     // ⌘V goes to the view first, as other shortcuts do: it may paste what
     // is not text (an image).
     s.ctx.shortcut_taken = false;
     s.ctx.input.shortcut = .{ .key = 'v', .cmd = true };
     s.frame();
+    if (!Surface.alive(tok)) return;
     s.ctx.input.shortcut = null;
     if (s.ctx.shortcut_taken) return;
     pasteText(s);

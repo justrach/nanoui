@@ -128,7 +128,9 @@ fn press(obj: objc.Object, event: objc.Object, button: input.Button) void {
     s.ctx.text_menu = false;
     if (eff_button == .right) s.ctx.secondaryDown();
     s.ctx.pointerDown();
+    const tok = s.token();
     s.frame();
+    if (!Surface.alive(tok)) return;
     if (eff_button == .right and s.ctx.selection.text.items.len > 0) s.ctx.text_menu = true;
     if (s.ctx.focus == 0) {
         if (s.ctx.selection.hit != null or s.ctx.selection.dragging or s.ctx.selection.text.items.len > 0) {
@@ -180,7 +182,9 @@ fn mouseDragged(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) 
     const s = surfaceOf(obj) orelse return;
     setMouse(s, event);
     s.ctx.updateHot();
+    const tok = s.token();
     if (s.visible()) s.requestFrame() else s.frame();
+    if (!Surface.alive(tok)) return;
     if (s.ctx.drag_request) |req| {
         s.ctx.drag_request = null;
         beginDragSession(s, req, event);
@@ -268,7 +272,9 @@ fn scrollWheel(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) v
         s.requestFrame();
     } else {
         in.scroll = .{ .x = dx, .y = if (wheel) dy else 0 };
+        const tok = s.token();
         s.frame();
+        if (!Surface.alive(tok)) return;
         if (took) s.ctx.updateHot();
     }
 }

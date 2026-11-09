@@ -192,7 +192,7 @@ pub fn textArea(c: *Context, buffer: *tf.TextBuffer, opts: AreaOptions) tf.Resul
                 .tab => c.focusCycle(c.input.shift),
                 else => {},
             }
-        }
+        };
         textedit.commitUndo(c, buffer, e, &result, false, took_undo);
         textedit.updateCaretBlink(c, was_focused, result.changed, e.caret != prev_caret);
         if (result.changed or result.submitted) c.changed = true;

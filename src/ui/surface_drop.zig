@@ -18,9 +18,11 @@ fn dragPoint(s: *Surface, info: objc.Object) types.Point {
 /// A drag from another app moves over the view: a copy where a box takes drops.
 pub fn draggingUpdated(obj: objc.Object, _: objc.SEL, info: objc.Object) callconv(.c) objc.NSUInteger {
     const s = surfaceOf(obj) orelse return 0;
+    const tok = s.token();
     const p = dragPoint(s, info);
     s.ctx.input.drag_over = p;
     s.frame();
+    if (!Surface.alive(tok)) return 0;
     return if (s.ctx.acceptsDropAt(p)) 1 else 0; // NSDragOperationCopy
 }
 
@@ -53,7 +55,9 @@ pub fn performDragOperation(obj: objc.Object, _: objc.SEL, info: objc.Object) ca
     const text = a.dupe(u8, objc.fromNSString(objc.msg(?objc.Object, pb, "stringForType:", .{objc.nsString("public.utf8-plain-text")}))) catch "";
     s.ctx.input.drag_over = null;
     s.ctx.input.drop = .{ .point = p, .urls = urls.items, .text = text };
+    const tok = s.token();
     s.frame();
+    if (!Surface.alive(tok)) return objc.NO;
     s.ctx.input.drop = null;
     return if (s.ctx.acceptsDropAt(p)) objc.YES else objc.NO;
 }

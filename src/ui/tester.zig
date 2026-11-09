@@ -69,6 +69,15 @@ pub const Tester = struct {
     /// Initializes in place (the context points into the tester) and runs
     /// the first frame.
     pub fn init(t: *Tester, gpa: std.mem.Allocator, view: View, opts: Options) !void {
+        if (@import("../rt.zig").enabled) {
+            const Ext = struct { extern fn nanoui_rt_tester_init(t: *Tester, gpa_ptr: *const std.mem.Allocator, view_ptr: *const View, opts_ptr: *const Options) callconv(.c) u8; };
+            if (Ext.nanoui_rt_tester_init(t, &gpa, &view, &opts) != 0) return error.TesterInitFailed;
+            return;
+        }
+        return t.initImpl(gpa, view, opts);
+    }
+
+    pub fn initImpl(t: *Tester, gpa: std.mem.Allocator, view: View, opts: Options) !void {
         var renderer: metal.Renderer = if (portable) {} else try metal.Renderer.init();
         errdefer if (!portable) renderer.deinit();
         t.* = .{
@@ -107,6 +116,14 @@ pub const Tester = struct {
     }
 
     pub fn deinit(t: *Tester) void {
+        if (@import("../rt.zig").enabled) {
+            const Ext = struct { extern fn nanoui_rt_tester_deinit(t: *Tester) callconv(.c) void; };
+            return Ext.nanoui_rt_tester_deinit(t);
+        }
+        t.deinitImpl();
+    }
+
+    pub fn deinitImpl(t: *Tester) void {
         t.clipboard.deinit(t.gpa);
         t.instances.deinit(t.gpa);
         t.ctx.deinit();
@@ -115,6 +132,14 @@ pub const Tester = struct {
     }
 
     pub fn frame(t: *Tester) void {
+        if (@import("../rt.zig").enabled) {
+            const Ext = struct { extern fn nanoui_rt_tester_frame(t: *Tester) callconv(.c) void; };
+            return Ext.nanoui_rt_tester_frame(t);
+        }
+        t.frameImpl();
+    }
+
+    pub fn frameImpl(t: *Tester) void {
         _ = frame_mod.run(&t.ctx, t.view, &t.text, &t.instances, t.size, t.scale, t.theme, t.dt, t.time);
         // The simulated clock is the real one here: a view reads its rate off it.
         t.ctx.frame_time = t.dt;
@@ -348,28 +373,6 @@ pub const Tester = struct {
         platform.runUntil(seconds, &t.woken);
         t.woken.store(false, .release);
         t.frame();
-    }
-
-    /// The pointer goes down at (x, y) and stays down (`move`, `up`), with
-    /// the modifier keys `setMods` left.
-    pub fn down(t: *Tester, x: f32, y: f32) void {
-        t.moveTo(x, y);
-        t.ctx.input.click_count = 1;
-        t.ctx.pointerDown();
-        t.frame();
-    }
-
-    /// The pointer moves to (x, y), held down or not.
-    pub fn move(t: *Tester, x: f32, y: f32) void {
-        t.ctx.input.mouse = .{ .x = x, .y = y };
-        if (!t.ctx.input.down) t.ctx.updateHot();
-        t.frame();
-    }
-
-    pub fn up(t: *Tester) void {
-        t.ctx.pointerUp();
-        t.frame();
-        t.ctx.updateHot();
     }
 
     /// Renders the last frame offscreen and writes it to a PNG file.

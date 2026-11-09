@@ -183,8 +183,16 @@ pub const Surface = struct {
 
     pub fn destroy(self: *Surface) void {
         self.dead = true;
+        self.ctx.changed = false;
         self.force_destroy = !self.window.app.running;
         if (!self.in_frame) self.finishDestroy();
+    }
+    pub fn token(self: *const Surface) ?*anyopaque {
+        return wake.token(self);
+    }
+    pub fn alive(tok: ?*anyopaque) bool {
+        const s = wake.find(tok) orelse return false;
+        return !s.dead;
     }
     pub fn finishDestroy(self: *Surface) void {
         if (!self.torn_down) {
@@ -200,7 +208,7 @@ pub const Surface = struct {
             }
             if (self.tracking) |t| objc.release(t);
             a11y.clearCache(self);
-            objc.release(self.nsview);
+            objc.autorelease(self.nsview);
             self.instances.deinit(self.gpa);
             self.pasted.deinit(self.gpa);
             if (self.tip) |t| self.gpa.free(t);
@@ -493,6 +501,7 @@ pub const Surface = struct {
             return;
         }
         if (self.display_link != null and self.visible()) {
+            self.ctx.frame_in = null;
             self.setRate(null);
             self.setPaced(true);
         } else self.scheduleTick();

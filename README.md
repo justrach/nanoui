@@ -8,7 +8,7 @@
 
 <p align="center"><sub>Meet Nano. <a href="docs/images/nano-transparent.png">Transparent PNG</a> · <a href="docs/images/nano-paper.png">Original paper illustration</a></sub></p>
 
-<p align="center">Want to see it in use? <a href="https://github.com/justrach/nanoterm"><strong>nanoterm</strong></a> is a terminal with a coding agent, <a href="https://github.com/justrach/nanomon"><strong>nanomon</strong></a> an activity monitor, <a href="https://github.com/justrach/nanostudio"><strong>nanostudio</strong></a> a screen recorder, <a href="https://github.com/justrach/nanofly"><strong>nanofly</strong></a> a live flight tracker, <a href="https://github.com/gstohl/nanomail"><strong>nanomail</strong></a> a JMAP mail client, <a href="https://github.com/justrach/nanolight"><strong>nanolight</strong></a> a cross-platform launcher, <a href="apps/nanobrowser"><strong>nanobrowser</strong></a> a browser engine in Zig, and <a href="apps/nanocua"><strong>nanocua</strong></a> a computer-use MCP app.</p>
+<p align="center">Want to see it in use? <a href="https://github.com/justrach/nanoterm"><strong>nanoterm</strong></a> is a terminal with a coding agent, <a href="https://github.com/justrach/nanomon"><strong>nanomon</strong></a> an activity monitor, <a href="https://github.com/justrach/nanostudio"><strong>nanostudio</strong></a> a screen recorder, <a href="https://github.com/justrach/nanofly"><strong>nanofly</strong></a> a live flight tracker, <a href="https://github.com/gstohl/nanomail"><strong>nanomail</strong></a> a JMAP mail client, <a href="https://github.com/justrach/nanolight"><strong>nanolight</strong></a> a cross-platform launcher, <a href="https://github.com/justrach/nanodocs"><strong>nanodocs</strong></a> a Markdown &amp; HTML studio and agent shelf, <a href="apps/nanobrowser"><strong>nanobrowser</strong></a> a browser engine in Zig, and <a href="apps/nanocua"><strong>nanocua</strong></a> a computer-use MCP app.</p>
 
 <p align="center">
   <img alt="macOS · iOS · Android · Linux · Windows" src="https://img.shields.io/badge/macOS%20·%20iOS%20·%20Android%20·%20Linux%20·%20Windows-555">
@@ -491,28 +491,22 @@ What you need, an app's build.zig, and what isn't there yet:
 - **[nanomail](https://github.com/gstohl/nanomail):** a JMAP mail client for macOS and iOS. It shows rich mail with links and pictures, loading pictures from the web only when you ask. New mail arrives by push, and mailboxes others share with you appear with what you may do in them. It signs in with a password, a token, or OAuth in the browser.
 - **[nanolight](https://github.com/justrach/nanolight):** a launcher for the Mac, Windows and Linux. It finds apps as you type (initials and typos too), does math, and completes Google searches inline, showing the results in its own panel. It runs Raycast extensions and script commands, and asks Grok or searches X a row away.
 
-### [nanobrowser](apps/nanobrowser) & [nanocua](apps/nanocua)
+### [nanodocs](https://github.com/justrach/nanodocs), [nanobrowser](apps/nanobrowser) & [nanocua](apps/nanocua)
 
-- **[nanobrowser](apps/nanobrowser):** a web browser on nanoui with an engine of its own in Zig — no WebKit, no Blink, no Gecko, and no C. Its WHATWG HTML parser, CSS cascade, block/flex/grid/table layout, display list, and bytecode JavaScript VM + DOM bindings live in `apps/nanobrowser`.
+<p align="center">
+  <a href="https://github.com/justrach/nanodocs"><img src="docs/images/nanodocs-light.png" width="48%" alt="nanodocs in Paper mode: rendering nanoui's README natively on the GPU with Liquid Glass capsules"></a>
+  <a href="https://github.com/justrach/nanodocs"><img src="docs/images/nanodocs-dark.png" width="48%" alt="nanodocs in Dark mode: rendering an agent HTML report from .nanoui/shelf/ with the Discord .env inspector open"></a>
+</p>
+
+- **[nanodocs](https://github.com/justrach/nanodocs):** a native GPU Markdown (`.md`) and HTML (`.html`) studio and agent artifact shelf (`.nanoui/shelf/`), with Liquid Glass capsules, warm paper and obsidian palettes, 120 Hz transaction-synced live resize, and a `.env` Discord server inspector.
+- **[nanobrowser](apps/nanobrowser):** a web browser on nanoui with an engine of its own in Zig — no WebKit, no Blink, no Gecko, and no C (WHATWG HTML, CSS cascade, block/flex/grid/table layout, display list, and bytecode JS VM).
 - **[nanocua](apps/nanocua):** lets coding agents see and use apps on your Mac in the background through the accessibility tree and an MCP server, with a native nanoui control panel and stop switch (**⌃⌥⌘.**).
 
-Download them for macOS:
-[nanoterm](https://github.com/justrach/nanoterm/releases/latest/download/nanoterm-macos-arm64.dmg) ·
-[nanomon](https://github.com/justrach/nanomon/releases/latest/download/nanomon-macos-arm64.dmg) ·
-[nanostudio](https://github.com/justrach/nanostudio/releases/latest/download/nanostudio-macos-arm64.dmg) ·
-[nanolight](https://github.com/justrach/nanolight/releases/latest/download/nanolight-macos-arm64.dmg).
-nanomail builds from source for now (`zig build`; its README has iOS).
-
-They live in `apps/` as submodules, and each also builds on its own, fetching
-nanoui pinned by commit. To build one against the nanoui next to it, with
-your changes, use `--fork`: `cd apps/nanomon && zig build run --fork=../..`.
+Download them for macOS: [nanoterm](https://github.com/justrach/nanoterm/releases/latest/download/nanoterm-macos-arm64.dmg) · [nanomon](https://github.com/justrach/nanomon/releases/latest/download/nanomon-macos-arm64.dmg) · [nanostudio](https://github.com/justrach/nanostudio/releases/latest/download/nanostudio-macos-arm64.dmg) · [nanolight](https://github.com/justrach/nanolight/releases/latest/download/nanolight-macos-arm64.dmg). nanomail and nanodocs build from source (`zig build`). They live in `apps/` as submodules; use `--fork=../..` to build one against a local checkout.
 
 ## Performance
 
-Performance is measured headless with [`hillclimb/`](hillclimb/README.md):
-the same scenes rendered through each framework's own frames and offscreen
-Metal renderer, on an Apple M3 Ultra. The figures are medians per frame in
-milliseconds; lower is better.
+Performance is measured headless with [`hillclimb/`](hillclimb/README.md): the same scenes rendered through each framework's own frames and offscreen Metal renderer on an Apple M3 Ultra (medians per frame in ms; lower is better).
 
 | scene | frame CPU nanoui | frame CPU mygo | GPU nanoui | GPU mygo |
 |---|---:|---:|---:|---:|
@@ -522,51 +516,35 @@ milliseconds; lower is better.
 | list (100 000-row virtual list) | 0.060 | 0.367 | 0.046 | 0.045 |
 | dashboard (12 cards) | 0.015 | 0.087 | 0.098 | 0.295 |
 
-Release binaries are about 0.7 MB for nanoui and 11.8 MB for mygo. IPC (5000
-sequential calls from the page to native code) took 493 ms with nanoui and
-528 ms with mygo.
+Release binaries are about 0.7 MB for nanoui and 11.8 MB for mygo. IPC (5000 sequential calls from the page to native code) took 493 ms with nanoui and 528 ms with mygo.
 
 ### Build times
 
-A counter app each, from empty build caches, on the same M3 Ultra
-(`sh tools/buildperf.sh` measures it again: mygo's
-`examples/counter-native` with Go 1.27.1, nanoui's from `nui start` with
-Zig 0.17.0; network fetches aren't timed):
+A counter app each, from empty build caches, on the same M3 Ultra (`sh tools/buildperf.sh` measures it again: mygo's `examples/counter-native` with Go 1.27.1, nanoui's from `nui start` with Zig 0.17.0; network fetches aren't timed):
 
 | | mygo | nanoui |
 |---|---:|---:|
 | cold build | 4.4 s | 6.3 s (a second app, Zig's global cache warm: 4.8 s) |
 | rebuild, nothing changed | 0.28 s | 0.12 s |
-| rebuild after a one-line edit | 0.55 s | 2.2 s |
+| rebuild after a one-line edit | 0.55 s | 0.56 s |
 | build cache on disk | 182 MB | 97 MB |
 | program | 14 MB | 4 MB Debug, 0.7 MB ReleaseFast (11 s), 0.4 MB ReleaseSmall (6.7 s) |
 
-Zig compiles the app and nanoui as one unit, so an edit rebuilds the
-whole of it where Go rebuilds one package: that's where mygo is faster.
-Cold builds are close, nothing-changed rebuilds faster, and the disk a
-project costs is about half.
+`build.zig` compiles nanoui's non-generic runtime (`src/rt.zig`: renderer, text shaping, layout, paint, platform backend) once into `libnanoui-rt.a`, so an edit in the app only recompiles the tiny app root and relinks in ~0.56 s.
 
 ## Development
 
 ```sh
 zig build lines                                                       # the 600-line limit, enforced
 zig build test-bin -Dtarget=aarch64-linux-gnu --prefix zig-out/linux  # Linux tests, for the container
+cd lean-proofs && lake build && lake exe nanoui-spec-report           # Lean 4 formal proofs (lifecycle, resize, scroll, build split)
 cd hillclimb && zig build run -- --label "change"                     # benchmarks against mygo and history
 sh tools/version.sh 0.2.1                                             # set the version for a release
 ```
 
-To release, set the version, commit, and push its tag (`git tag v0.2.1 &&
-git push origin v0.2.1`). The release workflow checks that the tag matches
-`build.zig.zon`, runs the tests, and opens the GitHub release.
+To release, set the version, commit, and push its tag (`git tag v0.2.1 && git push origin v0.2.1`). The release workflow checks that the tag matches `build.zig.zon`, runs the tests, and opens the GitHub release. Rules for working here, by hand or with an agent, are in [AGENTS.md](AGENTS.md).
 
-Rules for working here, by hand or with an agent, are in
-[AGENTS.md](AGENTS.md).
-
-nanoui is a subset of what full frameworks offer. Pages work on macOS, Windows
-and Linux so far, accessibility is only on iOS and macOS's built-in controls,
-there are no notifications, channels or plugins yet, and bundling is only for
-iOS and Android. Apps update themselves from GitHub releases on macOS, even
-restarting unseen (`nanoui.Updater`). Bound methods run on the main thread.
+nanoui is a subset of what full frameworks offer. Pages work on macOS, Windows and Linux so far, accessibility is only on iOS and macOS's built-in controls, there are no notifications, channels or plugins yet, and bundling is only for iOS and Android. Apps update themselves from GitHub releases on macOS, even restarting unseen (`nanoui.Updater`). Bound methods run on the main thread.
 
 ## License
 

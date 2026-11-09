@@ -53,6 +53,7 @@ pub const Rows = struct {
 };
 
 pub fn list(c: *Context, opts: Options) Rows {
+    c.retain.virtual_list = true;
     const id = c.peekId(null);
     if (opts.scroll_to) |y| c.scroll.put(c.gpa, id, @max(0, y)) catch {};
     const i = c.open(.{

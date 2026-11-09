@@ -377,7 +377,6 @@ pub const Window = struct {
         try self.docked.append(self.app.gpa, p);
         return p;
     }
-    }
 
     pub fn setTitle(self: *Window, title: []const u8) void {
         const pool = objc.Pool.push();

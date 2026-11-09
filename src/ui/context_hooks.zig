@@ -192,42 +192,78 @@ pub fn addHit(c: *Context, id: u64, index: u32, rect: types.Rect, scroll: bool) 
     c.next_hits.append(c.gpa, .{ .id = id, .index = index, .rect = rect, .scroll = scroll }) catch {};
 }
 
-pub fn commitHits(c: *Context) void {
-    std.mem.swap(std.ArrayList(ctx_mod.Hit), &c.hits, &c.next_hits);
-    updateHot(c);
+pub fn warmMaps(c: *Context) void {
+    c.nodes.ensureTotalCapacity(c.gpa, 4096) catch {};
+    c.stack.ensureTotalCapacity(c.gpa, 128) catch {};
+    c.rects.ensureTotalCapacity(c.gpa, 4096) catch {};
+    c.prev_rects.ensureTotalCapacity(c.gpa, 4096) catch {};
+    c.hits.ensureTotalCapacity(c.gpa, 1024) catch {};
+    c.next_hits.ensureTotalCapacity(c.gpa, 1024) catch {};
+    c.a11y_items.ensureTotalCapacity(c.gpa, 1024) catch {};
+    c.helps.ensureTotalCapacity(c.gpa, 1024) catch {};
+    c.motion.entries.ensureTotalCapacity(c.gpa, 4096) catch {};
+    c.anims.ensureTotalCapacity(c.gpa, 512) catch {};
+    c.scroll.ensureTotalCapacity(c.gpa, 64) catch {};
+    c.scroll_x.ensureTotalCapacity(c.gpa, 32) catch {};
+    c.overscroll.ensureTotalCapacity(c.gpa, 64) catch {};
+    c.scrollbars.ensureTotalCapacity(c.gpa, 64) catch {};
+    c.scroll_max.ensureTotalCapacity(c.gpa, 64) catch {};
+    c.scroll_follow.ensureTotalCapacity(c.gpa, 64) catch {};
+    c.scroll_seen.ensureTotalCapacity(c.gpa, 64) catch {};
+    c.scroll_cap.ensureTotalCapacity(c.gpa, 64) catch {};
+    c.scroll_moved.ensureTotalCapacity(c.gpa, 64) catch {};
+    c.hot_path.ensureTotalCapacity(c.gpa, 64) catch {};
+    c.focusable_ids.ensureTotalCapacity(c.gpa, 64) catch {};
+    c.last_focusable_ids.ensureTotalCapacity(c.gpa, 64) catch {};
+    c.drop_targets.ensureTotalCapacity(c.gpa, 64) catch {};
+    c.selection.order.ensureTotalCapacity(c.gpa, 1024) catch {};
+    c.selection.next_order.ensureTotalCapacity(c.gpa, 1024) catch {};
+    c.selection.lines.ensureTotalCapacity(c.gpa, 1024) catch {};
+    c.truncates.ensureTotalCapacity(c.gpa, 4096) catch {};
+    _ = c.arena.allocator().alloc(u8, 64 * 1024) catch {};
 }
 
-pub fn updateHot(c: *Context) void {
-    c.hot = 0;
-    c.hot_index = ctx_mod.none;
-    c.hot_path.clearRetainingCapacity();
-    var i = c.hits.items.len;
-    while (i > 0) {
-        i -= 1;
-        const h = c.hits.items[i];
-        if (!h.scroll and !h.scroll_x and h.rect.contains(c.input.mouse)) {
-            c.hot = h.id;
-            c.hot_index = h.index;
-            hotPath(c, h);
-            return;
+pub fn forgetStale(c: *Context) void {
+    var stale: [64]u64 = undefined;
+    var n: usize = 0;
+    var it = c.anims.iterator();
+    while (it.next()) |e| {
+        if (n == stale.len) break;
+        if (c.frame - e.value_ptr.frame > 120) {
+            stale[n] = e.key_ptr.*;
+            n += 1;
         }
     }
-}
-
-fn hotPath(c: *Context, h: ctx_mod.Hit) void {
-    if (h.index >= c.nodes.items.len or c.nodes.items[h.index].id != h.id) return;
-    var at = h.index;
-    while (at != ctx_mod.none) {
-        const n = c.nodes.items[at];
-        if (n.interactive) c.hot_path.append(c.gpa, n.id) catch return;
-        at = n.parent;
+    for (stale[0..n]) |k| _ = c.anims.remove(k);
+    c.motion_store.forget(c.frame, 120);
+    n = 0;
+    var mit = c.memory.iterator();
+    while (mit.next()) |e| {
+        if (n == stale.len) break;
+        if (c.frame - e.value_ptr.frame > 120) {
+            stale[n] = e.key_ptr.*;
+            n += 1;
+        }
     }
+    for (stale[0..n]) |k| _ = c.memory.remove(k);
 }
 
 /// `focusable`: Tab reaches the box, and while it has the focus Return or
 /// Space clicks it and `Context.focus_ring` is drawn round it; `text`: a
 /// text field, which takes those keys itself.
-pub fn interact(c: *Context, index: u32, opts: struct { focusable: bool = false, text: bool = false }) ctx_mod.Interaction {
+pub const InteractOptions = struct { focusable: bool = false, text: bool = false };
+
+pub fn interact(c: *Context, index: u32, opts: InteractOptions) ctx_mod.Interaction {
+    if (@import("../rt.zig").enabled) {
+        const Ext = struct { extern fn nanoui_rt_ctx_interact(c: *Context, index: u32, opts_ptr: *const InteractOptions, out: *ctx_mod.Interaction) callconv(.c) void; };
+        var out: ctx_mod.Interaction = undefined;
+        Ext.nanoui_rt_ctx_interact(c, index, &opts, &out);
+        return out;
+    }
+    return interactImpl(c, index, opts);
+}
+
+pub fn interactImpl(c: *Context, index: u32, opts: InteractOptions) ctx_mod.Interaction {
     const n = c.node(index);
     n.interactive = true;
     const id = n.id;
@@ -322,6 +358,14 @@ pub fn state(c: *Context, comptime T: type, key: []const u8) *T {
 }
 
 pub fn animate(c: *Context, id: u64, salt: u32, target: f32, speed: f32) f32 {
+    if (@import("../rt.zig").enabled) {
+        const Ext = struct { extern fn nanoui_rt_ctx_animate(c: *Context, id: u64, salt: u32, target: f32, speed: f32) callconv(.c) f32; };
+        return Ext.nanoui_rt_ctx_animate(c, id, salt, target, speed);
+    }
+    return animateImpl(c, id, salt, target, speed);
+}
+
+pub fn animateImpl(c: *Context, id: u64, salt: u32, target: f32, speed: f32) f32 {
     var h = std.hash.Wyhash.init(id);
     h.update(std.mem.asBytes(&salt));
     const key = h.final();
