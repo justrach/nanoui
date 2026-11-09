@@ -1,6 +1,10 @@
 //! Tray icons: items in the menu bar's status area, with a menu, a title,
-//! an SF Symbol or pixels as their icon; without a menu, a click calls
-//! `on_click` (a menu bar extra opens its panel under `anchor()`).
+//! an SF Symbol or pixels as their icon. A menu alone opens on every click;
+//! `on_click` alone takes every click (a menu bar extra opens its panel
+//! under `anchor()`); with both, a click calls `on_click` and then opens the
+//! menu under the item (a menu bar app that brings its window forward and
+//! offers its menu in one click), and a right click only opens the menu
+//! (`clickAction`).
 const std = @import("std");
 const objc = @import("objc.zig");
 const menu_mod = @import("menu.zig");
@@ -27,9 +31,23 @@ pub const Options = struct {
     symbol: []const u8 = "",
     tooltip: []const u8 = "",
     menu: []const menu_mod.MenuItem = &.{},
-    /// Called on a click when there is no menu.
+    /// Called on a click; with a menu too, before the menu opens. It must
+    /// not destroy the tray (defer that: `App.soon`).
     on_click: ?Click = null,
 };
+
+/// What a click on a tray does (`Options.on_click`).
+pub const ClickAction = enum { none, click, menu, click_then_menu };
+
+/// A left (`right` false) or right click on a tray with `on_click`
+/// (`has_click`) and a menu (`has_menu`). A tray with a menu and no
+/// `on_click` never asks: the menu is the status item's own and AppKit
+/// opens it on every click.
+pub fn clickAction(right: bool, has_click: bool, has_menu: bool) ClickAction {
+    if (right) return if (has_menu) .menu else if (has_click) .click else .none;
+    if (has_click) return if (has_menu) .click_then_menu else .click;
+    return if (has_menu) .menu else .none;
+}
 
 pub const Tray = struct {
     gpa: std.mem.Allocator,
@@ -64,6 +82,8 @@ pub const Tray = struct {
             const button = objc.msg(objc.Object, item, "button", .{});
             objc.msg(void, button, "setTarget:", .{target});
             objc.msg(void, button, "setAction:", .{objc.sel("clicked:")});
+            // Both buttons, on release: a right click opens the menu alone.
+            _ = objc.msg(isize, button, "sendActionOn:", .{@as(objc.NSUInteger, mask_left_up | mask_right_up)});
         }
         return self;
     }
@@ -130,15 +150,43 @@ pub const Tray = struct {
         return .{ .x = f.origin.x, .y = top - f.origin.y - f.size.height, .width = f.size.width, .height = f.size.height };
     }
 
+    // NSEventMaskLeftMouseUp, NSEventMaskRightMouseUp, NSEventTypeRightMouseUp.
+    const mask_left_up: objc.NSUInteger = 1 << 2;
+    const mask_right_up: objc.NSUInteger = 1 << 4;
+    const type_right_up: objc.NSUInteger = 4;
+
     fn clicked(obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
         const self = objc.getZig(Tray, obj) orelse return;
-        if (self.on_click) |c| c.func(c.ctx, self);
+        const nsapp = objc.msg(objc.Object, objc.class("NSApplication"), "sharedApplication", .{});
+        const event = objc.msg(?objc.Object, nsapp, "currentEvent", .{});
+        const right = if (event) |e| objc.msg(objc.NSUInteger, e, "type", .{}) == type_right_up else false;
+        const action = clickAction(right, self.on_click != null, self.menu != null);
+        if (action == .click or action == .click_then_menu) if (self.on_click) |c| c.func(c.ctx, self);
+        // Read after `on_click`, which may have replaced the menu.
+        if (action == .menu or action == .click_then_menu) if (self.menu) |m| {
+            // The status item's own way to open a menu it does not own
+            // (`menu` would take the click from `on_click`); it returns once
+            // the menu closes.
+            objc.msg(void, self.item, "popUpStatusItemMenu:", .{m.ns});
+        };
     }
 
     pub fn setMenu(self: *Tray, app_name: []const u8, template: []const menu_mod.MenuItem) !void {
         const m = try menu_mod.Menu.create(self.gpa, app_name, template);
         if (self.menu) |old| old.destroy();
         self.menu = m;
-        objc.msg(void, self.item, "setMenu:", .{m.ns});
+        // With `on_click` the button's action opens the menu after it; a
+        // status item's own menu would take every click instead.
+        if (self.on_click == null) objc.msg(void, self.item, "setMenu:", .{m.ns});
     }
 };
+
+test "a click with on_click and a menu runs on_click and then opens the menu; a right click only opens it" {
+    const t = std.testing;
+    try t.expectEqual(ClickAction.click_then_menu, clickAction(false, true, true));
+    try t.expectEqual(ClickAction.menu, clickAction(true, true, true));
+    try t.expectEqual(ClickAction.click, clickAction(false, true, false));
+    try t.expectEqual(ClickAction.click, clickAction(true, true, false));
+    try t.expectEqual(ClickAction.menu, clickAction(false, false, true));
+    try t.expectEqual(ClickAction.none, clickAction(false, false, false));
+}
