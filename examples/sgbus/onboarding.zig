@@ -241,7 +241,7 @@ pub const Onboarding = struct {
         defer d.end();
         {
             const front = ui.div(c).absolute().offset(0, 0).sizeFull().face(.front).itemsCenter().justifyCenter();
-            _ = ui.image(c, .{ .key = s.key, .bytes = s.picture, .max_width = card_w, .max_height = card_h, .radius = 0, .scale = 2 });
+            _ = ui.image(c, .{ .key = s.key, .source = .{ .encoded = s.picture }, .max_width = card_w, .max_height = card_h, .radius = 0, .scale = 2 });
             front.end();
         }
         if (over > 0) {

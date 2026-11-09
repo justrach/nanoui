@@ -38,9 +38,9 @@ pub const Scene = struct {
         _ = ui.button(c, "Cancel", .{});
         ui.icon(c, "star.fill", .{ .size = 18, .color = c.theme.accent });
         ui.badge(c, "new", c.theme.accent);
-        _ = ui.image(c, .{ .key = "gradient", .bytes = s.picture, .max_width = 60, .radius = 8 });
+        _ = ui.image(c, .{ .key = "gradient", .source = .{ .encoded = s.picture }, .max_width = 60, .radius = 8 });
         // The same picture's shape, tinted (a monochrome mark).
-        _ = ui.image(c, .{ .key = "gradient", .bytes = s.picture, .max_width = 30, .radius = 0, .tint = c.theme.accent });
+        _ = ui.image(c, .{ .key = "gradient", .source = .{ .encoded = s.picture }, .max_width = 30, .radius = 0, .tint = c.theme.accent });
     }
 };
 

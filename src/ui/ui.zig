@@ -104,6 +104,8 @@ pub const Stroke = @import("draw.zig").Stroke;
 pub const triangulate = @import("draw.zig").triangulate;
 pub const Texture = @import("gpu.zig").Texture;
 pub const ImageOptions = widgets.ImageOptions;
+/// Where a picture comes from: encoded bytes, or premultiplied BGRA pixels.
+pub const ImageSource = @import("images.zig").Source;
 pub const svg = widgets.svg;
 /// A font the app brings, found by family name (`Theme.font`, …).
 pub const registerFont = @import("font_registry.zig").register;

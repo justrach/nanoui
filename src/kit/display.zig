@@ -54,7 +54,7 @@ pub fn avatar(c: *ui.Context, opts: struct { name: []const u8 = "", image: ?[]co
     if (opts.ring) |r| d = d.border(r).borderW(2);
     defer d.end();
     if (opts.image) |png| {
-        _ = ui.image(c, .{ .key = opts.name, .bytes = png, .max_width = opts.size, .max_height = opts.size, .radius = opts.size / 2 });
+        _ = ui.image(c, .{ .key = opts.name, .source = .{ .encoded = png }, .max_width = opts.size, .max_height = opts.size, .radius = opts.size / 2 });
         return;
     }
     const hues = [_]u24{ 0xe8453c, 0xe8833c, 0xc9a227, 0x3fae5a, 0x16a3a3, 0x2f6fd0, 0x6d4fd0, 0xb447a8 };
