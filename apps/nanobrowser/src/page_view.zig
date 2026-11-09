@@ -21,7 +21,12 @@ const motion = @import("page_motion.zig");
 const frames = @import("frames.zig");
 const web = @import("web/web.zig");
 const webfonts = @import("webfonts.zig");
+const perf = @import("perf_rules.zig");
 const Page = @import("page.zig").Page;
+
+fn needsPrepare(p: *const Page) bool {
+    return perf.needsPrepare(p.doc.style_dirty, p.doc.layout_dirty, p.list_dirty, p.doc.svg_dirty, p.list != null);
+}
 
 /// What layout measures with during a frame.
 const Fonts = struct {
@@ -232,6 +237,7 @@ fn makeList(p: *Page, tree: box.Tree, m: box.Measurer) void {
     p.list = display.build(p.list_arena.allocator(), tree, p.doc.node, m, &p.scrolls) catch null;
     if (p.restore_scroll > 0) if (p.list) |*l| {
         l.clips[1].scroll_y = p.restore_scroll;
+        l.scroll_rev +%= 1;
     };
 }
 
@@ -284,14 +290,16 @@ fn advanceFrames(p: *Page, c: *ui.Context) void {
         if (r.x >= clip.visible.x + clip.visible.w or r.x + r.w <= clip.visible.x or r.y >= clip.visible.y + clip.visible.h or r.y + r.h <= clip.visible.y) continue;
         if (r.w <= 0 or r.h <= 0) continue;
         child.busy += 1;
-        web.frameStart(child);
+        // A frame's CSS motion has the same clock and wakeups as its owner.
+        runAnimations(child, c);
+        if (!child.dead) web.frameStart(child);
         if (!child.dead) {
             prepare(child, c, r.w, r.h);
             if (child.list != null) child.list.?.resolve(r.x, r.y, r.w, r.h);
             web.frameLaid(child);
         }
         if (!child.dead) {
-            prepare(child, c, r.w, r.h);
+            if (needsPrepare(child)) prepare(child, c, r.w, r.h);
             if (child.list != null) {
                 const cl = &child.list.?;
                 cl.resolve(r.x, r.y, r.w, r.h);
@@ -301,6 +309,7 @@ fn advanceFrames(p: *Page, c: *ui.Context) void {
             }
             advanceFrames(child, c);
         }
+        wantFrames(child, c);
         child.busy -= 1;
         child.maybeFree();
         // A script in it may have changed this page: this frame shows that.
@@ -395,7 +404,7 @@ pub fn view(p: *Page, c: *ui.Context, rect: box.Rect) void {
     if (p.list != null) p.list.?.resolve(rect.x, rect.y, rect.w, rect.h);
     web.frameLaid(p);
     if (p.dead) return;
-    prepare(p, c, rect.w, rect.h);
+    if (needsPrepare(p)) prepare(p, c, rect.w, rect.h);
     if (p.list == null) {
         _ = c.leaf(.{ .absolute = true, .fixed = true, .offset = .{ .x = rect.x, .y = rect.y }, .width = .{ .px = rect.w }, .height = .{ .px = rect.h }, .background = c.theme.background }, .none, null);
         return;
@@ -407,7 +416,7 @@ pub fn view(p: *Page, c: *ui.Context, rect: box.Rect) void {
     if (l.frames.len > 0 or p.frames.list.items.len > 0) {
         advanceFrames(p, c);
         if (p.dead) return;
-        if (p.doc.layout_dirty or p.doc.style_dirty) {
+        if (needsPrepare(p)) {
             prepare(p, c, rect.w, rect.h);
             if (p.list == null) return;
             p.list.?.resolve(rect.x, rect.y, rect.w, rect.h);
@@ -446,7 +455,7 @@ pub fn view(p: *Page, c: *ui.Context, rect: box.Rect) void {
         if (c.input.pressed and it.hovered) frames.focusChain(p);
     }
     if (p.dead) return;
-    if (p.doc.layout_dirty or p.doc.style_dirty or p.list_dirty) {
+    if (needsPrepare(p)) {
         // What the pointer did restyled it, or a script changed it: this
         // frame shows that.
         prepare(p, c, rect.w, rect.h);
@@ -463,7 +472,7 @@ pub fn view(p: *Page, c: *ui.Context, rect: box.Rect) void {
         wheel_taken = web.wheel(under.page, under.node, mouse.x, mouse.y, -c.input.scroll.x, -c.input.scroll.y, .{ .ctrl = c.input.ctrl, .shift = c.input.shift, .alt = c.input.alt, .meta = c.input.cmd });
         if (p.dead) return;
     }
-    if (p.doc.layout_dirty or p.doc.style_dirty) prepare(p, c, rect.w, rect.h);
+    if (needsPrepare(p)) prepare(p, c, rect.w, rect.h);
     if (p.list == null) return;
     const shown = &p.list.?;
     shown.resolve(rect.x, rect.y, rect.w, rect.h);
@@ -475,6 +484,12 @@ pub fn view(p: *Page, c: *ui.Context, rect: box.Rect) void {
     }
     glide.step(p, c, shown);
     shown.resolve(rect.x, rect.y, rect.w, rect.h);
+    if (inside and p.hover_held_until > c.time) {
+        const now_under = underPointer(p, mouse.x, mouse.y);
+        if (perf.shouldWakeForHoverHold(true, now_under.page.doc.hover, now_under.node)) {
+            c.frameIn(@floatCast(@max(p.hover_held_until - c.time, 0.001)));
+        }
+    }
     web.paintStart(p);
     replay.replay(c, shown, Replay{ .p = p }, rect);
     @import("find.zig").draw(p, c, shown, rect);
@@ -502,7 +517,10 @@ pub fn moveBy(p: *Page, l: *display.List, i: u32, dx: f32, dy: f32) void {
     c.scroll_x = std.math.clamp(c.scroll_x + dx, 0, m[0]);
     c.scroll_y = std.math.clamp(c.scroll_y + dy, 0, m[1]);
     p.restore_scroll = 0;
-    if (c.scroll_x != was[0] or c.scroll_y != was[1]) p.hover_held_until = p.engine.now + 0.12;
+    if (c.scroll_x != was[0] or c.scroll_y != was[1]) {
+        l.scroll_rev +%= 1;
+        p.hover_held_until = p.engine.now + 0.12;
+    }
     const key = if (i == 1) p.doc.node else c.node orelse return;
     p.scrolls.put(p.gpa, key, .{ c.scroll_x, c.scroll_y }) catch {};
     web.scrolled(p, key);
@@ -520,8 +538,13 @@ fn clampScrolls(p: *Page, l: *display.List) void {
     for (l.clips, 0..) |*c, i| {
         if (i == 0) continue;
         const m = l.maxScroll(@intCast(i));
-        c.scroll_x = std.math.clamp(c.scroll_x, 0, m[0]);
-        c.scroll_y = std.math.clamp(c.scroll_y, 0, m[1]);
+        const sx = std.math.clamp(c.scroll_x, 0, m[0]);
+        const sy = std.math.clamp(c.scroll_y, 0, m[1]);
+        if (sx != c.scroll_x or sy != c.scroll_y) {
+            c.scroll_x = sx;
+            c.scroll_y = sy;
+            l.scroll_rev +%= 1;
+        }
     }
 }
 

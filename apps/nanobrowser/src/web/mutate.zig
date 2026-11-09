@@ -289,6 +289,10 @@ fn attrChanged(w: *World, n: *Node, name: []const u8, old: ?[]const u8, value: ?
                     try @import("api_forms.zig").imageAsked(w, x);
                 };
             }
+        } else if (n.isTag("iframe")) {
+            // Retire the old document and its queued load before any task runs,
+            // not on the next layout scan after timers may already have fired.
+            if ((std.mem.eql(u8, name, "src") or std.mem.eql(u8, name, "srcdoc")) and inPage(w, n)) frames.note(w.page, n);
         } else if (n.isTag("link")) {
             if (std.mem.eql(u8, name, "href") or std.mem.eql(u8, name, "rel")) loader.forget(w.page, n);
         } else if (n.isTag("input")) {

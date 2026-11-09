@@ -7,3 +7,4 @@ def main : IO Unit := do
   IO.println "  [OK] NanoUI.RetainedScroll   (retained_shift_matches_full_layout, subtree_hit_invariant_at_all_x)"
   IO.println "  [OK] NanoUI.MarkdownSpec     (append_span_sound)"
   IO.println "  [OK] NanoUI.BuildSplit       (split_rebuild_strictly_faster)"
+  IO.println "  [OK] NanoUI.BrowserPerf      (hover_hold_quiescent_when_same, resolve_cache_sound, single_pass_group_cull_equiv, static_page_zero_prelude_cost, pre_focus_single_pass)"

@@ -220,6 +220,28 @@ test "a native read off an iframe that's then removed still binds and runs, as S
     try r.expectNoErrors();
 }
 
+test "cross-frame enumeration does not expose hidden properties or replace DOM prototypes" {
+    var r: Run = undefined;
+    try r.start();
+    defer r.stop();
+    try r.html(
+        \\<!doctype html><body><iframe id=challenge></iframe><script>
+        \\var names = [], hidden, prototype;
+        \\function attributes(o) {
+        \\  hidden = Object.getOwnPropertyDescriptor(o, 'secret').enumerable;
+        \\  prototype = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(o), '__proto__').enumerable;
+        \\  for (var k in o) { names.push(k); challenge[k] = o[k]; }
+        \\}
+        \\</script><iframe srcdoc="<script>var o = {title:'challenge'}; Object.defineProperty(o, 'secret', {value:1}); parent.attributes(o);</script>"></iframe>
+    );
+    try r.waitJs("names.length > 0");
+    try r.expectJs("names.join()", "title");
+    try r.expectJs("hidden + ',' + prototype", "false,false");
+    try r.expectJs("challenge instanceof HTMLIFrameElement", "true");
+    try r.expectJs("challenge.src = 'about:blank'; challenge.getAttribute('src')", "about:blank");
+    try r.expectNoErrors();
+}
+
 test "frame arrays keep their brand, iterator and message clone" {
     var r: Run = undefined;
     try r.start();

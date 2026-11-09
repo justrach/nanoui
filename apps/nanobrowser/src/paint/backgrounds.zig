@@ -127,7 +127,7 @@ fn tile(c: *ui.Context, key: []const u8, bytes: []const u8, svg: bool, x: f32, y
     _ = c.open(.{ .absolute = true, .offset = .{ .x = x, .y = y } }, null);
     defer c.end();
     if (svg) {
-        _ = ui.svg(c, .{ .key = key, .source = .{ .encoded = bytes }, .width = w, .height = h, .current = ui.Color.black });
+        _ = ui.svg(c, .{ .key = key, .bytes = bytes, .width = w, .height = h, .current = ui.Color.black });
         return;
     }
     _ = ui.image(c, .{ .key = key, .source = .{ .encoded = bytes }, .box = .{ .w = w, .h = h }, .radius = 0 });

@@ -3,3 +3,4 @@ import NanoUI.LiveResize
 import NanoUI.RetainedScroll
 import NanoUI.MarkdownSpec
 import NanoUI.BuildSplit
+import NanoUI.BrowserPerf

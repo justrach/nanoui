@@ -14,6 +14,7 @@ test {
     _ = @import("tests_net.zig");
     _ = @import("tests_misc.zig");
     _ = @import("tests_frames.zig");
+    _ = @import("tests_frame_events.zig");
     _ = @import("tests_worker.zig");
     _ = @import("tests_gaps.zig");
 }

@@ -27,7 +27,7 @@ inline fn elemIf(vm: *Vm, o: *Object, i: usize) Error!?Value {
         const v = o.elems[i];
         if (!v.isHole()) return v;
     }
-    if (try props.has(vm, o, key(i))) return try props.get(vm, o, key(i));
+    if (try props.has(vm, o, try key(vm, i))) return try props.get(vm, o, try key(vm, i));
     return null;
 }
 
@@ -56,7 +56,7 @@ fn map(vm: *Vm, this: Value, args: []const Value) Error!Value {
     var i: usize = 0;
     while (i < n) : (i += 1) {
         if (try elemIf(vm, o, i)) |v| {
-            try props.defineData(vm, r, key(i), try invoke(vm, cb, u.arg(args, 1), v, i, o), u.PropFlags.all);
+            try props.defineData(vm, r, try key(vm, i), try invoke(vm, cb, u.arg(args, 1), v, i, o), u.PropFlags.all);
         }
     }
     return r.value();
@@ -73,7 +73,7 @@ fn filter(vm: *Vm, this: Value, args: []const Value) Error!Value {
     while (i < n) : (i += 1) {
         if (try elemIf(vm, o, i)) |v| {
             if (ops.truthy(try invoke(vm, cb, u.arg(args, 1), v, i, o))) {
-                try props.defineData(vm, r, key(at), v, u.PropFlags.all);
+                try props.defineData(vm, r, try key(vm, at), v, u.PropFlags.all);
                 at += 1;
             }
         }
@@ -142,7 +142,7 @@ fn findImpl(vm: *Vm, this: Value, args: []const Value, backward: bool, mode: Fin
     var step: usize = 0;
     while (step < n) : (step += 1) {
         const i = if (backward) n - 1 - step else step;
-        const v = try props.get(vm, o, key(i));
+        const v = try props.get(vm, o, try key(vm, i));
         if (ops.truthy(try invoke(vm, cb, u.arg(args, 1), v, i, o))) {
             return if (mode == .value) v else Value.fromUsize(i);
         }
@@ -172,7 +172,7 @@ fn flatten(vm: *Vm, target: *Object, at: *usize, src: *Object, depth: f64, mappe
         if (depth > 0 and try arr.isArrayValue(vm, v)) {
             try flatten(vm, target, at, v.asObject(), depth - 1, Value.undefined, Value.undefined);
         } else {
-            try props.defineData(vm, target, key(at.*), v, u.PropFlags.all);
+            try props.defineData(vm, target, try key(vm, at.*), v, u.PropFlags.all);
             at.* += 1;
         }
     }
@@ -202,7 +202,7 @@ fn fill(vm: *Vm, this: Value, args: []const Value) Error!Value {
     const start = try u.relativeIndex(vm, u.arg(args, 1), n, 0);
     const end = try u.relativeIndex(vm, u.arg(args, 2), n, n);
     var i = start;
-    while (i < end) : (i += 1) try props.put(vm, o, key(i), u.arg(args, 0));
+    while (i < end) : (i += 1) try props.put(vm, o, try key(vm, i), u.arg(args, 0));
     return o.value();
 }
 
@@ -221,9 +221,9 @@ fn copyWithin(vm: *Vm, this: Value, args: []const Value) Error!Value {
     while (count > 0) : (count -= 1) {
         const f = if (backward) from - 1 else from;
         const t = if (backward) to - 1 else to;
-        if (try props.has(vm, o, key(f))) {
-            try props.put(vm, o, key(t), try props.get(vm, o, key(f)));
-        } else if (!try props.delete(vm, o, key(t))) return vm.throwError(.TypeError, "Cannot delete property");
+        if (try props.has(vm, o, try key(vm, f))) {
+            try props.put(vm, o, try key(vm, t), try props.get(vm, o, try key(vm, f)));
+        } else if (!try props.delete(vm, o, try key(vm, t))) return vm.throwError(.TypeError, "Cannot delete property");
         if (backward) {
             from -= 1;
             to -= 1;
@@ -241,7 +241,7 @@ fn atFn(vm: *Vm, this: Value, args: []const Value) Error!Value {
     var i = try conv.toIntegerOrInf(vm, u.arg(args, 0));
     if (i < 0) i += n;
     if (i < 0 or i >= n) return Value.undefined;
-    return props.get(vm, o, key(@intFromFloat(i)));
+    return props.get(vm, o, try key(vm, @intFromFloat(i)));
 }
 
 /// Copies an array-like with holes read through as undefined, for the copying methods.
@@ -250,7 +250,7 @@ fn copied(vm: *Vm, o: *Object) Error!*Object {
     const r = try objmod.newArray(vm, &.{});
     try objmod.growElems(vm, r, n);
     var i: usize = 0;
-    while (i < n) : (i += 1) try objmod.arrayPush(vm, r, try props.get(vm, o, key(i)));
+    while (i < n) : (i += 1) try objmod.arrayPush(vm, r, try props.get(vm, o, try key(vm, i)));
     return r;
 }
 
@@ -281,12 +281,12 @@ fn toSpliced(vm: *Vm, this: Value, args: []const Value) Error!Value {
     }
     const r = try objmod.newArray(vm, &.{});
     var i: usize = 0;
-    while (i < start) : (i += 1) try objmod.arrayPush(vm, r, try props.get(vm, o, key(i)));
+    while (i < start) : (i += 1) try objmod.arrayPush(vm, r, try props.get(vm, o, try key(vm, i)));
     if (args.len > 2) {
         for (args[2..]) |v| try objmod.arrayPush(vm, r, v);
     }
     i = start + skip;
-    while (i < n) : (i += 1) try objmod.arrayPush(vm, r, try props.get(vm, o, key(i)));
+    while (i < n) : (i += 1) try objmod.arrayPush(vm, r, try props.get(vm, o, try key(vm, i)));
     return r.value();
 }
 

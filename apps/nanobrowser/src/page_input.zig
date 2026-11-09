@@ -9,6 +9,7 @@ const css = @import("css/css.zig");
 const loader = @import("loader.zig");
 const web = @import("web/web.zig");
 const view = @import("page_view.zig");
+const perf = @import("perf_rules.zig");
 const Page = @import("page.zig").Page;
 
 /// Called each frame with the element under the pointer.
@@ -19,9 +20,9 @@ pub fn pointer(p: *Page, c: *ui.Context, it: ui.Interaction, under: ?*dom.Node, 
     // A page moving under a still pointer isn't the person pointing at anything:
     // as in other browsers, hover waits for it to stop. Else each frame of a
     // scroll restyles what passes under the pointer.
-    const held = inside and p.hover_held_until > c.time and !moved and !c.input.pressed and !c.input.released and !c.input.secondary;
-    if (held) c.frameIn(@floatCast(@max(p.hover_held_until - c.time, 0.001)));
-    const node = if (held) old else under;
+    const held = perf.isHoverHeld(inside, c.time, p.hover_held_until, moved, c.input.pressed or c.input.released or c.input.secondary);
+    if (perf.shouldWakeForHoverHold(held, old, under)) c.frameIn(@floatCast(@max(p.hover_held_until - c.time, 0.001)));
+    const node = perf.effectiveHover(held, old, under);
     if (node != old and inside) {
         setState(p, &p.doc.hover, node);
         web.pointerMoved(p, old, node, x, y);

@@ -57,10 +57,7 @@ pub const Switcher = struct {
         }, "pane");
         defer c.end();
         _ = c.open(.{ .width = .fill, .padding = .xy(16, 10), .direction = .row }, "head");
-        if (s.wants_focus) {
-            c.focus = c.peekId("query");
-            s.wants_focus = false;
-        }
+        @import("../perf_rules.zig").preFocus(&c.focus, &s.wants_focus, c.peekId("query"));
         ui.key(c, "query");
         const r = ui.textField(c, &s.field, .{ .placeholder = "Find a tab", .width = .fill, .size = 15, .bare = true, .color = p.ink, .placeholder_color = p.muted });
         c.end();

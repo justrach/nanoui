@@ -19,8 +19,14 @@ const iter = @import("iter.zig");
 const b_array2 = @import("b_array2.zig");
 const b_iter = @import("b_array_iter.zig");
 
-pub inline fn key(i: usize) PropKey {
-    return PropKey.fromIndex(@intCast(i));
+/// Array methods are generic: an array-like may have indices beyond uint32.
+/// Those are ordinary string keys, not array indices. Native scans must also
+/// observe the VM deadline even when no JavaScript callback is invoked.
+pub inline fn key(vm: *Vm, i: usize) Error!PropKey {
+    vm.budget -= 1;
+    if (vm.budget <= 0) try calls.interrupt(vm);
+    if (i < std.math.maxInt(u32)) return PropKey.fromIndex(@intCast(i));
+    return conv.toPropKey(vm, Value.fromUsize(i));
 }
 
 /// Dense and free of surprises: storage can be touched directly.
@@ -79,7 +85,7 @@ fn isArrayFn(vm: *Vm, _: Value, args: []const Value) Error!Value {
 fn ofFn(vm: *Vm, this: Value, args: []const Value) Error!Value {
     if (this.isObject() and this.asObject() != vm.protos.array_ctor and this.isConstructor()) {
         const r = try calls.construct(vm, this, &.{Value.fromUsize(args.len)}, this);
-        for (args, 0..) |v, i| try props.defineData(vm, r.asObject(), key(i), v, u.PropFlags.all);
+        for (args, 0..) |v, i| try props.defineData(vm, r.asObject(), try key(vm, i), v, u.PropFlags.all);
         try setLen(vm, r.asObject(), args.len);
         return r;
     }
@@ -102,7 +108,7 @@ fn fromFn(vm: *Vm, this: Value, args: []const Value) Error!Value {
         fn add(c: @This(), v0: Value) Error!void {
             var v = v0;
             if (!c.mapper.isUndefined()) v = try calls.call(c.vm, c.mapper, c.this_arg, &.{ v, Value.fromUsize(c.i.*) });
-            try props.defineData(c.vm, c.out, key(c.i.*), v, u.PropFlags.all);
+            try props.defineData(c.vm, c.out, try key(c.vm, c.i.*), v, u.PropFlags.all);
             c.i.* += 1;
         }
     };
@@ -116,7 +122,7 @@ fn fromFn(vm: *Vm, this: Value, args: []const Value) Error!Value {
         const o = try conv.toObject(vm, src);
         const n = try conv.lengthOf(vm, o);
         var k: usize = 0;
-        while (k < n) : (k += 1) try ctx.add(try props.get(vm, o, key(k)));
+        while (k < n) : (k += 1) try ctx.add(try props.get(vm, o, try key(vm, k)));
     }
     try setLen(vm, out, i);
     return out.value();
@@ -135,7 +141,7 @@ fn push(vm: *Vm, this: Value, args: []const Value) Error!Value {
     const o = try conv.toObject(vm, this);
     var n = try conv.lengthOf(vm, o);
     for (args) |v| {
-        try props.put(vm, o, key(n), v);
+        try props.put(vm, o, try key(vm, n), v);
         n += 1;
     }
     try setLen(vm, o, n);
@@ -150,7 +156,7 @@ fn pop(vm: *Vm, this: Value, _: []const Value) Error!Value {
         a.elems_len -= 1;
         a.arr_len = a.elems_len;
         if (!v.isHole()) return v;
-        return props.get(vm, a, key(a.arr_len));
+        return props.get(vm, a, try key(vm, a.arr_len));
     }
     const o = try conv.toObject(vm, this);
     const n = try conv.lengthOf(vm, o);
@@ -158,8 +164,8 @@ fn pop(vm: *Vm, this: Value, _: []const Value) Error!Value {
         try setLen(vm, o, 0);
         return Value.undefined;
     }
-    const v = try props.get(vm, o, key(n - 1));
-    if (!try props.delete(vm, o, key(n - 1))) return vm.throwError(.TypeError, "Cannot delete property");
+    const v = try props.get(vm, o, try key(vm, n - 1));
+    if (!try props.delete(vm, o, try key(vm, n - 1))) return vm.throwError(.TypeError, "Cannot delete property");
     try setLen(vm, o, n - 1);
     return v;
 }
@@ -180,14 +186,14 @@ fn shift(vm: *Vm, this: Value, _: []const Value) Error!Value {
         try setLen(vm, o, 0);
         return Value.undefined;
     }
-    const first = try props.get(vm, o, key(0));
+    const first = try props.get(vm, o, try key(vm, 0));
     var i: usize = 1;
     while (i < n) : (i += 1) {
-        if (try props.has(vm, o, key(i))) {
-            try props.put(vm, o, key(i - 1), try props.get(vm, o, key(i)));
-        } else if (!try props.delete(vm, o, key(i - 1))) return vm.throwError(.TypeError, "Cannot delete property");
+        if (try props.has(vm, o, try key(vm, i))) {
+            try props.put(vm, o, try key(vm, i - 1), try props.get(vm, o, try key(vm, i)));
+        } else if (!try props.delete(vm, o, try key(vm, i - 1))) return vm.throwError(.TypeError, "Cannot delete property");
     }
-    if (!try props.delete(vm, o, key(n - 1))) return vm.throwError(.TypeError, "Cannot delete property");
+    if (!try props.delete(vm, o, try key(vm, n - 1))) return vm.throwError(.TypeError, "Cannot delete property");
     try setLen(vm, o, n - 1);
     return first;
 }
@@ -208,11 +214,11 @@ fn unshift(vm: *Vm, this: Value, args: []const Value) Error!Value {
     if (args.len != 0) {
         var i = n;
         while (i > 0) : (i -= 1) {
-            if (try props.has(vm, o, key(i - 1))) {
-                try props.put(vm, o, key(i - 1 + args.len), try props.get(vm, o, key(i - 1)));
-            } else if (!try props.delete(vm, o, key(i - 1 + args.len))) return vm.throwError(.TypeError, "Cannot delete property");
+            if (try props.has(vm, o, try key(vm, i - 1))) {
+                try props.put(vm, o, try key(vm, i - 1 + args.len), try props.get(vm, o, try key(vm, i - 1)));
+            } else if (!try props.delete(vm, o, try key(vm, i - 1 + args.len))) return vm.throwError(.TypeError, "Cannot delete property");
         }
-        for (args, 0..) |v, j| try props.put(vm, o, key(j), v);
+        for (args, 0..) |v, j| try props.put(vm, o, try key(vm, j), v);
     }
     try setLen(vm, o, n + args.len);
     return Value.fromUsize(n + args.len);
@@ -233,6 +239,7 @@ pub fn speciesCreate(vm: *Vm, o: *Object, n: usize) Error!*Object {
 }
 
 fn newWithLength(vm: *Vm, n: usize) Error!*Object {
+    if (n > std.math.maxInt(u32)) return vm.throwError(.RangeError, "Invalid array length");
     const a = try objmod.newArray(vm, &.{});
     a.arr_len = @intCast(n);
     return a;
@@ -254,8 +261,8 @@ fn slice(vm: *Vm, this: Value, args: []const Value) Error!Value {
     }
     var k: usize = 0;
     while (k < count) : (k += 1) {
-        if (try props.has(vm, o, key(start + k))) {
-            try props.defineData(vm, r, key(k), try props.get(vm, o, key(start + k)), u.PropFlags.all);
+        if (try props.has(vm, o, try key(vm, start + k))) {
+            try props.defineData(vm, r, try key(vm, k), try props.get(vm, o, try key(vm, start + k)), u.PropFlags.all);
         }
     }
     try setLen(vm, r, count);
@@ -295,31 +302,31 @@ fn splice(vm: *Vm, this: Value, args: []const Value) Error!Value {
     }
     var k: usize = 0;
     while (k < del) : (k += 1) {
-        if (try props.has(vm, o, key(start + k))) {
-            try props.defineData(vm, removed, key(k), try props.get(vm, o, key(start + k)), u.PropFlags.all);
+        if (try props.has(vm, o, try key(vm, start + k))) {
+            try props.defineData(vm, removed, try key(vm, k), try props.get(vm, o, try key(vm, start + k)), u.PropFlags.all);
         }
     }
     try setLen(vm, removed, del);
     if (items.len < del) {
         k = start;
         while (k < n - del) : (k += 1) {
-            if (try props.has(vm, o, key(k + del))) {
-                try props.put(vm, o, key(k + items.len), try props.get(vm, o, key(k + del)));
-            } else if (!try props.delete(vm, o, key(k + items.len))) return vm.throwError(.TypeError, "Cannot delete property");
+            if (try props.has(vm, o, try key(vm, k + del))) {
+                try props.put(vm, o, try key(vm, k + items.len), try props.get(vm, o, try key(vm, k + del)));
+            } else if (!try props.delete(vm, o, try key(vm, k + items.len))) return vm.throwError(.TypeError, "Cannot delete property");
         }
         k = n;
         while (k > n - del + items.len) : (k -= 1) {
-            if (!try props.delete(vm, o, key(k - 1))) return vm.throwError(.TypeError, "Cannot delete property");
+            if (!try props.delete(vm, o, try key(vm, k - 1))) return vm.throwError(.TypeError, "Cannot delete property");
         }
     } else if (items.len > del) {
         k = n - del;
         while (k > start) : (k -= 1) {
-            if (try props.has(vm, o, key(k + del - 1))) {
-                try props.put(vm, o, key(k + items.len - 1), try props.get(vm, o, key(k + del - 1)));
-            } else if (!try props.delete(vm, o, key(k + items.len - 1))) return vm.throwError(.TypeError, "Cannot delete property");
+            if (try props.has(vm, o, try key(vm, k + del - 1))) {
+                try props.put(vm, o, try key(vm, k + items.len - 1), try props.get(vm, o, try key(vm, k + del - 1)));
+            } else if (!try props.delete(vm, o, try key(vm, k + items.len - 1))) return vm.throwError(.TypeError, "Cannot delete property");
         }
     }
-    for (items, 0..) |v, j| try props.put(vm, o, key(start + j), v);
+    for (items, 0..) |v, j| try props.put(vm, o, try key(vm, start + j), v);
     try setLen(vm, o, n - del + items.len);
     return removed.value();
 }
@@ -338,7 +345,7 @@ fn concat(vm: *Vm, this: Value, args: []const Value) Error!Value {
             spread = if (s.isUndefined()) try isArrayValue(vm, item) else ops.truthy(s);
         }
         if (!spread) {
-            try props.defineData(vm, r, key(at), item, u.PropFlags.all);
+            try props.defineData(vm, r, try key(vm, at), item, u.PropFlags.all);
             at += 1;
             continue;
         }
@@ -354,8 +361,8 @@ fn concat(vm: *Vm, this: Value, args: []const Value) Error!Value {
         }
         var k: usize = 0;
         while (k < n) : (k += 1) {
-            if (try props.has(vm, src, key(k))) {
-                try props.defineData(vm, r, key(at), try props.get(vm, src, key(k)), u.PropFlags.all);
+            if (try props.has(vm, src, try key(vm, k))) {
+                try props.defineData(vm, r, try key(vm, at), try props.get(vm, src, try key(vm, k)), u.PropFlags.all);
             }
             at += 1;
         }
@@ -378,7 +385,7 @@ pub fn joinImpl(vm: *Vm, o: *Object, sep: *str.JSString) Error!Value {
     var i: usize = 0;
     while (i < n) : (i += 1) {
         if (i != 0) try b.str(sep);
-        const v = try props.get(vm, o, key(i));
+        const v = try props.get(vm, o, try key(vm, i));
         if (!v.isNullish()) try b.str(try conv.toStr(vm, v));
     }
     return Value.fromString(try b.finish());
@@ -406,7 +413,7 @@ fn toLocaleString(vm: *Vm, this: Value, _: []const Value) Error!Value {
     var i: usize = 0;
     while (i < n) : (i += 1) {
         if (i != 0) try b.byte(',');
-        const v = try props.get(vm, o, key(i));
+        const v = try props.get(vm, o, try key(vm, i));
         if (v.isNullish()) continue;
         const f = try props.getV(vm, v, name);
         try b.str(try conv.toStr(vm, try calls.call(vm, f, v, &.{})));
@@ -424,12 +431,12 @@ fn reverse(vm: *Vm, this: Value, _: []const Value) Error!Value {
     var i: usize = 0;
     while (i < n / 2) : (i += 1) {
         const j = n - 1 - i;
-        const hi = try props.has(vm, o, key(i));
-        const hj = try props.has(vm, o, key(j));
-        const a = try props.get(vm, o, key(i));
-        const b = try props.get(vm, o, key(j));
-        if (hj) try props.put(vm, o, key(i), b) else _ = try props.delete(vm, o, key(i));
-        if (hi) try props.put(vm, o, key(j), a) else _ = try props.delete(vm, o, key(j));
+        const hi = try props.has(vm, o, try key(vm, i));
+        const hj = try props.has(vm, o, try key(vm, j));
+        const a = try props.get(vm, o, try key(vm, i));
+        const b = try props.get(vm, o, try key(vm, j));
+        if (hj) try props.put(vm, o, try key(vm, i), b) else _ = try props.delete(vm, o, try key(vm, i));
+        if (hi) try props.put(vm, o, try key(vm, j), a) else _ = try props.delete(vm, o, try key(vm, j));
     }
     return o.value();
 }
@@ -443,13 +450,13 @@ fn searchFrom(vm: *Vm, o: *Object, target: Value, from_v: Value, mode: SearchMod
     var i = try u.relativeIndex(vm, from_v, n, 0);
     while (i < n) : (i += 1) {
         if (mode == .includes) {
-            const v = if (i < o.elems_len and !o.flags.exotic and !o.elems[i].isHole()) o.elems[i] else try props.get(vm, o, key(i));
+            const v = if (i < o.elems_len and !o.flags.exotic and !o.elems[i].isHole()) o.elems[i] else try props.get(vm, o, try key(vm, i));
             if (conv.sameValueZero(vm, v, target)) return Value.true;
         } else {
             if (i < o.elems_len and !o.flags.exotic and !o.elems[i].isHole()) {
                 if (try ops.strictEquals(vm, o.elems[i], target)) return Value.fromUsize(i);
-            } else if (try props.has(vm, o, key(i))) {
-                if (try ops.strictEquals(vm, try props.get(vm, o, key(i)), target)) return Value.fromUsize(i);
+            } else if (try props.has(vm, o, try key(vm, i))) {
+                if (try ops.strictEquals(vm, try props.get(vm, o, try key(vm, i)), target)) return Value.fromUsize(i);
             }
         }
     }
@@ -475,8 +482,8 @@ fn lastIndexOf(vm: *Vm, this: Value, args: []const Value) Error!Value {
     if (f < 0) return Value.fromInt(-1);
     var i: usize = @intFromFloat(f);
     while (true) {
-        if (try props.has(vm, o, key(i))) {
-            if (try ops.strictEquals(vm, try props.get(vm, o, key(i)), u.arg(args, 0))) return Value.fromUsize(i);
+        if (try props.has(vm, o, try key(vm, i))) {
+            if (try ops.strictEquals(vm, try props.get(vm, o, try key(vm, i)), u.arg(args, 0))) return Value.fromUsize(i);
         }
         if (i == 0) return Value.fromInt(-1);
         i -= 1;

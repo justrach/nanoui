@@ -161,6 +161,15 @@ fn wantedOf(n: *const dom.Node) struct { text: []const u8, srcdoc: bool } {
 }
 
 fn detach(f: *Frame) void {
+    // A queued load belongs to the old document, not the frame's next URL.
+    // In particular, about:blank must not start a newly assigned onload early.
+    if (f.owner.js) |w| {
+        var i = w.images_done.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (w.images_done.items[i].node == f.node) _ = w.images_done.orderedRemove(i);
+        }
+    }
     if (f.page) |c| {
         f.page = null;
         const o = f.owner;

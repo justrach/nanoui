@@ -47,6 +47,8 @@ function crossWindow(id, self) {
 
 const gone = 0, cross = 2;
 const remotes = new Map();
+const eventStates = new WeakMap();
+$.remoteEventState = (event) => eventStates.get(event)?.();
 // A function read off a window, and this window's of that name: what it still does
 // once the frame has gone. Sentry and others read clean natives from an iframe they
 // remove straight away, and go on to bind and call them.
@@ -88,10 +90,12 @@ $.hook("makeRemote", (peer, id, callable, array) => {
     ownKeys() { return state() === cross ? [] : Array.from(call(4) ?? []); },
     getOwnPropertyDescriptor(_, k) {
       if (state() === cross) return Reflect.getOwnPropertyDescriptor(far(), k);
-      if (typeof k === "symbol" || !call(5, k)) return undefined;
+      if (typeof k === "symbol") return undefined;
+      const enumerable = call(5, k);
+      if (enumerable === undefined) return undefined;
       // The local array target's length is non-configurable, as the remote's is.
       const length = array && k === "length";
-      return { value: call(0, k), writable: true, enumerable: !length, configurable: !length };
+      return { value: call(0, k), writable: true, enumerable, configurable: !length };
     },
     getPrototypeOf() { return state() === cross ? null : call(8) ?? null; },
     apply(_, self, args) {
@@ -104,6 +108,8 @@ $.hook("makeRemote", (peer, id, callable, array) => {
     },
   });
   remotes.set(key, p);
+  let eventState;
+  eventStates.set(p, () => eventState ??= call(11));
   return p;
 });
 // Arguments already are a list. Iterating their remote proxy here would call
@@ -120,12 +126,15 @@ $.hook("remoteOp", (op, o, a, b) => {
     case 2: return a in o;
     case 3: return delete o[a];
     case 4: return Reflect.ownKeys(o).filter((k) => typeof k === "string");
-    case 5: return Object.getOwnPropertyDescriptor(o, a) !== undefined;
+    // Preserve hidden properties, including Object.prototype.__proto__: for-in
+    // must not turn an attributes copy across frames into prototype replacement.
+    case 5: return Object.getOwnPropertyDescriptor(o, a)?.enumerable;
     case 6: return Reflect.apply(o, a, argumentList(b));
     case 7: return Reflect.construct(o, argumentList(a));
     case 8: return Object.getPrototypeOf(o);
     case 9: return o[Symbol[a]];
     case 10: return o instanceof g.MessagePort || $.remotePort(o);
+    case 11: return $.eventState(o);
   }
 });
 })

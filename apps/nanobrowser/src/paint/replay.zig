@@ -50,19 +50,21 @@ fn toAffine(m: css.fx.Mat) ui.Affine {
     return .{ .a = m.a, .b = m.b, .c = m.c, .d = m.d, .e = m.e, .f = m.f };
 }
 
-/// What a group has of anything that shows. Items are in order; `from` opens it.
-fn groupEnd(items: []const display.Item, from: usize) usize {
-    var depth: u32 = 0;
-    var i = from;
-    while (i < items.len) : (i += 1) switch (items[i].kind) {
+/// If nothing in the group opened at `from` shows, returns the index of its
+/// matching `group_end` in a single pass; stops at the first visible item (`null`).
+fn skipHiddenGroup(l: *const display.List, from: usize) ?usize {
+    var depth: u32 = 1;
+    var i = from + 1;
+    while (i < l.items.len) : (i += 1) switch (l.items[i].kind) {
         .group_begin => depth += 1,
         .group_end => {
             depth -= 1;
             if (depth == 0) return i;
         },
-        else => {},
+        .hit => {},
+        else => if (shows(l, &l.items[i])) return null,
     };
-    return items.len - 1;
+    return l.items.len - 1;
 }
 
 fn shows(l: *const display.List, it: *const display.Item) bool {
@@ -107,15 +109,7 @@ pub fn replay(c: *ui.Context, l: *const display.List, host: anytype, rect: Rect)
                     continue;
                 }
                 // Nothing of it in the window: not a pass of the renderer.
-                const end = groupEnd(l.items, i);
-                var any = false;
-                for (l.items[i + 1 .. end]) |*x| {
-                    if (x.kind != .hit and x.kind != .group_begin and x.kind != .group_end and shows(l, x)) {
-                        any = true;
-                        break;
-                    }
-                }
-                if (!any) {
+                if (skipHiddenGroup(l, i)) |end| {
                     i = end;
                     continue;
                 }
@@ -130,7 +124,7 @@ pub fn replay(c: *ui.Context, l: *const display.List, host: anytype, rect: Rect)
         const r = l.placed(it);
         if (it.kind == .image) {
             const n = it.kind.image.node;
-            if (n.image_key.len == 0 and n.ns == .html and overlaps(.{ .x = r.x - lazy_reach, .y = r.y - lazy_reach, .w = r.w + 2 * lazy_reach, .h = r.h + 2 * lazy_reach }, clip.visible)) host.nearLazy(n);
+            if (n.image_key.len == 0 and n.ns == .html and n.isTag("img") and overlaps(.{ .x = r.x - lazy_reach, .y = r.y - lazy_reach, .w = r.w + 2 * lazy_reach, .h = r.h + 2 * lazy_reach }, clip.visible)) host.nearLazy(n);
         }
         const wanted: u32 = if (it.clip <= 1) 0 else it.clip;
         if (wanted != open_clip or it.xform != open_xform) {
@@ -293,7 +287,7 @@ fn drawPicture(c: *ui.Context, im: display.Kind.Image, placed: ui.Style, r: Rect
         _ = c.open(placed, null);
         defer c.end();
         if (isSvg(n.image)) {
-            _ = ui.svg(c, .{ .key = n.image_key, .source = .{ .encoded = n.image }, .width = r.w, .height = r.h, .color = color(k) });
+            _ = ui.svg(c, .{ .key = n.image_key, .bytes = n.image, .width = r.w, .height = r.h, .color = color(k) });
             return;
         }
         _ = ui.image(c, .{ .key = n.image_key, .source = .{ .encoded = n.image }, .box = .{ .w = r.w, .h = r.h }, .radius = 0, .tint = color(k) });
@@ -339,7 +333,7 @@ fn drawImage(c: *ui.Context, im: display.Kind.Image, placed: ui.Style, r: Rect) 
     defer c.end();
     // An inline `<svg>` is laid out to its box and says for itself how it fits.
     if (n.ns == .svg) {
-        _ = ui.svg(c, .{ .key = n.image_key, .source = .{ .encoded = n.image }, .width = r.w, .height = r.h });
+        _ = ui.svg(c, .{ .key = n.image_key, .bytes = n.image, .width = r.w, .height = r.h });
         return;
     }
     const svg = isSvg(n.image);
@@ -353,7 +347,7 @@ fn drawImage(c: *ui.Context, im: display.Kind.Image, placed: ui.Style, r: Rect) 
         // Documents start from black, whatever this window's theme.
         _ = c.open(.{ .absolute = true, .offset = .{ .x = p.x, .y = p.y } }, null);
         defer c.end();
-        _ = ui.svg(c, .{ .key = n.image_key, .source = .{ .encoded = n.image }, .width = p.w, .height = p.h, .current = ui.Color.black });
+        _ = ui.svg(c, .{ .key = n.image_key, .bytes = n.image, .width = p.w, .height = p.h, .current = ui.Color.black });
         return;
     }
     const v = visiblePart(p, r.w, r.h);

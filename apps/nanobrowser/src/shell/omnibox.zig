@@ -81,10 +81,7 @@ pub const Omnibox = struct {
             .align_items = .center,
         }, "field");
         _ = box;
-        if (o.wants_focus) {
-            c.focus = c.peekId("address");
-            o.wants_focus = false;
-        }
+        @import("../perf_rules.zig").preFocus(&c.focus, &o.wants_focus, c.peekId("address"));
         ui.key(c, "address");
         const r = ui.textField(c, &o.field, .{
             .placeholder = engine.prompt(),

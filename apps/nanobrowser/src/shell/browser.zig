@@ -413,14 +413,14 @@ pub const Browser = struct {
             .layer = 1,
         }, "find");
         defer c.end();
-        if (b.find_wants_focus) {
-            c.focus = c.peekId("find-field");
-            b.find_wants_focus = false;
-        }
+        @import("../perf_rules.zig").preFocus(&c.focus, &b.find_wants_focus, c.peekId("find-field"));
         ui.key(c, "find-field");
         const r = ui.textField(c, &b.find_field, .{ .placeholder = "Find on page", .width = .fill, .size = 13, .bare = true, .select_all_on_focus = true, .color = p.ink, .placeholder_color = p.muted });
         if (r.changed) page.findText(b.find_field.text());
-        if (r.submitted) page.findStep(1);
+        if (r.submitted) {
+            page.findStep(1);
+            c.changed = true;
+        }
         ui.textf(c, .{ .size = 12, .color = p.muted }, "{d}", .{page.findCount()});
     }
 

@@ -180,11 +180,17 @@ pub const List = struct {
     canvas: css.Color,
     /// The `<iframe>`s' content boxes among `items`.
     frames: []const *const Item = &.{},
+    scroll_rev: u32 = 1,
+    resolved_rev: u32 = 0,
+    resolved_rect: Rect = .{},
 
     /// Works out this frame's offsets and visible parts, for a viewport of
     /// `w` × `h` at (`x`, `y`) in the window.
     pub fn resolve(l: *List, x: f32, y: f32, w: f32, h: f32) void {
         const window: Rect = .{ .x = x, .y = y, .w = w, .h = h };
+        if (!@import("../perf_rules.zig").needsResolve(l.scroll_rev, l.resolved_rev, l.resolved_rect, window)) return;
+        l.resolved_rev = l.scroll_rev;
+        l.resolved_rect = window;
         var done: usize = 1;
         for (l.clips, 0..) |*c, i| {
             if (i == 0) {

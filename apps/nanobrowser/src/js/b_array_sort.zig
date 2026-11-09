@@ -121,13 +121,13 @@ pub fn sort(vm: *Vm, this: Value, args: []const Value) Error!Value {
     defer vals.deinit(vm.gpa);
     var i: usize = 0;
     while (i < n) : (i += 1) {
-        if (try props.has(vm, o, arr.key(i))) try vals.append(vm.gpa, try props.get(vm, o, arr.key(i)));
+        if (try props.has(vm, o, try arr.key(vm, i))) try vals.append(vm.gpa, try props.get(vm, o, try arr.key(vm, i)));
     }
     try sortValues(vm, vals.items, cmp, false);
-    for (vals.items, 0..) |v, j| try props.put(vm, o, arr.key(j), v);
+    for (vals.items, 0..) |v, j| try props.put(vm, o, try arr.key(vm, j), v);
     i = vals.items.len;
     while (i < n) : (i += 1) {
-        if (!try props.delete(vm, o, arr.key(i))) return vm.throwError(.TypeError, "Cannot delete property");
+        if (!try props.delete(vm, o, try arr.key(vm, i))) return vm.throwError(.TypeError, "Cannot delete property");
     }
     return o.value();
 }

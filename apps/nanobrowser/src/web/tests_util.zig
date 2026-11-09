@@ -64,6 +64,8 @@ pub const Run = struct {
         r.t.frame();
     }
 
+    const id_script = "for (const e of document.querySelectorAll('[id]')) if (!Object.hasOwn(window, e.id) && !(e.id in EventTarget.prototype)) window[e.id] = e; 0";
+
     /// Opens a page of `html`, percent-encoded into a `data:` address.
     pub fn html(r: *Run, source: []const u8) !void {
         const gpa = testing.allocator;
@@ -73,8 +75,9 @@ pub const Run = struct {
         try appendEncoded(gpa, &out, source);
         r.b.tabs.items[r.b.current].go(out.items);
         r.settle();
-        // Elements by their ids, for the tests' short expressions.
-        _ = try r.eval("for (const e of document.querySelectorAll('[id]')) if (!Object.hasOwn(window, e.id) && !(e.id in EventTarget.prototype)) window[e.id] = e; 0");
+        // Elements by their ids, for the tests' short expressions. Static pages
+        // with no scripts bind them lazily when a test actually calls `world`/`eval`.
+        if (r.page().js != null) _ = try r.eval(id_script);
     }
 
     pub fn open(r: *Run, url: []const u8) void {
@@ -93,6 +96,9 @@ pub const Run = struct {
             w.runner.phase = .complete;
             w.runner.dom_ready = true;
             w.runner.load_fired = true;
+            w.enter();
+            defer w.leave();
+            _ = w.vm.eval(id_script, "test") catch {};
             break :blk w;
         };
     }

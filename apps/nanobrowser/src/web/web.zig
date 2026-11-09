@@ -33,8 +33,7 @@ fn worldFor(p: *Page) ?*World {
 /// The document has parsed: a page with scripts gets its world, before it asks
 /// for anything that might answer at once.
 pub fn parsed(p: *Page) void {
-    if (p.no_scripts) return;
-    if (!scripts.hasScripts(p.doc)) return;
+    if (!@import("../perf_rules.zig").needsWorld(p.no_scripts, scripts.hasScripts(p.doc), false, false)) return;
     const w = worldFor(p) orelse return;
     if (p.worker != null) @import("prelude.zig").workerScope(w) catch |e| w.report(e);
 }
@@ -45,8 +44,9 @@ pub fn parsed(p: *Page) void {
 pub fn ensureWorld(p: *Page) ?*World {
     const had = p.js != null;
     const w = worldFor(p) orelse return null;
-    if (!had) {
-        // Its document has long been there.
+    if (!had and p.state != .fetching) {
+        // An existing document is complete. A frame reached before its bytes
+        // arrive must still run its scripts and fire DOMContentLoaded/load.
         w.runner.phase = .complete;
         w.runner.dom_ready = true;
         w.runner.load_fired = true;
@@ -71,7 +71,7 @@ pub fn escape(p: *Page) void {
 
 /// A button with `popovertarget` or `commandfor`: true when it did what it says.
 pub fn invoke(p: *Page, button: *dom.Node) bool {
-    const w = p.js orelse return false;
+    const w = p.js orelse (if (@import("../perf_rules.zig").needsWorld(p.no_scripts, false, false, true)) ensureWorld(p) else null) orelse return false;
     if (!w.h.invoke.isCallable()) return false;
     const target = bind.wrap(w.vm, button) catch return false;
     w.enter();
@@ -82,7 +82,7 @@ pub fn invoke(p: *Page, button: *dom.Node) bool {
 
 /// A `<details>` was opened or closed by a person.
 pub fn detailsToggled(p: *Page, d: *dom.Node) void {
-    const w = p.js orelse return;
+    const w = p.js orelse (if (@import("../perf_rules.zig").needsWorld(p.no_scripts, false, false, d.hasAttr("name"))) ensureWorld(p) else null) orelse return;
     if (!w.h.detailsToggled.isCallable()) return;
     const target = bind.wrap(w.vm, d) catch return;
     w.task(w.h.detailsToggled, Value.undefined, &.{target});

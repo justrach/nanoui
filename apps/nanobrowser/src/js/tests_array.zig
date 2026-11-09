@@ -2,6 +2,41 @@
 
 const t = @import("tests_util.zig");
 
+test "large array-like indices stay ordinary property names" {
+    try t.expectAll(&.{
+        .{ .src = "Array.prototype.indexOf.call({length:4294967298,4294967296:'x'},'x',4294967296)", .want = "4294967296" },
+        .{ .src = "Array.prototype.lastIndexOf.call({length:4294967297,4294967296:'x'},'x')", .want = "4294967296" },
+        .{ .src = "Array.prototype.includes.call({length:4294967297,4294967296:'x'},'x',4294967296)", .want = "true" },
+        .{ .src = "Array.prototype.at.call({length:4294967297,4294967296:'x'},-1)", .want = "x" },
+        .{ .src = "Array.prototype.findLast.call({length:4294967297,4294967296:'x'},x=>true)", .want = "x" },
+        .{ .src = "Array.prototype.slice.call({length:4294967297,4294967296:'x'},4294967296).join()", .want = "x" },
+        .{ .src = "var o={length:4294967296};Array.prototype.push.call(o,'x');o[4294967296]+','+o.length", .want = "x,4294967297" },
+        .{ .src = "var o={length:4294967297,4294967296:'x'};Array.prototype.pop.call(o)+','+o.length+','+(4294967296 in o)", .want = "x,4294967296,false" },
+        .{ .src = "var o={length:4294967297};Array.prototype.fill.call(o,'x',4294967296);o[4294967296]", .want = "x" },
+        .{ .src = "var o={length:4294967297,4294967296:'x'};Array.prototype.copyWithin.call(o,4294967295,4294967296);o[4294967295]", .want = "x" },
+        .{ .src = "var a=[];a.length=4294967295;try{a.push('x')}catch(e){};a[4294967295]+','+a.length", .want = "x,4294967295" },
+        .{ .src = "try{Array.prototype.slice.call({length:4294967296})}catch(e){e.name}", .want = "RangeError" },
+    });
+}
+
+test "native array scans respect the script deadline" {
+    const std = @import("std");
+    const js = @import("js.zig");
+    const vm = try js.Vm.create(std.testing.allocator);
+    defer vm.deinit();
+    for ([_][]const u8{
+        "Array.prototype.indexOf.call({length:9007199254740991},'missing')",
+        "Array.prototype.lastIndexOf.call({length:9007199254740991},'missing')",
+        "Array.prototype.forEach.call({length:9007199254740991},()=>{})",
+        "Array.prototype.sort.call({length:9007199254740991})",
+    }) |source| {
+        vm.setDeadline(1);
+        try std.testing.expectError(error.Terminated, vm.eval(source, "array-deadline.js"));
+        vm.setDeadline(0);
+        try std.testing.expectEqual(@as(f64, 42), (try vm.eval("40+2", "after.js")).asNumber());
+    }
+}
+
 test "Array" {
     try t.expectAll(&.{
         .{ .src = "new Array(3).length", .want = "3" },

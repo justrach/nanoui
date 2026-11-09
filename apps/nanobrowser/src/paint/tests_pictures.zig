@@ -214,6 +214,52 @@ test "a custom element that makes its svg with scripts, as yt-icon does" {
 
 const data_svg = "data:image/svg+xml,";
 
+test "a faded iframe tile shows its replacement image and stops requesting frames" {
+    var r: Run = undefined;
+    const red = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='30' height='30'%3E%3Crect width='30' height='30' fill='%23ff0000'/%3E%3C/svg%3E";
+    const blue = "data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2710%27 height=%2710%27%3E%3Crect width=%2710%27 height=%2710%27 fill=%27%230000ff%27/%3E%3C/svg%3E";
+    const content = body ++
+        \\<style>.selected{position:relative;transition:all 2s ease;opacity:.01}
+        \\.wrapper{overflow:hidden;position:relative;width:30px;height:30px;transform:scale(1);transition:.1s ease}
+        \\.wrapper img{position:relative}.sprite{width:300%;height:300%}.single{width:100%;height:100%}</style>
+        \\<div id=tile><div class=wrapper><img class=sprite src="
+    ++ red ++ "\" style='top:-100%;left:-100%'></div></div>";
+    try start(&r, body ++ "<iframe id=frame style='border:0;width:100px;height:100px'></iframe>");
+    defer r.stop();
+    const encoded = try std.json.Stringify.valueAlloc(testing.allocator, content, .{});
+    defer testing.allocator.free(encoded);
+    const script = try std.fmt.allocPrint(testing.allocator, "frame.srcdoc={s}; 0", .{encoded});
+    defer testing.allocator.free(script);
+    _ = try r.eval(script);
+    try r.waitJs("frame.contentDocument.getElementById('tile') !== null");
+    _ = try r.eval("var tile=frame.contentDocument.getElementById('tile'); 0");
+    {
+        const s = try shot(&r);
+        defer s.deinit();
+        try testing.expect(s.isRed(15, 15));
+    }
+    _ = try r.eval("tile.style.transition='opacity 4s ease'; tile.className='selected'; 0");
+    r.t.frame();
+    try testing.expect(r.t.ctx.animating);
+    r.t.advance(4.1);
+    {
+        const s = try shot(&r);
+        defer s.deinit();
+        try testing.expect(s.isWhite(15, 15));
+    }
+    _ = try r.eval("var holder=frame.contentDocument.createElement('div'); holder.innerHTML='<div class=wrapper><img class=single src=\"" ++ blue ++ "\" style=\"top:0%;left:0%\"></div>'; while(tile.firstChild) tile.removeChild(tile.firstChild); tile.appendChild(holder.firstChild); tile.classList.remove('selected'); 0");
+    r.t.frame();
+    r.t.advance(4.1);
+    {
+        const s = try shot(&r);
+        defer s.deinit();
+        try testing.expect(s.isBlue(15, 15));
+    }
+    r.t.frame();
+    try testing.expect(!r.t.ctx.animating);
+    try r.expectNoErrors();
+}
+
 test "an external svg in an img and in a background" {
     var r: Run = undefined;
     const rect = "%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Crect width='10' height='10' fill='%23ff0000'/%3E%3C/svg%3E";

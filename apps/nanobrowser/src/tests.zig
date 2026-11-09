@@ -19,6 +19,7 @@ test {
     _ = @import("css/transform.zig");
     _ = @import("css/animate.zig");
     _ = @import("page.zig");
+    _ = @import("perf_rules.zig");
     _ = @import("page_view.zig");
     _ = @import("page_input.zig");
     _ = @import("loader.zig");

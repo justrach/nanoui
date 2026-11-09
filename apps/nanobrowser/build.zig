@@ -10,9 +10,11 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+        .strip = optimize != .debug,
         .imports = &.{.{ .name = "nanoui", .module = nanoui }},
     });
     const exe = b.addExecutable(.{ .name = "nanobrowser", .root_module = root });
+    exe.use_llvm = true;
     // nanoui links WebKit for pages, which this app doesn't show: it draws
     // pages itself, and the framework shouldn't even be loaded.
     exe.dead_strip_dylibs = true;
@@ -30,8 +32,10 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/js/test262_host.zig"),
         .target = target,
         .optimize = optimize,
+        .strip = optimize != .debug,
         .link_libc = true,
     }) });
+    host262.use_llvm = true;
     b.step("test262-host", "Build the test262 host").dependOn(&b.addInstallArtifact(host262, .{}).step);
 
     const filters = b.option([]const []const u8, "test-filter", "Run only tests with this in their name") orelse &.{};
@@ -39,8 +43,10 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/tests.zig"),
         .target = target,
         .optimize = optimize,
+        .strip = optimize != .debug,
         .imports = &.{.{ .name = "nanoui", .module = nanoui }},
     }) });
+    tests.use_llvm = true;
     b.step("test", "Run the tests").dependOn(&b.addRunArtifact(tests).step);
     // The tests as a program, for another machine (Linux in a container).
     const test_bin = b.addInstallArtifact(tests, .{ .dest_sub_path = if (target.result.os.tag == .windows) "nanobrowser-tests.exe" else "nanobrowser-tests" });

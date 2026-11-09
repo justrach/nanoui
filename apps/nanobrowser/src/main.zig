@@ -12,6 +12,8 @@ const address = @import("shell/address.zig");
 const theme = @import("shell/theme.zig");
 const web = @import("web/web.zig");
 
+pub const std_options: std.Options = .{ .log_level = .warn };
+
 pub fn main(init: std.process.Init) !void {
     web.setLogging(init.environ_map.get("NANOBROWSER_LOG") != null);
     const app = try nanoui.App.create(init, .{ .name = "nanobrowser" });

@@ -64,3 +64,24 @@ test "a click during a scroll goes to what's under the pointer now" {
     // 50 down the window, scrolled by 150: the third row.
     try tests.expectEqJs(&r, "got", "c");
 }
+
+test "scrolling within the same hovered element schedules no wakeup frame" {
+    var r: Run = undefined;
+    try r.start();
+    defer r.stop();
+    try tests.page(&r, rows);
+    const p = r.page();
+    // Static page without scripts: no JS world created on load.
+    try testing.expect(p.js == null);
+    const x = p.origin[0] + 50;
+    const y = p.origin[1] + 50;
+    r.t.moveTo(x, y);
+    r.t.frame();
+    r.t.ctx.input.precise = true;
+    // Scroll by 10px: row #a (100px tall) is still under (x, y), so no hover-hold wake is needed.
+    r.t.scroll(x, y, -10);
+    try testing.expectEqual(@as(?f32, null), r.t.ctx.frame_in);
+    // Scroll by another 150px: row #b is now under (x, y), so a hover-hold wake is scheduled immediately.
+    r.t.scroll(x, y, -150);
+    try testing.expect(r.t.ctx.frame_in != null);
+}

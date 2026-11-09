@@ -42,10 +42,13 @@ typing, and update. It is not a browser to trust with a bank account.
 - **Little is kept.** `localStorage` and history live for the life of the process. On
   Apple's systems the system's HTTP client also keeps cookies and a cache of its own on
   disk, so a site can remember what it decided about this browser between runs.
-- **Bot walls remain unsupported.** Cross-frame array and message-port fixes remove
-  reCAPTCHA's earlier JavaScript errors, but the demo still times out waiting for its
-  challenge frame in hidden-window tests, even though the checkbox receives its click.
-  This is not a completed CAPTCHA fix. Turnstile still stops in its scripts.
+- **Bot-wall support is incomplete.** reCAPTCHA's demo now loads its image challenge
+  after a checkbox click in hidden-window tests, including the challenge-frame and
+  reload requests. Cross-frame property enumeration preserves non-enumerable properties
+  instead of corrupting the challenge iframe's prototype. Iframe CSS transitions also
+  advance and request frames: a pixel regression checks faded tiles becoming visible
+  after image replacement, then returning to idle. Completing a challenge and acceptance
+  on Google's search block page remain unverified. Turnstile still stops in its scripts.
 - **It says it's Chrome.** The user agent is Chrome's own string, with the version in
   `chrome_major` (`src/page.zig`) and no name of ours, so sites can't tell it apart by that
   and it needs raising as Chrome moves on. It doesn't get past the walls above: Google's
