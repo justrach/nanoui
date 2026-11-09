@@ -11,6 +11,7 @@ const input = @import("input.zig");
 const Surface = @import("surface.zig").Surface;
 const drop = @import("surface_drop.zig");
 const link_pace = @import("surface_pacing.zig");
+const keys = @import("surface_keys.zig");
 
 pub const methods = [_]objc.Method{
     .{ .name = "isFlipped", .imp = &yes, .types = "c@:" },
@@ -31,9 +32,6 @@ pub const methods = [_]objc.Method{
     .{ .name = "mouseExited:", .imp = &mouseExited, .types = "v@:@" },
     .{ .name = "scrollWheel:", .imp = &scrollWheel, .types = "v@:@" },
     .{ .name = "magnifyWithEvent:", .imp = &magnify, .types = "v@:@" },
-    .{ .name = "keyDown:", .imp = &keyDown, .types = "v@:@" },
-    .{ .name = "flagsChanged:", .imp = &flagsChanged, .types = "v@:@" },
-    .{ .name = "paste:", .imp = &paste, .types = "v@:@" },
     .{ .name = "draggingEntered:", .imp = &drop.draggingUpdated, .types = "Q@:@" },
     .{ .name = "draggingUpdated:", .imp = &drop.draggingUpdated, .types = "Q@:@" },
     .{ .name = "draggingExited:", .imp = &drop.draggingExited, .types = "v@:@" },
@@ -51,7 +49,7 @@ pub const methods = [_]objc.Method{
     .{ .name = "metalDisplayLink:needsUpdate:", .imp = &link_pace.metalDisplayLinkNeedsUpdate, .types = "v@:@@" },
     .{ .name = "viewWillStartLiveResize", .imp = &link_pace.liveResizeStart, .types = "v@:" },
     .{ .name = "viewDidEndLiveResize", .imp = &link_pace.liveResizeEnd, .types = "v@:" },
-} ++ textinput.methods ++ a11y.methods;
+} ++ keys.methods ++ textinput.methods ++ a11y.methods;
 
 /// What drags from other apps may bring.
 pub const drag_types = [_][]const u8{ "public.url", "public.file-url", "public.utf8-plain-text" };
@@ -72,7 +70,7 @@ fn yes1(_: objc.Object, _: objc.SEL, _: ?objc.Object) callconv(.c) objc.BOOL {
     return objc.YES;
 }
 
-fn setMods(in: *input.Input, flags: objc.NSUInteger) void {
+pub fn setMods(in: *input.Input, flags: objc.NSUInteger) void {
     in.shift = flags & (1 << 17) != 0;
     in.ctrl = flags & (1 << 18) != 0;
     in.alt = flags & (1 << 19) != 0;
@@ -275,138 +273,6 @@ fn scrollWheel(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) v
     }
 }
 
-fn keyDown(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) void {
-    const s = surfaceOf(obj) orelse return;
-    const code = objc.msg(u16, event, "keyCode", .{});
-    const flags = objc.msg(objc.NSUInteger, event, "modifierFlags", .{});
-    const in = &s.ctx.input;
-    setMods(in, flags);
-    // Key combinations go to the view first, which may take them; while an
-    // input method composes, only ⌘'s do (↓, Space, Esc, Tab are its).
-    const composing = textinput.composing(s);
-    const ign = objc.fromNSString(objc.msg(?objc.Object, event, "charactersIgnoringModifiers", .{}));
-    if (ign.len > 0) {
-        const cp = std.unicode.utf8Decode(ign[0..cf.seqLen(ign[0])]) catch 0;
-        const key = input.Shortcut.keyOf(cp);
-        const special = key == 0xF700 or key == 0xF701 or key == '\t' or key == 0x1b;
-        // Option too: a text field with Emacs's keys takes ⌥B, ⌥F, ⌥D.
-        if (in.cmd or (!composing and (in.ctrl or in.alt or special))) {
-            s.ctx.shortcut_taken = false;
-            in.shortcut = .{ .key = key, .cmd = in.cmd, .ctrl = in.ctrl, .alt = in.alt, .shift = in.shift };
-            s.frame();
-            in.shortcut = null;
-            if (s.ctx.shortcut_taken) return;
-            if (in.cmd and !in.ctrl and !in.alt and !in.shift) switch (key) {
-                'c' => return textinput.copy(s),
-                'x' => return textinput.cut(s),
-                'v' => return pasteText(s),
-                'a' => return textinput.selectAll(s),
-                else => {},
-            };
-        }
-    }
-    if (code == 48 and !composing and !in.cmd and !in.ctrl and !in.alt and !s.ctx.focused_multiline and s.ctx.focusable_ids.items.len > 0) {
-        s.ctx.focusCycle(in.shift);
-        s.frame();
-        return;
-    }
-    // A focused text field gets the event through the input system:
-    // accents, input methods, the system's key bindings.
-    if (textinput.interpret(s, event)) return;
-    in.key = switch (code) {
-        51 => .backspace,
-        117 => .delete,
-        123 => .left,
-        124 => .right,
-        125 => .down,
-        126 => .up,
-        115 => .home,
-        119 => .end,
-        36, 76 => .enter,
-        48 => .tab,
-        53 => .escape,
-        116 => .page_up,
-        121 => .page_down,
-        122 => .f1,
-        120 => .f2,
-        99 => .f3,
-        118 => .f4,
-        96 => .f5,
-        97 => .f6,
-        98 => .f7,
-        100 => .f8,
-        101 => .f9,
-        109 => .f10,
-        103 => .f11,
-        111 => .f12,
-        else => null,
-    };
-    var buf: [64]u8 = undefined;
-    var n: usize = 0;
-    if (in.key == null and !in.cmd and !in.ctrl) {
-        const chars = objc.fromNSString(objc.msg(?objc.Object, event, "characters", .{}));
-        // Printable text only: no controls, no function keys (U+F700…).
-        var i: usize = 0;
-        while (i < chars.len) {
-            const len = cf.seqLen(chars[i]);
-            const seq = chars[i..@min(chars.len, i + len)];
-            const printable = seq[0] >= 0x20 and seq[0] != 0x7f and !(seq.len == 3 and seq[0] == 0xef and seq[1] >= 0x9c and seq[1] <= 0x9f);
-            if (printable and n + seq.len <= buf.len) {
-                @memcpy(buf[n .. n + seq.len], seq);
-                n += seq.len;
-            }
-            i += len;
-        }
-    }
-    in.chars = buf[0..n];
-    if (in.key == null and n == 0) return;
-    s.frame();
-}
-
-/// The modifier keys alone: a frame with `mods_changed` (a switcher that
-/// commits as Control is let go).
-fn flagsChanged(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) void {
-    const s = surfaceOf(obj) orelse return;
-    setMods(&s.ctx.input, objc.msg(objc.NSUInteger, event, "modifierFlags", .{}));
-    s.ctx.input.mods_changed = true;
-    s.frame();
-}
-
-fn pasteText(s: *Surface) void {
-    const pb = objc.msg(objc.Object, objc.class("NSPasteboard"), "generalPasteboard", .{});
-    const str = objc.msg(?objc.Object, pb, "stringForType:", .{objc.nsString("public.utf8-plain-text")});
-    const bytes = objc.fromNSString(str);
-    s.pasted.clearRetainingCapacity();
-    if (s.ctx.focused_multiline) {
-        var i: usize = 0;
-        while (i < bytes.len) : (i += 1) {
-            if (bytes[i] == '\r') {
-                if (i + 1 < bytes.len and bytes[i + 1] == '\n') i += 1;
-                s.pasted.append(s.gpa, '\n') catch return;
-            } else {
-                s.pasted.append(s.gpa, bytes[i]) catch return;
-            }
-        }
-    } else {
-        s.pasted.appendSlice(s.gpa, bytes) catch return;
-        for (s.pasted.items) |*ch| if (ch.* == '\n' or ch.* == '\r') {
-            ch.* = ' ';
-        };
-    }
-    textinput.paste(s, s.pasted.items);
-}
-
-fn paste(obj: objc.Object, _: objc.SEL, _: ?objc.Object) callconv(.c) void {
-    const s = surfaceOf(obj) orelse return;
-    // ⌘V goes to the view first, as other shortcuts do: it may paste what
-    // is not text (an image).
-    s.ctx.shortcut_taken = false;
-    s.ctx.input.shortcut = .{ .key = 'v', .cmd = true };
-    s.frame();
-    s.ctx.input.shortcut = null;
-    if (s.ctx.shortcut_taken) return;
-    pasteText(s);
-}
 
 
 

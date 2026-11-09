@@ -114,7 +114,24 @@ pub fn parseAccelerator(s: []const u8) Accelerator {
             a.mods |= mod_shift;
         } else a.key = keyOf(p);
     }
+    // A shifted digit ("Cmd+!", "Shift+1") is its digit with Shift, as
+    // AppKit matches it and as `ui.Shortcut` names it.
+    if (std.mem.indexOfScalar(u21, &shifted_digits, a.key)) |i| {
+        a.key = '0' + @as(u21, @intCast((i + 1) % 10));
+        a.mods |= mod_shift;
+    }
     return a;
+}
+
+/// What Shift+1 … Shift+0 type on a US keyboard.
+const shifted_digits = [_]u21{ '!', '@', '#', '$', '%', '^', '&', '*', '(', ')' };
+
+test "a shifted digit is its digit with Shift" {
+    try std.testing.expectEqual(@as(u21, '1'), parseAccelerator("Cmd+!").key);
+    try std.testing.expectEqual(mod_cmd | mod_shift, parseAccelerator("Cmd+!").mods);
+    try std.testing.expectEqual(@as(u21, '0'), parseAccelerator("Shift+)").key);
+    try std.testing.expectEqual(@as(u21, '1'), parseAccelerator("Shift+1").key);
+    try std.testing.expectEqual(mod_shift, parseAccelerator("Shift+1").mods);
 }
 
 fn keyOf(p: []const u8) u21 {

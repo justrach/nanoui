@@ -35,6 +35,67 @@ pub fn label(comptime s: []const u8) []const u8 {
     };
 }
 
+/// While true, the menu bar's key equivalents are held back: a view that
+/// captures key combinations (a shortcut editor) gets ⌘ chords as its
+/// own shortcuts, and the main menu's `performKeyEquivalent:` says no.
+pub var menu_key_equivalents_suspended: bool = false;
+
+/// Holds the menu bar's key equivalents back (`true`) or lets them work
+/// again. Main thread. No effect where nanoui has no native menu bar.
+pub fn suspendMenuKeyEquivalents(on: bool) void {
+    menu_key_equivalents_suspended = on;
+}
+
+/// The key a shifted punctuation mark is typed with on a US keyboard
+/// (`!` is Shift+1), or null: menus and shortcuts name the unshifted key.
+pub fn unshiftedUs(cp: u21) ?u21 {
+    const pairs = [_][2]u21{
+        .{ '!', '1' },  .{ '@', '2' }, .{ '#', '3' },  .{ '$', '4' }, .{ '%', '5' },
+        .{ '^', '6' },  .{ '&', '7' }, .{ '*', '8' },  .{ '(', '9' }, .{ ')', '0' },
+        .{ '~', '`' },  .{ '_', '-' }, .{ '+', '=' },  .{ '{', '[' }, .{ '}', ']' },
+        .{ '|', '\\' }, .{ ':', ';' }, .{ '"', '\'' }, .{ '<', ',' }, .{ '>', '.' },
+        .{ '?', '/' },
+    };
+    for (pairs) |p| if (p[0] == cp) return p[1];
+    return null;
+}
+
+/// The unshifted character of a Mac virtual key code on an ANSI keyboard
+/// (digits, punctuation), or 0: what Shift+key is offered as when the
+/// keyboard layout can't say.
+pub fn ansiChar(code: u16) u21 {
+    return switch (code) {
+        18 => '1',
+        19 => '2',
+        20 => '3',
+        21 => '4',
+        23 => '5',
+        22 => '6',
+        26 => '7',
+        28 => '8',
+        25 => '9',
+        29 => '0',
+        27 => '-',
+        24 => '=',
+        33 => '[',
+        30 => ']',
+        42 => '\\',
+        41 => ';',
+        39 => '\'',
+        43 => ',',
+        47 => '.',
+        44 => '/',
+        50 => '`',
+        else => 0,
+    };
+}
+
+test "shifted punctuation names its key" {
+    try std.testing.expectEqual(@as(?u21, '1'), unshiftedUs('!'));
+    try std.testing.expectEqual(@as(?u21, null), unshiftedUs('a'));
+    try std.testing.expectEqual(@as(u21, '1'), ansiChar(18));
+}
+
 test "labels" {
     if (mac) {
         try std.testing.expectEqualStrings("⌘⇧M", label("⌘⇧M"));

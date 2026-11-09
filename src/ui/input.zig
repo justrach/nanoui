@@ -24,6 +24,18 @@ pub const Shortcut = struct {
     pub const escape: u21 = 0x1b;
     pub const tab: u21 = '\t';
     pub const enter: u21 = '\r';
+    /// The Delete key above Return (backspace), and the forward delete.
+    pub const backspace: u21 = 0x7f;
+    pub const forward_delete: u21 = 0xF728;
+    pub const home: u21 = 0xF729;
+    pub const end: u21 = 0xF72B;
+    pub const page_up: u21 = 0xF72C;
+    pub const page_down: u21 = 0xF72D;
+
+    /// Function key `n` (F1 is 1), as AppKit's code points have them.
+    pub fn f(n: u8) u21 {
+        return 0xF704 + @as(u21, n) - 1;
+    }
 
     /// The shortcut key for a typed character, ignoring modifiers:
     /// ASCII lowered, and ⇧Tab's backtab (0x19) offered as Tab (Shift is set).
@@ -41,13 +53,18 @@ pub const Shortcut = struct {
             const eq = std.ascii.eqlIgnoreCase;
             if (eq(p, "cmd")) s.cmd = true else if (eq(p, "ctrl")) s.ctrl = true else if (eq(p, "alt") or eq(p, "opt")) s.alt = true else if (eq(p, "shift")) s.shift = true else {
                 const named = [_]struct { []const u8, u21 }{
-                    .{ "enter", enter }, .{ "return", enter }, .{ "escape", escape }, .{ "esc", escape },
-                    .{ "tab", tab },     .{ "up", up },        .{ "down", down },     .{ "left", left },
-                    .{ "right", right }, .{ "space", ' ' },    .{ "backspace", 0x7f }, .{ "delete", 0x7f },
-                    .{ "plus", '+' },
+                    .{ "enter", enter },        .{ "return", enter },                 .{ "escape", escape },  .{ "esc", escape },
+                    .{ "tab", tab },            .{ "up", up },                        .{ "down", down },      .{ "left", left },
+                    .{ "right", right },        .{ "space", ' ' },                    .{ "backspace", 0x7f }, .{ "delete", 0x7f },
+                    .{ "plus", '+' },           .{ "home", home },                    .{ "end", end },        .{ "pageup", page_up },
+                    .{ "pagedown", page_down }, .{ "forwarddelete", forward_delete },
                 };
                 s.key = for (named) |n| {
                     if (eq(p, n[0])) break n[1];
+                } else if (p.len >= 2 and (p[0] == 'f' or p[0] == 'F') and std.ascii.isDigit(p[1])) fkey: {
+                    const n = std.fmt.parseInt(u8, p[1..], 10) catch return null;
+                    if (n < 1 or n > 20) return null;
+                    break :fkey f(n);
                 } else blk: {
                     // One character, whole.
                     const len = std.unicode.utf8ByteSequenceLength(if (p.len > 0) p[0] else return null) catch return null;

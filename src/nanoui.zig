@@ -223,4 +223,6 @@ test {
     // Screens, the About panel's options, recent documents.
     _ = @import("screens.zig");
     _ = @import("app_extras.zig");
+    // Windows opened while running and closed by the app, keys.
+    _ = @import("tests_window_more.zig");
 }

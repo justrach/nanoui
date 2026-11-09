@@ -110,6 +110,9 @@ pub const dock = struct {
 pub fn setInlinePredictions(on: bool) void {
     if (comptime @import("builtin").os.tag == .macos) @import("textinput.zig").inline_predictions = on;
 }
+/// Holds the menu bar's key equivalents back while a view captures key
+/// combinations (a shortcut editor): ⌘ chords reach the view instead.
+pub const suspendMenuKeyEquivalents = keys.suspendMenuKeyEquivalents;
 
 pub const key = widgets.key;
 pub const keyInt = widgets.keyInt;
