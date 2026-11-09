@@ -114,7 +114,13 @@ pub fn canvas(c: *Context, style: types.Style) *Canvas {
     const cv = c.alloc().create(Canvas) catch @panic("nanoui: out of memory");
     const id = c.peekId(null);
     cv.* = .{ .c = c };
-    if (c.rects.get(id)) |r| cv.size = .{ .w = r.w, .h = r.h } else c.changed = true;
+    if (c.rects.get(id)) |r| {
+        cv.size = .{ .w = r.w, .h = r.h };
+    } else if (style.width == .px and style.height == .px) {
+        cv.size = .{ .w = style.width.px, .h = style.height.px };
+    } else {
+        c.changed = true;
+    }
     _ = c.leaf(style, .{ .canvas = cv }, null);
     return cv;
 }

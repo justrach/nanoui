@@ -13,6 +13,8 @@ const ctx_mod = @import("context.zig");
 const Context = ctx_mod.Context;
 const none = ctx_mod.none;
 
+pub const skirt: f32 = 384;
+
 pub const ScrollOffset = struct {
     id: u64,
     y: f32,
@@ -76,8 +78,8 @@ pub fn shift(c: *Context, instances: *std.ArrayList(gpu.Instance), size: types.S
     const quiet = c.input.pressed or c.input.released or c.input.secondary or c.input.key != null or c.input.chars.len != 0 or c.input.ops.len != 0 or c.input.shortcut != null or c.input.zoom != 1 or c.input.pan.x != 0 or c.input.pan.y != 0;
     if (quiet) return false;
     const moved = changedOffset(c) orelse return false;
-    // Past the end, or past the 128pt pre-shaped skirt, build a fresh frame.
-    if (@abs(moved.next - moved.base) > 128) return false;
+    // Past the end, or past the pre-shaped skirt, build a fresh frame.
+    if (@abs(moved.next - moved.base) > skirt) return false;
     if (moved.next > maxOffset(c, moved.id, moved.view) + 0.5 or moved.next < -0.5) return false;
     const dy = moved.next - moved.prev;
     if (dy == 0) return false;
@@ -86,14 +88,21 @@ pub fn shift(c: *Context, instances: *std.ArrayList(gpu.Instance), size: types.S
     instances.appendSlice(c.gpa, rs.scroll_scene.items) catch return false;
     const view = moved.view;
     for (instances.items) |*it| {
-        if (!clipMatches(it.clip, view)) continue;
+        if (!clipInView(it.clip, view)) continue;
         it.rect[1] -= dy;
+        if (it.kind == gpu.Kind.segment or it.kind == gpu.Kind.triangle) {
+            it.uv[1] -= dy;
+            it.uv[3] -= dy;
+        }
+        if (it.kind == gpu.Kind.triangle) {
+            it.border_color[1] -= dy;
+        }
     }
     shiftTree(c, index, dy);
     for (c.hits.items) |*h| {
         if (h.id == moved.id and h.scroll) continue;
         if (!inSubtree(c, index, h.index)) continue;
-        h.rect.y -= dy;
+        h.rect = c.node(h.index).rect.intersect(view);
     }
     if (c.rects.getPtr(moved.id)) |r| r.* = view;
     // The thumb tracks the offset; placeThumb restores its exact y and height.
@@ -156,13 +165,13 @@ fn placeThumb(c: *Context, instances: *std.ArrayList(gpu.Instance), index: u32, 
     const t = std.math.clamp(offset / (content_h - view.h), 0, 1);
     const bar_h = @max(@as(f32, 24), view.h * view.h / content_h);
     const y = view.y + (view.h - bar_h) * t;
-    const x = view.x + view.w - 7;
+    const right = view.x + view.w - 3;
     var k = instances.items.len;
     while (k > 0) {
         k -= 1;
         const it = &instances.items[k];
         if (!clipMatches(it.clip, view)) continue;
-        if (@abs(it.rect[0] - x) > 0.5 or @abs(it.rect[2] - 4) > 0.5) continue;
+        if (@abs((it.rect[0] + it.rect[2]) - right) > 0.6 or it.rect[2] < 3.5 or it.rect[2] > 7.5) continue;
         it.rect[1] = y + 2;
         it.rect[3] = bar_h - 4;
         if (c.scrollbars.getPtr(n.id)) |g| {
@@ -175,6 +184,10 @@ fn placeThumb(c: *Context, instances: *std.ArrayList(gpu.Instance), index: u32, 
 
 fn clipMatches(clip: [4]f32, view: types.Rect) bool {
     return @abs(clip[0] - view.x) < 0.6 and @abs(clip[1] - view.y) < 0.6 and @abs(clip[2] - (view.x + view.w)) < 0.6 and @abs(clip[3] - (view.y + view.h)) < 0.6;
+}
+
+fn clipInView(clip: [4]f32, view: types.Rect) bool {
+    return @abs(clip[0] - view.x) < 0.6 and @abs(clip[1] - view.y) < 0.6 and clip[2] > view.x and clip[2] <= view.x + view.w + 0.6 and @abs(clip[3] - (view.y + view.h)) < 0.6;
 }
 
 fn cannotRetain(c: *Context, index: u32) bool {
@@ -250,8 +263,12 @@ test "retained scroll shifts instances and right-aligned hits without rebuilding
     t.scroll(100, 80, -28);
     try testing.expect(t.ctx.stats.retained);
     try testing.expectEqual(y0 - 28, t.findText("Item 3").?.y);
-    // Right-edge button on Item 3 moved with the row and still takes clicks.
-    const row3_y = t.findText("Item 3").?.y;
-    t.click(235, row3_y + 4);
-    try testing.expectEqual(@as(?usize, 3), p.clicked);
+    // Item 6 started below the 160pt viewport (at y = 168, in the 128pt skirt);
+    // scrolling another 28pt brings it to y = 112 without rebuilding, with both
+    // its instances and its hit box intact.
+    t.scroll(100, 80, -28);
+    try testing.expect(t.ctx.stats.retained);
+    const row6_y = t.findText("Item 6").?.y;
+    t.click(235, row6_y + 4);
+    try testing.expectEqual(@as(?usize, 6), p.clicked);
 }

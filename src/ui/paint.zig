@@ -11,6 +11,7 @@ const rich = text_mod.rich;
 const ctx_mod = @import("context.zig");
 const Context = ctx_mod.Context;
 const none = ctx_mod.none;
+const skirt = @import("retain.zig").skirt;
 
 pub fn paint(c: *Context, out: *std.ArrayList(metal.Instance)) void {
     out.clearRetainingCapacity();
@@ -49,15 +50,17 @@ fn push(c: *Context, out: *std.ArrayList(metal.Instance), inst: metal.Instance) 
 }
 
 /// A canvas's shapes, moved to its box and clipped to it; those wholly
-/// outside what shows of it are left out.
-fn paintCanvas(c: *Context, out: *std.ArrayList(metal.Instance), cv: *const @import("draw.zig").Canvas, r: types.Rect, visible: types.Rect, opacity: f32) void {
-    const clip = metal.clip4(visible);
+/// outside what shows of it (including the 128pt retained-scroll skirt) are left out.
+fn paintCanvas(c: *Context, out: *std.ArrayList(metal.Instance), cv: *const @import("draw.zig").Canvas, r: types.Rect, visible: types.Rect, clip4: [4]f32, skirt4: [4]f32, opacity: f32) void {
+    const box_clip = metal.clip4(visible);
     out.ensureUnusedCapacity(c.gpa, cv.shapes.items.len) catch return;
     for (cv.shapes.items) |shape| {
         var i = shape;
         i.rect[0] += r.x;
         i.rect[1] += r.y;
-        if (i.rect[0] > clip[2] or i.rect[1] > clip[3] or i.rect[0] + i.rect[2] < clip[0] or i.rect[1] + i.rect[3] < clip[1]) continue;
+        if (i.rect[0] > skirt4[2] or i.rect[1] > skirt4[3] or i.rect[0] + i.rect[2] < skirt4[0] or i.rect[1] + i.rect[3] < skirt4[1]) continue;
+        const inside_r = i.rect[0] >= r.x - 4 and i.rect[1] >= r.y - 4 and i.rect[0] + i.rect[2] <= r.x + r.w + 8 and i.rect[1] + i.rect[3] <= r.y + r.h + 8;
+        if (!inside_r and (i.rect[0] > box_clip[2] or i.rect[1] > box_clip[3] or i.rect[0] + i.rect[2] < box_clip[0] or i.rect[1] + i.rect[3] < box_clip[1])) continue;
         if (i.kind == metal.Kind.segment or i.kind == metal.Kind.triangle) {
             i.uv[0] += r.x;
             i.uv[1] += r.y;
@@ -70,7 +73,7 @@ fn paintCanvas(c: *Context, out: *std.ArrayList(metal.Instance), cv: *const @imp
         }
         i.color[3] *= opacity;
         i.border_color[3] *= if (i.kind == metal.Kind.quad) opacity else 1;
-        i.clip = clip;
+        i.clip = if (inside_r) clip4 else box_clip;
         out.appendAssumeCapacity(i);
     }
 }
@@ -108,6 +111,13 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip_
     const selectable = (selectable_in or st.selectable) and !st.control;
     const r = n.rect;
     const visible = r.intersect(clip);
+    const skirt_clip: types.Rect = .{
+        .x = clip.x,
+        .y = clip.y - skirt,
+        .w = clip.w,
+        .h = clip.h + skirt * 2,
+    };
+    const painted = r.intersect(skirt_clip);
     const total_opacity = opacity_in * st.opacity;
     if (total_opacity <= 0.001) return;
     const open_group = st.group and total_opacity < 0.999 and !c.painting_group;
@@ -149,7 +159,7 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip_
     // What the box and its subtree emit, for `Style.scale`.
     const start = out.items.len;
 
-    if (visible.w > 0 and visible.h > 0) {
+    if (painted.w > 0 and painted.h > 0) {
         if (st.shadow) |sh| paintShadow(c, out, sh, r, rad, opacity, clip4);
         for (st.shadows) |sh| paintShadow(c, out, sh, r, rad, opacity, clip4);
         // Glass takes the background's place.
@@ -208,11 +218,11 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip_
                 .xf = if (std.mem.eql(f32, &tx.affine, &.{ 0, 0, 0, 0 })) .{ 0, 0, 0, 0 } else .{ st.rotation, st.spin, r.x + r.w * st.rotation_anchor.x, r.y + r.h * st.rotation_anchor.y },
             }),
             .hole => |radius| push(c, out, .{ .rect = rect4, .color = .{ 0, 0, 0, 1 }, .radius = radius, .kind = metal.Kind.hole, .clip = clip4 }),
-            .canvas => |cv| paintCanvas(c, out, cv, r, visible, opacity),
+            .canvas => |cv| paintCanvas(c, out, cv, r, visible, clip4, metal.clip4(painted), opacity),
             .none => {},
         }
     }
-    if (n.interactive and visible.w > 0 and visible.h > 0) c.addHit(n.id, index, visible, false);
+    if (n.interactive and painted.w > 0 and painted.h > 0) c.addHit(n.id, index, visible, false);
     // Each axis routes through the same clipped, paint-ordered regions.
     if (st.scroll_x and visible.w > 0 and visible.h > 0) c.next_hits.append(c.gpa, .{ .id = n.id, .index = index, .rect = visible, .scroll = false, .scroll_x = true }) catch {};
     // Over the scrolling boxes behind it, never hot itself.
@@ -409,7 +419,7 @@ fn textRunLimit(c: *Context, out: *std.ArrayList(metal.Instance), t: ctx_mod.Con
                 g.value_ptr.* = count;
             };
         };
-        if (y > clip4[3] + 128 or y + lh < clip4[1] - 128 or x > clip4[2]) return;
+        if (y > clip4[3] + skirt or y + lh < clip4[1] - skirt or x > clip4[2]) return;
     }
     const styled = t.spans.len > 0 and rich.styled(t.spans);
     const lay = t.cut_lay orelse if (styled) rich.layout(c.text, t.str[start..end], style, t.spans, start) else c.text.layout(t.str[start..end], style);

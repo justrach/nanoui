@@ -71,7 +71,7 @@ pub fn applyScroll(c: *Context, dy: f32) bool {
             if (!gop.found_existing) gop.value_ptr.* = 0;
             if (!isHolding(c)) {
                 gop.value_ptr.* = @max(0, gop.value_ptr.* - dy);
-                c.retain.scroll_delta = true;
+                if (dy != 0) c.retain.scroll_delta = true;
                 return true;
             }
             const ov_gop = c.overscroll.getOrPut(c.gpa, h.id) catch return false;
@@ -101,6 +101,7 @@ pub fn applyScroll(c: *Context, dy: f32) bool {
             }
             gop.value_ptr.* = cur;
             ov_gop.value_ptr.* = over;
+            if (dy != 0 and @abs(over) <= 0.05) c.retain.scroll_delta = true;
             motion.jump(c, h.id, salt_overscroll, over);
             return true;
         }
