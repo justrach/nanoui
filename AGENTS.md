@@ -72,7 +72,9 @@ src/nanoui.zig        the public API
 src/objc.zig          Objective-C runtime, runtime classes, blocks, libdispatch
 src/app.zig           lifecycle, menu bar, trays, services, client generation
 src/dev.zig           --nanoui-* flags: generate, snapshot, script, eval, hidden
-src/window.zig        NSWindow showing a page or native UI, window controls
+src/app_extras.zig    the About panel's options, recent documents, presentation options
+src/screens.zig       the Mac's screens: ids, frames, scales, names (App.screens)
+src/window.zig        NSWindow showing a page or native UI, window controls, level, placement
 src/window_lights.zig the traffic lights kept where a taller top bar wants them
 src/page.zig          the page's platform-free part: the outbox, held messages, the asset table
 src/page_webkit.zig   WKWebView: the view, the scheme handler, the message handler

@@ -266,7 +266,8 @@ const RoleInfo = struct { label: []const u8, action: [:0]const u8, accel: []cons
 
 fn roleInfo(r: Role) RoleInfo {
     return switch (r) {
-        .about => .{ .label = "About {s}", .action = "orderFrontStandardAboutPanel:" },
+        // The app delegate's (app.zig): the panel told `Options.about`.
+        .about => .{ .label = "About {s}", .action = "nanouiAbout:" },
         .hide => .{ .label = "Hide {s}", .action = "hide:", .accel = "Cmd+H" },
         .hide_others => .{ .label = "Hide Others", .action = "hideOtherApplications:", .accel = "Cmd+Alt+H" },
         .unhide => .{ .label = "Show All", .action = "unhideAllApplications:" },

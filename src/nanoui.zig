@@ -102,6 +102,14 @@ pub const AppOptions = plat.app.Options;
 pub const Window = plat.window.Window;
 pub const WindowOptions = plat.window.Options;
 pub const PageOptions = plat.window.PageOptions;
+/// How high a window stacks (`WindowOptions.level`, `Window.setLevel`).
+pub const WindowLevel = @import("window_types.zig").Level;
+/// A connected screen (`App.screens`), the About panel's options
+/// (`AppOptions.about`) and what full screen hides
+/// (`App.setPresentationOptions`): macOS.
+pub const Screen = if (mac) @import("screens.zig").Screen else void;
+pub const About = if (mac) @import("app_extras.zig").About else void;
+pub const Presentation = if (mac) @import("app_extras.zig").Presentation else void;
 pub const Asset = plat.window.Asset;
 /// Typed IPC for pages: wherever a webview draws them (macOS, iOS, Windows, Linux).
 const has_pages = mac or builtin.os.tag == .ios or builtin.os.tag == .windows or (builtin.os.tag == .linux and !is_android);
@@ -212,4 +220,7 @@ test {
     std.testing.refAllDecls(@import("tray.zig").Tray);
     // The window's own: borderless, out of the window cycle, its alpha.
     _ = @import("tests_window.zig");
+    // Screens, the About panel's options, recent documents.
+    _ = @import("screens.zig");
+    _ = @import("app_extras.zig");
 }
