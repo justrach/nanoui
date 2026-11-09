@@ -40,6 +40,8 @@ pub const Window = struct {
     closed: bool = false,
     full_screen: bool = false,
     title: [256:0]u8 = @splat(0),
+    /// The layer-shell namespace, kept alive for the surface's lifetime.
+    layer_namespace: [128:0]u8 = @splat(0),
 
     pub fn create(app: *App, options: Options) !*Window {
         const g = &gtk.api;
@@ -51,6 +53,9 @@ pub const Window = struct {
             .page => |p| page_options = p,
             .view => |v| self.view = v,
         }
+        // A layer surface's library must be in the global scope before GTK 4
+        // is loaded (`gtk.layerShellLib`), so say it before GTK comes up.
+        if (options.layer_shell != null) gtk.wants_layer_shell = true;
         try app.startGtk(page_options != null);
         if (!app.gui) return self;
         const win = if (gtk.v4) gtk.v4api.gtk_window_new() else gtk.v3.gtk_window_new(0);
@@ -72,6 +77,9 @@ pub const Window = struct {
         if (!options.decorations) g.gtk_window_set_decorated(win, 0);
         // Before it is realized: the visual can't change after.
         if (options.transparent and !options.decorations) self.transparent = @import("transparent.zig").setup(win);
+        // Before it is realized too, and only then: the surface is a layer
+        // of the desktop, and can't become one after it's on screen.
+        if (options.layer_shell) |ls| self.setupLayerShell(win, ls);
         // Out of the taskbar and the pager. GTK 4 dropped both hints (on
         // Wayland, a window can't ask), so there it is a no-op.
         if (options.skip_taskbar and !gtk.v4) {
@@ -99,6 +107,53 @@ pub const Window = struct {
         if (options.opacity < 1) self.setOpacity(options.opacity);
         if (!app.flags.hidden and options.visible) self.show();
         return self;
+    }
+
+    /// Turns `win` into a Wayland layer surface, before anything realizes it:
+    /// a panel or launcher of the desktop rather than a window among windows.
+    /// Only where gtk4-layer-shell and the protocol are there; else the
+    /// window stays ordinary, and a warning says what was missing.
+    fn setupLayerShell(self: *Window, win: *gtk.Widget, ls: window_types.LayerShell) void {
+        if (!gtk.v4) {
+            std.log.warn("nanoui: layer_shell needs GTK 4 and gtk4-layer-shell; this window is ordinary", .{});
+            return;
+        }
+        if (!gtk.loadLayerShell()) {
+            std.log.warn("nanoui: no gtk4-layer-shell here; this window is ordinary", .{});
+            return;
+        }
+        const l = &gtk.layer_shell;
+        if (l.gtk_layer_is_supported() == 0) {
+            std.log.warn("nanoui: no layer-shell protocol on this session (Wayland only); this window is ordinary", .{});
+            return;
+        }
+        const n = @min(ls.namespace.len, self.layer_namespace.len - 1);
+        @memcpy(self.layer_namespace[0..n], ls.namespace[0..n]);
+        self.layer_namespace[n] = 0;
+        l.gtk_layer_init_for_window(win);
+        l.gtk_layer_set_namespace(win, &self.layer_namespace);
+        l.gtk_layer_set_layer(win, switch (ls.layer) {
+            .background => gtk.layer_background,
+            .bottom => gtk.layer_bottom,
+            .top => gtk.layer_top,
+            .overlay => gtk.layer_overlay,
+        });
+        if (ls.anchor_left) l.gtk_layer_set_anchor(win, gtk.edge_left, 1);
+        if (ls.anchor_right) l.gtk_layer_set_anchor(win, gtk.edge_right, 1);
+        if (ls.anchor_top) l.gtk_layer_set_anchor(win, gtk.edge_top, 1);
+        if (ls.anchor_bottom) l.gtk_layer_set_anchor(win, gtk.edge_bottom, 1);
+        if (ls.margin_left != 0) l.gtk_layer_set_margin(win, gtk.edge_left, ls.margin_left);
+        if (ls.margin_right != 0) l.gtk_layer_set_margin(win, gtk.edge_right, ls.margin_right);
+        if (ls.margin_top != 0) l.gtk_layer_set_margin(win, gtk.edge_top, ls.margin_top);
+        if (ls.margin_bottom != 0) l.gtk_layer_set_margin(win, gtk.edge_bottom, ls.margin_bottom);
+        if (ls.exclusive_zone) |zone| {
+            l.gtk_layer_set_exclusive_zone(win, zone);
+        } else if (ls.exclusive) l.gtk_layer_auto_exclusive_zone_enable(win);
+        l.gtk_layer_set_keyboard_mode(win, switch (ls.keyboard) {
+            .none => gtk.keyboard_none,
+            .exclusive => gtk.keyboard_exclusive,
+            .on_demand => gtk.keyboard_on_demand,
+        });
     }
 
     fn onDestroy(_: *gtk.Widget, data: ?*anyopaque) callconv(.c) void {

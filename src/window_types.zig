@@ -62,6 +62,51 @@ pub fn ShouldClose(comptime Window: type) type {
 /// A window, or a panel (`NSPanel`: a floating palette, a popover's window).
 pub const Kind = enum { window, panel };
 
+/// Which layer of the desktop a layer-shell window sits in, in the
+/// compositor's stacking: above ordinary windows (a launcher), above
+/// everything the shell draws (`overlay`), under windows, or behind them.
+pub const LayerShellLayer = enum { background, bottom, top, overlay };
+
+/// Whether a layer-shell window takes the keyboard: `none` never, `exclusive`
+/// whenever it is shown (a launcher: you can type as it appears), `on_demand`
+/// when the compositor gives it the focus (a click).
+pub const KeyboardMode = enum { none, exclusive, on_demand };
+
+/// Wayland: the window is a layer-shell surface rather than a window among
+/// windows: a panel, a bar or a launcher, in a layer of its own above (or
+/// below) ordinary windows, positioned and sized by its anchors. It needs
+/// GTK 4 with `gtk4-layer-shell` installed, on a Wayland session; elsewhere
+/// the window stays ordinary and a warning says so.
+///
+/// A launcher is typically `transparent` with `decorations = false` and no
+/// anchors at all: the compositor centers it, and the view draws its own
+/// rounded panel over what is behind.
+pub const LayerShell = struct {
+    layer: LayerShellLayer = .top,
+    /// The name the compositor knows it by: what `hyprctl layers` shows, and
+    /// what a compositor's own rules match (`layerrule = …, name:…`).
+    namespace: []const u8 = "nanoui",
+    /// Anchored edges: what the surface is pinned to, and so what it
+    /// stretches along (or keeps its size against, with margins). None
+    /// anchored: centered.
+    anchor_left: bool = false,
+    anchor_right: bool = false,
+    anchor_top: bool = false,
+    anchor_bottom: bool = false,
+    /// Gaps from the anchored edges, in points.
+    margin_left: i32 = 0,
+    margin_right: i32 = 0,
+    margin_top: i32 = 0,
+    margin_bottom: i32 = 0,
+    /// Asks for a place of its own, the size of the surface along its
+    /// anchored edges (a bar's), that other windows are kept out of.
+    exclusive: bool = false,
+    /// The exclusive zone in points, where `exclusive`'s automatic one is
+    /// not wanted; null uses the automatic one.
+    exclusive_zone: ?i32 = null,
+    keyboard: KeyboardMode = .on_demand,
+};
+
 pub fn Options(comptime Window: type) type {
     return struct {
         title: []const u8 = "",
@@ -162,6 +207,10 @@ pub fn Options(comptime Window: type) type {
         non_activating: bool = false,
         /// Never merged into another window's tabs.
         tabbing_disallowed: bool = true,
+        /// Wayland: a layer-shell surface, a panel of the desktop rather
+        /// than a window among windows. Null (the default) is an ordinary
+        /// window; on other platforms it changes nothing.
+        layer_shell: ?LayerShell = null,
         // Where a platform has none of these (Linux, Windows), they are ignored.
         content: Content,
     };
