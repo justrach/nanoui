@@ -321,7 +321,7 @@ pub const Surface = struct {
         self.pacing_log.note(now);
         // What scrolling gathered since the last frame, applied at once.
         const dy = self.scroll.take();
-        if (dy != 0 and !c.applyScroll(dy) and c.wants_wheel) c.input.scroll.y += dy;
+        if (dy != 0 and !c.applyScroll(dy) and (c.wants_wheel or c.wheelAt())) c.input.scroll.y += dy;
         const r = frame_mod.run(c, self.view, &self.text, &self.instances, self.size, self.scale, a11y.themed(self, self.theme()), dt, now - self.start_time);
         if (self.dead) return;
         a11y.afterFrame(self);

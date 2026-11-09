@@ -103,3 +103,32 @@ test "without it, the page behind takes the wheel (what `wheel` fixes)" {
     try testing.expectEqual(@as(f32, 0), s.panned);
     try testing.expectEqual(@as(f32, 40), pageOffset(&t, &s));
 }
+
+/// A canvas that pans with two fingers: it marks itself `wheel` and reads
+/// `input.scroll` without setting `wants_wheel`.
+const Canvas = struct {
+    x: f32 = 0,
+    y: f32 = 0,
+    fn view(s: *Canvas, c: *ui.Context) void {
+        const root = ui.div(c).column().sizeFull();
+        defer root.end();
+        const cv = ui.div(c).w(200).h(200).clip().wheel();
+        defer cv.end();
+        if (cv.hovered()) {
+            s.x += c.input.scroll.x;
+            s.y += c.input.scroll.y;
+        }
+    }
+};
+
+test "a wheel box gets the wheel's vertical deltas without asking each frame" {
+    var s: Canvas = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&s, Canvas.view), .{ .width = 300, .height = 300, .scale = 1 });
+    defer t.deinit();
+    t.settle(0.1);
+    t.moveTo(100, 100);
+    t.frame();
+    t.scroll(100, 100, 30);
+    try testing.expectEqual(@as(f32, 30), s.y);
+}
