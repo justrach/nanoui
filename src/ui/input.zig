@@ -126,6 +126,9 @@ pub const FocusedText = struct {
     marked: ?[2]usize,
     /// Where the caret is drawn, in view points.
     caret_rect: types.Rect,
+    /// While composing: where the input method's selected clause (or the
+    /// marked text) starts, in view points, for its candidate window.
+    clause_rect: ?types.Rect = null,
     /// The selection's two ends in order, line-tall, when it has one.
     ends: ?[2]types.Rect = null,
 };

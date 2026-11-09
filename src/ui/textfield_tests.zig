@@ -75,7 +75,6 @@ test "a suggestion is taken with → at the end" {
     try std.testing.expectEqualStrings("git status", b.text());
     try std.testing.expectEqual(@as(usize, 10), e.caret);
 }
-
 /// A timecode field's filter: digits kept, full-width digits made ASCII.
 fn digits(cp: u21) ?u21 {
     if (cp >= '0' and cp <= '9') return cp;

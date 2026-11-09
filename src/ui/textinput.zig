@@ -22,6 +22,8 @@ pub const methods = [_]objc.Method{
     .{ .name = "markedRange", .imp = &markedRange, .types = "{_NSRange=QQ}@:" },
     .{ .name = "selectedRange", .imp = &selectedRange, .types = "{_NSRange=QQ}@:" },
     .{ .name = "validAttributesForMarkedText", .imp = &validAttributes, .types = "@@:" },
+    // NSTextInputTraits: macOS 14's inline predictions (`setInlinePredictions`).
+    .{ .name = "inlinePredictionType", .imp = &inlinePredictionType, .types = "q@:" },
     .{ .name = "attributedSubstringForProposedRange:actualRange:", .imp = &attributedSubstring, .types = "@@:{_NSRange=QQ}^{_NSRange=QQ}" },
     .{ .name = "firstRectForCharacterRange:actualRange:", .imp = &firstRect, .types = "{CGRect={CGPoint=dd}{CGSize=dd}}@:{_NSRange=QQ}^{_NSRange=QQ}" },
     .{ .name = "characterIndexForPoint:", .imp = &characterIndex, .types = "Q@:{CGPoint=dd}" },
@@ -81,6 +83,7 @@ pub const Queue = struct {
 fn ignoreCopy(_: ?*anyopaque, _: []const u8) void {}
 
 fn push(s: *Surface, op: ctx_mod.TextOp) void {
+    logOp(op);
     s.text_queue.ops.append(s.gpa, op) catch return;
     if (!s.text_queue.collecting) return flush(s);
     s.text_queue.preview(s.ctx.focused_text, s.ctx.focused_multiline, op);
@@ -132,16 +135,29 @@ fn stringOf(obj: objc.Object) []const u8 {
     return objc.fromNSString(obj);
 }
 
-fn insertText(obj: objc.Object, _: objc.SEL, str: objc.Object, _: NSRange) callconv(.c) void {
+/// The text an input method replaces (the accent menu's held letter, a
+/// reconversion), selected first: `replacement` is UTF-16, ignored when
+/// NSNotFound or while composing (the marked text is what is replaced).
+fn selectReplacement(s: *Surface, replacement: NSRange) void {
+    if (replacement.location == not_found) return;
+    const f = focusedOf(s) orelse return;
+    if (f.marked != null) return;
+    const b = clampRange(f.text, replacement) orelse return;
+    push(s, .{ .select = .{ .anchor = b[0], .caret = b[1] } });
+}
+
+fn insertText(obj: objc.Object, _: objc.SEL, str: objc.Object, replacement: NSRange) callconv(.c) void {
     const s = objc.getZig(Surface, obj) orelse return;
     const t = stringOf(str);
     // Control characters arrive as commands, not text.
     if (t.len == 1 and (t[0] < 0x20 or t[0] == 0x7f)) return;
+    selectReplacement(s, replacement);
     push(s, .{ .insert = dupe(s, t) });
 }
 
-fn setMarkedText(obj: objc.Object, _: objc.SEL, str: objc.Object, sel: NSRange, _: NSRange) callconv(.c) void {
+fn setMarkedText(obj: objc.Object, _: objc.SEL, str: objc.Object, sel: NSRange, replacement: NSRange) callconv(.c) void {
     const s = objc.getZig(Surface, obj) orelse return;
+    selectReplacement(s, replacement);
     const t = dupe(s, stringOf(str));
     const loc: cf.CFIndex = if (sel.location == not_found) 0 else @intCast(@min(sel.location, t.len * 2));
     const len: cf.CFIndex = if (sel.location == not_found) 0 else @intCast(@min(sel.length, t.len * 2));
@@ -179,6 +195,29 @@ fn selectedRange(obj: objc.Object, _: objc.SEL) callconv(.c) NSRange {
     return range16(f.text, @min(f.caret, f.anchor), @max(f.caret, f.anchor));
 }
 
+/// Whether the system may offer inline predictions in text fields: its
+/// completion arrives as marked text, so a letter just typed is held
+/// uncommitted until the next one (`ui.setInlinePredictions`).
+pub var inline_predictions: bool = true;
+
+fn inlinePredictionType(_: objc.Object, _: objc.SEL) callconv(.c) objc.NSInteger {
+    // NSTextInputTraitTypeDefault, NSTextInputTraitTypeNo.
+    return if (inline_predictions) 0 else 1;
+}
+
+/// `NANOUI_TEXT_LOG=1`: every text operation the input system sends, on stderr.
+var text_log: ?bool = null;
+
+fn logOp(op: ctx_mod.TextOp) void {
+    if (text_log == null) text_log = std.c.getenv("NANOUI_TEXT_LOG") != null;
+    if (!text_log.?) return;
+    switch (op) {
+        .insert => |t| std.debug.print("text: insert \"{s}\"\n", .{t}),
+        .set_marked => |m| std.debug.print("text: set_marked \"{s}\" sel {d}+{d}\n", .{ m.text, m.sel_start, m.sel_len }),
+        else => std.debug.print("text: {s}\n", .{@tagName(op)}),
+    }
+}
+
 fn validAttributes(_: objc.Object, _: objc.SEL) callconv(.c) objc.Object {
     return objc.msg(objc.Object, objc.class("NSArray"), "array", .{});
 }
@@ -206,12 +245,15 @@ pub fn clampRange(text: []const u8, r: NSRange) ?[2]usize {
     return .{ cf.byteOffset(text, @intCast(r.location)), cf.byteOffset(text, @intCast(end)) };
 }
 
-/// Where the input method's candidate window goes: under the caret, in
-/// screen coordinates.
-fn firstRect(obj: objc.Object, _: objc.SEL, _: NSRange, _: ?*NSRange) callconv(.c) objc.CGRect {
+/// Where the input method's candidate window goes: under the clause it
+/// converts while composing (Kotoeri, Pinyin), else under the caret, in
+/// screen coordinates; `actual` gets the range the rect is for.
+fn firstRect(obj: objc.Object, _: objc.SEL, range: NSRange, actual: ?*NSRange) callconv(.c) objc.CGRect {
     const s = objc.getZig(Surface, obj) orelse return .{};
     const f = s.ctx.focused_text orelse return .{};
-    const r: objc.CGRect = .{ .origin = .{ .x = f.caret_rect.x, .y = f.caret_rect.y }, .size = .{ .width = f.caret_rect.w, .height = f.caret_rect.h } };
+    const at = if (f.marked != null) f.clause_rect orelse f.caret_rect else f.caret_rect;
+    if (actual) |a| a.* = if (range.location == not_found) range else .{ .location = range.location, .length = 0 };
+    const r: objc.CGRect = .{ .origin = .{ .x = at.x, .y = at.y }, .size = .{ .width = at.w, .height = at.h } };
     const in_window = objc.msg(objc.CGRect, obj, "convertRect:toView:", .{ r, @as(?objc.Object, null) });
     return objc.msg(objc.CGRect, s.window.nswindow, "convertRectToScreen:", .{in_window});
 }

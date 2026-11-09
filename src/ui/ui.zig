@@ -104,6 +104,12 @@ pub const dock = struct {
     pub const externalTarget = v.externalTarget;
     pub const dropExternal = v.dropExternal;
 };
+/// Whether macOS offers inline predictions (14+) in text fields. They come
+/// as marked text: off, each typed letter is committed as it's typed, as
+/// a search field wants. On by default; no effect elsewhere.
+pub fn setInlinePredictions(on: bool) void {
+    if (comptime @import("builtin").os.tag == .macos) @import("textinput.zig").inline_predictions = on;
+}
 
 pub const key = widgets.key;
 pub const keyInt = widgets.keyInt;
@@ -281,6 +287,7 @@ test {
     _ = @import("markdown.zig");
     _ = @import("layout.zig");
     _ = textfield;
+    _ = @import("textfield_tests.zig");
     _ = @import("tests.zig");
     _ = @import("tests_keymap.zig");
     _ = @import("tests_multiline.zig");
@@ -334,7 +341,6 @@ test {
     _ = @import("tests_textedit.zig");
     _ = @import("tests_field.zig");
     _ = @import("tests_input.zig");
-    _ = @import("textfield_tests.zig");
     _ = @import("tests_backtab.zig");
     if (@import("builtin").os.tag == .macos) {
         _ = @import("tests_menu.zig");
