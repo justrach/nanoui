@@ -57,6 +57,7 @@ pub const Window = struct {
         if (options.title_bar == .hidden) style |= 1 << 15; // full size content view
         if (popover) style = 1 << 7; // borderless, non-activating panel
         if (options.non_activating) style |= 1 << 7;
+        if (options.kind == .panel and options.utility and !popover) style |= 1 << 4; // NSWindowStyleMaskUtilityWindow
         // No title bar, no frame, no resizing edges (`decorations`): the
         // app draws it and moves it (`window_drag`). Only the panel's
         // non-activating bit stays.
@@ -160,6 +161,8 @@ pub const Window = struct {
             _ = objc.msg(objc.BOOL, nswindow, "setFrameAutosaveName:", .{objc.nsString(name)});
         }
         if (options.always_on_top or options.floating) self.setAlwaysOnTop(true);
+        if (options.kind == .panel and !popover and !options.hides_on_deactivate)
+            objc.msg(void, nswindow, "setHidesOnDeactivate:", .{objc.NO});
         if (options.opacity < 1) self.setOpacity(options.opacity);
         // Opened quietly by an update's restart: behind, not key, until the
         // updater puts it back as it was (update_auto.zig).

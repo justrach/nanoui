@@ -269,6 +269,30 @@ pub const App = struct {
         objc.dispatchAfter(ms * std.time.ns_per_ms, ctx, func);
     }
 
+    /// Main thread only: calls `func(ctx)` once the current event (and any
+    /// frame it runs) is done, in every run loop mode: also under a modal
+    /// dialog or a menu being tracked, unlike `onMain`/`after`, whose GCD
+    /// main-queue blocks all wait while one of them runs a modal. Where to
+    /// open the dialogs and context menus a view asked for.
+    pub fn soon(ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) void {
+        const Job = struct { ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void };
+        const job = std.heap.c_allocator.create(Job) catch return;
+        job.* = .{ .ctx = ctx, .func = func };
+        var tctx: cf_soon.Context = .{ .info = job };
+        const t = cf_soon.CFRunLoopTimerCreate(null, cf_soon.CFAbsoluteTimeGetCurrent(), 0, 0, 0, struct {
+            fn fire(timer: *anyopaque, info: ?*anyopaque) callconv(.c) void {
+                const j: *Job = @ptrCast(@alignCast(info));
+                const f = j.func;
+                const c = j.ctx;
+                std.heap.c_allocator.destroy(j);
+                cf_soon.CFRunLoopTimerInvalidate(timer);
+                cf_soon.CFRelease(timer);
+                f(c);
+            }
+        }.fire, &tctx);
+        cf_soon.CFRunLoopAddTimer(cf_soon.CFRunLoopGetMain(), t, cf_soon.kCFRunLoopCommonModes);
+    }
+
     /// Replaces the menu bar with one built from `template`.
     pub fn setMenu(self: *App, template: []const menu_mod.MenuItem) !void {
         const m = try menu_mod.Menu.create(self.gpa, self.options.name, template);
@@ -388,3 +412,14 @@ fn resignedActive(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.
     if (app.options.on_active) |f| f(app.options.ctx, false);
     app.wentAway();
 }
+
+const cf_soon = struct {
+    const Context = extern struct { version: isize = 0, info: ?*anyopaque, retain: ?*const anyopaque = null, release: ?*const anyopaque = null, copyDescription: ?*const anyopaque = null };
+    extern "c" fn CFRunLoopTimerCreate(a: ?*anyopaque, fire: f64, interval: f64, flags: usize, order: isize, callout: *const fn (*anyopaque, ?*anyopaque) callconv(.c) void, ctx: *Context) *anyopaque;
+    extern "c" fn CFRunLoopAddTimer(rl: *anyopaque, t: *anyopaque, mode: *anyopaque) void;
+    extern "c" fn CFRunLoopTimerInvalidate(t: *anyopaque) void;
+    extern "c" fn CFRelease(p: *anyopaque) void;
+    extern "c" fn CFRunLoopGetMain() *anyopaque;
+    extern "c" fn CFAbsoluteTimeGetCurrent() f64;
+    extern "c" const kCFRunLoopCommonModes: *anyopaque;
+};
