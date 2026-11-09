@@ -70,7 +70,7 @@ pub const Interaction = struct {
     a11y_step: i8 = 0,
 };
 pub const Hit = struct { id: u64, index: u32, rect: types.Rect, scroll: bool, scroll_x: bool = false, wheel: bool = false };
-pub const Cursor = enum { arrow, hand, text, resize_left_right, resize_up_down, open_hand, closed_hand, not_allowed, crosshair };
+pub const Cursor = enum { arrow, hand, text, resize_left_right, resize_up_down, open_hand, closed_hand, not_allowed, crosshair, custom };
 pub const A11yRole = @import("access.zig").Role;
 pub const A11yItem = @import("access.zig").Item;
 
@@ -244,6 +244,10 @@ pub const Context = struct {
     cursor_text: bool = false,
     /// A cursor a view asks for, over what widgets set (dividers).
     cursor: ?Cursor = null,
+    /// With `cursor = .custom`: the platform cursor to show (an NSCursor on
+    /// macOS, an HCURSOR on Windows), owned by the app. Changing it while
+    /// `.custom` stays set re-applies it. Ignored on Linux (the arrow).
+    custom_cursor: ?*anyopaque = null,
     /// Springs and tweens (`motion.zig`), kept across frames.
     motion: @import("motion.zig").State = .{},
     /// The system's Reduce Motion: springs and tweens are their target.

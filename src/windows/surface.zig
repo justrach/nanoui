@@ -250,8 +250,12 @@ pub const Surface = struct {
 
     fn setCursor(self: *Surface) void {
         // IDC_ARROW, IDC_HAND, IDC_IBEAM, IDC_SIZEWE, IDC_SIZENS, IDC_SIZEALL, IDC_NO.
+        if (self.cursor == .custom) if (self.ctx.custom_cursor) |cur| {
+            _ = w.SetCursor(@ptrCast(cur));
+            return;
+        };
         const id: usize = switch (self.cursor) {
-            .arrow => 32512,
+            .arrow, .custom => 32512,
             .hand => 32649,
             .text => 32513,
             .resize_left_right => 32644,
