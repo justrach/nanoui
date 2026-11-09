@@ -133,6 +133,8 @@ pub const App = struct {
             const w = self.windows.items[self.windows.items.len - 1];
             w.close();
         }
+        // Surfaces closed with ticks or wakes queued, which won't run now.
+        @import("ui/surface_wake.zig").sweep();
         self.windows.deinit(self.gpa);
         self.services.deinit(self.gpa);
         self.events.deinit(self.gpa);

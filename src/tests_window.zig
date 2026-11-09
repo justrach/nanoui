@@ -31,6 +31,7 @@ fn makeApp(gpa: std.mem.Allocator) !*App {
 
 fn freeApp(app: *App) void {
     while (app.windows.items.len > 0) app.windows.items[app.windows.items.len - 1].close();
+    @import("ui/surface_wake.zig").sweep();
     app.windows.deinit(app.gpa);
     objc.release(app.delegate);
     app.gpa.destroy(app);
@@ -182,4 +183,54 @@ test "traffic_lights is left alone without a hidden title bar" {
     var p: Page = .{};
     const win = try app.newWindow(.{ .title = "plain", .width = 300, .height = 200, .visible = false, .traffic_lights = .{ .x = 26, .y = 26 }, .content = .{ .view = .init(&p, Page.view) } });
     try testing.expect(win.lights == null);
+}
+
+const wake = @import("ui/surface_wake.zig");
+
+/// Closes a window whose surface has a wake queued `after` seconds out, as
+/// the last window of a running app closes. Returns the wake's token. The
+/// app is left running: `makeApp`'s `quit_on_last_window_closed = false`
+/// keeps the close from quitting it (`stop:` and an event posted here).
+fn closeWithWake(app: *App, p: *Page, after: f64) !?*anyopaque {
+    const w = try app.newWindow(.{ .title = "closing", .width = 200, .height = 120, .visible = false, .content = .{ .view = .init(p, Page.view) } });
+    const s = w.surface.?;
+    wake.at(s, @import("ui/cf.zig").CACurrentMediaTime() + after);
+    app.running = true;
+    w.close();
+    return wake.token(s);
+}
+
+test "a surface closed with a wake queued is freed when the app stops, though the wake never runs" {
+    const app = try makeApp(testing.allocator);
+    var p: Page = .{};
+    // An hour off, so it never runs: the surface waits for it, and the
+    // sweep (`freeApp`, as `App.destroy`) frees it.
+    const id = try closeWithWake(app, &p, 3600);
+    try testing.expect(wake.find(id) != null);
+    app.running = false;
+    freeApp(app);
+    try testing.expect(wake.find(id) == null);
+}
+
+test "a wake that runs after its surface was freed finds nothing" {
+    const app = try makeApp(testing.allocator);
+    var p: Page = .{};
+    const id = try closeWithWake(app, &p, 0);
+    app.running = false;
+    freeApp(app);
+    try testing.expect(wake.find(id) == null);
+    // The wake runs now, with no surface for its id.
+    @import("platform.zig").runFor(0.05);
+}
+
+test "a surface closed with a wake queued is freed by the wake while the app runs" {
+    const app = try makeApp(testing.allocator);
+    var p: Page = .{};
+    const id = try closeWithWake(app, &p, 0);
+    // The wake is due now; a loaded machine may take a while to run it.
+    var waited: f64 = 0;
+    while (wake.find(id) != null and waited < 1) : (waited += 0.02) @import("platform.zig").runFor(0.02);
+    try testing.expect(wake.find(id) == null);
+    app.running = false;
+    freeApp(app);
 }

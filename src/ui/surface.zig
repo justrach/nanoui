@@ -17,6 +17,7 @@ const ui = @import("ui.zig");
 const Window = @import("../window.zig").Window;
 const a11y = @import("a11y.zig");
 const events = @import("surface_events.zig");
+const wake = @import("surface_wake.zig");
 const frame_log_mod = @import("frame_log.zig");
 pub const FrameLog = frame_log_mod.FrameLog;
 pub const KeysReleased = struct { ctx: ?*anyopaque, func: *const fn (ctx: ?*anyopaque, s: *Surface) void };
@@ -54,7 +55,7 @@ pub const Surface = struct {
     full_pending: bool = false,
     retained_ready: bool = false,
     frame_in_due: f64 = 0,
-    wake: @import("surface_wake.zig").Wake = .{},
+    wake: wake.Wake = .{},
     pending_sync: bool = false,
     /// A frame was wanted while the window was hidden: run it once visible.
     pending: bool = false,
@@ -121,6 +122,9 @@ pub const Surface = struct {
             // Before anything can run a frame: setContentView: resizes the view.
             .start_time = cf.CACurrentMediaTime(),
         };
+        // Before anything can queue a tick or a wake, which find it by id.
+        wake.register(self);
+        errdefer wake.unregister(self);
         if (text.portable and !window.app.flags.hidden) self.text.enablePersistence(window.app.options.name);
         self.ctx = .init(gpa, &self.text);
         // Pictures go straight to the GPU before any view callback can run a frame.
@@ -197,7 +201,10 @@ pub const Surface = struct {
             self.pacing_log.close();
             if (self.frame_log) |*fl| fl.deinit();
         }
-        if (self.force_destroy or (!self.tick_scheduled and self.wake.pending == 0)) self.gpa.destroy(self);
+        // Else the last tick or wake to run frees it. Closed while the app
+        // ran, it may stop before they do: `App.destroy` frees it then
+        // (`wake.sweep`).
+        if (self.force_destroy or (!self.tick_scheduled and self.wake.pending == 0)) wake.free(self);
     }
 
     fn finishFrame(self: *Surface) void {
@@ -368,7 +375,7 @@ pub const Surface = struct {
                 self.setRate(null);
                 self.setPaced(true);
             } else if (c.frame_in != null) {
-                @import("surface_wake.zig").at(self, self.frame_in_due); // not a slowed link: see there
+                wake.at(self, self.frame_in_due); // not a slowed link: see there
             } else if (c.time_driven != .none) {
                 self.setRate(if (c.time_driven == .fast) null else 1.0 / 24.0);
                 self.setPaced(true);
@@ -448,7 +455,7 @@ pub const Surface = struct {
             presented = self.renderer.drawLogged(self.instances.items, self.atlasTexture(), self.size, clear, null, 0).presented;
         }
         if (presented) self.last_present_target = present_at;
-        if (presented) @import("surface_wake.zig").presented(self);
+        if (presented) wake.presented(self);
         return presented;
     }
 
@@ -503,7 +510,7 @@ pub const Surface = struct {
     }
 
     pub fn setPaced(self: *Surface, on: bool) void {
-        if (on) @import("surface_wake.zig").watch(self);
+        if (on) wake.watch(self);
         if (self.paced == on) return;
         self.paced = on;
         if (!on and self.frame_log != null) self.frame_log.?.last_t = 0;
@@ -576,10 +583,10 @@ pub const Surface = struct {
     fn scheduleTick(self: *Surface) void {
         if (self.tick_scheduled) return;
         self.tick_scheduled = true;
-        objc.dispatchAfter(std.time.ns_per_s / 120, self, tick);
+        objc.dispatchAfter(std.time.ns_per_s / 120, wake.token(self), tick);
     }
     fn tick(ptr: ?*anyopaque) callconv(.c) void {
-        const self: *Surface = @ptrCast(@alignCast(ptr));
+        const self = wake.find(ptr) orelse return;
         self.tick_scheduled = false;
         if (self.dead) return self.finishDestroy();
         self.frame();
