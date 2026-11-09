@@ -15,6 +15,17 @@ pub const MessageKind = dialog_types.MessageKind;
 pub const MessageOptions = dialog_types.MessageOptions;
 pub const MessageResult = dialog_types.MessageResult;
 pub const freePaths = dialog_types.freePaths;
+pub const Filter = dialog_types.Filter;
+
+/// The panel's file type list (`lpstrFilter`): the named groups, or the
+/// plain extensions as one; null for every file.
+fn filterList(buf: []u16, filters: []const Filter, extensions: []const []const u8) ?[*:0]const u16 {
+    var one: [1]Filter = undefined;
+    const list = dialog_types.groups(filters, extensions, &one);
+    if (list.len == 0) return null;
+    const got = dialog_types.windowsFilter(buf, list) orelse return null;
+    return @ptrCast(got.ptr);
+}
 
 extern "ole32" fn CoInitializeEx(reserved: ?*anyopaque, flags: u32) callconv(.winapi) i32;
 extern "ole32" fn CoUninitialize() callconv(.winapi) void;
@@ -65,7 +76,7 @@ pub const Texts = struct {
     title: [256]u16 = undefined,
     button: [64]u16 = undefined,
     folder: [1024]u16 = undefined,
-    types: [512]u16 = undefined,
+    types: [2048]u16 = undefined,
 };
 
 /// What `opts` adds to an open dialog's options. It picks one kind of item:
@@ -96,7 +107,7 @@ pub fn make(opts: OpenOptions, texts: *Texts) !*Com {
     if (opts.title.len > 0) _ = d.slot(SetText, slot.set_title)(d, w.wide(&texts.title, opts.title));
     if (opts.button.len > 0) _ = d.slot(SetText, slot.set_ok_button_label)(d, w.wide(&texts.button, opts.button));
     if (opts.directory.len > 0) setFolder(d, w.wide(&texts.folder, opts.directory));
-    if (opts.extensions.len > 0 and optionsFor(opts) & fos.pick_folders == 0) setFileTypes(d, &texts.types, opts.extensions);
+    if ((opts.filters.len > 0 or opts.extensions.len > 0) and optionsFor(opts) & fos.pick_folders == 0) setFileTypes(d, &texts.types, opts.filters, opts.extensions);
     return d;
 }
 
@@ -109,17 +120,24 @@ fn setFolder(d: *Com, path: [*:0]const u16) void {
     _ = d.slot(*const fn (*Com, *Com) callconv(.winapi) i32, slot.set_folder)(d, folder);
 }
 
-/// One filter of the extensions allowed, "*.png;*.jpg", named by itself.
-fn setFileTypes(d: *Com, buf: []u16, extensions: []const []const u8) void {
-    var spec: [512]u8 = undefined;
-    var len: usize = 0;
-    for (extensions, 0..) |ext, i| {
-        const part = std.fmt.bufPrint(spec[len..], "{s}*.{s}", .{ if (i > 0) ";" else "", ext }) catch break;
-        len += part.len;
+/// Named filter groups, or one filter of the extensions allowed ("*.png;*.jpg").
+fn setFileTypes(d: *Com, buf: []u16, filters: []const Filter, extensions: []const []const u8) void {
+    var one: [1]Filter = undefined;
+    const list = dialog_types.groups(filters, extensions, &one);
+    const got = dialog_types.windowsFilter(buf, list) orelse return;
+    var specs: [16]FilterSpec = undefined;
+    var count: usize = 0;
+    var pos: usize = 0;
+    while (pos + 1 < got.len and got[pos] != 0 and count < specs.len) {
+        const name_end = std.mem.indexOfScalarPos(u16, got, pos, 0) orelse break;
+        const spec_start = name_end + 1;
+        if (spec_start >= got.len or got[spec_start] == 0) break;
+        const spec_end = std.mem.indexOfScalarPos(u16, got, spec_start, 0) orelse break;
+        specs[count] = .{ .name = @ptrCast(got[pos..].ptr), .spec = @ptrCast(got[spec_start..].ptr) };
+        count += 1;
+        pos = spec_end + 1;
     }
-    const s = w.wide(buf, spec[0..len]);
-    const filter = [_]FilterSpec{.{ .name = s, .spec = s }};
-    _ = d.slot(*const fn (*Com, u32, [*]const FilterSpec) callconv(.winapi) i32, slot.set_file_types)(d, filter.len, &filter);
+    if (count > 0) _ = d.slot(*const fn (*Com, u32, [*]const FilterSpec) callconv(.winapi) i32, slot.set_file_types)(d, @intCast(count), &specs);
 }
 
 /// The file system paths in an `IShellItemArray`, as WTF-8. Free with `freePaths`.
@@ -171,7 +189,10 @@ pub fn save(gpa: std.mem.Allocator, opts: SaveOptions) !?[]u8 {
     var file: [4096]u16 = @splat(0);
     _ = w.wide(&file, opts.name);
     var title: [256]u16 = undefined;
+    var types: [2048]u16 = undefined;
     var ofn: w.OPENFILENAMEW = .{ .lpstrFile = &file, .nMaxFile = file.len, .lpstrTitle = if (opts.title.len > 0) w.wide(&title, opts.title) else null, .Flags = w.OFN_EXPLORER | w.OFN_OVERWRITEPROMPT | w.OFN_NOCHANGEDIR };
+    ofn.lpstrFilter = filterList(&types, opts.filters, opts.extensions);
+    if (ofn.lpstrFilter != null) ofn.nFilterIndex = 1;
     if (w.GetSaveFileNameW(&ofn) == 0) return null;
     return try std.unicode.utf16LeToUtf8Alloc(gpa, std.mem.sliceTo(&file, 0));
 }
@@ -198,4 +219,13 @@ pub fn message(opts: MessageOptions) MessageResult {
         else => 0,
     };
     return .{ .button = button };
+}
+
+test "the file type list: named groups, else the extensions" {
+    var buf: [256]u16 = undefined;
+    const groups = [_]Filter{ .{ .name = "Audio", .extensions = &.{"wav"} }, .{ .name = "Images", .extensions = &.{ "png", "jpg" } } };
+    const got = filterList(&buf, &groups, &.{}).?;
+    try std.testing.expectEqualSlices(u16, std.unicode.utf8ToUtf16LeStringLiteral("Audio"), std.mem.span(got));
+    try std.testing.expect(filterList(&buf, &.{}, &.{}) == null);
+    try std.testing.expect(filterList(&buf, &.{}, &.{"mov"}) != null);
 }
