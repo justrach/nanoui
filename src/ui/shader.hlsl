@@ -393,7 +393,13 @@ float4 shade(Varyings v) {
         return float4(v.i_color.rgb * a, a);
     }
     // Premultiplied: the border is laid over the fill (see shader.metal).
-    float4 c = float4(v.i_color.rgb * v.i_color.a, v.i_color.a);
+    float4 fill = v.i_color;
+    if (v.i_uv.y > 0.5) {
+        float gr = floor(v.i_uv.z / 256.0), gb = floor(v.i_uv.w / 256.0);
+        float4 bottom = float4(gr, v.i_uv.z - gr * 256.0, gb, v.i_uv.w - gb * 256.0) / 255.0;
+        fill = lerp(fill, bottom, saturate(v.v_local.y / max(v.i_rect.w, 1e-4)));
+    }
+    float4 c = float4(fill.rgb * fill.a, fill.a);
     float bw = v.i_misc.y;
     if (bw > 0.0 && v.i_border_color.a > 0.0) {
         float inner = smoothstep(-bw - aa, -bw + aa, d);

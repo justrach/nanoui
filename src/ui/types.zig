@@ -279,6 +279,9 @@ pub const Style = struct {
     align_items: Align = .start,
     justify: Justify = .start,
     background: ?Color = null,
+    /// The background fades from `background` at the top to this at the
+    /// bottom (a lit bar, a button's sheen), in 8-bit steps.
+    gradient: ?Color = null,
     border: ?Color = null,
     border_width: f32 = 1,
     /// Dashed: dashes twice the border's width, gaps once it, spaced evenly

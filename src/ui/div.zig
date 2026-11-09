@@ -138,6 +138,10 @@ pub const Div = struct {
     pub fn bg(d: Div, color: Color) Div {
         return d.set("background", @as(?Color, color));
     }
+    /// The background fades to `color` at the bottom.
+    pub fn gradient(d: Div, color: Color) Div {
+        return d.set("gradient", color);
+    }
     pub fn border(d: Div, color: Color) Div {
         return d.set("border", @as(?Color, color));
     }

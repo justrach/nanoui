@@ -162,7 +162,8 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip_
             .border_width = if (st.border != null) st.border_width else 0,
             .radius = rad,
             // A quad's uv is free: its x marks a dashed border.
-            .uv = .{ if (st.border_dashed) 1 else 0, 0, 0, 0 },
+            // and its y a gradient (`gpu.gradientUv`).
+            .uv = metal.gradientUv(st.border_dashed, if (fill != null and st.gradient != null) st.gradient.?.alpha(opacity) else null),
             .clip = clip4,
         });
         switch (n.content) {

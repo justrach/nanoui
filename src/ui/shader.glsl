@@ -395,7 +395,13 @@ vec4 shade() {
         return vec4(i_color.rgb * a, a);
     }
     // Premultiplied: the border is laid over the fill (see shader.metal).
-    vec4 c = vec4(i_color.rgb * i_color.a, i_color.a);
+    vec4 fill = i_color;
+    if (i_uv.y > 0.5) {
+        float gr = floor(i_uv.z / 256.0), gb = floor(i_uv.w / 256.0);
+        vec4 bottom = vec4(gr, i_uv.z - gr * 256.0, gb, i_uv.w - gb * 256.0) / 255.0;
+        fill = mix(fill, bottom, clamp(v_local.y / max(i_rect.w, 1e-4), 0.0, 1.0));
+    }
+    vec4 c = vec4(fill.rgb * fill.a, fill.a);
     float bw = i_misc.y;
     if (bw > 0.0 && i_border_color.a > 0.0) {
         float inner = smoothstep(-bw - aa, -bw + aa, d);

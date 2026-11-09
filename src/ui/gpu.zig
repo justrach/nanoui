@@ -118,7 +118,7 @@ pub fn lastCover(instances: []const Instance, size: types.Size) ?usize {
         const kind = inst.kind;
         if (kind == Kind.glass or kind == Kind.layer_begin or kind == Kind.layer_end or kind == Kind.hole or kind == Kind.texture) return found;
         if (kind != Kind.quad or inst.color[3] < 1) continue;
-        if (inst.radius != 0 or (inst.border_width > 0 and inst.border_color[3] > 0)) continue;
+        if (inst.radius != 0 or (inst.border_width > 0 and inst.border_color[3] > 0) or inst.uv[1] != 0 or hasMatrix(&inst)) continue;
         if (inst.clip_round != 0 or inst.xf[0] != 0 or inst.xf[1] != 0 or inst.pulse[0] > 0) continue;
         if (inst.vel[0] != 0 or inst.vel[1] != 0 or inst.vel[2] != 0 or inst.turn[0] != 0) continue;
         const r = inst.rect;
@@ -147,6 +147,26 @@ test "lastCover: a full opaque quad hides what came before it" {
     var clipped = full;
     clipped.clip = .{ 0, 0, 50, 50 };
     try std.testing.expectEqual(@as(?usize, null), lastCover(&.{clipped}, sz));
+}
+
+/// A quad's gradient (`Style.gradient`) in its free `uv`: y marks it, z and
+/// w hold the bottom color's 8-bit r·256+g and b·256+a (exact in a float).
+pub fn gradientUv(dashed: bool, bottom: ?types.Color) [4]f32 {
+    const d: f32 = if (dashed) 1 else 0;
+    const c = bottom orelse return .{ d, 0, 0, 0 };
+    const q = struct {
+        fn b(v: f32) f32 {
+            return @round(std.math.clamp(v, 0, 1) * 255);
+        }
+    };
+    return .{ d, 1, q.b(c.r) * 256 + q.b(c.g), q.b(c.b) * 256 + q.b(c.a) };
+}
+
+/// `gradientUv`'s bottom color, unpacked (straight alpha).
+pub fn gradientBottom(uv: [4]f32) [4]f32 {
+    const r = @floor(uv[2] / 256);
+    const b = @floor(uv[3] / 256);
+    return .{ r / 255, (uv[2] - r * 256) / 255, b / 255, (uv[3] - b * 256) / 255 };
 }
 
 pub fn color4(c: types.Color) [4]f32 {
