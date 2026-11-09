@@ -7,6 +7,7 @@ const Surface = @import("surface.zig").Surface;
 const window_types = @import("../window_types.zig");
 const Page = @import("../page_webview2.zig").Page;
 const drop_files = @import("drop_files.zig");
+const iconFrame = @import("icon.zig").iconFrame;
 
 /// The window message a page's queued messages go out on (`Page.flush`):
 /// after the app's own (`WM_APP` onwards, as `fdwatch.zig` allocates them).
@@ -41,43 +42,6 @@ pub const Frame = struct { x: f64, y: f64, width: f64, height: f64 };
 const class_name = std.unicode.utf8ToUtf16LeStringLiteral("NanoUIWindow");
 var registered = false;
 
-/// An `HICON` from an ICO's bytes, at the frame nearest `cx` × `cy`.
-fn iconFrame(ico: []const u8, cx: i32, cy: i32) ?w.HICON {
-    if (ico.len < 6) return null;
-    const count = readU16(ico, 4);
-    var best: ?struct { offset: u32, size: u32 } = null;
-    var best_score: u32 = std.math.maxInt(u32);
-    var i: usize = 0;
-    while (i < count) : (i += 1) {
-        const entry = 6 + i * 16;
-        if (entry + 16 > ico.len) break;
-        const width: i32 = if (ico[entry] == 0) 256 else ico[entry];
-        const height: i32 = if (ico[entry + 1] == 0) 256 else ico[entry + 1];
-        const size = readU32(ico, entry + 8);
-        const offset = readU32(ico, entry + 12);
-        if (offset > ico.len or size > ico.len - offset) continue;
-        const score: u32 = @abs(width - cx) + @abs(height - cy);
-        if (score < best_score) {
-            best_score = score;
-            best = .{ .offset = offset, .size = size };
-        }
-    }
-    const frame = best orelse return null;
-    const data: *const anyopaque = @ptrCast(ico.ptr + @as(usize, frame.offset));
-    return w.CreateIconFromResourceEx(data, frame.size, 1, 0x00030000, cx, cy, 0);
-}
-
-fn readU16(bytes: []const u8, at: usize) u16 {
-    return @as(u16, bytes[at]) | (@as(u16, bytes[at + 1]) << 8);
-}
-
-fn readU32(bytes: []const u8, at: usize) u32 {
-    return @as(u32, bytes[at]) |
-        (@as(u32, bytes[at + 1]) << 8) |
-        (@as(u32, bytes[at + 2]) << 16) |
-        (@as(u32, bytes[at + 3]) << 24);
-}
-
 pub const Window = struct {
     app: *App,
     /// Null when headless (snapshots).
@@ -108,6 +72,8 @@ pub const Window = struct {
     /// `Options.transparent`: the frame is the window, alpha and all
     /// (`layered.zig`).
     transparent: bool = false,
+    /// Whether the title bar was last made dark; null until it is set.
+    title_bar_dark: ?bool = null,
 
     /// Resizing changes geometry only, never the foreground window.
     pub const set_size_flags: u32 = w.SWP_NOMOVE | w.SWP_NOZORDER | w.SWP_NOACTIVATE;
@@ -147,6 +113,9 @@ pub const Window = struct {
         if (options.opacity < 1 or self.transparent) ex |= w.WS_EX_LAYERED;
         const hwnd = w.CreateWindowExW(ex, class_name, w.wide(&title, options.title), style, w.CW_USEDEFAULT, w.CW_USEDEFAULT, 100, 100, null, null, inst, null) orelse return error.CreateWindow;
         self.hwnd = hwnd;
+        // The title bar matches the theme before the window is first shown; a
+        // surface keeps it matching the theme each frame is drawn with.
+        self.setTitleBarDark(if (options.theme) |t| t.dark else @import("desktop.zig").isDark());
         _ = w.SetWindowLongPtrW(hwnd, w.GWLP_USERDATA, @bitCast(@intFromPtr(self)));
         self.setIcon(options.icon);
         w.DragAcceptFiles(hwnd, 1);
@@ -204,6 +173,16 @@ pub const Window = struct {
         _ = w.SetLayeredWindowAttributes(h, 0, alpha, w.LWA_ALPHA);
         // A frame with the new mode: GDI when translucent, the GPU at 1.
         if (self.surface) |s| s.requestFrame();
+    }
+
+    /// A dark title bar for a dark theme, as the system draws its own windows
+    /// in dark mode. Versions of Windows without it keep a light one.
+    pub fn setTitleBarDark(self: *Window, dark: bool) void {
+        if (self.title_bar_dark == dark) return;
+        const h = self.hwnd orelse return;
+        const value: w.BOOL = @intFromBool(dark);
+        _ = w.DwmSetWindowAttribute(h, w.DWMWA_USE_IMMERSIVE_DARK_MODE, &value, @sizeOf(w.BOOL));
+        self.title_bar_dark = dark;
     }
 
     fn of(hwnd: w.HWND) ?*Window {
@@ -289,6 +268,8 @@ pub const Window = struct {
             if (self.page) |p| p.enqueue(job.msg, true);
             return 0;
         }
+        // A page has no surface to follow the system's appearance: its title bar does here.
+        if (msg == w.WM_SETTINGCHANGE and self.surface == null and self.theme == null) self.setTitleBarDark(@import("desktop.zig").isDark());
         if (self.page) |p| {
             // The window moved or changed size, or the monitor's scale did:
             // the webview covers the client area as it now is.

@@ -272,6 +272,11 @@ pub extern "advapi32" fn RegGetValueW(hkey: usize, sub_key: [*:0]const u16, valu
 pub const HKEY_CURRENT_USER: usize = 0x80000001;
 /// RRF_RT_REG_DWORD: the value is read as a DWORD, whatever else the key holds.
 pub const RRF_RT_REG_DWORD = 0x00000010;
+/// Sets how the desktop window manager draws a window's frame. With
+/// `DWMWA_USE_IMMERSIVE_DARK_MODE` and a `BOOL`, whether its title bar is dark:
+/// documented from Windows 11, honoured from Windows 10 2004 (build 19041).
+pub extern "dwmapi" fn DwmSetWindowAttribute(hwnd: HWND, attribute: u32, value: *const anyopaque, size: u32) callconv(.winapi) i32;
+pub const DWMWA_USE_IMMERSIVE_DARK_MODE: u32 = 20;
 
 // Messages.
 pub const WM_DESTROY = 0x0002;

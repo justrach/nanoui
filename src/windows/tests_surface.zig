@@ -201,6 +201,49 @@ test "a window: decorations, skip_taskbar and opacity reach Win32" {
     try testing.expectEqual(@as(f64, 1), sidebar.opacity);
 }
 
+/// Whether the desktop window manager draws `h`'s title bar dark; null where
+/// Windows has no such setting to read.
+fn darkTitleBar(h: @import("win32.zig").HWND) ?bool {
+    const w = @import("win32.zig");
+    const dwm = struct {
+        extern "dwmapi" fn DwmGetWindowAttribute(hwnd: w.HWND, attribute: u32, value: *anyopaque, size: u32) callconv(.winapi) i32;
+    };
+    var value: w.BOOL = 0;
+    if (dwm.DwmGetWindowAttribute(h, w.DWMWA_USE_IMMERSIVE_DARK_MODE, &value, @sizeOf(w.BOOL)) < 0) return null;
+    return value != 0;
+}
+
+test "a window's title bar follows the theme it is drawn with" {
+    const gpa = testing.allocator;
+    const app = try gpa.create(App);
+    app.* = .{
+        .gpa = gpa,
+        .io = std.Io.Threaded.global_single_threaded.io(),
+        .options = .{ .quit_on_last_window_closed = false },
+        .flags = .{ .hidden = true },
+        .gui = true,
+    };
+    defer app.destroy();
+
+    // From the window's own theme, before it is ever shown.
+    var page_a: Page = .{};
+    const dark = try app.newWindow(.{ .title = "dark", .width = 200, .height = 120, .visible = false, .theme = ui.Theme.dark_theme, .content = .{ .view = .init(&page_a, Page.view) } });
+    const dh = dark.hwnd orelse return error.SkipZigTest;
+    try testing.expectEqual(true, darkTitleBar(dh) orelse return error.SkipZigTest);
+    var page_b: Page = .{};
+    const light = try app.newWindow(.{ .title = "light", .width = 200, .height = 120, .visible = false, .theme = ui.Theme.light, .content = .{ .view = .init(&page_b, Page.view) } });
+    try testing.expectEqual(false, darkTitleBar(light.hwnd.?).?);
+
+    // The next frame drawn with another theme takes the title bar with it.
+    const s = dark.surface.?;
+    s.theme_override = ui.Theme.light;
+    s.frame();
+    try testing.expectEqual(false, darkTitleBar(dh).?);
+    s.theme_override = ui.Theme.dark_theme;
+    s.frame();
+    try testing.expectEqual(true, darkTitleBar(dh).?);
+}
+
 test "a translucent window stands down from Direct3D, draw and present" {
     const gpa = testing.allocator;
     const app = try gpa.create(App);

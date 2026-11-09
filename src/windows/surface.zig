@@ -200,6 +200,7 @@ pub const Surface = struct {
             drawn_theme = self.theme();
             r = frame_mod.run(c, self.view, &self.text, &self.instances, self.size, self.scale, drawn_theme, dt, now - self.start_time);
         }
+        self.window.setTitleBarDark(drawn_theme.dark);
         // The real gap, for a view that reports its frame rate: `dt` above is
         // clamped so an animation cannot jump. The rate is what it is.
         c.frame_time = raw_dt;
