@@ -209,6 +209,9 @@ pub const setScrollOffset = @import("scroll_x.zig").setScrollOffset;
 pub const scrollMax = @import("scroll_x.zig").scrollMax;
 pub const scrollAtEnd = @import("scroll_x.zig").atEnd;
 pub const scrollToEnd = @import("scroll_x.zig").scrollToEnd;
+/// Rich text from a little Markdown (`markdown.zig`): bold, italic,
+/// code, headings and bullets as spans.
+pub const markdown = @import("markdown.zig");
 /// What a drop from another app brought (`Context.dropAt`).
 pub const Drop = @import("input.zig").Drop;
 pub const MouseButton = @import("input.zig").Button;
@@ -275,6 +278,7 @@ test {
     _ = @import("tests_dock.zig");
     _ = @import("tests_dock_hooks.zig");
     _ = @import("tests_scroll_api.zig");
+    _ = @import("markdown.zig");
     _ = @import("layout.zig");
     _ = textfield;
     _ = @import("tests.zig");
