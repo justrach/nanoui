@@ -53,6 +53,22 @@ fn env(name: [*:0]const u8) ?[]const u8 {
     return std.mem.span(v);
 }
 
+extern "kernel32" fn ExpandEnvironmentStringsW(src: [*:0]const u16, dst: [*]u16, size: u32) callconv(.winapi) u32;
+
+/// The current user's own fonts on Windows, `%LOCALAPPDATA%\Microsoft\Windows\Fonts`,
+/// in `buf`; null where there is no such folder to name.
+pub fn userFontDir(buf: []u8) ?[]const u8 {
+    if (builtin.os.tag != .windows) return null;
+    // A code unit is at most three bytes of WTF-8: no more than `buf` takes.
+    var wide: [341]u16 = undefined;
+    const room: u32 = @intCast(@min(wide.len, buf.len / 3));
+    const n = ExpandEnvironmentStringsW(std.unicode.utf8ToUtf16LeStringLiteral("%LOCALAPPDATA%\\Microsoft\\Windows\\Fonts"), &wide, room);
+    // The count includes the terminator; a variable not set stays unexpanded.
+    if (n < 2 or n > room or wide[0] == '%') return null;
+    const dir = buf[0..std.unicode.wtf16LeToWtf8(buf, wide[0 .. n - 1])];
+    return if (std.fs.path.isAbsolute(dir)) dir else null;
+}
+
 pub const Db = struct {
     gpa: std.mem.Allocator,
     io: std.Io,
@@ -227,6 +243,8 @@ pub const Db = struct {
                 db.scanDir("C:\\Windows\\Fonts");
                 // Under Wine, the Linux system's fonts are on drive Z:.
                 if (db.faces.items.len < 8) db.scanDir("Z:\\usr\\share\\fonts");
+                // Where Windows installs a font unless asked to for all users.
+                if (userFontDir(&buf)) |dir| db.scanDir(dir);
             },
             .macos => {
                 for ([_][]const u8{ "/System/Library/Fonts", "/Library/Fonts" }) |d| db.scanDir(d);
@@ -281,8 +299,9 @@ pub const Db = struct {
 
     pub fn scanDir(db: *Db, path: []const u8) void {
         db.recordDir(path);
-        var dir = std.Io.Dir.cwd().openDir(db.io, path, .{ .iterate = true }) catch {
-            db.cache_broken = true;
+        var dir = std.Io.Dir.cwd().openDir(db.io, path, .{ .iterate = true }) catch |err| {
+            // A folder that isn't there is recorded as absent: the index holds.
+            if (err != error.FileNotFound) db.cache_broken = true;
             return;
         };
         defer dir.close(db.io);
@@ -353,7 +372,7 @@ pub const Db = struct {
     }
 
     /// The face of `family` nearest `weight` and `italic`, null when the
-    /// family has none.
+    /// family has none; of two as near, one that isn't variable.
     pub fn family(db: *Db, name: []const u8, weight: u16, italic: bool) ?u32 {
         db.scan();
         var best: ?u32 = null;
@@ -361,13 +380,21 @@ pub const Db = struct {
         for (db.faces.items, 0..) |f, i| {
             if (f.private or !std.ascii.eqlIgnoreCase(f.style.name(), name)) continue;
             const dw: u32 = @abs(@as(i32, f.style.weight) - @as(i32, weight));
-            const score = dw + @as(u32, if (f.style.italic != italic) 1000 else 0);
+            const score = 2 * (dw + @as(u32, if (f.style.italic != italic) 1000 else 0)) + @intFromBool(f.style.variable);
             if (score < best_score) {
                 best_score = score;
                 best = @intCast(i);
             }
         }
         return best;
+    }
+
+    /// Whether every face of `family` is a variable font's.
+    fn onlyVariable(db: *Db, name: []const u8) bool {
+        for (db.faces.items) |f| {
+            if (!f.private and !f.style.variable and std.ascii.eqlIgnoreCase(f.style.name(), name)) return false;
+        }
+        return true;
     }
 
     /// As `family`, a width in `font-stretch` percent counted first. OS/2's
@@ -391,10 +418,19 @@ pub const Db = struct {
     }
 
     /// The face for a style: its family if installed, else the first
-    /// installed of the defaults.
+    /// installed of the defaults. A variable font is read at its default
+    /// instance only, its other weights synthesized, so among the defaults a
+    /// family with faces of its own goes first (Consolas over Windows 11's
+    /// variable Cascadia Mono); one installed only as a variable font when
+    /// no other is.
     pub fn match(db: *Db, name: ?[]const u8, weight: u16, italic: bool, mono: bool) ?u32 {
         if (name) |n| if (db.family(n, weight, italic)) |f| return f;
-        for (if (mono) &monos else &sans) |n| if (db.family(n, weight, italic)) |f| return f;
+        var variable: ?u32 = null;
+        for (if (mono) &monos else &sans) |n| if (db.family(n, weight, italic)) |f| {
+            if (!db.onlyVariable(n)) return f;
+            if (variable == null) variable = f;
+        };
+        if (variable) |f| return f;
         db.scan();
         for (db.faces.items, 0..) |f, i| if (!f.private and f.style.mono == mono) return @intCast(i);
         for (db.faces.items, 0..) |f, i| if (!f.private) return @intCast(i);

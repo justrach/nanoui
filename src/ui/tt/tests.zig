@@ -296,6 +296,126 @@ test "an unsupported cmap does not invalidate other warm font faces" {
     }
 }
 
+test "Windows' per-user font folder is named from LOCALAPPDATA" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var buf: [1024]u8 = undefined;
+    const dir = fontdb.userFontDir(&buf) orelse return error.SkipZigTest;
+    try std.testing.expect(std.fs.path.isAbsolute(dir));
+    try std.testing.expect(std.mem.endsWith(u8, dir, "\\Microsoft\\Windows\\Fonts"));
+}
+
+test "a font folder that isn't there leaves the font index written and then hit" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var root_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = root_buf[0..try tmp.dir.realPath(std.testing.io, &root_buf)];
+    // As a per-user font folder is until the user installs a font.
+    const missing = try std.fs.path.join(gpa, &.{ root, "no-fonts-yet" });
+    defer gpa.free(missing);
+    const cache_path = try std.fs.path.join(gpa, &.{ root, "font-index-v2.bin" });
+    defer gpa.free(cache_path);
+    for ([_]@import("fontindex.zig").State{ .written, .hit }) |expected| {
+        var db = fontdb.Db.init(gpa, std.testing.io);
+        defer db.deinit();
+        db.fonts_dir = missing;
+        db.cache_path = cache_path;
+        db.scan();
+        try std.testing.expectEqual(expected, db.cache.state);
+    }
+}
+
+test "a variable font is known as one" {
+    const gpa = std.testing.allocator;
+    // Windows 11's Cascadia Mono is variable; elsewhere none is known to be installed.
+    const path = if (builtin.os.tag == .windows) "C:\\Windows\\Fonts\\CascadiaMono.ttf" else return error.SkipZigTest;
+    const data = std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, gpa, .limited(64 << 20)) catch return error.SkipZigTest;
+    defer gpa.free(data);
+    try std.testing.expect((try font.Font.init(data, 0)).style.variable);
+    const plain = load(gpa) orelse return error.SkipZigTest;
+    defer gpa.free(plain);
+    try std.testing.expect(!(try font.Font.init(plain, 0)).style.variable);
+}
+
+/// A monospaced face of `family` for the matching tests: a style, never loaded.
+fn styled(db: *fontdb.Db, family: []const u8, weight: u16, variable: bool) !void {
+    var style: font.Style = .{ .weight = weight, .mono = true, .variable = variable };
+    @memcpy(style.family[0..family.len], family);
+    style.family_len = @intCast(family.len);
+    try db.faces.append(db.gpa, .{ .path = try db.gpa.dupe(u8, family), .index = 0, .style = style });
+}
+
+test "the default fonts take a family with faces of its own over a variable one" {
+    const gpa = std.testing.allocator;
+    var db = fontdb.Db.init(gpa, std.testing.io);
+    defer db.deinit();
+    db.scanned = true;
+    try styled(&db, "Cascadia Mono", 400, true);
+    // Alone, the variable family is the default.
+    try std.testing.expectEqualStrings("Cascadia Mono", db.faces.items[db.match(null, 700, false, true).?].style.name());
+    try styled(&db, "Consolas", 400, false);
+    try styled(&db, "Consolas", 700, false);
+    // With a family of real faces after it in the defaults, that one, for every weight.
+    const bold = db.faces.items[db.match(null, 700, false, true).?];
+    try std.testing.expectEqualStrings("Consolas", bold.style.name());
+    try std.testing.expectEqual(@as(u16, 700), bold.style.weight);
+    try std.testing.expectEqualStrings("Consolas", db.faces.items[db.match(null, 400, false, true).?].style.name());
+    // Named by the app, the variable family is still the one it gets.
+    try std.testing.expectEqualStrings("Cascadia Mono", db.faces.items[db.match("Cascadia Mono", 700, false, true).?].style.name());
+}
+
+test "a default family with faces of its own beside its variable font keeps them" {
+    const gpa = std.testing.allocator;
+    for ([_]bool{ true, false }) |static_regular| {
+        var db = fontdb.Db.init(gpa, std.testing.io);
+        defer db.deinit();
+        db.scanned = true;
+        // The system's variable Cascadia Mono found first, faces of its own a
+        // user installed after it, and Consolas.
+        try styled(&db, "Cascadia Mono", 400, true);
+        if (static_regular) try styled(&db, "Cascadia Mono", 400, false);
+        try styled(&db, "Cascadia Mono", 700, false);
+        try styled(&db, "Consolas", 400, false);
+        try styled(&db, "Consolas", 700, false);
+        // One family for every weight; a real face over the variable one
+        // where there is one, the variable one's own regular where not.
+        for ([_]u16{ 400, 700 }) |weight| {
+            const face = db.faces.items[db.match(null, weight, false, true).?];
+            try std.testing.expectEqualStrings("Cascadia Mono", face.style.name());
+            try std.testing.expectEqual(weight, face.style.weight);
+            try std.testing.expectEqual(weight == 400 and !static_regular, face.style.variable);
+        }
+    }
+}
+
+test "the font index keeps whether a face is variable" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    const fontindex = @import("fontindex.zig");
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "face.ttf", .data = "only stat'ed" });
+    var root_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const root = root_buf[0..try tmp.dir.realPath(io, &root_buf)];
+    const face_path = try std.fs.path.join(gpa, &.{ root, "face.ttf" });
+    defer gpa.free(face_path);
+    const index_path = try std.fs.path.join(gpa, &.{ root, "index.bin" });
+    defer gpa.free(index_path);
+    const stat = try std.Io.Dir.cwd().statFile(io, face_path, .{});
+    var style: font.Style = .{ .variable = true };
+    @memcpy(style.family[0..5], "Fixed");
+    style.family_len = 5;
+    const faces = [_]fontdb.Face{.{ .path = face_path, .index = 0, .style = style, .mtime = stat.mtime.nanoseconds, .size = stat.size }};
+    const directories = [_]fontindex.Directory{};
+    _ = fontindex.write(gpa, io, index_path, "test", &directories, &faces) orelse return error.IndexNotWritten;
+    const entries = try fontindex.read(gpa, io, index_path, "test");
+    defer {
+        for (entries) |entry| gpa.free(entry.path);
+        gpa.free(entries);
+    }
+    try std.testing.expect(entries.len == 1 and entries[0].style.variable);
+}
+
 const CreateFileW = if (builtin.os.tag == .windows) struct {
     pub extern "kernel32" fn CreateFileW(
         path: [*:0]const u16,

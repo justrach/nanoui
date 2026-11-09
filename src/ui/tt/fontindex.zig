@@ -7,7 +7,8 @@
 const std = @import("std");
 const font = @import("font.zig");
 
-pub const format_version: u32 = 2;
+/// 3: a face's flags say whether it is variable.
+pub const format_version: u32 = 3;
 const nanoui_version = @import("build_options").version;
 const magic = "NUFI";
 const seed: u64 = 0x4e554649;
@@ -98,9 +99,10 @@ pub fn read(gpa: std.mem.Allocator, io: std.Io, cache_path: []const u8, scope: [
         style.family_len = family_len;
         style.weight = try r.u16v();
         const flags = try r.u8v();
-        if (flags & ~@as(u8, 3) != 0) return error.Damaged;
+        if (flags & ~@as(u8, 7) != 0) return error.Damaged;
         style.italic = flags & 1 != 0;
         style.mono = flags & 2 != 0;
+        style.variable = flags & 4 != 0;
         const mtime = try r.i128v();
         const size = try r.u64v();
         const stat = std.Io.Dir.cwd().statFile(io, path, .{}) catch |err| {
@@ -153,7 +155,7 @@ pub fn write(gpa: std.mem.Allocator, io: std.Io, cache_path: []const u8, scope: 
         c.u8v(face.style.family_len);
         c.bytes(face.style.family[0..face.style.family_len]);
         c.u16v(face.style.weight);
-        c.u8v(@as(u8, @intFromBool(face.style.italic)) | @as(u8, @intFromBool(face.style.mono)) << 1);
+        c.u8v(@as(u8, @intFromBool(face.style.italic)) | @as(u8, @intFromBool(face.style.mono)) << 1 | @as(u8, @intFromBool(face.style.variable)) << 2);
         c.i128v(face.mtime);
         c.u64v(face.size);
     }

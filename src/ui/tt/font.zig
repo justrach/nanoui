@@ -58,6 +58,8 @@ pub const Tables = struct {
     name_len: u32 = 0,
     cff: u32 = 0,
     cff_len: u32 = 0,
+    /// A variable font's axes: present or not is all that is read.
+    fvar: u32 = 0,
 
     pub fn read(data: []const u8, index: usize) Error!Tables {
         const at = try faceOffset(data, index);
@@ -79,6 +81,7 @@ pub const Tables = struct {
                 tag("glyf") => t.glyf = off,
                 tag("kern") => t.kern = off,
                 tag("OS/2") => t.os2 = off,
+                tag("fvar") => t.fvar = off,
                 tag("CFF ") => {
                     t.cff = off;
                     t.cff_len = be32(data, rec + 12);
@@ -107,6 +110,9 @@ pub const Style = struct {
     mono: bool = false,
     /// OS/2's width class: 1 ultra-condensed … 5 normal … 9 ultra-expanded.
     width: u16 = 5,
+    /// A variable font, whose weights are one outline's axis: nanoui reads it
+    /// at its default instance, and a bold of it is synthesized.
+    variable: bool = false,
 
     pub fn name(s: *const Style) []const u8 {
         return s.family[0..s.family_len];
@@ -124,6 +130,7 @@ pub const Style = struct {
             s.mono = data.len > t.os2 + 35 and data[t.os2 + 35] == 9;
         }
         if (t.head != 0 and be16(data, t.head + 44) & 2 != 0) s.italic = true;
+        s.variable = t.fvar != 0;
         s.readFamily(data, t);
         return s;
     }
