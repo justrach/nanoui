@@ -107,6 +107,48 @@ pub const Texture = struct {
     pixel_buffer: ?*anyopaque = null,
 };
 
+/// The last instance that is a plain, opaque quad covering all of `size`
+/// (a window's background): everything before it is hidden, so it can be
+/// the frame's clear color instead of shaded pixels. Null if there is
+/// none, or if a group, pane of glass, hole or texture comes before it
+/// (their passes must still run in order).
+pub fn lastCover(instances: []const Instance, size: types.Size) ?usize {
+    var found: ?usize = null;
+    for (instances, 0..) |inst, k| {
+        const kind = inst.kind;
+        if (kind == Kind.glass or kind == Kind.layer_begin or kind == Kind.layer_end or kind == Kind.hole or kind == Kind.texture) return found;
+        if (kind != Kind.quad or inst.color[3] < 1) continue;
+        if (inst.radius != 0 or (inst.border_width > 0 and inst.border_color[3] > 0)) continue;
+        if (inst.clip_round != 0 or inst.xf[0] != 0 or inst.xf[1] != 0 or inst.pulse[0] > 0) continue;
+        if (inst.vel[0] != 0 or inst.vel[1] != 0 or inst.vel[2] != 0 or inst.turn[0] != 0) continue;
+        const r = inst.rect;
+        if (r[0] > 0 or r[1] > 0 or r[0] + r[2] < size.w or r[1] + r[3] < size.h) continue;
+        const c = inst.clip;
+        if (c[0] > 0 or c[1] > 0 or c[2] < size.w or c[3] < size.h) continue;
+        found = k;
+    }
+    return found;
+}
+
+test "lastCover: a full opaque quad hides what came before it" {
+    const full: Instance = .{ .rect = .{ 0, 0, 100, 50 }, .color = .{ 0.1, 0.2, 0.3, 1 } };
+    const small: Instance = .{ .rect = .{ 10, 10, 5, 5 }, .color = .{ 1, 1, 1, 1 } };
+    const sz: types.Size = .{ .w = 100, .h = 50 };
+    try std.testing.expectEqual(@as(?usize, 2), lastCover(&.{ small, full, full, small }, sz));
+    var clear = full;
+    clear.color[3] = 0.5;
+    try std.testing.expectEqual(@as(?usize, 0), lastCover(&.{ full, clear, small }, sz));
+    var round = full;
+    round.radius = 4;
+    try std.testing.expectEqual(@as(?usize, null), lastCover(&.{ round, small }, sz));
+    var glass = small;
+    glass.kind = Kind.glass;
+    try std.testing.expectEqual(@as(?usize, null), lastCover(&.{ glass, full }, sz));
+    var clipped = full;
+    clipped.clip = .{ 0, 0, 50, 50 };
+    try std.testing.expectEqual(@as(?usize, null), lastCover(&.{clipped}, sz));
+}
+
 pub fn color4(c: types.Color) [4]f32 {
     return .{ c.r, c.g, c.b, c.a };
 }
