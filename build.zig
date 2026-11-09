@@ -171,7 +171,13 @@ pub fn build(b: *std.Build) void {
     });
     b.step("ruler-replay", "Build the offscreen ruler replay").dependOn(&b.addInstallArtifact(ruler_replay, .{}).step);
 
-    const tests = b.addTest(.{ .root_module = nanoui });
+    // `-Dllvm=false -Dnew-linker=false`: the tests built as zorg builds apps
+    // (the self-hosted backend, the old MachO linker).
+    const use_llvm = b.option(bool, "llvm", "Build the tests with the LLVM backend (false = self-hosted)");
+    const new_linker = b.option(bool, "new-linker", "Link the tests with Zig's new linker");
+    const filters = b.option([]const []const u8, "test-filter", "Run only the tests whose names contain this") orelse &.{};
+    const tests = b.addTest(.{ .root_module = nanoui, .use_llvm = use_llvm, .filters = filters });
+    tests.use_new_linker = new_linker;
     // On Android, the tests are a program for a device (`adb push`, run in `adb shell`).
     if (target.result.abi.isAndroid()) if (android.Sdk.find(b)) |sdk| {
         _ = android.linkNdk(b, tests, sdk);
