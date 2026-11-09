@@ -10,6 +10,7 @@ hillclimb/zig-out/
 .claude/
 codedb.snapshot
 .DS_Store
+.env
 zig-pkg/
 hillclimb/zig-pkg/
 .rpi/

@@ -4,18 +4,19 @@
 
 <h1 align="center">nanoui</h1>
 
-<p align="center">Desktop apps in Zig, with native UI drawn on the GPU or a web frontend.</p>
+<p align="center">Desktop and mobile apps in Zig, with native UI drawn on the GPU or a web frontend.</p>
 
 <p align="center"><sub>Meet Nano. <a href="docs/images/nano-transparent.png">Transparent PNG</a> · <a href="docs/images/nano-paper.png">Original paper illustration</a></sub></p>
 
-<p align="center">Want to see it in use? <a href="https://github.com/justrach/nanoterm"><strong>nanoterm</strong></a> is a terminal with a coding agent, and <a href="https://github.com/justrach/nanomon"><strong>nanomon</strong></a> an activity monitor, both built on nanoui.</p>
+<p align="center">Want to see it in use? <a href="https://github.com/justrach/nanoterm"><strong>nanoterm</strong></a> is a terminal with a coding agent, <a href="https://github.com/justrach/nanomon"><strong>nanomon</strong></a> an activity monitor, <a href="https://github.com/justrach/nanostudio"><strong>nanostudio</strong></a> a screen recorder, <a href="https://github.com/justrach/nanofly"><strong>nanofly</strong></a> a live flight tracker, <a href="https://github.com/gstohl/nanomail"><strong>nanomail</strong></a> a JMAP mail client, <a href="https://github.com/justrach/nanolight"><strong>nanolight</strong></a> a cross-platform launcher, <a href="apps/nanobrowser"><strong>nanobrowser</strong></a> a browser engine in Zig, and <a href="apps/nanocua"><strong>nanocua</strong></a> a computer-use MCP app.</p>
 
 <p align="center">
-  <img alt="macOS · Linux · Windows" src="https://img.shields.io/badge/macOS%20·%20Linux%20·%20Windows-555">
+  <img alt="macOS · iOS · Android · Linux · Windows" src="https://img.shields.io/badge/macOS%20·%20iOS%20·%20Android%20·%20Linux%20·%20Windows-555">
   <img alt="Apps of about 0.7 MB" src="https://img.shields.io/badge/apps-~0.7%20MB-44cc11">
   <img alt="One dependency, the author's own http-zig, on Linux and Windows only" src="https://img.shields.io/badge/dependencies-1%20(own)-44cc11">
   <img alt="Built in Zig 0.17" src="https://img.shields.io/badge/built%20in-Zig%200.17-f7a41d?logo=zig&logoColor=white">
   <img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue">
+  <a href="https://discord.gg/EmTpv7rmTA"><img alt="Discord" src="https://img.shields.io/badge/Discord-nanoui-5865F2?logo=discord&logoColor=white"></a>
 </p>
 
 <p align="center">
@@ -26,7 +27,8 @@
   <a href="#platforms">Platforms</a> ·
   <a href="#apps">Apps</a> ·
   <a href="#performance">Performance</a> ·
-  <a href="#credits">Credits</a>
+  <a href="#credits">Credits</a> ·
+  <a href="https://discord.gg/EmTpv7rmTA">Discord</a>
 </p>
 
 <p align="center">
@@ -37,10 +39,12 @@ Each window shows one of two kinds of interface:
 
 - **Native UI**, written in Zig alone and drawn by nanoui: no HTML, no
   JavaScript, no webview. It has flexbox layout, text in a glyph atlas,
-  animations, and views you can test without a window. On macOS it draws with
-  Metal and CoreText, in one instanced draw call per frame.
-- **A web page** in the system webview (WKWebView on macOS, WebView2 on
-  Windows, WebKitGTK on Linux). The
+  animations, and views you can test without a window. On macOS and iOS it
+  draws with Metal and CoreText, in one instanced draw call per frame; on
+  Linux and Android with OpenGL (or its CPU renderer); on Windows with
+  Direct3D 11.
+- **A web page** in the system webview (WKWebView on macOS and iOS, WebView2
+  on Windows, WebKitGTK on Linux). The
   frontend calls Zig through a JavaScript client generated from your Zig
   types, with TypeScript declarations.
 
@@ -87,7 +91,7 @@ with (`--nanoui REF` for another, `--local PATH` for a checkout). The app's
 To add nanoui to a project of your own instead:
 
 ```sh
-zig fetch --save git+https://github.com/justrach/nanoui#v0.5.0
+zig fetch --save git+https://github.com/justrach/nanoui#v0.13.0
 ```
 
 Releases are tagged `vMAJOR.MINOR.PATCH`, as mygo's are, and each is listed
@@ -452,38 +456,40 @@ What you need, an app's build.zig, and what isn't there yet:
 
 ## Apps
 
-<table>
-  <tr>
-    <td width="50%" valign="top">
-      <a href="https://github.com/justrach/nanoterm"><img src="docs/images/nanoterm-light.png" alt="nanoterm: an agent's answer with a native visual"></a>
-      <p><a href="https://github.com/justrach/nanoterm"><strong>nanoterm</strong></a>: a terminal of blocks, in the manner of Warp, with a coding agent (graff or Claude Code) over ACP. It has native visuals, a ⌘P launcher, and SSH sessions where the agent works on the remote host.</p>
-    </td>
-    <td width="50%" valign="top">
-      <a href="https://github.com/justrach/nanomon"><img src="docs/images/nanomon-dark.png" alt="nanomon: the overview with graff's suggestions"></a>
-      <p><a href="https://github.com/justrach/nanomon"><strong>nanomon</strong></a>: an activity monitor in Codegraff colors, with cell graphs of CPU, memory, GPU, disk and network. You can quit several processes at once, and a graff bubble suggests what to quit.</p>
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top">
-      <a href="https://github.com/justrach/nanostudio"><img src="docs/images/nanostudio-dark.png" alt="nanostudio: the editor with a zoom on the timeline"></a>
-      <p><a href="https://github.com/justrach/nanostudio"><strong>nanostudio</strong></a>: a screen recorder and editor. It records a display or a window with its sound, then zooms where you clicked. You can trim, speed up and dress the take, and export it. Every frame, preview and export alike, is a nanoui view.</p>
-    </td>
-    <td width="50%" valign="top">
-      <a href="https://github.com/justrach/nanofly"><img src="docs/images/nanofly.png" alt="nanofly: Singapore to San Francisco over the Pacific, with the weather's radar, and the flight's card in a sheet of glass" width="300"></a>
-      <p><a href="https://github.com/justrach/nanofly"><strong>nanofly</strong></a>: flights, live, on a map, for iPhone (and the Mac), after Flighty. It finds a flight's route, follows it from open ADS-B data, and says when it lands by each airport's clock, with the weather there. Its map, drawn by <code>ui.canvas</code>, has the night's side, the weather's radar and the planes around; you can pinch it, and its card is a sheet of Liquid Glass you drag between three heights.</p>
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top">
-      <a href="https://github.com/gstohl/nanomail"><img src="docs/images/nanomail-dark.png" alt="nanomail: a message with links and a picture, shared mailboxes in the sidebar"></a>
-      <p><a href="https://github.com/gstohl/nanomail"><strong>nanomail</strong></a>: a JMAP mail client for macOS and iOS. It shows rich mail with links and pictures, loading pictures from the web only when you ask. New mail arrives by push, and mailboxes others share with you appear with what you may do in them. It signs in with a password, a token, or OAuth in the browser.</p>
-    </td>
-    <td width="50%" valign="top">
-      <a href="https://github.com/justrach/nanolight"><img src="docs/images/nanolight.jpg" alt="Nanolight: its panel has found Safari from &quot;saf&quot;"></a>
-      <p><a href="https://github.com/justrach/nanolight"><strong>nanolight</strong></a>: a launcher for the Mac, Windows and Linux. It finds apps as you type (initials and typos too), does math, and completes Google searches inline, showing the results in its own panel. It runs Raycast extensions and script commands, and asks Grok or searches X a row away.</p>
-    </td>
-  </tr>
-</table>
+### [nanoterm](https://github.com/justrach/nanoterm) & [nanomon](https://github.com/justrach/nanomon)
+
+<p align="center">
+  <a href="https://github.com/justrach/nanoterm"><img src="docs/images/nanoterm-light.png" width="48%" alt="nanoterm: an agent's answer with a native visual"></a>
+  <a href="https://github.com/justrach/nanomon"><img src="docs/images/nanomon-dark.png" width="48%" alt="nanomon: the overview with graff's suggestions"></a>
+</p>
+
+- **[nanoterm](https://github.com/justrach/nanoterm):** a terminal of blocks, in the manner of Warp, with a coding agent (graff or Claude Code) over ACP. It has native visuals, a ⌘P launcher, and SSH sessions where the agent works on the remote host.
+- **[nanomon](https://github.com/justrach/nanomon):** an activity monitor in Codegraff colors, with cell graphs of CPU, memory, GPU, disk and network. You can quit several processes at once, and a graff bubble suggests what to quit.
+
+### [nanostudio](https://github.com/justrach/nanostudio) & [nanofly](https://github.com/justrach/nanofly)
+
+<p align="center">
+  <a href="https://github.com/justrach/nanostudio"><img src="docs/images/nanostudio-dark.png" width="58%" alt="nanostudio: the editor with a zoom on the timeline"></a>
+  <a href="https://github.com/justrach/nanofly"><img src="docs/images/nanofly.png" width="32%" alt="nanofly: Singapore to San Francisco over the Pacific, with the weather's radar, and the flight's card in a sheet of glass"></a>
+</p>
+
+- **[nanostudio](https://github.com/justrach/nanostudio):** a screen recorder and editor. It records a display or a window with its sound, then zooms where you clicked. You can trim, speed up and dress the take, and export it. Every frame, preview and export alike, is a nanoui view.
+- **[nanofly](https://github.com/justrach/nanofly):** flights, live, on a map, for iPhone (and the Mac), after Flighty. It finds a flight's route, follows it from open ADS-B data, and says when it lands by each airport's clock, with the weather there. Its map, drawn by `ui.canvas`, has the night's side, the weather's radar and the planes around; you can pinch it, and its card is a sheet of Liquid Glass you drag between three heights.
+
+### [nanomail](https://github.com/gstohl/nanomail) & [nanolight](https://github.com/justrach/nanolight)
+
+<p align="center">
+  <a href="https://github.com/gstohl/nanomail"><img src="docs/images/nanomail-dark.png" width="48%" alt="nanomail: a message with links and a picture, shared mailboxes in the sidebar"></a>
+  <a href="https://github.com/justrach/nanolight"><img src="docs/images/nanolight.jpg" width="48%" alt="Nanolight: its panel has found Safari from 'saf'"></a>
+</p>
+
+- **[nanomail](https://github.com/gstohl/nanomail):** a JMAP mail client for macOS and iOS. It shows rich mail with links and pictures, loading pictures from the web only when you ask. New mail arrives by push, and mailboxes others share with you appear with what you may do in them. It signs in with a password, a token, or OAuth in the browser.
+- **[nanolight](https://github.com/justrach/nanolight):** a launcher for the Mac, Windows and Linux. It finds apps as you type (initials and typos too), does math, and completes Google searches inline, showing the results in its own panel. It runs Raycast extensions and script commands, and asks Grok or searches X a row away.
+
+### [nanobrowser](apps/nanobrowser) & [nanocua](apps/nanocua)
+
+- **[nanobrowser](apps/nanobrowser):** a web browser on nanoui with an engine of its own in Zig — no WebKit, no Blink, no Gecko, and no C. Its WHATWG HTML parser, CSS cascade, block/flex/grid/table layout, display list, and bytecode JavaScript VM + DOM bindings live in `apps/nanobrowser`.
+- **[nanocua](apps/nanocua):** lets coding agents see and use apps on your Mac in the background through the accessibility tree and an MCP server, with a native nanoui control panel and stop switch (**⌃⌥⌘.**).
 
 Download them for macOS:
 [nanoterm](https://github.com/justrach/nanoterm/releases/latest/download/nanoterm-macos-arm64.dmg) ·
@@ -586,4 +592,4 @@ nanoui stands on the shoulders of these projects:
   That covers interruptible targets, presence, keyframes, stagger, layout
   animation, its exact springs and its easing curves.
 - **[GPUI Kit](https://github.com/longbridge/gpui-component)** by [Longbridge](https://github.com/longbridge): `nanoui.kit` follows its components, their variants and their names.
-<p align="center"><sub>Built in Zig 0.17 · <a href="AGENTS.md">AGENTS.md</a> · <a href="hillclimb/README.md">benchmarks</a> · <a href="LICENSE">MIT</a> · <a href="THIRD_PARTY_NOTICES.md">third-party notices</a></sub></p>
+<p align="center"><sub>Built in Zig 0.17 · <a href="https://discord.gg/EmTpv7rmTA">Discord</a> · <a href="AGENTS.md">AGENTS.md</a> · <a href="hillclimb/README.md">benchmarks</a> · <a href="LICENSE">MIT</a> · <a href="THIRD_PARTY_NOTICES.md">third-party notices</a></sub></p>
