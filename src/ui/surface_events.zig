@@ -89,11 +89,30 @@ fn hitTest(obj: objc.Object, _: objc.SEL, point: objc.CGPoint) callconv(.c) ?obj
     const local = objc.msg(objc.CGPoint, obj, "convertPoint:fromView:", .{ point, super });
     const p: types.Point = .{ .x = @floatCast(local.x), .y = @floatCast(local.y) };
     if (p.x < 0 or p.y < 0 or p.x >= s.size.w or p.y >= s.size.h) return null;
+    // A page docked in this view (`Window.dockPage` with this view as its
+    // parent) takes the pointer over its frame: its subview's own hit test,
+    // front to back, before the surface claims the point.
+    if (dockedHit(obj, local)) |hit| return hit;
     if (s.transparent and s.ctx.inStageHoleAt(p)) {
         s.cursor_dirty = true;
         return null;
     }
     return obj;
+}
+
+/// The visible subview under `local` (this view's coordinates), deepest
+/// first, as NSView's own `hitTest:` would find it; null when none is.
+fn dockedHit(obj: objc.Object, local: objc.CGPoint) ?objc.Object {
+    const subviews = objc.msg(?objc.Object, obj, "subviews", .{}) orelse return null;
+    var i = objc.msg(objc.NSUInteger, subviews, "count", .{});
+    while (i > 0) {
+        i -= 1;
+        const sub = objc.msg(objc.Object, subviews, "objectAtIndex:", .{i});
+        if (objc.msg(objc.BOOL, sub, "isHidden", .{}) != objc.NO) continue;
+        // A subview's `hitTest:` takes the point in its superview's space.
+        if (objc.msg(?objc.Object, sub, "hitTest:", .{local})) |hit| return hit;
+    }
+    return null;
 }
 
 /// The view gives up the keyboard (a page took it): no box has the focus.
