@@ -135,7 +135,7 @@ pub inline fn getOrCompile(vm: *Vm, fp: *bc.FuncProto) ?JitFn {
     if (fp.jit_fn) |p| return @ptrCast(@alignCast(p));
     if (fp.jit_disabled) return null;
     fp.hot_count +|= 1;
-    const threshold: u16 = if (fp.has_loop and fp.code.len <= 4096) 1 else 2;
+    const threshold: u16 = if (fp.has_loop) 1 else 2;
     return if (fp.hot_count < threshold) null else compileSlow(vm, fp);
 }
 

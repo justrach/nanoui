@@ -238,10 +238,14 @@ pub fn paintEnd(p: *Page) void {
 
 /// The frame is over, however it ended: another if something still waits for one.
 pub fn frameEnd(p: *Page, c: *ui.Context) void {
+    for (p.frames.list.items) |f| {
+        if (f.page) |child| if (child.js) |cw| if (cw.in_frame) frameEnd(child, c);
+    }
     const w = p.js orelse return;
     w.painting = false;
     if (!p.dead and (w.animation.items.len > 0 or w.redraw_due)) c.animationFrame();
     w.redraw_due = false;
+    w.redraw_asked = false;
     w.in_frame = false;
 }
 

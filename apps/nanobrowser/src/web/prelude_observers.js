@@ -176,9 +176,10 @@ class MessagePort extends EventTarget {
     }
     const to = this._peer;
     if (!to) return;
-    const m = { data: g.structuredClone(data), ports: $.transferred(transfer) };
+    const isPrim = data === null || (typeof data !== "object" && typeof data !== "function");
+    const m = isPrim && transfer === undefined ? { data, ports: [] } : { data: g.structuredClone(data), ports: $.transferred(transfer) };
     // Held at the port from now, not from the next task: it may be sent on before then.
-    if (to._started) g.setTimeout(() => to._arrive(m), 0);
+    if (to._started) $.postTask(() => to._arrive(m));
     else to._queue.push(m);
   }
   _arrive(m) { if (this._started) this._deliver(m); else this._queue.push(m); }

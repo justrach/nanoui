@@ -141,7 +141,7 @@ pub const Payload = extern union {
     module: *module.Module,
 };
 
-pub const inline_slots = 5;
+pub const inline_slots = 8;
 
 pub const Object = struct {
     cell: heap.Cell,

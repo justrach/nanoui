@@ -192,15 +192,7 @@ function removeEventListener(type, cb, opts) {
 
 // A `load` stops at the document: the window's own is its own event.
 function pathOf(target, type) {
-  const path = [target];
-  if ($.isNode(target)) {
-    let n = target;
-    while ((n = $.eventParent(n))) {
-      if (n === g && type === "load") break;
-      path.push(n);
-    }
-  }
-  return path;
+  return $.eventPath(target, type);
 }
 
 function report(e) { $.reportError(e); }
@@ -268,12 +260,11 @@ function callHandler(t, ev, f) {
 
 // The `on…` handler of this target: its property, else its attribute's.
 function runHandler(t, ev) {
-  const type = ev.type;
   const s = t[HANDLERS];
+  const type = ev.type;
+  const src = t === g ? (windowBodyEvents.has(type) && g.document && g.document.body ? $.inlineAttr(g.document.body, type) : null) : $.inlineAttr(t, type);
+  if (!s && src === null) return;
   const key = "prop:" + type;
-  let src = null;
-  if (t === g) { if (windowBodyEvents.has(type) && g.document && g.document.body) src = $.inlineAttr(g.document.body, type); }
-  else src = $.inlineAttr(t, type);
   // A property holds unless the attribute was set after it.
   if (s && s[key] !== undefined && s["src:" + type] === src) {
     if (typeof s[key] === "function") callHandler(t, ev, s[key]);
@@ -288,11 +279,19 @@ function runHandler(t, ev) {
 
 function invoke(t, ev, phase, st) {
   if (st.stop) return;
-  ev.currentTarget = t;
-  ev.eventPhase = phase;
-  if (phase !== 1) runHandler(t, ev);
-  if (st.stopNow) return;
-  const map = t[LS]; if (!map) return;
+  const map = t[LS];
+  if (phase === 1) {
+    if (!map) return;
+    const list = map.get(ev.type);
+    if (!list || list.length === 0) return;
+    ev.currentTarget = t;
+    ev.eventPhase = 1;
+  } else {
+    ev.currentTarget = t;
+    ev.eventPhase = phase;
+    runHandler(t, ev);
+    if (st.stopNow || !map) return;
+  }
   const list = map.get(ev.type); if (!list || list.length === 0) return;
   if (list.length === 1) {
     const l = list[0];
@@ -364,9 +363,8 @@ def(et, "removeEventListener", removeEventListener);
 def(et, "dispatchEvent", dispatchEvent);
 
 // `el.onclick` and friends.
-function eventProp(proto, type) {
-  const name = "on" + type;
-  Object.defineProperty(proto, name, {
+function eventDesc(type) {
+  return {
     configurable: true, enumerable: true,
     get() {
       const t = targetOf(this);
@@ -382,13 +380,13 @@ function eventProp(proto, type) {
       s["src:" + type] = t === g ? (g.document && g.document.body ? $.inlineAttr(g.document.body, type) : null) : $.inlineAttr(t, type);
       $.listen(type);
     },
-  });
+  };
 }
 const allEvents = ["abort", "animationcancel", "animationend", "animationiteration", "animationstart", "auxclick", "beforeinput", "blur", "cancel", "canplay", "canplaythrough", "change", "click", "close", "contextmenu", "copy", "cut", "dblclick", "drag", "dragend", "dragenter", "dragleave", "dragover", "dragstart", "drop", "durationchange", "emptied", "ended", "error", "focus", "focusin", "focusout", "formdata", "gotpointercapture", "input", "invalid", "keydown", "keypress", "keyup", "load", "loadeddata", "loadedmetadata", "loadstart", "lostpointercapture", "mousedown", "mouseenter", "mouseleave", "mousemove", "mouseout", "mouseover", "mouseup", "paste", "pause", "play", "playing", "pointercancel", "pointerdown", "pointerenter", "pointerleave", "pointermove", "pointerout", "pointerover", "pointerup", "progress", "ratechange", "reset", "resize", "scroll", "scrollend", "seeked", "seeking", "select", "selectionchange", "stalled", "submit", "suspend", "timeupdate", "toggle", "touchcancel", "touchend", "touchmove", "touchstart", "transitioncancel", "transitionend", "transitionrun", "transitionstart", "volumechange", "waiting", "wheel"];
 const windowOnly = ["afterprint", "beforeprint", "beforeunload", "hashchange", "languagechange", "message", "messageerror", "offline", "online", "pagehide", "pageshow", "popstate", "rejectionhandled", "storage", "unhandledrejection", "unload"];
-for (const t of allEvents) { eventProp(HTMLElement.prototype, t); eventProp(SVGElement.prototype, t); eventProp(Document.prototype, t); eventProp(g, t); }
-for (const t of windowOnly) { eventProp(g, t); eventProp(HTMLBodyElement.prototype, t); }
-eventProp(Document.prototype, "readystatechange");
+for (const t of allEvents) { const name = "on" + t, d = eventDesc(t); Object.defineProperty(HTMLElement.prototype, name, d); Object.defineProperty(SVGElement.prototype, name, d); Object.defineProperty(Document.prototype, name, d); Object.defineProperty(g, name, d); }
+for (const t of windowOnly) { const name = "on" + t, d = eventDesc(t); Object.defineProperty(g, name, d); Object.defineProperty(HTMLBodyElement.prototype, name, d); }
+Object.defineProperty(Document.prototype, "onreadystatechange", eventDesc("readystatechange"));
 
 // The Zig side's way in.
 $.hook("fire", (target, type, bubbles, cancelable) => {

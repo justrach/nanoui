@@ -365,6 +365,7 @@ pub const Window = struct {
     }
 
     pub fn redraw(self: *Window) void {
+        if (self.app.flags.hidden) return;
         if (self.surface) |s| s.requestFrame();
     }
 

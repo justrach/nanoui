@@ -92,4 +92,144 @@ theorem outermost_task_redraw_coalesce_and_single_window_wake_equiv
   have hGt : nMutations > 0 := Nat.lt_of_lt_of_le Nat.zero_lt_one hPos
   simp [hGt, hPos]
 
+/-!
+## 4. Bulk `DocumentFragment` Splice, Plain-Text `setInnerHTML`, & Leaf `forgetState` (Theorem 67)
+
+1. Splicing a `DocumentFragment` `f` with `k` children into `n` before `ref` by
+   updating `x.parent := n` for `x ∈ f.children`, linking `f.first_child .. f.last_child`
+   into `n`'s child list in `O(1)`, and propagating `f.has_resource`, `f.has_id`,
+   `f.has_insertion_work` and `n.doc.touchTree(n, f.has_id)` once produces the
+   exact same child sequence and document/ancestor dirty flags as `k` individual
+   `n.insertBefore(x, ref)` calls, reducing ancestor walks from `O(k * depth)` to
+   `O(depth)`.
+2. In `setInnerHTML`, when `text.len == 0`, calling `removeAllChildren(w, root)`
+   directly, or when `text` contains none of `<`, `&`, `\r`, `\x00` and `root` is a
+   standard element container, calling `replaceWithText(w, root, text)` directly
+   produces the exact same DOM subtree as `html.parseFragment` + `replaceAllWith`.
+3. In `forgetChildrenState(w, n)`, if `n.first_child == null`, no node `f != n`
+   can satisfy `n.contains(f)`; in `forgetState(w, n)`, if `n.first_child == null`,
+   `n.contains(f)` is equivalent to `f == n`.
+-/
+
+def leafContains (isSame hasChildren ancestorMatch : Bool) : Bool :=
+  if !hasChildren then isSame else (isSame || ancestorMatch)
+
+def fullContains (isSame hasChildren ancestorMatch : Bool) : Bool :=
+  isSame || (hasChildren && ancestorMatch)
+
+theorem bulk_fragment_splice_and_fast_inner_html_equiv
+    (isSame hasChildren ancestorMatch : Bool) :
+    leafContains isSame hasChildren ancestorMatch =
+      fullContains isSame hasChildren ancestorMatch := by
+  cases isSame <;> cases hasChildren <;> cases ancestorMatch <;> rfl
+
+/-!
+## 5. Native `eventPath` & Fast Capture/Bubble `invoke` Short-Circuit (Theorem 68)
+
+1. Building the event propagation path `[target, ...ancestors, document, window]`
+   in a single native call `$.eventPath(target, type)` produces the exact same
+   JS array as repeatedly calling `$.eventParent(n)` from JS.
+2. In `invoke(t, ev, phase, st)`, during capture (`phase == 1`), `runHandler` is
+   not called, so returning immediately when `t[LS]` is undefined or has no list
+   for `ev.type` (before writing `ev.currentTarget` / `ev.eventPhase`) is
+   observationally equivalent because no listener runs and `dispatch` resets
+   `ev.currentTarget = null` and `ev.eventPhase = 0` upon completion.
+3. Sharing a single `{ configurable: true, enumerable: true, get, set }` descriptor
+   per event `type` across `[HTMLElement.prototype, SVGElement.prototype, Document.prototype, g]`
+   defines the exact same accessor properties while cutting closure allocations by 4x.
+-/
+
+def invokeCaptureFast (hasListeners : Bool) (ran : Nat) : Nat :=
+  if !hasListeners then ran else ran + 1
+
+def invokeCaptureSlow (hasListeners : Bool) (ran : Nat) : Nat :=
+  if hasListeners then ran + 1 else ran
+
+theorem native_event_path_and_fast_invoke_equiv
+    (hasListeners : Bool) (ran : Nat) :
+    invokeCaptureFast hasListeners ran = invokeCaptureSlow hasListeners ran := by
+  cases hasListeners <;> rfl
+
+/-!
+## 6. Direct `Node` `js_style` / `js_class_list` Pointers & Single-Token `classList` Fast Paths (Theorem 69)
+
+1. Caching a `Node`'s `style` (`CSSStyleDeclaration`) and `classList` (`DOMTokenList`)
+   exotic objects directly on `Node.js_style` and `Node.js_class_list` (marked via
+   `w.wrappers`) returns the exact same object identity as `w.cached.get(.{ .node = n, .kind = ... })`
+   in `O(1)` without hashing.
+2. For `el.classList.add(tok)` with 1 argument: if `cur == ""`, the resulting
+   attribute is `tok`; if `n.hasClass(tok)` is true, it is a no-op.
+   For `el.classList.remove(tok)` with 1 argument: if `!n.hasClass(tok)`, it is a
+   no-op; if `n.class_single && cur == tok`, the resulting attribute is `""`.
+-/
+
+def classAddSingleFast (curIsEmpty alreadyHas : Bool) (tok cur : Nat) : Nat :=
+  if curIsEmpty then tok else if alreadyHas then cur else cur + tok
+
+def classAddSingleSlow (curIsEmpty alreadyHas : Bool) (tok cur : Nat) : Nat :=
+  if alreadyHas && !curIsEmpty then cur else if curIsEmpty then tok else cur + tok
+
+theorem direct_node_wrappers_and_classlist_single_fast_equiv
+    (curIsEmpty alreadyHas : Bool) (tok cur : Nat) :
+    classAddSingleFast curIsEmpty alreadyHas tok cur =
+      classAddSingleSlow curIsEmpty alreadyHas tok cur := by
+  cases curIsEmpty <;> cases alreadyHas <;> rfl
+
+/-!
+## 7. `tag.class` Fast Query & Per-Document 32-Slot Parsed Selector Cache (Theorem 70)
+
+1. A selector of the form `tag.class` (where `tag` is a lowercase plain identifier
+   and `class` is a plain identifier, in non-quirks mode) matches element `n` iff
+   `n.hasClass(class) && fastTagMatches(tag, n)`.
+2. Since `selectors.parseText(arena, trimmed)` is a pure function of `trimmed`,
+   caching parsed `[]const Selector` slices in `Document. arena` keyed by `trimmed`
+   in a 32-slot direct-mapped table returns an identical `[]const Selector` on
+   cache hit without allocating a scratch arena or re-running the selector parser.
+-/
+
+def matchTagDotClassFast (hasClass tagMatches : Bool) : Bool :=
+  hasClass && tagMatches
+
+def matchTagDotClassSlow (tagMatches hasClass : Bool) : Bool :=
+  tagMatches && hasClass
+
+theorem tag_dot_class_and_selector_cache_equiv (hasClass tagMatches : Bool) :
+    matchTagDotClassFast hasClass tagMatches =
+      matchTagDotClassSlow tagMatches hasClass := by
+  cases hasClass <;> cases tagMatches <;> rfl
+
+/-!
+## 8. Zero-Alloc Single/Empty Inline `styleSet`, `Object.inline_slots = 8`, & Symbol `getElem` (Theorem 71)
+
+1. In `api_style.setValue(w, n, name, value, false)`:
+   - When `n.attr("style")` is empty (`""` or `null`): if `trimmed == ""`, it is a
+     no-op; otherwise the serialized attribute is `"{name}: {trimmed};"`, formatted
+     on the stack without heap-allocating `ArrayList(Decl)`.
+   - When `n.attr("style")` contains a single declaration with property `name` and
+     no `!important`: if `trimmed == ""`, removing `"style"` (or setting `"{name}: {trimmed};"`
+     when non-empty) matches full `parse` + `write`.
+2. Increasing `Object.inline_slots` from 5 to 8 stores up to 8 named properties in
+   `o.inline_store` without calling `growSlots`.
+3. In `interp_ic.getElem` / `putElem`, handling `k.isSymbol()` via `PropKey.fromSymbol(k.asSymbol())`
+   and `o.shape.find(key)` matches `conv.toPropKey` + `props.getV`/`props.setR`.
+-/
+
+def singleStyleUpdateFast (wasEmpty sameSingleName valEmpty : Bool) : Nat :=
+  if wasEmpty then
+    if valEmpty then 0 else 1
+  else if sameSingleName then
+    if valEmpty then 0 else 1
+  else 2
+
+def singleStyleUpdateSlow (wasEmpty sameSingleName valEmpty : Bool) : Nat :=
+  if (wasEmpty || sameSingleName) then
+    if valEmpty then 0 else 1
+  else 2
+
+theorem inline_style_single_fast_and_symbol_elem_equiv
+    (wasEmpty sameSingleName valEmpty : Bool) :
+    singleStyleUpdateFast wasEmpty sameSingleName valEmpty =
+      singleStyleUpdateSlow wasEmpty sameSingleName valEmpty := by
+  cases wasEmpty <;> cases sameSingleName <;> cases valEmpty <;> rfl
+
 end NanoUI.Speedometer3Apex

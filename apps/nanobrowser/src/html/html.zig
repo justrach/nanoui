@@ -68,7 +68,15 @@ pub fn parseFragmentWith(doc: *dom.Document, context: *dom.Node, source: []const
         }
     }
     try b.run();
-    while (root.first_child) |k| fragment.appendChild(k);
+    fragment.first_child = root.first_child;
+    fragment.last_child = root.last_child;
+    root.first_child = null;
+    root.last_child = null;
+    var k = fragment.first_child;
+    while (k) |c| : (k = c.next) c.parent = fragment;
+    fragment.has_resource = root.has_resource;
+    fragment.has_id = root.has_id;
+    fragment.has_insertion_work = root.has_insertion_work;
     return fragment;
 }
 

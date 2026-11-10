@@ -98,10 +98,38 @@ fn write(w: *World, n: *Node, list: []const Decl) Error!void {
 
 /// Sets (or, for "", removes) one property. `name` is dashed.
 fn setValue(w: *World, n: *Node, name: []const u8, value: []const u8, important: bool) Error!void {
+    const cur = n.attr("style") orelse "";
+    const trimmed = std.mem.trim(u8, value, " \t\r\n\x0c");
+    if (!important and cur.len == 0) {
+        if (trimmed.len == 0) return;
+        var sbuf: [256]u8 = undefined;
+        if (name.len + trimmed.len + 3 <= sbuf.len) {
+            @memcpy(sbuf[0..name.len], name);
+            sbuf[name.len] = ':';
+            sbuf[name.len + 1] = ' ';
+            @memcpy(sbuf[name.len + 2 .. name.len + 2 + trimmed.len], trimmed);
+            sbuf[name.len + 2 + trimmed.len] = ';';
+            return mutate.setAttr(w, n, "style", sbuf[0 .. name.len + 3 + trimmed.len]);
+        }
+    }
+    if (!important and cur.len > name.len + 2 and std.ascii.startsWithIgnoreCase(cur, name) and cur[name.len] == ':' and std.mem.indexOfScalar(u8, cur[name.len + 1 ..], ':') == null and std.mem.indexOfScalar(u8, cur[name.len + 1 ..], '!') == null) {
+        const semi = std.mem.indexOfScalar(u8, cur[name.len + 1 ..], ';');
+        if (semi == null or std.mem.trim(u8, cur[name.len + 1 + semi.? + 1 ..], " \t\r\n\x0c").len == 0) {
+            if (trimmed.len == 0) return mutate.removeAttr(w, n, "style");
+            var sbuf: [256]u8 = undefined;
+            if (name.len + trimmed.len + 3 <= sbuf.len) {
+                @memcpy(sbuf[0..name.len], name);
+                sbuf[name.len] = ':';
+                sbuf[name.len + 1] = ' ';
+                @memcpy(sbuf[name.len + 2 .. name.len + 2 + trimmed.len], trimmed);
+                sbuf[name.len + 2 + trimmed.len] = ';';
+                return mutate.setAttr(w, n, "style", sbuf[0 .. name.len + 3 + trimmed.len]);
+            }
+        }
+    }
     var list: std.ArrayList(Decl) = .empty;
     defer list.deinit(w.gpa);
-    try parse(w.gpa, n.attr("style") orelse "", &list);
-    const trimmed = std.mem.trim(u8, value, " \t\r\n\x0c");
+    try parse(w.gpa, cur, &list);
     var i: usize = 0;
     var place: ?usize = null;
     while (i < list.items.len) {
@@ -196,10 +224,18 @@ fn styleLength(vm: *Vm, o: *js.Object) Error!u32 {
 const style_hooks = js.HostHooks{ .get_named = styleGet, .set_named = styleSet, .get_index = styleIndex, .length_index = styleLength };
 
 pub fn inlineStyle(w: *World, n: *Node) Error!Value {
+    if (n.js_style) |p| {
+        const o: *js.Object = @ptrCast(@alignCast(p));
+        return o.value();
+    }
     const key = world_mod.CacheKey{ .node = n, .kind = .style };
-    if (w.cached.get(key)) |o| return o.value();
+    if (w.cached.get(key)) |o| {
+        n.js_style = o;
+        return o.value();
+    }
     const o = try w.vm.newExoticObject(w.extra.style, tag_style, n, &style_hooks);
     try w.cached.put(w.gpa, key, o);
+    n.js_style = o;
     return o.value();
 }
 

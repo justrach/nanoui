@@ -132,6 +132,7 @@ pub fn flushLayoutOnly(p: *Page, c: *ui.Context, w: f32, h: f32) void {
 
 /// Style, layout and display list brought up to date for a viewport of `w` × `h`.
 pub fn prepare(p: *Page, c: *ui.Context, w: f32, h: f32) void {
+    if (p.js) |jw| if (jw.in_frame) { jw.redraw_due = false; jw.redraw_asked = false; };
     flushLayoutOnly(p, c, w, h);
     if (p.tree) |tree| if (p.list == null or p.list_dirty or p.doc.svg_dirty) {
         var fonts: Fonts = .{ .p = p, .c = c };

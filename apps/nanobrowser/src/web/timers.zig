@@ -111,9 +111,8 @@ pub const Timers = struct {
             p.busy -= 1;
             p.maybeFree();
         }
-        const now = world_mod.monotonic();
         var ran: u32 = 0;
-        while (t.list.items.len > 0 and t.list.items[0].due <= now and ran < 64) : (ran += 1) {
+        while (t.list.items.len > 0 and t.list.items[0].due <= world_mod.monotonic() and ran < 16) : (ran += 1) {
             if (p.dead or w.stopped) return;
             const timer = t.list.orderedRemove(0);
             runOne(t, w, timer);
@@ -154,6 +153,23 @@ pub const Timers = struct {
         });
         t.arm(w);
         return id;
+    }
+
+    /// Queues an immediate 0ms task (e.g. `MessagePort.postMessage`) without timer-nesting clamping.
+    pub fn postTask(t: *Timers, w: *World, callback: Value) Error!void {
+        const id = t.next_id;
+        t.next_id += 1;
+        const copy = try w.gpa.alloc(Value, 0);
+        errdefer w.gpa.free(copy);
+        try t.insert(w.gpa, .{
+            .id = id,
+            .due = world_mod.monotonic(),
+            .interval_ms = null,
+            .nesting = 0,
+            .callback = callback,
+            .args = copy,
+        });
+        t.arm(w);
     }
 
     pub fn clear(t: *Timers, w: *World, id: u32) void {

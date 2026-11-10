@@ -10,9 +10,35 @@ const match = @import("selector_match.zig");
 const Node = dom.Node;
 pub const Error = Allocator.Error || error{InvalidSelector};
 
-fn parse(arena: Allocator, text: []const u8) Error![]const selectors.Selector {
-    const list = try selectors.parseText(arena, text);
+fn parse(doc: *dom.Document, arena: Allocator, trimmed: []const u8) Error![]const selectors.Selector {
+    if (trimmed.len > 0 and trimmed.len <= 256) {
+        const idx = std.hash.Fnv1a_32.hash(trimmed) & 31;
+        if (doc.sel_cache_ptrs[idx]) |ptr| {
+            if (std.mem.eql(u8, doc.sel_cache_keys[idx], trimmed)) {
+                const p: [*]const selectors.Selector = @ptrCast(@alignCast(ptr));
+                return p[0..doc.sel_cache_lens[idx]];
+            }
+        }
+        const key_copy = try doc.arena.dupe(u8, trimmed);
+        const list = (try selectors.parseText(doc.arena, key_copy)) orelse return error.InvalidSelector;
+        doc.sel_cache_keys[idx] = key_copy;
+        doc.sel_cache_ptrs[idx] = list.ptr;
+        doc.sel_cache_lens[idx] = @intCast(list.len);
+        return list;
+    }
+    const list = try selectors.parseText(arena, trimmed);
     return list orelse error.InvalidSelector;
+}
+
+const TagClass = struct { tag: []const u8, cls: []const u8 };
+
+fn parseTagClass(trimmed: []const u8) ?TagClass {
+    const dot = std.mem.indexOfScalar(u8, trimmed, '.') orelse return null;
+    if (dot == 0 or dot + 1 >= trimmed.len) return null;
+    const tag = trimmed[0..dot];
+    const cls = trimmed[dot + 1 ..];
+    if (!isPlainLowerIdent(tag) or !isPlainIdent(cls)) return null;
+    return .{ .tag = tag, .cls = cls };
 }
 
 fn hit(list: []const selectors.Selector, n: *Node, ctx: *match.Ctx) bool {
@@ -117,6 +143,13 @@ pub fn querySelector(root: *Node, selector: []const u8, arena: Allocator) Error!
             }
             return null;
         }
+        if (parseTagClass(trimmed)) |tc| {
+            var at = root.first_child;
+            while (at) |n| : (at = n.nextInTree(root)) {
+                if (n.kind == .element and fastTagMatches(tc.tag, n) and n.hasClass(tc.cls)) return n;
+            }
+            return null;
+        }
     }
     if (isPlainLowerIdent(trimmed)) {
         var at = root.first_child;
@@ -125,7 +158,7 @@ pub fn querySelector(root: *Node, selector: []const u8, arena: Allocator) Error!
         }
         return null;
     }
-    const list = try parse(arena, selector);
+    const list = try parse(root.doc, arena, trimmed);
     var ctx = context(root);
     switch (resolveIdAnchor(root, list)) {
         .none => return null,
@@ -143,13 +176,22 @@ pub fn querySelector(root: *Node, selector: []const u8, arena: Allocator) Error!
 /// Appends every matching element to `out`, which `arena` grows.
 pub fn querySelectorAll(root: *Node, selector: []const u8, arena: Allocator, out: *std.ArrayList(*Node)) Error!void {
     const trimmed = std.mem.trim(u8, selector, " \t\r\n\x0c");
-    if (!root.doc.quirks and trimmed.len > 1 and trimmed[0] == '.' and isPlainIdent(trimmed[1..])) {
-        const want = trimmed[1..];
-        var at = root.first_child;
-        while (at) |n| : (at = n.nextInTree(root)) {
-            if (n.kind == .element and n.hasClass(want)) try out.append(arena, n);
+    if (!root.doc.quirks and trimmed.len > 1) {
+        if (trimmed[0] == '.' and isPlainIdent(trimmed[1..])) {
+            const want = trimmed[1..];
+            var at = root.first_child;
+            while (at) |n| : (at = n.nextInTree(root)) {
+                if (n.kind == .element and n.hasClass(want)) try out.append(arena, n);
+            }
+            return;
         }
-        return;
+        if (parseTagClass(trimmed)) |tc| {
+            var at = root.first_child;
+            while (at) |n| : (at = n.nextInTree(root)) {
+                if (n.kind == .element and fastTagMatches(tc.tag, n) and n.hasClass(tc.cls)) try out.append(arena, n);
+            }
+            return;
+        }
     }
     if (isPlainLowerIdent(trimmed)) {
         var at = root.first_child;
@@ -158,7 +200,7 @@ pub fn querySelectorAll(root: *Node, selector: []const u8, arena: Allocator, out
         }
         return;
     }
-    const list = try parse(arena, selector);
+    const list = try parse(root.doc, arena, trimmed);
     var ctx = context(root);
     switch (resolveIdAnchor(root, list)) {
         .none => return,
@@ -174,13 +216,18 @@ pub fn querySelectorAll(root: *Node, selector: []const u8, arena: Allocator, out
 
 pub fn matchesSelector(node: *Node, selector: []const u8, arena: Allocator) Error!bool {
     const trimmed = std.mem.trim(u8, selector, " \t\r\n\x0c");
-    if (!node.doc.quirks and trimmed.len > 1 and trimmed[0] == '.' and isPlainIdent(trimmed[1..])) {
-        return node.kind == .element and node.hasClass(trimmed[1..]);
+    if (!node.doc.quirks and trimmed.len > 1) {
+        if (trimmed[0] == '.' and isPlainIdent(trimmed[1..])) {
+            return node.kind == .element and node.hasClass(trimmed[1..]);
+        }
+        if (parseTagClass(trimmed)) |tc| {
+            return node.kind == .element and fastTagMatches(tc.tag, node) and node.hasClass(tc.cls);
+        }
     }
     if (isPlainLowerIdent(trimmed)) {
         return node.kind == .element and fastTagMatches(trimmed, node);
     }
-    const list = try parse(arena, selector);
+    const list = try parse(node.doc, arena, trimmed);
     if (node.kind != .element) return false;
     var ctx = context(node);
     return hit(list, node, &ctx);
@@ -189,14 +236,24 @@ pub fn matchesSelector(node: *Node, selector: []const u8, arena: Allocator) Erro
 /// `node` or its nearest ancestor that matches.
 pub fn closest(node: *Node, selector: []const u8, arena: Allocator) Error!?*Node {
     const trimmed = std.mem.trim(u8, selector, " \t\r\n\x0c");
-    if (!node.doc.quirks and trimmed.len > 1 and trimmed[0] == '.' and isPlainIdent(trimmed[1..])) {
-        const want = trimmed[1..];
-        var at: ?*Node = if (node.kind == .element) node else node.parentElement();
-        while (at) |n| : (at = n.parentElement()) {
-            if (n.is_shadow) return null;
-            if (n.hasClass(want)) return n;
+    if (!node.doc.quirks and trimmed.len > 1) {
+        if (trimmed[0] == '.' and isPlainIdent(trimmed[1..])) {
+            const want = trimmed[1..];
+            var at: ?*Node = if (node.kind == .element) node else node.parentElement();
+            while (at) |n| : (at = n.parentElement()) {
+                if (n.is_shadow) return null;
+                if (n.hasClass(want)) return n;
+            }
+            return null;
         }
-        return null;
+        if (parseTagClass(trimmed)) |tc| {
+            var at: ?*Node = if (node.kind == .element) node else node.parentElement();
+            while (at) |n| : (at = n.parentElement()) {
+                if (n.is_shadow) return null;
+                if (fastTagMatches(tc.tag, n) and n.hasClass(tc.cls)) return n;
+            }
+            return null;
+        }
     }
     if (isPlainLowerIdent(trimmed)) {
         var at: ?*Node = if (node.kind == .element) node else node.parentElement();
@@ -206,7 +263,7 @@ pub fn closest(node: *Node, selector: []const u8, arena: Allocator) Error!?*Node
         }
         return null;
     }
-    const list = try parse(arena, selector);
+    const list = try parse(node.doc, arena, trimmed);
     var ctx = context(node);
     var at: ?*Node = if (node.kind == .element) node else node.parentElement();
     while (at) |n| : (at = n.parentElement()) {

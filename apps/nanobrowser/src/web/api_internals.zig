@@ -68,6 +68,41 @@ fn eventParent(vm: *Vm, _: Value, args: []const Value) Error!Value {
     return bind.wrap(vm, n.parent);
 }
 
+fn eventPath(vm: *Vm, _: Value, args: []const Value) Error!Value {
+    const target = bind.arg(args, 0);
+    const n0 = bind.asNode(target) orelse return (try vm.newArray(&.{target})).value();
+    const is_load = if (args.len > 1 and args[1].isString()) std.mem.eql(u8, try vm.toStringSlice(args[1]), "load") else false;
+    var buf: [64]Value = undefined;
+    buf[0] = target;
+    var len: usize = 1;
+    var cur: ?*dom.Node = n0;
+    const w = bind.world(vm);
+    while (cur) |n| {
+        const next_val: Value = if (n.kind == .document)
+            (if (!is_load and n.doc == w.page.doc) vm.global().value() else Value.null)
+        else
+            try bind.wrap(vm, n.parent);
+        if (next_val.isNull()) break;
+        if (len < buf.len) {
+            buf[len] = next_val;
+            len += 1;
+            cur = if (n.kind == .document) null else n.parent;
+        } else break;
+    }
+    const arr = try vm.newArray(buf[0..len]);
+    while (cur) |n| {
+        const next_val: Value = if (n.kind == .document)
+            (if (!is_load and n.doc == w.page.doc) vm.global().value() else Value.null)
+        else
+            try bind.wrap(vm, n.parent);
+        if (next_val.isNull()) break;
+        try arr.setIdx(vm, @intCast(len), next_val);
+        len += 1;
+        cur = if (n.kind == .document) null else n.parent;
+    }
+    return arr.value();
+}
+
 fn isNode(_: *Vm, _: Value, args: []const Value) Error!Value {
     return Value.fromBool(bind.asNode(bind.arg(args, 0)) != null);
 }
@@ -265,13 +300,22 @@ fn takeImages(vm: *Vm, _: Value, _: []const Value) Error!Value {
     return arr.value();
 }
 
+fn postTask(vm: *Vm, _: Value, args: []const Value) Error!Value {
+    const w = bind.world(vm);
+    if (w.stopped) return Value.undefined;
+    try w.timers.postTask(w, bind.arg(args, 0));
+    return Value.undefined;
+}
+
 const table = [_]bind.Method{
+    .{ .name = "postTask", .arity = 1, .f = postTask },
     .{ .name = "takeImages", .arity = 0, .f = takeImages },
     .{ .name = "hook", .arity = 2, .f = hook },
     .{ .name = "listen", .arity = 1, .f = listen },
     .{ .name = "log", .arity = 2, .f = log },
     .{ .name = "inlineAttr", .arity = 2, .f = inlineAttr },
     .{ .name = "eventParent", .arity = 1, .f = eventParent },
+    .{ .name = "eventPath", .arity = 2, .f = eventPath },
     .{ .name = "isNode", .arity = 1, .f = isNode },
     .{ .name = "markAll", .arity = 1, .f = markAll },
     .{ .name = "pageUrl", .arity = 0, .f = pageUrl },

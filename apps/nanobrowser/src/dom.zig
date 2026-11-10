@@ -90,8 +90,10 @@ pub const Node = struct {
     /// An inline split around blocks: its boxes, whose union its rect is.
     box_parts: []const *anyopaque = &.{},
 
-    /// The node's JS object (`web/`), its listeners, its layout box.
+    /// The node's JS object (`web/`), cached style/classList wrappers, its listeners, its layout box.
     js_object: ?*anyopaque = null,
+    js_style: ?*anyopaque = null,
+    js_class_list: ?*anyopaque = null,
     listeners: ?*anyopaque = null,
     box: ?*anyopaque = null,
 
@@ -107,9 +109,7 @@ pub const Node = struct {
     /// Its `srcset` candidate's density: file pixels to a CSS pixel.
     image_density: f32 = 1,
 
-    pub fn isElement(n: *const Node) bool {
-        return n.kind == .element;
-    }
+    pub fn isElement(n: *const Node) bool { return n.kind == .element; }
 
     pub inline fn isTag(n: *const Node, tag: []const u8) bool {
         return n.kind == .element and n.tag.len == tag.len and (n.tag.len == 0 or (n.tag[0] == tag[0] and std.mem.eql(u8, n.tag, tag)));
@@ -123,9 +123,7 @@ pub const Node = struct {
         return null;
     }
 
-    pub fn hasAttr(n: *const Node, name: []const u8) bool {
-        return n.attr(name) != null;
-    }
+    pub fn hasAttr(n: *const Node, name: []const u8) bool { return n.attr(name) != null; }
 
     /// Sets an attribute; `name` and `value` are copied.
     pub fn setAttr(n: *Node, name: []const u8, value: []const u8) Allocator.Error!void {
@@ -157,14 +155,10 @@ pub const Node = struct {
     }
 
     /// An attribute that decides what boxes there are, with no style changing.
-    fn changesBoxes(n: *const Node, name: []const u8) bool {
-        return n.isTag("details") and std.mem.eql(u8, name, "open");
-    }
+    fn changesBoxes(n: *const Node, name: []const u8) bool { return n.isTag("details") and std.mem.eql(u8, name, "open"); }
 
     /// Whether the `class` attribute lists `name` (Theorem 35).
-    pub fn hasClass(n: *const Node, name: []const u8) bool {
-        return perf.hasNodeClass(n, name);
-    }
+    pub fn hasClass(n: *const Node, name: []const u8) bool { return perf.hasNodeClass(n, name); }
 
     pub fn firstElementChild(n: *const Node) ?*Node {
         var c = n.first_child;
@@ -202,11 +196,53 @@ pub const Node = struct {
         return false;
     }
 
+    fn propagateFlags(n: *Node, has_res: bool, has_id: bool, has_work: bool) void {
+        if (has_res) {
+            var at: ?*Node = n;
+            while (at) |x| : (at = x.parent) x.has_resource = true;
+            n.doc.scan_dirty = true;
+        }
+        if (has_id and !n.has_id) {
+            var at: ?*Node = n;
+            while (at) |x| : (at = x.parent) {
+                if (x.has_id) break;
+                x.has_id = true;
+            }
+        }
+        if (has_work and !n.has_insertion_work) {
+            var at: ?*Node = n;
+            while (at) |x| : (at = x.parent) {
+                if (x.has_insertion_work) break;
+                x.has_insertion_work = true;
+            }
+        }
+    }
+
     /// Takes `child` from where it is and puts it before `ref` (at the end
     /// when null). A fragment gives its children. `child` must not contain `n`.
     pub fn insertBefore(n: *Node, child: *Node, ref: ?*Node) void {
         if (child.kind == .fragment) {
-            while (child.first_child) |k| n.insertBefore(k, ref);
+            const first = child.first_child orelse return;
+            const last = child.last_child.?;
+            child.first_child = null;
+            child.last_child = null;
+            var has_res = n.isTag("style");
+            var has_id = false;
+            var has_work = false;
+            var k: ?*Node = first;
+            while (k) |x| : (k = x.next) {
+                x.parent = n;
+                if (x.has_resource) has_res = true;
+                if (x.has_id) has_id = true;
+                if (x.has_insertion_work) has_work = true;
+            }
+            const prev = if (ref) |r| r.prev else n.last_child;
+            first.prev = prev;
+            last.next = ref;
+            if (prev) |p| p.next = first else n.first_child = first;
+            if (ref) |r| r.prev = last else n.last_child = last;
+            n.propagateFlags(has_res, has_id, has_work);
+            n.doc.touchTree(n, has_id);
             return;
         }
         child.remove();
@@ -215,31 +251,11 @@ pub const Node = struct {
         child.prev = if (ref) |r| r.prev else n.last_child;
         if (child.prev) |p| p.next = child else n.first_child = child;
         if (ref) |r| r.prev = child else n.last_child = child;
-        if (child.has_resource or n.isTag("style")) {
-            var at: ?*Node = n;
-            while (at) |x| : (at = x.parent) x.has_resource = true;
-            n.doc.scan_dirty = true;
-        }
-        if (child.has_id and !n.has_id) {
-            var at: ?*Node = n;
-            while (at) |x| : (at = x.parent) {
-                if (x.has_id) break;
-                x.has_id = true;
-            }
-        }
-        if (child.has_insertion_work and !n.has_insertion_work) {
-            var at: ?*Node = n;
-            while (at) |x| : (at = x.parent) {
-                if (x.has_insertion_work) break;
-                x.has_insertion_work = true;
-            }
-        }
+        n.propagateFlags(child.has_resource or n.isTag("style"), child.has_id, child.has_insertion_work);
         n.doc.touchTree(n, child.has_id);
     }
 
-    pub fn appendChild(n: *Node, child: *Node) void {
-        n.insertBefore(child, null);
-    }
+    pub fn appendChild(n: *Node, child: *Node) void { n.insertBefore(child, null); }
 
     /// Takes the node out of its parent.
     pub fn remove(n: *Node) void {
@@ -398,6 +414,10 @@ pub const Document = struct {
     id_last_key: []const u8 = "",
     id_last_node: ?*Node = null,
     id_map: std.StringHashMapUnmanaged(*Node) = .empty,
+    /// Per-document 32-slot parsed selector cache (Theorem 70).
+    sel_cache_keys: [32][]const u8 = @splat(""),
+    sel_cache_ptrs: [32]?*const anyopaque = @splat(null),
+    sel_cache_lens: [32]u32 = @splat(0),
     /// Goes up when anything in an inline `<svg>` changes: what's drawn from
     /// their markup is made again (`paint/svg_markup.zig`).
     svg_version: u32 = 0,
@@ -434,20 +454,14 @@ pub const Document = struct {
     }
 
     /// `n` and what's under it restyle.
-    pub fn markStyle(d: *Document, n: *Node) void {
-        d.touchUnder(n);
-    }
+    pub fn markStyle(d: *Document, n: *Node) void { d.touchUnder(n); }
 
     /// The style of what's under `n` may have changed: only that restyles.
-    pub fn touchUnder(d: *Document, n: *Node) void {
-        perf.touchUnder(d, n);
-    }
+    pub fn touchUnder(d: *Document, n: *Node) void { perf.touchUnder(d, n); }
 
     /// An attribute of `n` changed. Layout follows only if style did. What
     /// selects by it reaches its siblings at most, unless it is the inline style.
-    fn touchAttr(d: *Document, n: *Node, name: []const u8) void {
-        perf.touchAttr(d, n, name);
-    }
+    fn touchAttr(d: *Document, n: *Node, name: []const u8) void { perf.touchAttr(d, n, name); }
 
     /// `n`'s children changed.
     fn touchTree(d: *Document, n: *Node, id_changed: bool) void {

@@ -399,9 +399,8 @@ pub fn getElem(vm: *Vm, t: Value, k: Value) Error!Value {
             }
             return props.getR(vm, o, PropKey.fromIndex(i), t);
         }
-        if (k.isString()) {
-            const s = k.asString();
-            const key = if (s.key.bits != 0) s.key else try str.toKey(vm, s);
+        if (k.isString() or k.isSymbol()) {
+            const key = if (k.isString()) (if (k.asString().key.bits != 0) k.asString().key else try str.toKey(vm, k.asString())) else PropKey.fromSymbol(k.asSymbol());
             if (!o.flags.exotic and !o.flags.lazy_fn and !key.isIndex()) {
                 if (o.shape.find(key)) |slot| {
                     if (!o.shape.flagsAt(slot).accessor) return o.slots[slot];
@@ -454,9 +453,8 @@ pub fn putElem(vm: *Vm, t: Value, k: Value, v: Value, strict: bool) Error!void {
             }
             return;
         }
-        if (k.isString()) {
-            const s = k.asString();
-            const key = if (s.key.bits != 0) s.key else try str.toKey(vm, s);
+        if (k.isString() or k.isSymbol()) {
+            const key = if (k.isString()) (if (k.asString().key.bits != 0) k.asString().key else try str.toKey(vm, k.asString())) else PropKey.fromSymbol(k.asSymbol());
             if (!o.flags.exotic and !o.flags.lazy_fn and !key.isIndex()) {
                 if (o.shape.find(key)) |slot| {
                     const fl = o.shape.flagsAt(slot);

@@ -54,10 +54,8 @@ pub fn insert(w: *World, parent: *Node, child: *Node, ref: ?*Node) Error!void {
     if (child.kind == .fragment) {
         if (w.observed.items.len == 0 and !child.has_insertion_work) {
             if (child.first_child == null) return;
-            while (child.first_child) |x| {
-                adoptTree(x, parent.doc);
-                parent.insertBefore(x, ref);
-            }
+            adoptTree(child, parent.doc);
+            parent.insertBefore(child, ref);
             w.changed();
             return afterChildren(w, parent);
         }
@@ -117,21 +115,23 @@ fn removeOnly(w: *World, parent: *Node, child: *Node) Error!void {
 /// The document's pointers at this subtree go: it isn't there to focus.
 fn forgetState(w: *World, n: *Node) void {
     const d = n.doc;
-    if (d.focus) |f| if (n.contains(f)) {
+    const leaf = n.first_child == null;
+    if (d.focus) |f| if (if (leaf) f == n else n.contains(f)) {
         d.focus = null;
     };
-    if (d.hover) |f| if (n.contains(f)) {
+    if (d.hover) |f| if (if (leaf) f == n else n.contains(f)) {
         d.hover = null;
     };
-    if (d.active) |f| if (n.contains(f)) {
+    if (d.active) |f| if (if (leaf) f == n else n.contains(f)) {
         d.active = null;
     };
-    if (w.page.open_select) |s| if (n.contains(s)) {
+    if (w.page.open_select) |s| if (if (leaf) s == n else n.contains(s)) {
         w.page.open_select = null;
     };
 }
 
 fn forgetChildrenState(w: *World, n: *Node) void {
+    if (n.first_child == null) return;
     const d = n.doc;
     if (d.focus) |f| if (f != n and n.contains(f)) {
         d.focus = null;
@@ -202,10 +202,8 @@ pub fn replaceAllWith(w: *World, n: *Node, fragment: ?*Node) Error!void {
         n.removeChildren();
         if (fragment) |f| {
             if (!f.has_insertion_work) {
-                while (f.first_child) |x| {
-                    adoptTree(x, n.doc);
-                    n.insertBefore(x, null);
-                }
+                adoptTree(f, n.doc);
+                n.insertBefore(f, null);
                 w.changed();
                 if (connected and w.page.frames.list.items.len > 0) frames.sweep(w.page);
                 return afterChildren(w, n);

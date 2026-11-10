@@ -302,9 +302,15 @@ pub const World = struct {
         if (w.redraw_due) {
             if (caller_page) |cp| {
                 if (cp.js) |cw| {
-                    cw.redraw_due = true;
+                    if (!w.in_frame) {
+                        w.redraw_due = false;
+                        w.redraw_asked = false;
+                    }
+                    cw.redraw_asked = true;
+                    if (cw.depth == 0 and !cw.in_frame) cp.redraw() else cw.redraw_due = true;
                 } else if (!w.in_frame) {
                     w.redraw_due = false;
+                    w.redraw_asked = false;
                     p.redraw();
                 }
             } else if (!w.in_frame) {
