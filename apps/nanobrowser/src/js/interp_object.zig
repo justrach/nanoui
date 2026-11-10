@@ -37,7 +37,13 @@ pub fn argumentsObject(vm: *Vm, f: *Frame) Error!*Object {
     const a = try objmod.alloc(vm, sh, .arguments);
     const n = f.argc;
     if (n != 0) {
-        try objmod.growElems(vm, a, n);
+        if (n <= objmod.inline_slots - 3) {
+            a.slot_cap = 3;
+            a.elems = @as([*]Value, &a.inline_store) + 3;
+            a.elems_cap = objmod.inline_slots - 3;
+        } else {
+            try objmod.growElems(vm, a, n);
+        }
         @memcpy(a.elems[0..n], f.args[0..n]);
         a.elems_len = n;
     }

@@ -198,8 +198,10 @@ pub fn element(g: *Gen, n: *dom.Node) Error!void {
     if (s0.display == .table_column or s0.display == .table_column_group) return;
     g.depth += 1;
     defer g.depth -= 1;
-    try g.counters.apply(g.c.arena, s0, g.depth);
-    defer g.counters.leave(g.depth);
+    if (s0.counter_reset.len != 0 or s0.counter_increment.len != 0 or s0.counter_set.len != 0) {
+        try g.counters.apply(g.c.arena, s0, g.depth);
+    }
+    defer if (g.counters.entries.items.len != 0) g.counters.leave(g.depth);
     if (s0.display == .contents) {
         try pseudo(g, n, n.before);
         try children(g, n, s0, htag);
@@ -395,7 +397,8 @@ fn pseudo(g: *Gen, n: *dom.Node, sp: ?*const Style) Error!void {
 /// place what `b`'s parent should hold.
 fn finish(g: *Gen, b: *Box, base: usize) Error!void {
     const c = g.c;
-    const entries = try c.arena.dupe(Entry, g.stack.items[base..]);
+    const slice = g.stack.items[base..];
+    const entries: []const Entry = if (slice.len == 0) &.{} else try c.arena.dupe(Entry, slice);
     g.stack.items.len = base;
     switch (b.kind) {
         .inline_box => return inlineBox(g, b, entries),
@@ -487,6 +490,12 @@ fn partsOf(g: *Gen, n: *dom.Node, entries: []const Entry) Error!void {
 /// A block container: either all lines, or all blocks with anonymous blocks
 /// around the runs of inline content between them.
 pub fn container(g: *Gen, b: *Box, entries0: []const Entry) Error!void {
+    if (entries0.len == 0) {
+        b.lay.inline_root = true;
+        if (b.style.text_align == .start) b.lay.text_align = g.text_align;
+        b.lay.nowrap = g.nowrap;
+        return;
+    }
     const entries = try gen_table.wrapOrphans(g, b, entries0);
     var any_block = false;
     for (entries) |e| any_block = any_block or isBlockLevel(e);
@@ -507,7 +516,7 @@ fn inlineRoot(g: *Gen, b: *Box, entries: []const Entry) Error!void {
     b.lay.entries = entries;
     if (b.style.text_align == .start) b.lay.text_align = g.text_align;
     b.lay.nowrap = g.nowrap;
-    try text.build(g.c, b);
+    if (entries.len > 0) try text.build(g.c, b);
 }
 
 fn inlineRun(g: *Gen, b: *Box, run: []const Entry) Error!void {

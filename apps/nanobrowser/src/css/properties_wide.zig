@@ -239,6 +239,7 @@ fn corner(d: *Style, s: *const Style, i: usize) void {
 
 /// A new element's start: initial values, with the inherited ones from `p`.
 pub fn inheritInto(s: *Style, p: *const Style) void {
+    @memset(std.mem.asBytes(s), 0);
     s.* = .{};
     sides(s, p, &.{
         "visibility",      "cursor",           "pointer_events",       "color",

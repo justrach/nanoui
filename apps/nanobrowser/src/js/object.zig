@@ -174,6 +174,11 @@ pub const Object = struct {
     pub inline fn extra(o: *const Object) ?*FnExtra {
         return @ptrCast(@alignCast(o.host));
     }
+    pub inline fn elemsInline(o: *const Object) bool {
+        const base = @intFromPtr(&o.inline_store);
+        const p = @intFromPtr(o.elems);
+        return p >= base and p <= base + inline_slots * @sizeOf(Value);
+    }
 
     // The embedding API's convenience accessors; see js.zig.
     pub fn get(o: *Object, vm: *Vm, name: []const u8) Error!Value {
@@ -209,11 +214,18 @@ pub fn alloc(vm: *Vm, shape: *Shape, class: Class) Error!*Object {
     o.flags = .{};
     o.host_tag = 0;
     o.shape = shape;
-    o.slots = &o.inline_store;
-    o.elems = undefined;
-    o.slot_cap = inline_slots;
+    if (class == .array and shape.count == 0) {
+        o.slots = &o.inline_store;
+        o.slot_cap = 0;
+        o.elems = &o.inline_store;
+        o.elems_cap = inline_slots;
+    } else {
+        o.slots = &o.inline_store;
+        o.slot_cap = inline_slots;
+        o.elems = undefined;
+        o.elems_cap = 0;
+    }
     o.elems_len = 0;
-    o.elems_cap = 0;
     o.arr_len = 0;
     o.payload = .{ .none = 0 };
     o.env = null;
@@ -242,8 +254,8 @@ pub fn growSlots(vm: *Vm, o: *Object, n: u32) Error!void {
     if (n <= o.slot_cap) return;
     const cap = @max(n, @max(@as(u32, 12), o.slot_cap * 2));
     const mem = try vm.gpa.alloc(Value, cap);
-    @memcpy(mem[0..o.slot_cap], o.slots[0..o.slot_cap]);
-    if (o.slots != @as([*]Value, &o.inline_store)) vm.gpa.free(o.slots[0..o.slot_cap]);
+    if (o.slot_cap != 0) @memcpy(mem[0..o.slot_cap], o.slots[0..o.slot_cap]);
+    if (o.slot_cap != 0 and o.slots != @as([*]Value, &o.inline_store)) vm.gpa.free(o.slots[0..o.slot_cap]);
     o.slots = mem.ptr;
     o.slot_cap = cap;
 }
@@ -255,6 +267,10 @@ pub fn growElems(vm: *Vm, o: *Object, n: usize) Error!void {
     const cap: usize = @max(n, @as(usize, o.elems_cap) + @as(usize, o.elems_cap) / 2 + 4);
     if (o.elems_cap == 0) {
         const mem = try vm.gpa.alloc(Value, cap);
+        o.elems = mem.ptr;
+    } else if (o.elemsInline()) {
+        const mem = try vm.gpa.alloc(Value, cap);
+        if (o.elems_len != 0) @memcpy(mem[0..o.elems_len], o.elems[0..o.elems_len]);
         o.elems = mem.ptr;
     } else {
         const mem = try vm.gpa.realloc(o.elems[0..o.elems_cap], cap);
@@ -347,8 +363,8 @@ pub fn finalize(vm: *Vm, o: *Object) void {
     if (o.host != null and o.class != .closure) {
         if (vm.host_finalizer) |f| f(o);
     }
-    if (o.slots != @as([*]Value, &o.inline_store)) gpa.free(o.slots[0..o.slot_cap]);
-    if (o.elems_cap != 0) gpa.free(o.elems[0..o.elems_cap]);
+    if (o.slot_cap != 0 and o.slots != @as([*]Value, &o.inline_store)) gpa.free(o.slots[0..o.slot_cap]);
+    if (o.elems_cap != 0 and !o.elemsInline()) gpa.free(o.elems[0..o.elems_cap]);
     switch (o.class) {
         .closure => {
             if (o.extra()) |x| gpa.destroy(x);

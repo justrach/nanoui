@@ -58,7 +58,10 @@ pub fn callSetterSlot(vm: *Vm, ic: *bc.IC, slot_val: Value, receiver: Value, v: 
 pub fn getField(vm: *Vm, ic: *bc.IC, v: Value) Error!Value {
     if (!v.isObject()) {
         if (v.isString() and !ic.key.isIndex()) {
-            if (ic.key.eql(vm.k.length)) return Value.fromUsize(v.asString().len16);
+            if (ic.key.eql(vm.k.length)) {
+                ic.is_str_len = true;
+                return Value.fromUsize(v.asString().len16);
+            }
             const sp = vm.protos.string;
             if (ic.holder == sp and ic.holder_shape == sp.shape and ic.epoch == vm.proto_epoch and ic.slot != bc.IC.missing_slot) {
                 const sv = sp.slots[ic.slot];
@@ -77,6 +80,7 @@ pub fn getField(vm: *Vm, ic: *bc.IC, v: Value) Error!Value {
                     ic.fast_own_data = false;
                     ic.fast_proto_data = !acc;
                     ic.proto_shapes = @splat(null);
+                    ic.proto_idx = 0;
                     const sv = sp.slots[slot];
                     return if (acc) props.callGetter(vm, sv, v) else sv;
                 }
@@ -97,27 +101,20 @@ pub fn getField(vm: *Vm, ic: *bc.IC, v: Value) Error!Value {
         }
     }
     inline for (0..bc.IC.own_poly_cap) |k| if (ic.own_shapes[k] == sh) {
-        const slot = ic.own_slots[k];
-        if (ic.fast_own_data and ic.shape != null) {
-            ic.own_shapes[k] = ic.shape;
-            ic.own_slots[k] = ic.slot;
-            ic.shape = sh;
-            ic.slot = slot;
-        }
-        return o.slots[slot];
+        return o.slots[ic.own_slots[k]];
     };
     if (ic.holder) |h| {
         if (ic.epoch == vm.proto_epoch and h.shape == ic.holder_shape and ic.slot != bc.IC.missing_slot) {
             inline for (0..bc.IC.proto_poly_cap) |k| {
                 if (ic.proto_shapes[k] == sh) {
-                    if (ic.shape != null and !ic.fast_own_data) {
-                        ic.proto_shapes[k] = ic.shape;
-                        ic.shape = sh;
-                    }
                     const sv = h.slots[ic.slot];
                     return if (ic.is_accessor) props.callGetter(vm, sv, v) else sv;
                 }
             }
+        }
+    } else if (ic.slot == bc.IC.missing_slot and ic.epoch == vm.proto_epoch) {
+        inline for (0..bc.IC.proto_poly_cap) |k| {
+            if (ic.proto_shapes[k] == sh) return Value.undefined;
         }
     }
     const exotic_ok = !o.flags.exotic or o.class == .typedarray or (o.class == .host_exotic and o.payload.hooks.get_named == null and !ic.key.eql(vm.k.length));
@@ -137,6 +134,8 @@ pub fn getField(vm: *Vm, ic: *bc.IC, v: Value) Error!Value {
                 ic.is_transition = false;
                 ic.fast_own_data = !acc;
                 ic.fast_proto_data = false;
+                ic.proto_shapes = @splat(null);
+                ic.proto_idx = 0;
             }
             if (acc) return props.callGetter(vm, o.slots[slot], v);
             return o.slots[slot];
@@ -154,6 +153,7 @@ pub fn getField(vm: *Vm, ic: *bc.IC, v: Value) Error!Value {
                 if ((hs == vm.fn_root or h.class == .closure or h.class == .native) and is_lazy_key) break;
                 if (hs.find(ic.key)) |slot| {
                     const acc = hs.flagsAt(slot).accessor;
+                    pushOwnPoly(ic, cur_sh);
                     if (ic.holder == h and ic.holder_shape == hs and ic.slot == slot and ic.epoch == vm.proto_epoch and ic.shape != null and ic.shape != cur_sh and !ic.fast_own_data) {
                         var found = false;
                         inline for (0..bc.IC.proto_poly_cap) |k| if (ic.proto_shapes[k] == ic.shape) {
@@ -163,7 +163,7 @@ pub fn getField(vm: *Vm, ic: *bc.IC, v: Value) Error!Value {
                             ic.proto_shapes[ic.proto_idx & (bc.IC.proto_poly_cap - 1)] = ic.shape;
                             ic.proto_idx +%= 1;
                         }
-                    } else if (ic.holder != h or ic.holder_shape != hs or ic.slot != slot or ic.epoch != vm.proto_epoch) {
+                    } else if (ic.holder != h or ic.holder_shape != hs or ic.slot != slot or ic.epoch != vm.proto_epoch or ic.fast_own_data) {
                         ic.proto_shapes = @splat(null);
                         ic.proto_idx = 0;
                     }
@@ -180,6 +180,20 @@ pub fn getField(vm: *Vm, ic: *bc.IC, v: Value) Error!Value {
                     return h.slots[slot];
                 }
             } else {
+                pushOwnPoly(ic, cur_sh);
+                if (ic.slot == bc.IC.missing_slot and ic.holder == null and ic.epoch == vm.proto_epoch and ic.shape != null and ic.shape != cur_sh and !ic.fast_own_data) {
+                    var found = false;
+                    inline for (0..bc.IC.proto_poly_cap) |k| if (ic.proto_shapes[k] == ic.shape) {
+                        found = true;
+                    };
+                    if (!found) {
+                        ic.proto_shapes[ic.proto_idx & (bc.IC.proto_poly_cap - 1)] = ic.shape;
+                        ic.proto_idx +%= 1;
+                    }
+                } else if (ic.slot != bc.IC.missing_slot or ic.holder != null or ic.epoch != vm.proto_epoch or ic.fast_own_data) {
+                    ic.proto_shapes = @splat(null);
+                    ic.proto_idx = 0;
+                }
                 ic.shape = cur_sh;
                 ic.holder = null;
                 ic.holder_shape = null;
@@ -215,24 +229,13 @@ pub fn putField(vm: *Vm, ic: *bc.IC, t: Value, v: Value, strict: bool) Error!voi
         }
     }
     inline for (0..bc.IC.own_poly_cap) |k| if (ic.own_shapes[k] == o.shape) {
-        const slot = ic.own_slots[k];
-        if (ic.fast_own_data and ic.shape != null) {
-            ic.own_shapes[k] = ic.shape;
-            ic.own_slots[k] = ic.slot;
-            ic.shape = o.shape;
-            ic.slot = slot;
-        }
-        o.slots[slot] = v;
+        o.slots[ic.own_slots[k]] = v;
         return;
     };
     if (ic.is_accessor) if (ic.holder) |h| {
         if (ic.epoch == vm.proto_epoch and h.shape == ic.holder_shape) {
             inline for (0..bc.IC.proto_poly_cap) |k| {
                 if (ic.proto_shapes[k] == o.shape) {
-                    if (ic.shape != null and !ic.fast_own_data and !ic.is_transition) {
-                        ic.proto_shapes[k] = ic.shape;
-                        ic.shape = o.shape;
-                    }
                     return callSetterSlot(vm, ic, h.slots[ic.slot], t, v, strict);
                 }
             }

@@ -36,15 +36,27 @@ pub fn newSource(vm: *Vm, source: []const u8, name: []const u8) Error!*bc.Source
     const nm = try vm.gpa.dupe(u8, name);
     errdefer vm.gpa.free(nm);
     const s = try vm.heap.create(bc.Source, .source);
-    s.text = text;
-    s.name = nm;
-    s.line_starts = &.{};
+    s.* = .{
+        .cell = s.cell,
+        .text = text,
+        .name = nm,
+        .line_starts = &.{},
+        .borrowed_text = false,
+    };
     return s;
 }
 
 /// Compiles a classic script or eval source to a closure, without running it.
 pub fn compileScript(vm: *Vm, source: []const u8, filename: []const u8, mode: scope.Mode) Error!*Object {
+    const pr = @import("../perf_rules.zig");
+    pr.prof_compile_calls += 1;
+    const t0 = pr.nowNs();
+    defer pr.prof_compile_ns += pr.nowNs() -| t0;
     vm.enterFromHost();
+    const sc = @import("script_cache.zig");
+    if (mode == .script) {
+        if (try sc.lookupAndInstantiateScript(vm, source, filename)) |f| return f;
+    }
     var arena = std.heap.ArenaAllocator.init(vm.gpa);
     defer arena.deinit();
     const a = arena.allocator();
@@ -52,6 +64,7 @@ pub fn compileScript(vm: *Vm, source: []const u8, filename: []const u8, mode: sc
     const r = try scope.analyze(vm, a, &prog, source, mode);
     const src = try newSource(vm, source, filename);
     const c = try compiler.compileProgram(vm, a, &prog, r, src);
+    if (mode == .script) sc.recordScript(vm, source, c.main);
     return interp_object.makeClosure(vm, c.main, null);
 }
 

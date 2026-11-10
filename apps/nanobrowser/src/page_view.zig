@@ -228,6 +228,8 @@ pub fn flushStyleForNode(p: *Page, n: *dom.Node) void {
         flushStyle(p);
         return;
     }
+    const t0 = perf.nowNs();
+    defer perf.prof_style_ns += perf.nowNs() -| t0;
     p.engine.layout_change_node = null;
     p.engine.layout_change_many = false;
     const change = p.engine.restyleChanged(target) catch .layout;
@@ -252,6 +254,8 @@ pub fn flushStyle(p: *Page) void {
     const d = p.doc;
     if (!d.style_dirty) return;
     loader.scan(p);
+    const t0 = perf.nowNs();
+    defer perf.prof_style_ns += perf.nowNs() -| t0;
     p.title_stale = true;
     d.style_dirty = false;
     if (d.dirty_all) {
@@ -263,6 +267,8 @@ pub fn flushStyle(p: *Page) void {
         d.layout_dirty = true;
         return;
     }
+    p.engine.beginFlush();
+    defer p.engine.in_batch_flush = false;
     for (d.dirty_nodes.items) |n| {
         if (!n.style_queued) continue;
         // Under one already done, or no longer in the document: nothing to do.
@@ -286,6 +292,8 @@ pub fn flushStyle(p: *Page) void {
 }
 
 pub fn relayoutTree(p: *Page, c: *ui.Context) void {
+    const t0 = perf.nowNs();
+    defer perf.prof_layout_ns += perf.nowNs() -| t0;
     _ = p.layout_arena.reset(.retain_capacity);
     const a = p.layout_arena.allocator();
     var fonts: Fonts = .{ .p = p, .c = c };
@@ -322,10 +330,14 @@ pub fn relayout(p: *Page, c: *ui.Context) void {
 }
 
 fn makeList(p: *Page, tree: box.Tree, m: box.Measurer) void {
+    const t0 = perf.nowNs();
+    defer perf.prof_list_ns += perf.nowNs() -| t0;
     p.list_dirty = false;
     p.list_stale = false;
     p.lists +%= 1;
+    const ts = perf.nowNs();
     svg_markup.refresh(p);
+    perf.prof_svg_ns += perf.nowNs() -| ts;
     _ = p.list_arena.reset(.retain_capacity);
     p.list = display.build(p.list_arena.allocator(), tree, p.doc.node, m, &p.scrolls) catch null;
     if (p.restore_scroll > 0) if (p.list) |*l| {

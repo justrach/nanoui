@@ -90,6 +90,12 @@ pub const Deferred = union(enum) {
     submit: struct { form: *dom.Node, submitter: ?*dom.Node },
 };
 
+pub const DispatchPath = struct {
+    nodes: [128]*dom.Node = undefined,
+    len: u8 = 0,
+    has_win: bool = false,
+};
+
 pub const max_console = 1000;
 /// How long one task may run. A test may shorten it.
 pub var task_deadline_ns: u64 = 5 * std.time.ns_per_s;
@@ -176,6 +182,8 @@ pub const World = struct {
     /// A control should take the keyboard, or none, at the next frame.
     focus_request: ?*dom.Node = null,
     blur_request: bool = false,
+    dispatch_paths: [8]DispatchPath = undefined,
+    dispatch_depth: u8 = 0,
 
     pub fn create(p: *Page) !*World {
         const gpa = p.gpa;
@@ -284,7 +292,9 @@ pub const World = struct {
         if (w.depth != 0) return;
         vm.setDeadline(0);
         if (!has_caller and vm.bytesAllocated() > w.gc_next) {
+            const t0 = @import("../perf_rules.zig").nowNs();
             vm.collect();
+            @import("../perf_rules.zig").prof_gc_ns += @import("../perf_rules.zig").nowNs() -| t0;
             w.gc_next = @max(first_collection, vm.bytesAllocated() * 2);
         }
         const p = w.page;

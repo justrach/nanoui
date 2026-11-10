@@ -176,6 +176,8 @@ fn resolveIdAnchor(root: *Node, list: []const selectors.Selector) Anchor {
 /// The first element in `root` (not `root` itself) matching `selector`, in
 /// document order. `arena` holds the parsed selector.
 pub fn querySelector(root: *Node, selector: []const u8, arena: Allocator) Error!?*Node {
+    const t0 = perf.nowNs();
+    defer perf.prof_query_ns += perf.nowNs() -| t0;
     const trimmed = std.mem.trim(u8, selector, " \t\r\n\x0c");
     if (!root.doc.quirks and trimmed.len > 1) {
         if (trimmed[0] == '#' and isPlainIdent(trimmed[1..])) {
@@ -233,6 +235,8 @@ pub fn querySelector(root: *Node, selector: []const u8, arena: Allocator) Error!
 
 /// Appends every matching element to `out`, which `arena` grows.
 pub fn querySelectorAll(root: *Node, selector: []const u8, arena: Allocator, out: *std.ArrayList(*Node)) Error!void {
+    const t0 = perf.nowNs();
+    defer perf.prof_query_ns += perf.nowNs() -| t0;
     const trimmed = std.mem.trim(u8, selector, " \t\r\n\x0c");
     if (!root.doc.quirks and trimmed.len > 1) {
         if (trimmed[0] == '.' and isPlainIdent(trimmed[1..])) {

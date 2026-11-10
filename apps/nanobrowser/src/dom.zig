@@ -87,17 +87,17 @@ pub const Node = struct {
     has_on_attr: bool = false,
     /// Queued in `Document.dirty_nodes` for the next `flushStyle` pass.
     style_queued: bool = false,
-    style_shared: bool = false,
-    style_canon: ?*const anyopaque = null,
+    has_js_listeners: bool = false,
+    style_shared_gen: u32 = 0,
+    style_canon: ?*const style.Style = null,
     /// An inline split around blocks: its boxes, whose union its rect is.
     box_parts: []const *anyopaque = &.{},
 
-    /// The node's JS object (`web/`), cached style/classList wrappers, its listeners, its layout box.
     js_object: ?*anyopaque = null,
     js_style: ?*anyopaque = null,
     js_class_list: ?*anyopaque = null,
-    listeners: ?*anyopaque = null,
     box: ?*anyopaque = null,
+    text_cache: ?*anyopaque = null,
 
     /// A form control's live state: the value when edited (else the
     /// attribute's), its editor (`paint/controls.zig`), checked and selected.
@@ -430,12 +430,13 @@ pub const Document = struct {
     sel_cache_keys: [32][]const u8 = @splat(""),
     sel_cache_ptrs: [32]?*const anyopaque = @splat(null),
     sel_cache_lens: [32]u32 = @splat(0),
-    /// Goes up when anything in an inline `<svg>` changes: what's drawn from
-    /// their markup is made again (`paint/svg_markup.zig`).
     svg_version: u32 = 0,
+    svg_style_version: u32 = 0,
+    font_epoch: u32 = 0,
     svg_dirty: bool = false,
     rule_flags: u8 = 7,
     rule_attr_filter: u64 = std.math.maxInt(u64),
+    rule_id_bloom: u64 = std.math.maxInt(u64),
     /// What a restyle has to look at: everything, or under just these.
     dirty_all: bool = true,
     dirty_nodes: std.ArrayList(*Node) = .empty,

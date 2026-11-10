@@ -213,6 +213,7 @@ pub const IC = struct {
     epoch: u32 = 0,
     is_accessor: bool = false,
     is_transition: bool = false,
+    is_str_len: bool = false,
     fast_own_data: bool = false,
     fast_proto_data: bool = false,
     proto_idx: u8 = 0,
@@ -230,9 +231,10 @@ pub const Source = struct {
     name: []u8,
     /// Offsets of line starts, built the first time a position is reported.
     line_starts: []u32 = &.{},
+    borrowed_text: bool = false,
 
     pub fn finalize(s: *Source, gpa: Allocator) void {
-        gpa.free(s.text);
+        if (!s.borrowed_text) gpa.free(s.text);
         gpa.free(s.name);
         gpa.free(s.line_starts);
     }
@@ -295,8 +297,10 @@ pub const FuncProto = struct {
     is_method: bool,
     needs_args: bool = false,
     has_loop: bool = false,
+    borrowed_code: bool = false,
     module: ?*module.Module = null,
     jit_fn: ?*const anyopaque = null,
+    jit_cache_slot: ?*?*const anyopaque = null,
     hot_count: u16 = 0,
     jit_disabled: bool = false,
 
@@ -344,11 +348,13 @@ pub const FuncProto = struct {
     }
 
     pub fn finalize(p: *FuncProto, gpa: Allocator) void {
-        gpa.free(p.code);
+        if (!p.borrowed_code) {
+            gpa.free(p.code);
+            gpa.free(p.lines);
+        }
         gpa.free(p.constants);
         gpa.free(p.protos);
         gpa.free(p.ics);
-        gpa.free(p.lines);
     }
 
     /// The source position of the instruction at or before pc.

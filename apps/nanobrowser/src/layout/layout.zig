@@ -17,6 +17,9 @@ pub const Viewport = struct { width: f32, height: f32 };
 /// Builds and lays out the box tree of `doc` (node.computed filled by the
 /// cascade). Everything is in `arena`. Marks the document's layout clean.
 pub fn run(arena: Allocator, doc: *dom.Document, viewport: Viewport, m: box.Measurer) !box.Tree {
+    const perf = @import("../perf_rules.zig");
+    perf.prof_layout_runs += 1;
+    const t0 = perf.nowNs();
     clearBoxes(doc);
     var c: ctx.Ctx = .{
         .arena = arena,
@@ -26,9 +29,14 @@ pub fn run(arena: Allocator, doc: *dom.Document, viewport: Viewport, m: box.Meas
         .quirks = doc.quirks,
     };
     const root = try gen.build(&c, doc);
+    const t1 = perf.nowNs();
+    perf.prof_lay_gen_ns += t1 -| t0;
     ctx.setEdges(root, c.vw);
     _ = try sizing.layoutBfc(&c, root, c.vw, c.vh);
+    const t2 = perf.nowNs();
+    perf.prof_lay_size_ns += t2 -| t1;
     try finish.run(&c, root);
+    perf.prof_lay_fin_ns += perf.nowNs() -| t2;
     doc.layout_dirty = false;
     doc.oof_dirty_node = null;
     return .{
@@ -173,13 +181,15 @@ pub fn updateContainers(e: *cascade.Engine) bool {
 fn clearBoxes(doc: *dom.Document) void {
     var at: ?*dom.Node = doc.node;
     while (at) |n| {
-        n.box = null;
-        n.box_parts = &.{};
-        if (n.kind == .element and n.ns == .svg and n.isTag("svg") and (n.computed == null or n.computed.?.display != .contents)) {
-            at = n.nextDeepSkipping(doc.node);
-        } else {
-            at = n.nextDeep(doc.node);
+        if (n.kind == .element) {
+            if (n.box != null) n.box = null;
+            if (n.box_parts.len != 0) n.box_parts = &.{};
+            if (n.ns == .svg and n.isTag("svg") and (n.computed == null or n.computed.?.display != .contents)) {
+                at = n.nextDeepSkipping(doc.node);
+                continue;
+            }
         }
+        at = n.nextDeep(doc.node);
     }
 }
 

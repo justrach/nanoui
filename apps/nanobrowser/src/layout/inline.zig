@@ -88,6 +88,12 @@ pub const Lay = struct {
 /// in the formatting context. Sets runs and frags on the boxes, atoms' and
 /// floats' places relative to `p`.
 pub fn layout(c: *Ctx, p: *Box, cw: f32, cx: f32, t: f32, floats: *Floats, ch: ?f32) Error!Result {
+    p.lay.run_count = 0;
+    p.marker = null;
+    p.lay.first_baseline = null;
+    p.lay.last_baseline = null;
+    p.runs = &.{};
+    if (p.lay.pieces.len == 0) return .{};
     var l: Lay = .{
         .c = c,
         .p = p,
@@ -100,11 +106,6 @@ pub fn layout(c: *Ctx, p: *Box, cw: f32, cx: f32, t: f32, floats: *Floats, ch: ?
         .floats = floats,
         .ch = ch,
     };
-    p.lay.run_count = 0;
-    p.marker = null;
-    p.lay.first_baseline = null;
-    p.lay.last_baseline = null;
-    p.runs = &.{};
     try prepare(&l);
     try l.stack.append(c.arena, place.frameOf(c, p, p.style, null));
     l.strut_h = c.lineHeight(p.style);

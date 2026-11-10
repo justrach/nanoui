@@ -390,6 +390,7 @@ pub fn catchUp(p: *Page, c: *ui.Context) void {
     p.faces.changed = false;
     p.widths.clearRetainingCapacity();
     p.font_metrics.clearRetainingCapacity();
+    p.doc.font_epoch +%= 1;
     p.doc.touchStyle();
 }
 

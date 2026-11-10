@@ -113,7 +113,13 @@ fn setModuleOnProtos(p: *bc.FuncProto, m: *Module) void {
 }
 
 pub fn compile(vm: *Vm, source: []const u8, url: []const u8) Error!*Module {
+    const pr = @import("../perf_rules.zig");
+    pr.prof_compile_calls += 1;
+    const t0 = pr.nowNs();
+    defer pr.prof_compile_ns += pr.nowNs() -| t0;
     vm.enterFromHost();
+    const sc = @import("script_cache.zig");
+    if (try sc.lookupAndInstantiateModule(vm, source, url)) |m| return m;
     var arena = std.heap.ArenaAllocator.init(vm.gpa);
     defer arena.deinit();
     const a = arena.allocator();
@@ -121,6 +127,7 @@ pub fn compile(vm: *Vm, source: []const u8, url: []const u8) Error!*Module {
     const r = try scope.analyze(vm, a, &prog, source, .module);
     const src = try api.newSource(vm, source, url);
     const c = try compiler.compileProgram(vm, a, &prog, r, src);
+    sc.recordModule(vm, source, &prog, &c);
     const gpa = vm.gpa;
     const m = try vm.heap.create(Module, .module);
     const cell = m.cell;

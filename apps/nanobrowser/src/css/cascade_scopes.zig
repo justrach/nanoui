@@ -35,6 +35,102 @@ pub fn noteLayoutChange(e: *Engine, n: *dom.Node, old: ?*const style.Style, fres
     e.layout_change_node = n;
 }
 
+pub fn tryShareStyle(
+    e: *Engine,
+    n: *dom.Node,
+    parent: ?*dom.Node,
+    parent_is_element: bool,
+    canon_parent: *const style.Style,
+    parent_scope: ?*const @import("vars.zig").Scope,
+    old: ?*const style.Style,
+    no_pseudos: bool,
+    change: ?*@import("cascade.zig").Change,
+    out_cand: *?@import("../perf_rules.zig").ShareCand,
+) Allocator.Error!bool {
+    const perf = @import("../perf_rules.zig");
+    out_cand.* = null;
+    if (!no_pseudos) return false;
+    if (n.is_shadow) {
+        if (e.anim.hasNode(n)) return false;
+        if (e.style_share.lookupShadow(e.share_gen, canon_parent, parent_scope)) |sh| {
+            perf.prof_style_shared += 1;
+            const fake: perf.StyleShareEntry = .{
+                .shared_group = sh.shared_group,
+                .computed = sh.computed,
+                .scope = parent_scope,
+            };
+            try applySharedHit(e, n, old, &fake, change);
+            return true;
+        }
+        return false;
+    }
+    const share_ix: *const rule_index.Index = if (n.tree_scope) |sr| (try indexOfScope(e, sr)) orelse &e.ua_index.? else if (e.index) |*ix| ix else return false;
+    const host_has_rules: bool = if (n.shadow_root) |sr| blk: {
+        const hix = try indexOfScope(e, sr);
+        break :blk hix != null and hix.?.host.items.len > 0;
+    } else false;
+    const cand = perf.StyleShareCache.canShare(n, share_ix, canon_parent, parent == e.doc.node, canon_parent.display == .contents, parent_is_element and parent.?.shadow_root != null, host_has_rules, e.anim.hasNode(n)) orelse return false;
+    out_cand.* = cand;
+    if (e.style_share.lookup(e.share_gen, n, canon_parent, parent_scope, cand)) |hit| {
+        perf.prof_style_shared += 1;
+        try applySharedHit(e, n, old, hit, change);
+        return true;
+    }
+    return false;
+}
+
+pub fn applySharedHit(
+    e: *Engine,
+    n: *dom.Node,
+    old: ?*const style.Style,
+    hit: *const @import("../perf_rules.zig").StyleShareEntry,
+    change: ?*@import("cascade.zig").Change,
+) Allocator.Error!void {
+    const diff = @import("style_diff.zig");
+    const in_svg = n.ns == .svg and !n.isTag("svg");
+    const stored: *const style.Style = blk: {
+        if (in_svg) {
+            if (old) |o| {
+                if (o != hit.computed and diff.compare(o, hit.computed) != .none) {
+                    e.doc.svg_style_version +%= 1;
+                    if (change) |c| c.* = c.max(.paint);
+                }
+            } else {
+                e.doc.svg_style_version +%= 1;
+                if (change) |c| c.* = c.max(.paint);
+            }
+            break :blk hit.computed;
+        }
+        if (old) |o| {
+            const cmp = if (o == hit.computed) @import("cascade.zig").Change.none else diff.compare(o, hit.computed);
+            if (cmp != .none and n.ns == .svg) e.doc.svg_style_version +%= 1;
+            if (change) |c| c.* = c.max(cmp);
+            if (cmp == .layout) noteLayoutChange(e, n, o, hit.computed);
+            if (cmp == .none) break :blk o;
+            if (cmp == .paint) {
+                @constCast(o).* = hit.computed.*;
+                break :blk o;
+            }
+        } else {
+            if (n.ns == .svg) e.doc.svg_style_version +%= 1;
+            if (change) |c| c.* = c.max(.layout);
+            noteLayoutChange(e, n, null, hit.computed);
+        }
+        const copy = try e.genArena().create(style.Style);
+        copy.* = hit.computed.*;
+        break :blk copy;
+    };
+    n.computed = stored;
+    n.style_generation = e.generation;
+    n.css_vars = hit.scope;
+    n.before = null;
+    n.after = null;
+    n.marker = null;
+    n.backdrop = null;
+    n.style_shared_gen = hit.shared_group;
+    n.style_canon = hit.computed;
+}
+
 /// The nearest ancestor that is a container, with this name if one is given.
 fn nearestContainer(n: *const dom.Node, name: []const u8) ?*const dom.Node {
     var at = n.parent;
@@ -112,6 +208,7 @@ pub fn indexOfScope(e: *Engine, root: *dom.Node) Allocator.Error!?*rule_index.In
     for (list) |s| try ix.addSheet(s, e.viewport, false, &ranks, &order);
     e.doc.rule_flags |= ix.ruleFlags();
     e.doc.rule_attr_filter |= ix.attr_filter;
+    e.doc.rule_id_bloom |= ix.referenced_ids_bloom;
     try e.scope_index.put(e.gpa, key, ix);
     e.last_scope_root = root;
     e.last_scope_ix = ix;

@@ -110,6 +110,8 @@ pub const Engine = struct {
     registered: vars.Registered = .empty,
     registered_scope: ?*const vars.Scope = null,
     style_share: @import("../perf_rules.zig").StyleShareCache = .{},
+    share_gen: u32 = 0,
+    in_batch_flush: bool = false,
     last_scope_root: ?*const dom.Node = null,
     last_scope_ix: ?*rule_index.Index = null,
     layout_change_node: ?*dom.Node = null,
@@ -265,6 +267,7 @@ pub const Engine = struct {
         e.media_signature = e.signature();
         e.doc.rule_flags = ix.ruleFlags();
         e.doc.rule_attr_filter = ix.attr_filter;
+        e.doc.rule_id_bloom = ix.referenced_ids_bloom;
         e.index_dirty = false;
     }
 
@@ -303,6 +306,8 @@ pub const Engine = struct {
         e.fonts.interned.clearRetainingCapacity();
         e.generation +%= 1;
         if (e.generation == 0) e.generation = 1;
+        e.share_gen +%= 1;
+        if (e.share_gen == 0) e.share_gen = 1;
         e.root_font = 16;
         e.match_ctx = .{ .doc = e.doc };
         e.viewport_read = false;
@@ -318,23 +323,25 @@ pub const Engine = struct {
         e.anim.endGeneration(e.generation);
     }
 
+    pub fn beginFlush(e: *Engine) void {
+        e.share_gen +%= 1;
+        if (e.share_gen == 0) e.share_gen = 1;
+        e.in_batch_flush = true;
+    }
+
     /// Restyles `node` and what is in it, after a hover, class or attribute
     /// change. The change is what happened compared with the last computed
     /// style. Falls back on `restyleAll` when nothing has been computed yet or
     /// the root's font size moved, which `rem` makes global.
     pub fn restyleSubtree(e: *Engine, node: *dom.Node) Allocator.Error!Change {
-        if (e.generation == 0 or e.index_dirty) {
-            try e.restyleAll();
-            return .layout;
-        }
+        if (e.generation == 0 or e.index_dirty) { try e.restyleAll(); return .layout; }
         const root = if (e.doc.documentElement() == node) node else null;
         const root_size_before = if (root) |r| if (r.computed) |c| c.font_size else 16 else 16;
+        if (!e.in_batch_flush) { e.share_gen +%= 1; if (e.share_gen == 0) e.share_gen = 1; }
         e.match_ctx = .{ .doc = e.doc };
         var change: Change = .none;
         var at: ?*dom.Node = node;
-        while (at) |n| {
-            at = try e.styleOne(n, node, &change);
-        }
+        while (at) |n| at = try e.styleOne(n, node, &change);
         if (root) |r| if (r.computed) |c| if (c.font_size != root_size_before) {
             try e.restyleAll();
             return .layout;
@@ -414,41 +421,34 @@ pub const Engine = struct {
             n.tree_scope = p.tree_scope;
         }
         const perf = @import("../perf_rules.zig");
+        perf.prof_style_elems += 1;
         perf.updateAncestorBloom(n, root);
-        n.style_shared = false;
+        const in_svg = n.ns == .svg and !n.isTag("svg");
+        n.style_shared_gen = 0;
         n.style_canon = null;
-        const canon_parent: *const Style = if (parent_is_element and parent.?.style_shared and parent.?.style_canon != null) @ptrCast(@alignCast(parent.?.style_canon.?)) else parent_style;
-        const share_cand: ?perf.ShareCand = null;
-        if (share_cand) |sc| if (e.style_share.lookup(e.generation, n, canon_parent, parent_scope, sc)) |hit| {
-            const copy = try e.genArena().create(Style);
-            copy.* = hit.computed.*;
-            n.computed = copy;
-            n.style_generation = e.generation;
-            n.css_vars = hit.scope;
-            n.before = hit.before;
-            n.after = hit.after;
-            n.marker = null;
-            n.backdrop = null;
-            n.style_shared = true;
-            n.style_canon = hit.computed;
-            if (change) |c| { c.* = c.max(.layout); scopes.noteLayoutChange(e, n, null, copy); }
+        const canon_parent: *const Style = if (parent != null and parent.?.style_canon != null) parent.?.style_canon.? else parent_style;
+        var share_cand: ?perf.ShareCand = null;
+        if (try scopes.tryShareStyle(e, n, parent, parent_is_element, canon_parent, parent_scope, old, old_before == null and old_after == null and prev_before == null and prev_after == null, change, &share_cand)) {
             return n.nextDeep(root);
-        };
+        }
         const fresh_ptr: *Style = if (old == null) try e.genArena().create(Style) else &e.scratch_fresh;
         const r = if (n.is_shadow) compute.shadowRoot(parent_style, parent_scope, fresh_ptr) else try compute.element(e, n, parent_style, parent_scope, fresh_ptr);
         if (fresh_ptr.container_type != .normal) try e.containers.put(e.gpa, n, {});
         try e.anim.styled(e, n, .none, parent_style, r.scope, e.previous(n, .none), fresh_ptr);
-        const in_svg = n.ns == .svg and !n.isTag("svg");
         var compared: Change = .layout;
         if (old) |o| {
             compared = diff.compare(o, fresh_ptr);
+            if (compared != .none and n.ns == .svg) e.doc.svg_style_version +%= 1;
             const ch: Change = if (in_svg and compared == .layout) .paint else compared;
             if (change) |c| c.* = c.max(ch);
             if (ch == .layout) scopes.noteLayoutChange(e, n, o, fresh_ptr);
-        } else if (change) |c| {
-            const ch: Change = if (in_svg) .paint else .layout;
-            c.* = c.max(ch);
-            if (ch == .layout) scopes.noteLayoutChange(e, n, null, fresh_ptr);
+        } else {
+            if (n.ns == .svg) e.doc.svg_style_version +%= 1;
+            if (change) |c| {
+                const ch: Change = if (in_svg) .paint else .layout;
+                c.* = c.max(ch);
+                if (ch == .layout) scopes.noteLayoutChange(e, n, null, fresh_ptr);
+            }
         }
         const stored: *const Style = blk: {
             if (old) |o| {
@@ -478,7 +478,11 @@ pub const Engine = struct {
         n.after = try e.pseudoStyle(n, .after, e.pseudo_after.items, r.after, stored, r.scope, old_after, prev_after, change);
         n.marker = try e.pseudoStyle(n, .marker, e.pseudo_marker.items, r.marker, stored, r.scope, null, null, null);
         n.backdrop = try e.pseudoStyle(n, .backdrop, e.pseudo_backdrop.items, r.backdrop, stored, r.scope, null, null, null);
-        if (share_cand) |sc| e.style_share.record(e.generation, n, canon_parent, parent_scope, sc, stored, n.before, n.after, r.scope, r.marker or r.backdrop);
+        if (n.is_shadow) {
+            if (!e.anim.hasNode(n)) e.style_share.recordShadow(e.share_gen, n, canon_parent, parent_scope, stored);
+        } else if (share_cand) |sc| {
+            if (!e.anim.hasNode(n)) e.style_share.record(e.share_gen, n, canon_parent, parent_scope, sc, stored, n.before, n.after, r.scope, r.marker or r.backdrop);
+        }
         return n.nextDeep(root);
     }
 
