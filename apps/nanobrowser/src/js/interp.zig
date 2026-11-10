@@ -60,7 +60,7 @@ pub fn run(vm: *Vm) Error!Value {
     var err: Error = error.Thrown;
     loop: while (true) {
         dispatch: {
-            if (pc == f.fp.code.ptr and f.co == null) {
+            if (!f.is_entry and pc == f.fp.code.ptr and f.co == null) {
                 if (jit.getOrCompile(vm, f.fp)) |jfn| {
                     const entry = f.is_entry;
                     const r = ok(Value, jit.execFrame(vm, f, jfn, &sp), &err) orelse break :dispatch;

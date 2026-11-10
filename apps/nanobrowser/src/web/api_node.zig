@@ -196,7 +196,21 @@ fn replaceChild(vm: *Vm, this: Value, args: []const Value) Error!Value {
 pub fn clone(w: *bind.World, n: *Node, deep: bool, doc: *dom.Document) Error!*Node {
     const a = doc.arena;
     const copy = try a.create(Node);
-    copy.* = .{ .kind = n.kind, .doc = doc, .tag = n.tag, .ns = n.ns, .data = n.data, .has_resource = @import("../perf_rules.zig").isResourceTag(n.tag), .has_on_attr = n.has_on_attr };
+    copy.* = .{
+        .kind = n.kind,
+        .doc = doc,
+        .tag = n.tag,
+        .ns = n.ns,
+        .data = n.data,
+        .has_resource = @import("../perf_rules.zig").isResourceTag(n.tag),
+        .has_on_attr = n.has_on_attr,
+        .id_attr = n.id_attr,
+        .class_attr = n.class_attr,
+        .class_filter = n.class_filter,
+        .class_src = n.class_src,
+        .class_src_len = n.class_src_len,
+        .class_single = n.class_single,
+    };
     try copy.attrs.ensureTotalCapacity(a, n.attrs.items.len);
     for (n.attrs.items) |at| copy.attrs.appendAssumeCapacity(at);
     copy.value = n.value;
@@ -219,7 +233,21 @@ pub fn clone(w: *bind.World, n: *Node, deep: bool, doc: *dom.Document) Error!*No
         while (true) {
             if (k) |child| {
                 const c2 = try a.create(Node);
-                c2.* = .{ .kind = child.kind, .doc = doc, .tag = child.tag, .ns = child.ns, .data = child.data, .has_resource = @import("../perf_rules.zig").isResourceTag(child.tag), .has_on_attr = child.has_on_attr };
+                c2.* = .{
+                    .kind = child.kind,
+                    .doc = doc,
+                    .tag = child.tag,
+                    .ns = child.ns,
+                    .data = child.data,
+                    .has_resource = @import("../perf_rules.zig").isResourceTag(child.tag),
+                    .has_on_attr = child.has_on_attr,
+                    .id_attr = child.id_attr,
+                    .class_attr = child.class_attr,
+                    .class_filter = child.class_filter,
+                    .class_src = child.class_src,
+                    .class_src_len = child.class_src_len,
+                    .class_single = child.class_single,
+                };
                 try c2.attrs.ensureTotalCapacity(a, child.attrs.items.len);
                 for (child.attrs.items) |at| c2.attrs.appendAssumeCapacity(at);
                 c2.value = child.value;

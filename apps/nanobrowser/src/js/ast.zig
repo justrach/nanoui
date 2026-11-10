@@ -52,12 +52,21 @@ pub const Scope = struct {
     parent: ?*Scope,
     func: *FuncInfo,
     vars: std.ArrayList(*Var) = .empty,
+    var_filter: u64 = 0,
+    map: std.AutoHashMapUnmanaged(*JSString, *Var) = .empty,
     /// Number of captured variables; a scope with any pushes an Env at entry.
     env_size: u32 = 0,
     /// Functions to instantiate at entry, in source order.
     hoisted: std.ArrayList(*Node) = .empty,
 
+    pub inline fn varBit(name: *const JSString) u64 {
+        const h = (@intFromPtr(name) >> 4) ^ (@intFromPtr(name) >> 11);
+        return @as(u64, 1) << @intCast(h & 63);
+    }
+
     pub fn lookupHere(s: *const Scope, name: *JSString) ?*Var {
+        if (s.var_filter & varBit(name) == 0) return null;
+        if (s.map.count() != 0) return s.map.get(name);
         for (s.vars.items) |v| {
             if (v.name == name) return v;
         }

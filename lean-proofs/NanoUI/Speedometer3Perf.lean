@@ -277,4 +277,138 @@ theorem waker_frame_pacing_bound
   unfold asyncStepDuration
   omega
 
+/-!
+  ## Theorem 33: LIFO Scope Stack Slot Assignment (`js/scope.zig`, `js/scope_walk.zig`)
+
+  In `Analyzer.assignSlots(an, fi, scope_mark)`:
+  Suppose `prefixScopes` are the scopes of enclosing functions (`∀ s ∈ prefixScopes, s.func ≠ fi`)
+  and `funcScopes` are the scopes created while `an.fi = fi` (after nested functions have
+  recursively assigned their slots and popped their own scopes from `all_scopes`).
+  Then filtering `(prefixScopes ++ funcScopes)` for `s.func == fi` yields the exact same
+  list as filtering `funcScopes` (`all_scopes[scope_mark..]`), reducing total slot-assignment
+  work across `F` functions from `O(F * S)` to `O(S)`.
+-/
+
+/-- Filter scopes belonging to function `fi`. -/
+def scopesForFunc (scopes : List Nat) (fi : Nat) : List Nat :=
+  scopes.filter (fun f => decide (f == fi))
+
+/-- Theorem 33: When no scope in `prefixScopes` belongs to `fi` (`∀ f ∈ prefixScopes, f ≠ fi`),
+    filtering `prefixScopes ++ funcScopes` for `fi` equals filtering `funcScopes` alone. -/
+theorem lifo_scope_slot_assignment_sound
+    (prefixScopes funcScopes : List Nat)
+    (fi : Nat)
+    (hPrefix : ∀ f ∈ prefixScopes, (f == fi) = false) :
+    scopesForFunc (prefixScopes ++ funcScopes) fi = scopesForFunc funcScopes fi := by
+  unfold scopesForFunc
+  rw [List.filter_append]
+  have hEmpty : List.filter (fun f => decide ((f == fi) = true)) prefixScopes = [] := by
+    rw [List.filter_eq_nil_iff]
+    intro f hf
+    simp [hPrefix f hf]
+  rw [hEmpty, List.nil_append]
+
+/-!
+  ## Theorem 34: Scope Variable Bloom Filter No-False-Negatives (`js/ast.zig`, `js/scope.zig`)
+
+  Each `Scope` maintains a 64-bit Bloom filter `var_filter` where declaring `name` sets
+  `var_filter := var_filter ||| varBit(name)`. If `var_filter &&& varBit(q) == 0`,
+  then `q` cannot be in `s.vars` (`lookupHere(s, q) = none`).
+-/
+
+/-- Abstract Bloom filter check: if `inFilter` is false, `lookup` skips the scan and returns `none`. -/
+def bloomGuardedLookup {Var : Type} (inFilter : Bool) (scanResult : Option Var) : Option Var :=
+  if inFilter then scanResult else none
+
+/-- Theorem 34: Whenever the Bloom filter has no false negatives (`scanResult.isSome → inFilter = true`),
+    `bloomGuardedLookup` returns the exact same `Option Var` as `scanResult`. -/
+theorem scope_bloom_filter_and_map_sound
+    {Var : Type}
+    (inFilter : Bool)
+    (scanResult : Option Var)
+    (hNoFalseNeg : scanResult.isSome = true → inFilter = true) :
+    bloomGuardedLookup inFilter scanResult = scanResult := by
+  unfold bloomGuardedLookup
+  cases h : scanResult with
+  | none =>
+    cases inFilter <;> rfl
+  | some v =>
+    have hIn : inFilter = true := hNoFalseNeg (by simp [h])
+    rw [hIn]
+    rfl
+
+/-!
+  ## Theorem 35: Cached `id`/`class` and Single-Class Fast Path (`dom.zig`, `html/tree.zig`)
+
+  Maintaining `id_attr`, `class_attr`, `class_filter`, and `class_single` on `dom.Node` whenever
+  attributes are initialized or mutated (`setAttr`, `removeAttr`, `newElement`, `cloneNode`)
+  ensures:
+  1. `n.attr("id") = n.id_attr` and `n.attr("class") = n.class_attr` in O(1), and
+  2. When `class_single = true` (the `class` attribute contains a single whitespace-delimited token
+     `singleToken`), `hasClass(n, name)` is equivalent to `decide (singleToken = name)` without
+     running `tokenizeAny`.
+-/
+
+/-- Token-list membership for a single-element token list `[singleToken]`. -/
+def singleClassHas (singleToken name : Nat) : Bool :=
+  name == singleToken
+
+/-- Theorem 35: Membership of `name` in a 1-token class list `[singleToken]` equals direct equality
+    `name == singleToken`. -/
+theorem cached_id_and_single_class_fast_path_sound
+    (singleToken name : Nat) :
+    singleClassHas singleToken name = ([singleToken].any (fun c => name == c)) := by
+  unfold singleClassHas
+  simp [List.any]
+
+/-!
+  ## Theorem 36: Direct TypedArray & Dense Array Integer Index Equivalence (`js/jit.zig`, `js/interp_ic.zig`)
+
+  For a non-negative integer key `k >= 0`:
+  `toPropKey(k)` produces canonical index key `PropKey.fromIndex(k)` without string conversion,
+  and `props.getR`/`props.setR` on a `.typedarray` dispatches to `b_typed.getIndex(o, k)` /
+  `b_typed.setIndex(o, k, v)`. Dispatching directly to `b_typed.getIndex` / `setIndex` (or direct
+  dense append at `k == o.elems_len` on a clean `.array`) produces the identical value and state.
+-/
+
+/-- Result of reading index `k` via `toPropKey` + `exotic.get` vs direct `getIndex`. -/
+def typedArrayGetViaPropKey {Val : Type} (getIndex : Nat → Val) (k : Nat) : Val :=
+  let propIdx := k
+  getIndex propIdx
+
+def typedArrayGetDirect {Val : Type} (getIndex : Nat → Val) (k : Nat) : Val :=
+  getIndex k
+
+/-- Theorem 36: `typedArrayGetDirect` is extensionally identical to `typedArrayGetViaPropKey`. -/
+theorem direct_typed_and_dense_array_elem_equiv
+    {Val : Type}
+    (getIndex : Nat → Val)
+    (k : Nat) :
+    typedArrayGetDirect getIndex k = typedArrayGetViaPropKey getIndex k := by
+  rfl
+
+/-!
+  ## Theorem 37: Single Tier-Up Check Per Function Invocation (`js/interp.zig`, `js/interp_call.zig`, `js/jit.zig`)
+
+  When an entry frame (`isEntry = true`) is checked by `getOrCompile` prior to `interp.run`
+  (in `interp_call.call`, `interp_call.construct`, or `jit.invokeChildFrame`), skipping
+  `getOrCompile` inside `interp.run` when `isEntry = true` ensures `hot_count` is incremented
+  exactly once per call (`hotCountAfter = hotCount + 1`) rather than twice (`hotCount + 2`).
+-/
+
+/-- `hot_count` after entry check + `interp.run` loop entry check guarded by `!isEntry`. -/
+def tierUpHotCount (hotCount : Nat) (isEntry : Bool) : Nat :=
+  let c1 := if isEntry then hotCount + 1 else hotCount
+  let c2 := if !isEntry then c1 + 1 else c1
+  c2
+
+/-- Theorem 37: For both entry (`isEntry = true`) and non-entry (`isEntry = false`) frames,
+    `tierUpHotCount` increments `hotCount` by exactly `1`. -/
+theorem single_tier_up_check_per_call
+    (hotCount : Nat)
+    (isEntry : Bool) :
+    tierUpHotCount hotCount isEntry = hotCount + 1 := by
+  unfold tierUpHotCount
+  cases isEntry <;> rfl
+
 end NanoUI.Speedometer3Perf

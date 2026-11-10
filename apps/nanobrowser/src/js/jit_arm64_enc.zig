@@ -24,8 +24,8 @@ pub const Cond = enum(u4) {
     le = 0xD,
 };
 
-pub const max_bc_len = 8192;
-pub const max_inst_words = 32768;
+pub const max_bc_len = 32768;
+pub const max_inst_words = 131072;
 
 pub const Emitter = struct {
     buf: *[max_inst_words]u32,

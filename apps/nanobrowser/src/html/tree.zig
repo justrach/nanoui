@@ -346,13 +346,14 @@ pub const Builder = struct {
 
     pub fn newElement(b: *Builder, name: []const u8, ns: dom.Ns, attrs: []dom.Attr) Error!*dom.Node {
         const n = try b.arena.create(dom.Node);
-        var has_on = false;
-        for (attrs) |a| if (a.name.len > 2 and a.name[0] == 'o' and a.name[1] == 'n') {
-            has_on = true;
-            break;
-        };
-        n.* = .{ .kind = .element, .doc = b.doc, .tag = name, .ns = ns, .has_resource = @import("../perf_rules.zig").isResourceTag(name), .has_on_attr = has_on };
-        if (attrs.len > 0) n.attrs = .fromOwnedSlice(attrs);
+        n.* = .{ .kind = .element, .doc = b.doc, .tag = name, .ns = ns, .has_resource = @import("../perf_rules.zig").isResourceTag(name) };
+        if (attrs.len > 0) {
+            n.attrs = .fromOwnedSlice(attrs);
+            for (attrs) |a| {
+                if (a.name.len > 2 and a.name[0] == 'o' and a.name[1] == 'n') n.has_on_attr = true;
+                @import("../perf_rules.zig").syncNodeAttr(n, a.name, a.value);
+            }
+        }
         return n;
     }
 
@@ -458,6 +459,7 @@ pub const Builder = struct {
             if (n.hasAttr(a.name)) continue;
             if (a.name.len > 2 and a.name[0] == 'o' and a.name[1] == 'n') n.has_on_attr = true;
             try n.attrs.append(b.arena, a);
+            @import("../perf_rules.zig").syncNodeAttr(n, a.name, a.value);
         }
     }
 

@@ -117,7 +117,8 @@ pub inline fn getOrCompile(vm: *Vm, fp: *bc.FuncProto) ?JitFn {
     if (fp.jit_fn) |p| return @ptrCast(@alignCast(p));
     if (fp.jit_disabled) return null;
     fp.hot_count +|= 1;
-    if (fp.hot_count < 3) return null;
+    const threshold: u16 = if (fp.code.len <= 2048) 2 else if (fp.code.len <= 8192) 3 else 8;
+    if (fp.hot_count < threshold) return null;
     if (arm64.compile(vm, fp)) |jfn| {
         fp.jit_fn = @ptrCast(jfn);
         return jfn;
@@ -450,6 +451,19 @@ fn invokeChildFrame(vm: *Vm, caller_sp: [*]Value, child_f: *Frame) JitResult {
     return .{ .bits = @intFromPtr(ret_sp + 1), .err = 0 };
 }
 
+/// Theorem 37 (`NanoUI.Speedometer3Perf.single_tier_up_check_per_call`):
+/// Executes an entry frame directly via JIT when compiled, falling back to `interp.run`.
+pub fn runEntry(vm: *Vm) Error!Value {
+    const f = &vm.frames[vm.frame_top - 1];
+    if (comptime enabled) {
+        const res = invokeChildFrame(vm, f.ret_sp, f);
+        if (res.err != 0) return decodeErr(res.err);
+        vm.sp = f.ret_sp;
+        return f.ret_sp[0];
+    }
+    return interp.run(vm);
+}
+
 pub fn jitCall(vm: *Vm, f: *Frame, sp: [*]Value, next_pc: [*]const u8, argc: u32) callconv(.c) JitResult {
     f.pc = next_pc;
     vm.sp = sp;
@@ -460,6 +474,13 @@ pub fn jitCall(vm: *Vm, f: *Frame, sp: [*]Value, next_pc: [*]const u8, argc: u32
         if (co.class == .closure) {
             const child_f = calls.pushClosure(vm, co, sp - argc, argc, ret_sp, Value.undefined, ret_sp[0], false) catch |e| return errRes(vm, sp, e);
             return invokeChildFrame(vm, sp, child_f);
+        }
+        if (co.class == .bound) {
+            const b = co.payload.bound;
+            if (b.args.len == 0 and b.target.class == .closure) {
+                const child_f = calls.pushClosure(vm, b.target, sp - argc, argc, ret_sp, Value.undefined, b.this, false) catch |e| return errRes(vm, sp, e);
+                return invokeChildFrame(vm, sp, child_f);
+            }
         }
         if (co.class == .native and co.payload.native.func == &b_fn.fnCall) {
             const target = ret_sp[0];

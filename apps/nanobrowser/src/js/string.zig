@@ -261,6 +261,7 @@ pub fn intern(vm: *Vm, bytes: []const u8) Error!*JSString {
     s.owns = copy.len != 0;
     s.has_lone = r.has_lone;
     s.is_atom = true;
+    if (copy.len == 0 or copy[0] < '0' or copy[0] > '9') s.key = PropKey.fromAtom(s);
     try vm.atoms.put(vm.gpa, copy, s);
     return s;
 }
@@ -271,6 +272,7 @@ pub fn internString(vm: *Vm, s: *JSString) Error!*JSString {
     const b = try s.flat(vm);
     if (vm.atoms.get(b)) |a| return a;
     s.is_atom = true;
+    if (b.len == 0 or b[0] < '0' or b[0] > '9') s.key = PropKey.fromAtom(s);
     try vm.atoms.put(vm.gpa, b, s);
     return s;
 }

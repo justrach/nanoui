@@ -585,15 +585,16 @@ fn emitFunction(e: *Emitter, fp: *bc.FuncProto, pc_map: []u32, epilogue_idx: u32
     return !e.overflow;
 }
 
+threadlocal var pc_map_buf: [enc.max_bc_len + 1]u32 = undefined;
+threadlocal var inst_words_buf: [enc.max_inst_words]u32 = undefined;
+
 pub fn compile(vm: *Vm, fp: *bc.FuncProto) ?JitFn {
     if (comptime !jit.enabled) return null;
     if (fp.is_generator or fp.is_async or fp.code.len == 0 or fp.code.len > enc.max_bc_len) return null;
-    var pc_map: [enc.max_bc_len + 1]u32 = undefined;
-    var inst_buf: [enc.max_inst_words]u32 = undefined;
-    var e = Emitter{ .buf = &inst_buf };
-    if (!emitFunction(&e, fp, pc_map[0 .. fp.code.len + 1], 0, 0)) return null;
-    const epilogue_idx = pc_map[fp.code.len];
+    var e = Emitter{ .buf = &inst_words_buf };
+    if (!emitFunction(&e, fp, pc_map_buf[0 .. fp.code.len + 1], 0, 0)) return null;
+    const epilogue_idx = pc_map_buf[fp.code.len];
     e.len = 0;
-    if (!emitFunction(&e, fp, pc_map[0 .. fp.code.len + 1], epilogue_idx, 1)) return null;
-    return vm.jit_pool.allocCode(vm.raw_gpa, inst_buf[0..e.len]);
+    if (!emitFunction(&e, fp, pc_map_buf[0 .. fp.code.len + 1], epilogue_idx, 1)) return null;
+    return vm.jit_pool.allocCode(vm.raw_gpa, inst_words_buf[0..e.len]);
 }

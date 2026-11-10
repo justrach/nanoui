@@ -188,6 +188,51 @@ pub fn touchAttr(d: *dom.Document, n: *dom.Node, name: []const u8) void {
     }
 }
 
+/// Theorem 35 (`NanoUI.Speedometer3Perf.cached_id_and_single_class_fast_path_sound`):
+/// 64-bit Bloom filter bit for a class token.
+pub inline fn classBit(name: []const u8) u64 {
+    const mix = @as(u32, name[0]) *% 31 +% @as(u32, name[name.len - 1]) *% 17 +% @as(u32, @truncate(name.len));
+    return @as(u64, 1) << @intCast(mix & 63);
+}
+
+/// Synchronizes `id_attr`, `class_attr`, `class_filter`, and `class_single` on `dom.Node`.
+pub fn syncNodeAttr(n: *dom.Node, name: []const u8, val: ?[]const u8) void {
+    if (std.mem.eql(u8, name, "id")) {
+        n.id_attr = val;
+    } else if (std.mem.eql(u8, name, "class")) {
+        n.class_attr = val;
+        if (val) |list| {
+            var bits: u64 = 0;
+            var count: u32 = 0;
+            var first: []const u8 = "";
+            var words = std.mem.tokenizeAny(u8, list, " \t\r\n\x0c");
+            while (words.next()) |w| {
+                bits |= classBit(w);
+                if (count == 0) first = w;
+                count += 1;
+            }
+            n.class_filter = bits;
+            n.class_single = (count == 1);
+            n.class_src = first.ptr;
+            n.class_src_len = first.len;
+        } else {
+            n.class_filter = 0;
+            n.class_single = false;
+            n.class_src_len = 0;
+        }
+    }
+}
+
+/// O(1) Bloom-filtered and single-class fast-pathed `Node.hasClass` (Theorem 35).
+pub inline fn hasNodeClass(n: *const dom.Node, name: []const u8) bool {
+    if (name.len == 0 or (n.class_filter & classBit(name)) == 0) return false;
+    if (n.class_single) return n.class_src_len == name.len and std.mem.eql(u8, n.class_src[0..n.class_src_len], name);
+    const list = n.class_attr orelse return false;
+    var it = std.mem.tokenizeAny(u8, list, " \t\r\n\x0c");
+    while (it.next()) |c| if (std.mem.eql(u8, c, name)) return true;
+    return false;
+}
+
 test "hover hold is quiescent when element under pointer matches old hover" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

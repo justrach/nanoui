@@ -50,7 +50,7 @@ pub fn topLevel(an: *Analyzer, prog: *ast.Program, mode: scope.Mode) Error!void 
     try an.declareLexicals(s, f.body, true);
     try an.hoistVars(s, f.body, 0);
     for (f.body) |st| try stmt(an, st);
-    an.assignSlots(fi);
+    an.assignSlots(fi, 0);
 }
 
 /// Finds a variable by name from the current scope. Null means global.
@@ -144,6 +144,7 @@ pub fn function(an: *Analyzer, f: *ast.Func) Error!void {
     }
     const fi = try enterFunc(an, f);
     an.fi = fi;
+    const scope_mark = an.all_scopes.items.len;
     const s = try an.newScope(.function);
     fi.scope = s;
     an.scope = s;
@@ -169,7 +170,7 @@ pub fn function(an: *Analyzer, f: *ast.Func) Error!void {
         for (f.body) |st| try stmt(an, st);
         if (f.expr_body) |e| try expr(an, e);
     }
-    an.assignSlots(fi);
+    an.assignSlots(fi, scope_mark);
 }
 
 fn classInit(an: *Analyzer, f: *ast.Func) Error!void {

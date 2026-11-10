@@ -13,6 +13,7 @@ const Object = objmod.Object;
 const props = @import("props.zig");
 const conv = @import("conv.zig");
 const interp = @import("interp.zig");
+const jit = @import("jit.zig");
 const proxy = @import("b_proxy.zig");
 const coroutine = @import("coroutine.zig");
 const str = @import("string.zig");
@@ -142,6 +143,12 @@ pub fn callNonClosure(vm: *Vm, callee: Value, this: Value, args: []const Value) 
         .bound => {
             const b = o.payload.bound;
             if (b.args.len == 0) return call(vm, b.target.value(), b.this, args);
+            var stack_buf: [16]Value = undefined;
+            if (b.args.len + args.len <= stack_buf.len) {
+                @memcpy(stack_buf[0..b.args.len], b.args);
+                @memcpy(stack_buf[b.args.len..][0..args.len], args);
+                return call(vm, b.target.value(), b.this, stack_buf[0 .. b.args.len + args.len]);
+            }
             const all = try vm.gpa.alloc(Value, b.args.len + args.len);
             defer vm.gpa.free(all);
             @memcpy(all[0..b.args.len], b.args);
@@ -183,7 +190,7 @@ pub fn call(vm: *Vm, callee: Value, this: Value, args: []const Value) Error!Valu
     defer vm.depth -= 1;
     try vm.checkNativeStack();
     try pushEntry(vm, o, this, args, Value.undefined, false);
-    return interp.run(vm);
+    return jit.runEntry(vm);
 }
 
 /// The object `new` makes: ordinary, with new_target's prototype.
@@ -222,7 +229,7 @@ pub fn construct(vm: *Vm, callee: Value, args: []const Value, new_target: Value)
             var this = Value.hole;
             if (!o.flags.derived_ctor) this = (try allocThis(vm, o, new_target)).value();
             try pushEntry(vm, o, this, args, new_target, true);
-            return interp.run(vm);
+            return jit.runEntry(vm);
         },
         .native => {
             const saved_nt = vm.new_target;

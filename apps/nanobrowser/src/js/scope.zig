@@ -67,6 +67,16 @@ pub const Analyzer = struct {
             if (kind == .let or kind == .@"const" or kind == .class or kind == .import) v.needs_tdz = true;
         }
         try s.vars.append(an.a, v);
+        s.var_filter |= Scope.varBit(name);
+        if (s.map.count() != 0) {
+            const gop = try s.map.getOrPut(an.a, name);
+            if (!gop.found_existing) gop.value_ptr.* = v;
+        } else if (s.vars.items.len >= 16) {
+            for (s.vars.items) |item| {
+                const gop = try s.map.getOrPut(an.a, item.name);
+                if (!gop.found_existing) gop.value_ptr.* = item;
+            }
+        }
         return v;
     }
 
@@ -254,9 +264,10 @@ pub const Analyzer = struct {
         }
     }
 
-    /// Numbers a function's variables once everything inside it has been resolved.
-    pub fn assignSlots(an: *Analyzer, fi: *FuncInfo) void {
-        for (an.all_scopes.items) |s| {
+    /// Numbers a function's variables once everything inside it has been resolved,
+    /// and pops its scopes from the LIFO `all_scopes` stack (Theorem 33).
+    pub fn assignSlots(an: *Analyzer, fi: *FuncInfo, scope_mark: usize) void {
+        for (an.all_scopes.items[scope_mark..]) |s| {
             if (s.func != fi) continue;
             for (s.vars.items) |v| {
                 if (v.captured) {
@@ -270,6 +281,7 @@ pub const Analyzer = struct {
                 }
             }
         }
+        an.all_scopes.items.len = scope_mark;
     }
 };
 

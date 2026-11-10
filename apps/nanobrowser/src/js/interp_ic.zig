@@ -18,6 +18,7 @@ const str = @import("string.zig");
 const shape_mod = @import("shape.zig");
 const heap = @import("heap.zig");
 const interp_call = @import("interp_call.zig");
+const typed = @import("b_typed.zig");
 
 pub inline fn callGetterSlot(vm: *Vm, slot_val: Value, receiver: Value) Error!Value {
     return props.callGetter(vm, slot_val, receiver);
@@ -240,6 +241,36 @@ fn putOnPrimitive(vm: *Vm, t: Value, key: PropKey, v: Value, strict: bool) Error
 }
 
 pub fn getElem(vm: *Vm, t: Value, k: Value) Error!Value {
+    if (t.isObject()) {
+        const o = t.asObject();
+        if (k.isInt() and k.asInt() >= 0) {
+            const i: u32 = @intCast(k.asInt());
+            if (i < o.elems_len and !o.flags.exotic) {
+                const r = o.elems[i];
+                if (!r.isHole()) return r;
+            }
+            if (o.class == .typedarray) return typed.getIndex(vm, o, i);
+            if (!o.flags.exotic and !o.flags.has_sparse) {
+                if ((o.shape.proto == vm.protos.array and !vm.protos.array.flags.proto_dirty and !vm.protos.object.flags.proto_dirty) or
+                    (o.shape.proto == vm.protos.object and !vm.protos.object.flags.proto_dirty) or
+                    o.shape.proto == null)
+                {
+                    return Value.undefined;
+                }
+            }
+            return props.getR(vm, o, PropKey.fromIndex(i), t);
+        }
+        if (k.isString()) {
+            const s = k.asString();
+            const key = if (s.key.bits != 0) s.key else try str.toKey(vm, s);
+            if (!o.flags.exotic and !o.flags.lazy_fn and !key.isIndex()) {
+                if (o.shape.find(key)) |slot| {
+                    if (!o.shape.flagsAt(slot).accessor) return o.slots[slot];
+                }
+            }
+            return props.getR(vm, o, key, t);
+        }
+    }
     if (t.isString() and k.isInt()) {
         const s = t.asString();
         const i: u32 = @bitCast(k.asInt());
@@ -259,6 +290,49 @@ pub fn getElem(vm: *Vm, t: Value, k: Value) Error!Value {
 }
 
 pub fn putElem(vm: *Vm, t: Value, k: Value, v: Value, strict: bool) Error!void {
+    if (t.isObject()) {
+        const o = t.asObject();
+        if (k.isInt() and k.asInt() >= 0) {
+            const i: u32 = @intCast(k.asInt());
+            if (i < o.elems_len and !o.flags.exotic and !o.flags.elems_frozen and !o.elems[i].isHole()) {
+                o.elems[i] = v;
+                return;
+            }
+            if (o.class == .typedarray) return typed.setIndex(vm, o, i, v);
+            if (i == o.elems_len and o.class == .array and o.shape.proto == vm.protos.array and !vm.protos.array.flags.proto_dirty and !vm.protos.object.flags.proto_dirty and o.flags.extensible and !o.flags.elems_frozen and !o.flags.elems_sealed and !o.flags.length_readonly and !o.flags.is_proto) {
+                if (i >= o.elems_cap) try objmod.growElems(vm, o, @as(usize, i) + 1);
+                o.elems[i] = v;
+                o.elems_len = i + 1;
+                if (i >= o.arr_len) o.arr_len = i + 1;
+                return;
+            }
+            if (!try props.setR(vm, o, PropKey.fromIndex(i), v, t)) {
+                if (strict) return props.throwReadonly(vm, PropKey.fromIndex(i));
+            }
+            return;
+        }
+        if (k.isString()) {
+            const s = k.asString();
+            const key = if (s.key.bits != 0) s.key else try str.toKey(vm, s);
+            if (!o.flags.exotic and !o.flags.lazy_fn and !key.isIndex()) {
+                if (o.shape.find(key)) |slot| {
+                    const fl = o.shape.flagsAt(slot);
+                    if (fl.writable and !fl.accessor) {
+                        if (o.flags.is_proto) {
+                            o.flags.proto_dirty = true;
+                            vm.bumpProtoEpoch();
+                        }
+                        o.slots[slot] = v;
+                        return;
+                    }
+                }
+            }
+            if (!try props.setR(vm, o, key, v, t)) {
+                if (strict) return props.throwReadonly(vm, key);
+            }
+            return;
+        }
+    }
     if (t.isNullish()) {
         const key = try conv.toPropKey(vm, k);
         return putOnPrimitive(vm, t, key, v, strict);

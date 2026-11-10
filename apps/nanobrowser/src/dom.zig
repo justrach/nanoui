@@ -43,10 +43,13 @@ pub const Node = struct {
     css_vars: ?*const anyopaque = null,
     style_generation: u32 = 0,
 
-    /// `hasClass`'s filter, and the attribute text it is of.
+    /// `hasClass`'s filter, cached `id`/`class` slices, and single-class fast state (Theorem 35).
+    id_attr: ?[]const u8 = null,
+    class_attr: ?[]const u8 = null,
     class_filter: u64 = 0,
     class_src: [*]const u8 = "".ptr,
     class_src_len: usize = 0,
+    class_single: bool = false,
 
     /// A shadow root's stand-in: an element whose parent is its host, though it
     /// is none of the host's children, so walks of the host's tree stay out of it.
@@ -109,6 +112,9 @@ pub const Node = struct {
     }
 
     pub fn attr(n: *const Node, name: []const u8) ?[]const u8 {
+        if (n.attrs.items.len == 0) return null;
+        if (std.mem.eql(u8, name, "id")) return n.id_attr;
+        if (std.mem.eql(u8, name, "class")) return n.class_attr;
         for (n.attrs.items) |a| if (std.mem.eql(u8, a.name, name)) return a.value;
         return null;
     }
@@ -123,12 +129,15 @@ pub const Node = struct {
         for (n.attrs.items) |*a| if (std.mem.eql(u8, a.name, name)) {
             if (std.mem.eql(u8, a.value, value)) return;
             a.value = try gpa.dupe(u8, value);
+            perf.syncNodeAttr(n, name, a.value);
             n.doc.touchAttr(n, name);
             if (changesBoxes(n, name)) n.doc.touchLayout();
             return;
         };
-        try n.attrs.append(gpa, .{ .name = try gpa.dupe(u8, name), .value = try gpa.dupe(u8, value) });
+        const v = try gpa.dupe(u8, value);
+        try n.attrs.append(gpa, .{ .name = try gpa.dupe(u8, name), .value = v });
         if (name.len > 2 and name[0] == 'o' and name[1] == 'n') n.has_on_attr = true;
+        perf.syncNodeAttr(n, name, v);
         n.doc.touchAttr(n, name);
         if (changesBoxes(n, name)) n.doc.touchLayout();
     }
@@ -136,6 +145,7 @@ pub const Node = struct {
     pub fn removeAttr(n: *Node, name: []const u8) void {
         for (n.attrs.items, 0..) |a, i| if (std.mem.eql(u8, a.name, name)) {
             _ = n.attrs.orderedRemove(i);
+            perf.syncNodeAttr(n, name, null);
             n.doc.touchAttr(n, name);
             if (changesBoxes(n, name)) n.doc.touchLayout();
             return;
@@ -147,30 +157,9 @@ pub const Node = struct {
         return n.isTag("details") and std.mem.eql(u8, name, "open");
     }
 
-    fn classBit(name: []const u8) u64 {
-        const mix = @as(u32, name[0]) *% 31 +% @as(u32, name[name.len - 1]) *% 17 +% @as(u32, @truncate(name.len));
-        return @as(u64, 1) << @intCast(mix & 63);
-    }
-
-    /// Whether the `class` attribute lists `name`. Style matching asks this all
-    /// the time, and mostly the answer is no: each node keeps a little filter
-    /// of its classes, good until the attribute's text is replaced.
+    /// Whether the `class` attribute lists `name` (Theorem 35).
     pub fn hasClass(n: *const Node, name: []const u8) bool {
-        const list = n.attr("class") orelse return false;
-        if (name.len == 0) return false;
-        if (n.class_src != list.ptr or n.class_src_len != list.len) {
-            var bits: u64 = 0;
-            var words = std.mem.tokenizeAny(u8, list, " \t\r\n\x0c");
-            while (words.next()) |w| bits |= classBit(w);
-            const self = @constCast(n);
-            self.class_src = list.ptr;
-            self.class_src_len = list.len;
-            self.class_filter = bits;
-        }
-        if (n.class_filter & classBit(name) == 0) return false;
-        var it = std.mem.tokenizeAny(u8, list, " \t\r\n\x0c");
-        while (it.next()) |c| if (std.mem.eql(u8, c, name)) return true;
-        return false;
+        return perf.hasNodeClass(n, name);
     }
 
     pub fn firstElementChild(n: *const Node) ?*Node {
