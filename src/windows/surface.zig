@@ -17,6 +17,7 @@ const frame_mod = @import("../ui/frame.zig");
 const ctx_mod = @import("../ui/context.zig");
 const clock = @import("../ui/clock.zig");
 const Theme = @import("../ui/theme.zig").Theme;
+const sameChoice = @import("../ui/theme.zig").sameChoice;
 const Context = ctx_mod.Context;
 const Window = @import("window.zig").Window;
 const d3d = @import("d3d.zig");
@@ -259,13 +260,6 @@ pub const Surface = struct {
             self.trace("later timer {d} ms", .{@as(u32, @intFromFloat(@max(1, s * 1000)))});
         };
         self.trace("built: {d:.0}x{d:.0} scale {d:.2}, {d} draws, anim={} hot={} in={?d:.2} ticking={}", .{ self.size.w, self.size.h, self.scale, self.instances.items.len, c.animating, r.hot_changed, c.frame_in, self.ticking });
-    }
-
-    /// Whether two theme choices pick the same theme (both null: the system's).
-    fn sameChoice(a: ?Theme, b: ?Theme) bool {
-        const an = a orelse return b == null;
-        const bn = b orelse return false;
-        return std.meta.eql(an, bn);
     }
 
     /// The frame log, recording from now on (`NANOUI_FRAMES` opens one

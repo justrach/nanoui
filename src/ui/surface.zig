@@ -11,6 +11,8 @@ const text = @import("text.zig");
 const frame_mod = @import("frame.zig");
 const textinput = @import("textinput.zig");
 const Theme = @import("theme.zig").Theme;
+const sameChoice = @import("theme.zig").sameChoice;
+const theme_side = @import("surface_theme.zig");
 const ctx_mod = @import("context.zig");
 const Context = ctx_mod.Context;
 const ui = @import("ui.zig");
@@ -82,6 +84,10 @@ pub const Surface = struct {
     before_encode: ?@import("gpu.zig").BeforeEncode = null,
     cursor_dirty: bool = false,
     theme_override: ?Theme = null,
+    /// The theme the view last picked (`c.theme_chosen`); null: the system's.
+    theme_chosen: ?Theme = null,
+    /// What the window's appearance was last set to.
+    applied_appearance: theme_side.Appearance = .unset,
     cached_theme: Theme = Theme.light,
     reduce_motion: bool = false,
     is_visible: bool = false,
@@ -256,15 +262,9 @@ pub const Surface = struct {
     /// Caps the display link's pace at `fps` (0 lifts the cap).
     pub const setFpsCap = link_pace.setFpsCap;
 
-    pub fn refreshAppearance(self: *Surface) void {
-        const appearance = objc.msg(objc.Object, self.nsview, "effectiveAppearance", .{});
-        const name = objc.fromNSString(objc.msg(?objc.Object, appearance, "name", .{}));
-        self.cached_theme = if (std.mem.indexOf(u8, name, "Dark") != null) Theme.dark_theme else Theme.light;
-    }
-
-    fn theme(self: *Surface) Theme {
-        return self.theme_override orelse self.cached_theme;
-    }
+    pub const refreshAppearance = theme_side.refresh;
+    const theme = theme_side.theme;
+    const applyAppearance = theme_side.apply;
 
     /// The atlas texture the renderer samples: CoreText's, or the one
     /// nanoui's own text rasterized into memory, uploaded when it changed.
@@ -330,7 +330,18 @@ pub const Surface = struct {
         // What scrolling gathered since the last frame, applied at once.
         const dy = self.scroll.take();
         if (dy != 0 and !c.applyScroll(dy) and (c.wants_wheel or c.wheelAt())) c.input.scroll.y += dy;
-        const r = frame_mod.run(c, self.view, &self.text, &self.instances, self.size, self.scale, a11y.themed(self, self.theme()), dt, now - self.start_time);
+        self.applyAppearance();
+        // The theme the view picked last frame, and the one it picks now: a
+        // view that picks a theme has the frame built again with it in this
+        // same frame, so a change shows at once and the first frame is right.
+        var r = frame_mod.run(c, self.view, &self.text, &self.instances, self.size, self.scale, a11y.themed(self, self.theme()), dt, now - self.start_time);
+        // The view may close its window; teardown frees Window immediately.
+        if (self.dead) return;
+        if (!sameChoice(self.theme_chosen, c.theme_chosen)) {
+            self.theme_chosen = c.theme_chosen;
+            self.applyAppearance();
+            r = frame_mod.run(c, self.view, &self.text, &self.instances, self.size, self.scale, a11y.themed(self, self.theme()), dt, now - self.start_time);
+        }
         if (self.dead) return;
         a11y.afterFrame(self);
         @import("../play.zig").paint(self.gpa, &self.instances);
