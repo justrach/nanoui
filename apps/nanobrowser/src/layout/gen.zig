@@ -398,16 +398,19 @@ fn pseudo(g: *Gen, n: *dom.Node, sp: ?*const Style) Error!void {
 fn finish(g: *Gen, b: *Box, base: usize) Error!void {
     const c = g.c;
     const slice = g.stack.items[base..];
-    const entries: []const Entry = if (slice.len == 0) &.{} else try c.arena.dupe(Entry, slice);
-    g.stack.items.len = base;
-    switch (b.kind) {
-        .inline_box => return inlineBox(g, b, entries),
-        .flex, .grid => try itemsContainer(g, b, entries),
-        .table => try gen_table.fixTable(g, b, entries),
-        .table_row_group => try gen_table.fixGroup(g, b, entries),
-        .table_row => try gen_table.fixRow(g, b, entries),
-        else => try container(g, b, entries),
+    if (b.kind == .inline_box) {
+        const entries: []const Entry = if (slice.len == 0) &.{} else try c.arena.dupe(Entry, slice);
+        g.stack.items.len = base;
+        return inlineBox(g, b, entries);
     }
+    switch (b.kind) {
+        .flex, .grid => try itemsContainer(g, b, slice),
+        .table => try gen_table.fixTable(g, b, slice),
+        .table_row_group => try gen_table.fixGroup(g, b, slice),
+        .table_row => try gen_table.fixRow(g, b, slice),
+        else => try container(g, b, slice),
+    }
+    g.stack.items.len = base;
     try push(g, .{ .tag = .box, .box = b, .style = b.style });
 }
 
@@ -513,10 +516,11 @@ pub fn container(g: *Gen, b: *Box, entries0: []const Entry) Error!void {
 fn inlineRoot(g: *Gen, b: *Box, entries: []const Entry) Error!void {
     for (entries) |e| adopt(b, e);
     b.lay.inline_root = true;
-    b.lay.entries = entries;
+    const stored: []const Entry = if (entries.len == 0) &.{} else try g.c.arena.dupe(Entry, entries);
+    b.lay.entries = stored;
     if (b.style.text_align == .start) b.lay.text_align = g.text_align;
     b.lay.nowrap = g.nowrap;
-    if (entries.len > 0) try text.build(g.c, b);
+    if (stored.len > 0) try text.build(g.c, b);
 }
 
 fn inlineRun(g: *Gen, b: *Box, run: []const Entry) Error!void {

@@ -84,6 +84,7 @@ pub const ShareCand = struct {
     uses_next: bool = false,
     disallow_cousin: bool = false,
     rule_ix: *const rule_index.Index,
+    host_hash: u64 = 0,
     extra: [4]dom.Attr = undefined,
     extra_len: u8 = 0,
     prev_tag: []const u8 = "",
@@ -101,6 +102,8 @@ pub const StyleShareEntry = struct {
     parent_style: ?*const style.Style = null,
     parent_scope: ?*const vars.Scope = null,
     ancestor_bloom: u64 = 0,
+    ancestor_hash: u64 = 0,
+    host_hash: u64 = 0,
     tag: []const u8 = "",
     class_attr: ?[]const u8 = null,
     extra: [4]dom.Attr = undefined,
@@ -121,9 +124,9 @@ pub const ShadowShareEntry = struct {
 };
 
 pub const StyleShareCache = struct {
-    pub const num_sets = 512;
-    entries: [num_sets * 2]StyleShareEntry = @splat(.{}),
-    ways: [num_sets]u1 = @splat(0),
+    pub const num_sets = 256;
+    entries: [num_sets * 4]StyleShareEntry = @splat(.{}),
+    ways: [num_sets]u2 = @splat(0),
     shadow_entries: [16]ShadowShareEntry = @splat(.{}),
     next_group: u32 = 1,
 
@@ -133,12 +136,13 @@ pub const StyleShareCache = struct {
         return g;
     }
 
-    fn setOf(ix: *const rule_index.Index, parent_style: *const style.Style, tag: []const u8, class_attr: ?[]const u8, class_filter: u64, extra_hash: u64, pos_flags: u8) usize {
+    fn setOf(ix: *const rule_index.Index, parent_style: *const style.Style, tag: []const u8, class_attr: ?[]const u8, class_filter: u64, extra_hash: u64, host_hash: u64, pos_flags: u8) usize {
         var h: u64 = (@intFromPtr(parent_style) >> 4) *% 0x9E3779B97F4A7C15;
         h ^= (@intFromPtr(ix) >> 4) *% 0xD6E8FEB86659FD93;
         h ^= class_filter *% 0x517CC1B727220A95;
         if (class_attr) |ca| h ^= (@as(u64, ca.len) *% 0x94D049BB133111EB) ^ (@as(u64, if (ca.len > 0) ca[ca.len - 1] else 0) << 16);
         h ^= extra_hash *% 0xBF58476D1CE4E5B9;
+        h ^= host_hash *% 0x27D4EB2F165667C5;
         h ^= (@as(u64, tag.len) << 8) | (if (tag.len > 0) @as(u64, tag[0]) | (@as(u64, tag[tag.len - 1]) << 16) else 0);
         h ^= @as(u64, pos_flags) *% 0x3C79AC492BA7B653;
         return @intCast((h ^ (h >> 32)) & (num_sets - 1));
@@ -249,13 +253,20 @@ pub const StyleShareCache = struct {
             }
             if (is_empty) pos_flags |= 4;
         }
+        const host_hash: u64 = if (ix.uses_host_in_subtree) blk: {
+            if (n.tree_scope) |sr| if (sr.parent) |host| {
+                break :blk (host.ancestor_hash *% 0x9E3779B97F4A7C15) ^ perf.nodeSelfHash(host);
+            };
+            break :blk 0;
+        } else 0;
         perf.prof_ss_cand += 1;
         return .{
-            .set = setOf(ix, parent_style, n.tag, n.class_attr, n.class_filter, extra_hash, pos_flags),
+            .set = setOf(ix, parent_style, n.tag, n.class_attr, n.class_filter, extra_hash, host_hash, pos_flags),
             .pos_flags = pos_flags,
             .uses_next = check_next,
             .disallow_cousin = ix.uses_ancestor_positional or ix.uses_container,
             .rule_ix = ix,
+            .host_hash = host_hash,
             .extra = extra,
             .extra_len = extra_len,
             .prev_tag = prev_tag,
@@ -266,12 +277,10 @@ pub const StyleShareCache = struct {
     fn matchesEntry(entry: *const StyleShareEntry, gen: u32, n: *const dom.Node, parent_style: *const style.Style, parent_scope: ?*const vars.Scope, cand: *const ShareCand) bool {
         if (entry.generation != gen) return false;
         if (entry.ns != n.ns or entry.rule_ix != cand.rule_ix or entry.parent_style != parent_style or entry.parent_scope != parent_scope) return false;
-        if (entry.tree_scope != n.tree_scope and ((entry.tree_scope == null) != (n.tree_scope == null) or cand.rule_ix.uses_host_in_subtree)) return false;
-        if (entry.pos_flags != cand.pos_flags or entry.ancestor_bloom != n.ancestor_bloom or entry.extra_len != cand.extra_len) return false;
-        if (n.parent != entry.parent) {
-            if (cand.disallow_cousin) return false;
-            if (!(n.parent != null and entry.parent_shared_gen != 0 and n.parent.?.style_shared_gen == entry.parent_shared_gen)) return false;
-        }
+        if ((entry.tree_scope == null) != (n.tree_scope == null)) return false;
+        if (entry.tree_scope != n.tree_scope and cand.rule_ix.uses_host_in_subtree and cand.disallow_cousin) return false;
+        if (entry.pos_flags != cand.pos_flags or entry.ancestor_bloom != n.ancestor_bloom or entry.ancestor_hash != n.ancestor_hash or entry.host_hash != cand.host_hash or entry.extra_len != cand.extra_len) return false;
+        if (n.parent != entry.parent and cand.disallow_cousin) return false;
         if (!std.mem.eql(u8, entry.tag, n.tag) or !eqlOptSlice(entry.class_attr, n.class_attr)) return false;
         for (0..cand.extra_len) |i| {
             if (!std.mem.eql(u8, entry.extra[i].name, cand.extra[i].name) or !std.mem.eql(u8, entry.extra[i].value, cand.extra[i].value)) return false;
@@ -283,10 +292,11 @@ pub const StyleShareCache = struct {
     }
 
     pub fn lookup(self: *const StyleShareCache, gen: u32, n: *const dom.Node, parent_style: *const style.Style, parent_scope: ?*const vars.Scope, cand: ShareCand) ?*const StyleShareEntry {
-        const base = cand.set * 2;
-        if (matchesEntry(&self.entries[base], gen, n, parent_style, parent_scope, &cand)) return &self.entries[base];
-        if (matchesEntry(&self.entries[base + 1], gen, n, parent_style, parent_scope, &cand)) return &self.entries[base + 1];
-        if (self.entries[base].generation != gen and self.entries[base + 1].generation != gen) perf.prof_ss_miss_gen += 1 else perf.prof_ss_miss_key += 1;
+        const base = cand.set * 4;
+        inline for (0..4) |w| {
+            if (matchesEntry(&self.entries[base + w], gen, n, parent_style, parent_scope, &cand)) return &self.entries[base + w];
+        }
+        if (self.entries[base].generation != gen) perf.prof_ss_miss_gen += 1 else perf.prof_ss_miss_key += 1;
         return null;
     }
 
@@ -298,12 +308,20 @@ pub const StyleShareCache = struct {
         const grp = self.allocGroup();
         n.style_shared_gen = grp;
         n.style_canon = stored;
-        const base = cand.set * 2;
-        const idx = if (self.entries[base].generation != gen) base else if (self.entries[base + 1].generation != gen) base + 1 else blk: {
+        const base = cand.set * 4;
+        var idx: usize = base;
+        var found = false;
+        inline for (0..4) |w| {
+            if (!found and self.entries[base + w].generation != gen) {
+                idx = base + w;
+                found = true;
+            }
+        }
+        if (!found) {
             const w = self.ways[cand.set];
-            self.ways[cand.set] ^= 1;
-            break :blk base + w;
-        };
+            self.ways[cand.set] +%= 1;
+            idx = base + w;
+        }
         self.entries[idx] = .{
             .generation = gen,
             .shared_group = grp,
@@ -315,6 +333,8 @@ pub const StyleShareCache = struct {
             .parent_style = parent_style,
             .parent_scope = parent_scope,
             .ancestor_bloom = n.ancestor_bloom,
+            .ancestor_hash = n.ancestor_hash,
+            .host_hash = cand.host_hash,
             .tag = n.tag,
             .class_attr = n.class_attr,
             .extra = cand.extra,

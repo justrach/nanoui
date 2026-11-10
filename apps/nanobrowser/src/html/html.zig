@@ -8,6 +8,7 @@ const tree = @import("tree.zig");
 const tags = @import("tags.zig");
 const encoding = @import("encoding.zig");
 const serializer = @import("serialize.zig");
+const fast_fragment = @import("fast_fragment.zig");
 
 pub const tokenizer = @import("tokenizer.zig");
 pub const entities = @import("entities.zig");
@@ -41,6 +42,9 @@ pub fn parseFragment(doc: *dom.Document, context: *dom.Node, source: []const u8)
 pub fn parseFragmentWith(doc: *dom.Document, context: *dom.Node, source: []const u8, options: Options) Allocator.Error!*dom.Node {
     const t0 = @import("../perf_rules.zig").nowNs();
     defer @import("../perf_rules.zig").prof_html_ns += @import("../perf_rules.zig").nowNs() -| t0;
+    if (options.scripting) {
+        if (try fast_fragment.tryParseFragment(doc, context, source)) |fast| return fast;
+    }
     const fragment = try doc.createFragment();
     var b = try tree.Builder.init(doc, source, fragment);
     b.scripting = options.scripting;

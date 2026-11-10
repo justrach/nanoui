@@ -309,6 +309,7 @@ fn instantiateProto(vm: *Vm, t: *ProtoTemplate, src: *bc.Source) Error!*bc.FuncP
         .nparams = t.nparams,
         .nlocals = t.nlocals,
         .max_stack = t.max_stack,
+        .stack_need_bytes = (t.nlocals + t.max_stack + 64) * @sizeOf(Value),
         .strict = t.strict,
         .is_arrow = t.is_arrow,
         .is_async = t.is_async,
@@ -322,9 +323,9 @@ fn instantiateProto(vm: *Vm, t: *ProtoTemplate, src: *bc.Source) Error!*bc.FuncP
         .needs_args = t.needs_args,
         .has_loop = t.has_loop,
         .borrowed_code = true,
-        .jit_fn = t.jit_fn,
         .jit_cache_slot = &t.jit_fn,
     };
+    p.setJitFn(t.jit_fn);
     return p;
 }
 

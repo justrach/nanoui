@@ -118,6 +118,7 @@ pub const World = struct {
 
     /// JS calls under way that came from the host.
     depth: u32 = 0,
+    task_t0: u64 = 0,
     /// Collect when the VM has passed this many bytes.
     gc_next: usize = first_collection,
     /// `location` asked to go here; done when the task ends.
@@ -267,6 +268,7 @@ pub const World = struct {
         if (w.depth == 0) {
             w.page.busy += 1;
             w.vm.setDeadline(task_deadline_ns);
+            if (w.caller == null) w.task_t0 = @import("../perf_rules.zig").nowNs();
         }
         w.depth += 1;
     }
@@ -290,6 +292,10 @@ pub const World = struct {
         }
         w.depth -= 1;
         if (w.depth != 0) return;
+        if (!has_caller and w.task_t0 != 0) {
+            @import("../perf_rules.zig").prof_js_task_ns += @import("../perf_rules.zig").nowNs() -| w.task_t0;
+            w.task_t0 = 0;
+        }
         vm.setDeadline(0);
         if (!has_caller and vm.bytesAllocated() > w.gc_next) {
             const t0 = @import("../perf_rules.zig").nowNs();

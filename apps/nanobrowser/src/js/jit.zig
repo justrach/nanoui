@@ -23,15 +23,18 @@ const calls = @import("interp_call.zig");
 const slow = @import("interp_slow.zig");
 const typed = @import("b_typed.zig");
 const arm64 = @import("jit_arm64.zig");
+const arm64_stub = @import("jit_arm64_stub.zig");
 const jit_calls = @import("jit_calls.zig");
 
 pub const enabled = builtin.cpu.arch == .aarch64 and builtin.os.tag == .macos;
+pub const getFastCallStub = arm64_stub.getOrBuildStub;
 
 pub const JitResult = extern struct { bits: u64, err: u64 };
 pub const JitFn = *const fn (vm: *Vm, f: *Frame, bp: [*]Value, sp: [*]Value) callconv(.c) JitResult;
 
 pub const runEntry = jit_calls.runEntry;
 pub const jitCallGetter = jit_calls.jitCallGetter;
+pub const jitCallSetter = jit_calls.jitCallSetter;
 pub const jitCall = jit_calls.jitCall;
 pub const jitNew = jit_calls.jitNew;
 pub const jitApply = jit_calls.jitApply;
@@ -121,7 +124,7 @@ pub var global_jit_pool: JitPool = .{};
 
 noinline fn compileSlow(vm: *Vm, fp: *bc.FuncProto) ?JitFn {
     if (arm64.compile(vm, fp)) |jfn| {
-        fp.jit_fn = @ptrCast(jfn);
+        fp.setJitFn(@ptrCast(jfn));
         if (fp.jit_cache_slot) |slot| slot.* = @ptrCast(jfn);
         return jfn;
     }
@@ -137,7 +140,7 @@ pub inline fn getOrCompile(vm: *Vm, fp: *bc.FuncProto) ?JitFn {
     if (comptime !enabled) return null;
     if (fp.jit_fn) |p| return @ptrCast(@alignCast(p));
     if (fp.jit_disabled) return null;
-    if (fp.jit_cache_slot) |slot| if (slot.*) |p| { fp.jit_fn = p; return @ptrCast(@alignCast(p)); };
+    if (fp.jit_cache_slot) |slot| if (slot.*) |p| { fp.setJitFn(p); return @ptrCast(@alignCast(p)); };
     fp.hot_count +|= 1;
     const threshold: u16 = if (fp.has_loop) 1 else 2;
     return if (fp.hot_count < threshold) null else compileSlow(vm, fp);
@@ -256,6 +259,16 @@ pub fn jitGetElem(vm: *Vm, f: *Frame, sp: [*]Value, pc: [*]const u8) callconv(.c
             const s = t.asString();
             if (i < s.len16 and s.is_ascii and !s.is_rope) return .{ .bits = Value.fromString(vm.char_strs[s.ptr[i]]).bits, .err = 0 };
         }
+    } else if (k.isString() and t.isObject()) {
+        const s = k.asString();
+        const o = t.asObject();
+        if (s.key.bits != 0 and !s.key.isIndex() and !o.flags.exotic and !o.flags.lazy_fn) {
+            if (o.shape.find(s.key)) |slot| {
+                if (!o.shape.flagsAt(slot).accessor) return .{ .bits = o.slots[slot].bits, .err = 0 };
+            } else if (o.class == .object and (o.shape.proto == null or (o.shape.proto == vm.protos.object and !vm.protos.object.flags.proto_dirty and vm.protos.object.shape.find(s.key) == null))) {
+                return .{ .bits = Value.undefined.bits, .err = 0 };
+            }
+        }
     } else if (k.isSymbol() and t.isObject()) {
         const o = t.asObject();
         if (!o.flags.exotic) {
@@ -296,6 +309,27 @@ pub fn jitPutElem(vm: *Vm, f: *Frame, sp: [*]Value, pc: [*]const u8) callconv(.c
             typed.setIndex(vm, o, i, v) catch |e| return errRes(vm, sp, e);
             return .{ .bits = 0, .err = 0 };
         }
+    } else if (k.isString() and t.isObject()) {
+        const s = k.asString();
+        const o = t.asObject();
+        if (s.key.bits != 0 and !s.key.isIndex() and !o.flags.exotic and !o.flags.lazy_fn) {
+            if (o.shape.find(s.key)) |slot| {
+                const fl = o.shape.flagsAt(slot);
+                if (fl.writable and !fl.accessor) {
+                    o.slots[slot] = v;
+                    return .{ .bits = 0, .err = 0 };
+                }
+            } else if (o.shape.single) |next| {
+                if (next.key.bits == s.key.bits and @as(u8, @bitCast(next.flags)) == @as(u8, @bitCast(@import("shape.zig").PropFlags.all)) and
+                    next.count - 1 < o.slot_cap and o.flags.extensible and !o.flags.is_proto and o.class == .object and
+                    (o.shape.proto == null or (o.shape.proto == vm.protos.object and !vm.protos.object.flags.proto_dirty and vm.protos.object.shape.find(s.key) == null)))
+                {
+                    o.shape = next;
+                    o.slots[next.count - 1] = v;
+                    return .{ .bits = 0, .err = 0 };
+                }
+            }
+        }
     }
     f.pc = pc;
     vm.sp = sp;
@@ -330,6 +364,7 @@ pub fn jitBinaryOp(vm: *Vm, f: *Frame, sp: [*]Value, pc: [*]const u8, op_raw: u3
         .sub => ops.arith(vm, .sub, a, b),
         .mul => ops.arith(vm, .mul, a, b),
         .div => ops.arith(vm, .div, a, b),
+        .mod => ops.arith(vm, .mod, a, b),
         else => ops.bitop(vm, op, a, b),
     }) catch |e| return errRes(vm, sp, e);
     return .{ .bits = r.bits, .err = 0 };
@@ -371,6 +406,16 @@ pub fn jitCompareOp(vm: *Vm, f: *Frame, sp: [*]Value, pc: [*]const u8, op_raw: u
     if (op == .eq or op == .ne) {
         if (a.bits == b.bits and !a.isDouble()) return .{ .bits = Value.fromBool(op == .eq).bits, .err = 0 };
         if (a.isNullish() or b.isNullish()) return .{ .bits = Value.fromBool((ops.nullishOrDda(a) and ops.nullishOrDda(b)) == (op == .eq)).bits, .err = 0 };
+        if (a.isString() and b.isString()) {
+            const s1 = a.asString();
+            const s2 = b.asString();
+            if (s1.byte_len != s2.byte_len or s1.len16 != s2.len16) return .{ .bits = Value.fromBool(op == .ne).bits, .err = 0 };
+            if (s1.key.bits != 0 and s2.key.bits != 0) return .{ .bits = Value.fromBool((s1.key.bits == s2.key.bits) == (op == .eq)).bits, .err = 0 };
+            if (!s1.is_rope and !s2.is_rope) {
+                const eq = std.mem.eql(u8, s1.ptr[0..s1.byte_len], s2.ptr[0..s2.byte_len]);
+                return .{ .bits = Value.fromBool(eq == (op == .eq)).bits, .err = 0 };
+            }
+        }
     }
     f.pc = pc;
     vm.sp = sp;

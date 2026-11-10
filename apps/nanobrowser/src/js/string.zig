@@ -300,7 +300,7 @@ pub fn intern(vm: *Vm, bytes: []const u8) Error!*JSString {
         s.ptr = &s.inline_buf;
         s.has_lone = r.has_lone;
         s.is_atom = true;
-        if (bytes[0] < '0' or bytes[0] > '9') s.key = PropKey.fromAtom(s);
+        s.key = if (parseIndex(bytes)) |idx| PropKey.fromIndex(idx) else PropKey.fromAtom(s);
         try vm.atoms.put(vm.gpa, s.inline_buf[0..bytes.len], s);
         return s;
     }
@@ -309,7 +309,7 @@ pub fn intern(vm: *Vm, bytes: []const u8) Error!*JSString {
     s.owns = copy.len != 0;
     s.has_lone = r.has_lone;
     s.is_atom = true;
-    if (copy.len == 0 or copy[0] < '0' or copy[0] > '9') s.key = PropKey.fromAtom(s);
+    s.key = if (parseIndex(copy)) |idx| PropKey.fromIndex(idx) else PropKey.fromAtom(s);
     try vm.atoms.put(vm.gpa, copy, s);
     return s;
 }
@@ -320,7 +320,7 @@ pub fn internString(vm: *Vm, s: *JSString) Error!*JSString {
     const b = try s.flat(vm);
     if (vm.atoms.get(b)) |a| return a;
     s.is_atom = true;
-    if (b.len == 0 or b[0] < '0' or b[0] > '9') s.key = PropKey.fromAtom(s);
+    s.key = if (parseIndex(b)) |idx| PropKey.fromIndex(idx) else PropKey.fromAtom(s);
     try vm.atoms.put(vm.gpa, b, s);
     return s;
 }
@@ -432,6 +432,7 @@ pub fn eql(vm: *Vm, a: *JSString, b: *JSString) Error!bool {
     if (a == b) return true;
     if (a.byte_len != b.byte_len or a.len16 != b.len16) return false;
     if (a.is_atom and b.is_atom) return false;
+    if (a.key.bits != 0 and b.key.bits != 0) return a.key.bits == b.key.bits;
     return std.mem.eql(u8, try a.flat(vm), try b.flat(vm));
 }
 

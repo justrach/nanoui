@@ -93,10 +93,7 @@ pub inline fn callNative(vm: *Vm, o: *Object, this: Value, args: []const Value) 
         vm.depth -= 1;
     }
     try vm.checkNativeStack();
-    const pr = @import("../perf_rules.zig");
-    pr.prof_nat_calls += 1;
-    const t0 = if (vm.depth == 1) pr.nowNs() else 0;
-    defer if (t0 != 0) { pr.prof_nat_ns += pr.nowNs() -| t0; };
+    @import("../perf_rules.zig").prof_nat_calls += 1;
     return o.payload.native.func(vm, this, args);
 }
 

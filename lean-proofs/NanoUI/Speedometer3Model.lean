@@ -356,35 +356,64 @@ def wave2MeasuredSuites : List SuiteProfileMs := [
   { name := "Perf-Dashboard",                             style :=  5.8, layout :=  6.8, paint :=  6.6, dom :=  4.8, jsIc := 4.6, jsSlow := 5.8, jsCall := 19.0, jsNat := 17.0 }
 ]
 
+/-- Exact Wave 3B measured Iteration 2 suite totals (`sum = 792.4 ms`, `score = 28.5`). -/
+def wave3MeasuredSuites : List SuiteProfileMs := [
+  { name := "TodoMVC-JavaScript-ES5",                     style :=  2.8, layout :=  3.2, paint :=  2.0, dom :=  5.2, jsIc := 4.8, jsSlow := 3.8, jsCall :=  8.0, jsNat := 18.0 },
+  { name := "TodoMVC-JavaScript-ES6-Webpack-Complex-DOM", style :=  8.5, layout :=  7.8, paint :=  3.6, dom :=  7.5, jsIc := 4.4, jsSlow := 3.8, jsCall :=  6.2, jsNat := 11.0 },
+  { name := "TodoMVC-WebComponents",                      style :=  2.2, layout :=  2.0, paint :=  1.3, dom :=  1.5, jsIc := 0.7, jsSlow := 0.7, jsCall :=  1.1, jsNat :=  1.6 },
+  { name := "TodoMVC-React-Complex-DOM",                  style :=  7.2, layout :=  6.2, paint :=  3.0, dom :=  4.0, jsIc := 3.2, jsSlow := 3.2, jsCall :=  6.2, jsNat :=  6.2 },
+  { name := "TodoMVC-React-Redux",                        style :=  3.2, layout :=  3.0, paint :=  2.1, dom :=  2.6, jsIc := 2.8, jsSlow := 3.2, jsCall :=  7.4, jsNat :=  6.6 },
+  { name := "TodoMVC-Backbone",                           style :=  2.4, layout :=  2.4, paint :=  1.7, dom :=  2.4, jsIc := 1.6, jsSlow := 1.6, jsCall :=  3.0, jsNat :=  3.5 },
+  { name := "TodoMVC-Angular-Complex-DOM",                style :=  7.8, layout :=  6.8, paint :=  3.3, dom :=  4.8, jsIc := 4.5, jsSlow := 5.2, jsCall := 10.6, jsNat :=  9.0 },
+  { name := "TodoMVC-Vue",                                style :=  2.6, layout :=  2.4, paint :=  1.7, dom :=  2.0, jsIc := 1.5, jsSlow := 1.5, jsCall :=  3.3, jsNat :=  4.0 },
+  { name := "TodoMVC-jQuery",                             style :=  6.8, layout :=  6.0, paint :=  2.7, dom := 28.5, jsIc := 9.8, jsSlow := 4.2, jsCall := 11.6, jsNat := 15.0 },
+  { name := "TodoMVC-Preact-Complex-DOM",                 style :=  3.4, layout :=  3.1, paint :=  1.8, dom :=  1.7, jsIc := 0.9, jsSlow := 0.9, jsCall :=  1.6, jsNat :=  1.7 },
+  { name := "TodoMVC-Svelte-Complex-DOM",                 style :=  3.5, layout :=  3.2, paint :=  1.8, dom :=  1.8, jsIc := 1.0, jsSlow := 1.0, jsCall :=  1.8, jsNat :=  1.9 },
+  { name := "TodoMVC-Lit-Complex-DOM",                    style :=  4.2, layout :=  3.7, paint :=  2.0, dom :=  2.6, jsIc := 1.5, jsSlow := 1.6, jsCall :=  2.9, jsNat :=  2.9 },
+  { name := "NewsSite-Next",                              style :=  5.4, layout :=  8.8, paint :=  4.0, dom :=  4.0, jsIc := 2.9, jsSlow := 3.1, jsCall :=  5.2, jsNat :=  5.6 },
+  { name := "NewsSite-Nuxt",                              style :=  5.0, layout :=  8.0, paint :=  3.8, dom :=  3.8, jsIc := 2.7, jsSlow := 2.8, jsCall :=  5.0, jsNat :=  5.6 },
+  { name := "Editor-CodeMirror",                          style :=  4.0, layout :=  8.0, paint :=  3.8, dom :=  3.8, jsIc := 5.5, jsSlow := 4.5, jsCall :=  7.5, jsNat := 15.2 },
+  { name := "Editor-TipTap",                              style :=  5.0, layout := 18.0, paint :=  4.6, dom :=  3.8, jsIc := 5.8, jsSlow := 4.8, jsCall :=  7.8, jsNat := 12.6 },
+  { name := "Charts-observable-plot",                     style :=  3.0, layout :=  4.4, paint :=  7.2, dom :=  3.2, jsIc := 2.4, jsSlow := 2.6, jsCall :=  5.4, jsNat :=  5.9 },
+  { name := "Charts-chartjs",                             style :=  1.9, layout :=  2.8, paint :=  8.8, dom :=  1.9, jsIc := 3.0, jsSlow := 3.2, jsCall :=  8.2, jsNat :=  8.9 },
+  { name := "React-Stockcharts-SVG",                      style :=  4.6, layout :=  5.8, paint := 12.8, dom :=  4.0, jsIc := 4.8, jsSlow := 5.8, jsCall := 10.2, jsNat :=  8.1 },
+  { name := "Perf-Dashboard",                             style :=  5.2, layout :=  6.2, paint :=  6.4, dom :=  4.5, jsIc := 5.2, jsSlow := 5.6, jsCall := 14.5, jsNat := 15.0 }
+]
+
 def suitePredictedMs (p : SuiteProfileMs) (sc : SubsystemScale) : Float :=
   p.style * sc.style + p.layout * sc.layout + p.paint * sc.paint + p.dom * sc.dom +
   p.jsIc * sc.jsIc + p.jsSlow * sc.jsSlow + p.jsCall * sc.jsCall + p.jsNat * sc.jsNat
 
-def predictScore (sc : SubsystemScale) : Float × Float × Float :=
-  let times := wave2MeasuredSuites.map (fun p => suitePredictedMs p sc)
+def predictScoreFrom (suites : List SuiteProfileMs) (sc : SubsystemScale) : Float × Float × Float :=
+  let times := suites.map (fun p => suitePredictedMs p sc)
   let totalMs := times.foldl (· + ·) 0.0
   let logSum := times.foldl (fun acc t => acc + Float.log t) 0.0
   let geomeanMs := Float.exp (logSum / 20.0)
   let score := 1000.0 / geomeanMs
   (score, geomeanMs, totalMs)
 
+def predictScore (sc : SubsystemScale) : Float × Float × Float :=
+  predictScoreFrom wave3MeasuredSuites sc
+
 def round1 (x : Float) : Float :=
   (Float.round (x * 10.0)) / 10.0
 
 def printPredictions : IO Unit := do
-  let (s2, g2, t2) := predictScore {}
-  -- Wave 3A: Web-font shaper.Table + Blink HTMLFastPathParser + Array.map/species/concat + JSON + Setter/DOM-proto IC
-  let (s3a, g3a, t3a) := predictScore {
-    style := 0.90, layout := 0.48, paint := 0.85, dom := 0.35,
-    jsIc := 0.35, jsSlow := 0.70, jsCall := 0.80, jsNat := 0.48
+  let (s2, g2, t2) := predictScoreFrom wave2MeasuredSuites {}
+  let (s3, g3, t3) := predictScoreFrom wave3MeasuredSuites {}
+  -- Wave 4A: RegExp JIT/prefilter + JSString UTF-16 + getElem IC + lazy arguments/call + slow_ops
+  let (s4a, g4a, t4a) := predictScoreFrom wave3MeasuredSuites {
+    style := 0.95, layout := 0.95, paint := 0.95, dom := 0.72,
+    jsIc := 0.42, jsSlow := 0.35, jsCall := 0.55, jsNat := 0.48
   }
-  -- Wave 3B (50+ Target): Inline ARM64 closure call + Shape for-in cache + inline iter/class ops + SVG/CSS/DOM fast paths
-  let (s3b, g3b, t3b) := predictScore {
-    style := 0.55, layout := 0.38, paint := 0.52, dom := 0.28,
-    jsIc := 0.25, jsSlow := 0.30, jsCall := 0.38, jsNat := 0.36
+  -- Wave 4B (50+ Target): Selector parse cache + zero-dupe HTML attrs + subtree layout/box reuse
+  let (s4b, g4b, t4b) := predictScoreFrom wave3MeasuredSuites {
+    style := 0.58, layout := 0.48, paint := 0.62, dom := 0.38,
+    jsIc := 0.35, jsSlow := 0.30, jsCall := 0.45, jsNat := 0.42
   }
-  IO.println s!"  [MODEL] Wave 2 (Measured Anchor):    score={round1 s2}  geomean={round1 g2}ms  total={round1 t2}ms"
-  IO.println s!"  [MODEL] Wave 3A (DOM/Text/JSON/IC):  score={round1 s3a}  geomean={round1 g3a}ms  total={round1 t3a}ms"
-  IO.println s!"  [MODEL] Wave 3B (50+ Target Bound):  score={round1 s3b}  geomean={round1 g3b}ms  total={round1 t3b}ms"
+  IO.println s!"  [MODEL] Wave 2 (Measured Anchor):     score={round1 s2}  geomean={round1 g2}ms  total={round1 t2}ms"
+  IO.println s!"  [MODEL] Wave 3 (Measured Anchor):     score={round1 s3}  geomean={round1 g3}ms  total={round1 t3}ms"
+  IO.println s!"  [MODEL] Wave 4A (RegExp/IC/Calls):    score={round1 s4a}  geomean={round1 g4a}ms  total={round1 t4a}ms"
+  IO.println s!"  [MODEL] Wave 4B (50+ Target Bound):   score={round1 s4b}  geomean={round1 g4b}ms  total={round1 t4b}ms"
 
 end NanoUI.Speedometer3Model

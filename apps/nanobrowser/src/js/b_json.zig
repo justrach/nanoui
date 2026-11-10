@@ -213,7 +213,11 @@ const Parser = struct {
             if (p.i >= p.s.len or p.s[p.i] != ':') return p.fail();
             p.i += 1;
             const v = try p.value();
-            try props.defineData(p.vm, o, k, v, PropFlags.all);
+            if (!k.isIndex() and !o.shape.is_dict and o.shape.count < 512 and o.shape.find(k) == null) {
+                try props.addProp(p.vm, o, k, v, PropFlags.all);
+            } else {
+                try props.defineData(p.vm, o, k, v, PropFlags.all);
+            }
             p.ws();
             if (p.i >= p.s.len) return p.fail();
             if (p.s[p.i] == ',') {
@@ -276,6 +280,22 @@ fn parseFn(vm: *Vm, _: Value, args: []const Value) Error!Value {
 
 /// Appends s as a JSON string, escaped; lone surrogates become \uXXXX.
 pub fn quote(vm: *Vm, b: *str.Builder, s: *JSString) Error!void {
+    if (s.is_ascii and !s.is_rope) {
+        const fast = s.ptr[0..s.byte_len];
+        var clean = true;
+        for (fast) |c| {
+            if (c < 0x20 or c == '"' or c == '\\') {
+                clean = false;
+                break;
+            }
+        }
+        if (clean) {
+            try b.byte('"');
+            try b.bytes(fast);
+            try b.byte('"');
+            return;
+        }
+    }
     const t = try s.flat(vm);
     try b.byte('"');
     var i: usize = 0;
@@ -325,7 +345,16 @@ const Stringifier = struct {
     fn property(s: *Stringifier, holder: ?*Object, key: PropKey, val_in: Value) Error!bool {
         const vm = s.vm;
         var v = val_in;
-        if (v.isObject() or v.isBigInt()) {
+        if (v.isObject()) {
+            const vo = v.asObject();
+            const no_tojson = (!vo.flags.exotic and !vo.flags.lazy_fn and
+                ((vo.class == .array and vo.shape == vm.array_root and !vm.protos.array.flags.proto_dirty and !vm.protos.object.flags.proto_dirty) or
+                    ((vo.shape.proto == null or (vo.shape.proto == vm.protos.object and !vm.protos.object.flags.proto_dirty)) and vo.shape.find(vm.k.toJSON) == null)));
+            if (!no_tojson) {
+                const to_json = try props.getV(vm, v, vm.k.toJSON);
+                if (to_json.isCallable()) v = try calls.call(vm, to_json, v, &.{try str.keyToValue(vm, key)});
+            }
+        } else if (v.isBigInt()) {
             const to_json = try props.getV(vm, v, vm.k.toJSON);
             if (to_json.isCallable()) v = try calls.call(vm, to_json, v, &.{try str.keyToValue(vm, key)});
         }
@@ -358,6 +387,11 @@ const Stringifier = struct {
             try quote(vm, &s.b, v.asString());
             return true;
         }
+        if (v.isInt()) {
+            var ibuf: [16]u8 = undefined;
+            try s.b.bytes(std.fmt.bufPrint(&ibuf, "{d}", .{v.asInt()}) catch unreachable);
+            return true;
+        }
         if (v.isNumber()) {
             const d = v.asNumber();
             if (std.math.isFinite(d)) {
@@ -367,7 +401,7 @@ const Stringifier = struct {
         }
         if (v.isBigInt()) return vm.throwError(.TypeError, "Do not know how to serialize a BigInt");
         if (v.isObject() and !v.isCallable()) {
-            if (try arr.isArrayValue(vm, v)) {
+            if (v.asObject().class == .array or try arr.isArrayValue(vm, v)) {
                 try s.array(v.asObject());
             } else {
                 try s.object(v.asObject());
@@ -406,14 +440,22 @@ const Stringifier = struct {
     fn array(s: *Stringifier, o: *Object) Error!void {
         try s.enter(o);
         defer s.leave();
-        const n = try conv.lengthOf(s.vm, o);
+        const vm = s.vm;
+        const fast_arr = o.class == .array and o.shape == vm.array_root and !o.flags.exotic and !vm.protos.array.flags.proto_dirty and !vm.protos.object.flags.proto_dirty;
+        const n: usize = if (fast_arr) o.arr_len else try conv.lengthOf(vm, o);
         try s.b.byte('[');
         var i: usize = 0;
         while (i < n) : (i += 1) {
             if (i != 0) try s.b.byte(',');
             try s.newline();
             const k = PropKey.fromIndex(@intCast(i));
-            if (!try s.property(o, k, try props.get(s.vm, o, k))) try s.b.bytes("null");
+            const ev: Value = if (fast_arr and i < o.elems_len and o.shape == vm.array_root)
+                (if (o.elems[i].isHole()) Value.undefined else o.elems[i])
+            else if (fast_arr and o.shape == vm.array_root and !o.flags.has_sparse)
+                Value.undefined
+            else
+                try props.get(vm, o, k);
+            if (!try s.property(o, k, ev)) try s.b.bytes("null");
         }
         if (n != 0) try s.closeLine();
         try s.b.byte(']');
@@ -423,6 +465,35 @@ const Stringifier = struct {
         const vm = s.vm;
         try s.enter(o);
         defer s.leave();
+        if (s.allow == null and o.shape.all_plain_str and !o.shape.is_dict and !o.flags.exotic and !o.flags.lazy_fn and !o.flags.has_sparse and o.elems_len == 0 and o.class == .object) {
+            const init_sh = o.shape;
+            const count = init_sh.count;
+            try s.b.byte('{');
+            var any = false;
+            var idx: u32 = 0;
+            while (idx < count) : (idx += 1) {
+                const k = init_sh.table.entries.items[idx].key;
+                const v: Value = if (o.shape == init_sh) o.slots[idx] else blk: {
+                    const own = try props.getOwn(vm, o, k) orelse continue;
+                    if (!own.flags.enumerable) continue;
+                    break :blk try props.get(vm, o, k);
+                };
+                const rollback = s.b.buf.items.len;
+                if (any) try s.b.byte(',');
+                try s.newline();
+                try quote(vm, &s.b, k.atom());
+                try s.b.byte(':');
+                if (s.gap.len != 0) try s.b.byte(' ');
+                if (try s.property(o, k, v)) {
+                    any = true;
+                } else {
+                    s.b.buf.items.len = rollback;
+                }
+            }
+            if (any) try s.closeLine();
+            try s.b.byte('}');
+            return;
+        }
         var owned: ?[]PropKey = null;
         defer if (owned) |x| vm.gpa.free(x);
         const keys = s.allow orelse blk: {

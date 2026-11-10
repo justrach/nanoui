@@ -49,6 +49,7 @@ pub const Node = struct {
     class_filter: u64 = 0,
     attr_filter: u64 = 0,
     ancestor_bloom: u64 = 0,
+    ancestor_hash: u64 = 0,
     class_src: [*]const u8 = "".ptr,
     class_src_len: usize = 0,
     class_single: bool = false,

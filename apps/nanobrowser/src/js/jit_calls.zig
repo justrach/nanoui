@@ -18,12 +18,13 @@ const interp = @import("interp.zig");
 const iter = @import("iter.zig");
 const api = @import("vm_api.zig");
 const b_fn = @import("b_function.zig");
+const props = @import("props.zig");
 const objectops = @import("interp_object.zig");
 const jit = @import("jit.zig");
 const JitFn = jit.JitFn;
 const JitResult = jit.JitResult;
 
-noinline fn handleChildErr(vm: *Vm, caller_sp: [*]Value, child_f: *Frame, err_code: u64) JitResult {
+pub noinline fn handleChildErr(vm: *Vm, caller_sp: [*]Value, child_f: *Frame, err_code: u64) callconv(.c) JitResult {
     @branchHint(.cold);
     var err = jit.decodeErr(err_code);
     if (err == error.OutOfMemory) {
@@ -137,6 +138,45 @@ pub fn jitCallGetter(vm: *Vm, f: *Frame, sp: [*]Value, pc: [*]const u8, slot_bit
     vm.sp = sp;
     const r = calls.call(vm, a.get, recv, &.{}) catch |e| return jit.errRes(vm, sp, e);
     return .{ .bits = r.bits, .err = 0 };
+}
+
+pub fn jitCallSetter(vm: *Vm, f: *Frame, sp: [*]Value, pc: [*]const u8, slot_bits: u64) callconv(.c) JitResult {
+    const slot_val = Value{ .bits = slot_bits };
+    const a: *heap.Accessor = @fieldParentPtr("cell", slot_val.asCell());
+    if (a.set.isUndefined()) {
+        if (f.fp.strict) {
+            f.pc = pc;
+            vm.sp = sp;
+            const ic = &f.fp.ics[std.mem.readInt(u32, (pc + 1)[0..4], .little)];
+            return jit.errRes(vm, sp, props.throwReadonly(vm, ic.key));
+        }
+        return .{ .bits = 0, .err = 0 };
+    }
+    const recv = (sp - 2)[0];
+    const v = (sp - 1)[0];
+    if (a.set.isObject()) {
+        const so = a.set.asObject();
+        if (so.class == .closure) {
+            f.pc = pc + 5;
+            sp[0] = v;
+            vm.sp = sp + 1;
+            const child_f = calls.pushClosure(vm, so, sp, 1, sp, Value.undefined, recv, false) catch |e| return jit.errRes(vm, sp, e);
+            const res = invokeChildFrame(vm, sp, child_f);
+            if (res.err != 0) return res;
+            vm.sp = sp;
+            return .{ .bits = 0, .err = 0 };
+        }
+        if (so.class == .native and !so.flags.host_class) {
+            f.pc = pc;
+            vm.sp = sp;
+            _ = calls.callNative(vm, so, recv, &.{v}) catch |e| return jit.errRes(vm, sp, e);
+            return .{ .bits = 0, .err = 0 };
+        }
+    }
+    f.pc = pc;
+    vm.sp = sp;
+    _ = calls.call(vm, a.set, recv, &.{v}) catch |e| return jit.errRes(vm, sp, e);
+    return .{ .bits = 0, .err = 0 };
 }
 
 noinline fn jitCallNonClosure(vm: *Vm, sp: [*]Value, argc: u32, ret_sp: [*]Value, callee: Value) JitResult {

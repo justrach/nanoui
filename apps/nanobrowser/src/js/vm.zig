@@ -43,6 +43,7 @@ pub const Names = struct {
     then: PropKey = PropKey.none,
     get: PropKey = PropKey.none,
     set: PropKey = PropKey.none,
+    has: PropKey = PropKey.none,
     enumerable: PropKey = PropKey.none,
     configurable: PropKey = PropKey.none,
     writable: PropKey = PropKey.none,
@@ -265,9 +266,11 @@ pub const Vm = struct {
 
     // Execution state.
     stack: []Value = &.{},
+    stack_end: usize = 0,
     sp: [*]Value = undefined,
     frames: []frames.Frame = &.{},
     frame_top: u32 = 0,
+    fast_call_stub: ?*const anyopaque = null,
     /// Native re-entry depth; the native stack limit is set when it is zero.
     depth: u32 = 0,
     stack_limit: usize = 0,
@@ -334,12 +337,16 @@ pub const Vm = struct {
         vm.gpa = vm.counting.allocator();
         vm.heap = .{ .gpa = vm.gpa };
         vm.stack = try allocStack();
+        vm.stack_end = @intFromPtr(vm.stack.ptr) + vm.stack.len * @sizeOf(Value);
         vm.sp = vm.stack.ptr;
         vm.frames = try allocFrames();
+        vm.fast_call_stub = jit.getFastCallStub();
         try vm.initStrings();
         try builtins.init(vm);
         vm.protos.object.flags.proto_dirty = false;
         vm.protos.array.flags.proto_dirty = false;
+        vm.protos.array_ctor.flags.is_proto = true;
+        vm.protos.array_ctor.flags.proto_dirty = false;
         vm.protos.array_iter.flags.proto_dirty = false;
         vm.protos.regexp.flags.proto_dirty = false;
         return vm;
@@ -348,6 +355,7 @@ pub const Vm = struct {
     fn initStrings(vm: *Vm) Error!void {
         const e = try vm.heap.create(JSString, .string);
         e.* = .{ .cell = e.cell, .is_ascii = true, .is_atom = true, .byte_len = 0, .len16 = 0, .ptr = &e.inline_buf };
+        e.key = PropKey.fromAtom(e);
         try vm.atoms.put(vm.gpa, e.inline_buf[0..0], e);
         vm.empty = e;
         var i: usize = 0;
@@ -355,7 +363,7 @@ pub const Vm = struct {
             const c = try vm.heap.create(JSString, .string);
             c.* = .{ .cell = c.cell, .is_ascii = true, .is_atom = true, .owns = false, .byte_len = 1, .len16 = 1, .ptr = &c.inline_buf };
             c.inline_buf[0] = @intCast(i);
-            if (i < '0' or i > '9') c.key = PropKey.fromAtom(c);
+            c.key = if (i >= '0' and i <= '9') PropKey.fromIndex(@intCast(i - '0')) else PropKey.fromAtom(c);
             try vm.atoms.put(vm.gpa, c.inline_buf[0..1], c);
             vm.char_strs[i] = c;
         }

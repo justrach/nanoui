@@ -35,6 +35,88 @@ pub fn noteLayoutChange(e: *Engine, n: *dom.Node, old: ?*const style.Style, fres
     e.layout_change_node = n;
 }
 
+pub fn bumpShareGen(e: *Engine) void {
+    e.share_gen +%= 1;
+    if (e.share_gen == 0) e.share_gen = 1;
+}
+
+pub fn resetShareForAll(e: *Engine) void {
+    const frag = if (std.mem.indexOfScalar(u8, e.doc.url, '#')) |idx| e.doc.url[idx + 1 ..] else "";
+    e.last_url_hash = std.hash.Wyhash.hash(0x100, frag);
+    bumpShareGen(e);
+}
+
+pub fn maybeInvalidateShare(e: *Engine) void {
+    const frag = if (std.mem.indexOfScalar(u8, e.doc.url, '#')) |idx| e.doc.url[idx + 1 ..] else "";
+    const uh = std.hash.Wyhash.hash(0x100, frag);
+    const unpersist = (e.index != null and (e.index.?.uses_ancestor_positional or e.index.?.uses_container)) or e.any_scope_unpersist;
+    if (e.share_gen == 0 or unpersist or uh != e.last_url_hash) {
+        e.last_url_hash = uh;
+        bumpShareGen(e);
+    }
+}
+
+fn rebindBoxRuns(b: *@import("../layout/box.zig").Box, old_s: *const style.Style, new_s: *const style.Style) void {
+    if (b.style == old_s) b.style = new_s;
+    if (b.lay.marker_style == old_s) b.lay.marker_style = new_s;
+    for (b.runs) |*r| if (r.style == old_s) {
+        @constCast(r).style = new_s;
+    };
+    for (b.lay.pieces) |*p| if (p.style == old_s) {
+        p.style = new_s;
+    };
+    for (b.lay.entries) |*en| if (en.style == old_s) {
+        @constCast(en).style = new_s;
+    };
+}
+
+pub fn rebindPaintStyle(n: *dom.Node, old_s: *const style.Style, new_s: *const style.Style) bool {
+    if (n.box_parts.len != 0) return false;
+    const raw = n.box orelse {
+        if (old_s.display == .contents) {
+            if (n.doc.documentElement()) |de| if (de.box != null) return false;
+        }
+        return true;
+    };
+    const b: *@import("../layout/box.zig").Box = @ptrCast(@alignCast(raw));
+    if (b.kind != .block and b.kind != .flex and b.kind != .grid and b.kind != .replaced and b.kind != .inline_box) return false;
+    var ch = b.first_child;
+    while (ch) |k| : (ch = k.next) {
+        if (k.node == null or k.pseudo) return false;
+    }
+    rebindBoxRuns(b, old_s, new_s);
+    if (b.kind == .inline_box or old_s.isInlineLevel() or old_s.isOutOfFlow() or old_s.float != .none) {
+        var anc = b.parent;
+        while (anc) |ab| : (anc = ab.parent) {
+            rebindBoxRuns(ab, old_s, new_s);
+            if (ab.lay.inline_root) break;
+        }
+    }
+    return true;
+}
+
+pub fn storeComputedStyle(
+    e: *Engine,
+    n: *dom.Node,
+    old: ?*const style.Style,
+    in_svg: bool,
+    fresh_ptr: *style.Style,
+    compared: @import("cascade.zig").Change,
+    change: ?*@import("cascade.zig").Change,
+) Allocator.Error!*const style.Style {
+    if (old) |o| {
+        if (compared == .none) return o;
+        const s = try e.genArena().create(style.Style);
+        s.* = e.scratch_fresh;
+        if (compared == .paint and !in_svg and !rebindPaintStyle(n, o, s)) {
+            if (change) |c| c.* = c.max(.layout);
+            noteLayoutChange(e, n, o, s);
+        }
+        return s;
+    }
+    return fresh_ptr;
+}
+
 pub fn tryShareStyle(
     e: *Engine,
     n: *dom.Node,
@@ -59,7 +141,7 @@ pub fn tryShareStyle(
                 .computed = sh.computed,
                 .scope = parent_scope,
             };
-            try applySharedHit(e, n, old, &fake, change);
+            applySharedHit(e, n, old, &fake, change);
             return true;
         }
         return false;
@@ -73,7 +155,7 @@ pub fn tryShareStyle(
     out_cand.* = cand;
     if (e.style_share.lookup(e.share_gen, n, canon_parent, parent_scope, cand)) |hit| {
         perf.prof_style_shared += 1;
-        try applySharedHit(e, n, old, hit, change);
+        applySharedHit(e, n, old, hit, change);
         return true;
     }
     return false;
@@ -85,42 +167,44 @@ pub fn applySharedHit(
     old: ?*const style.Style,
     hit: *const @import("../perf_rules.zig").StyleShareEntry,
     change: ?*@import("cascade.zig").Change,
-) Allocator.Error!void {
+) void {
     const diff = @import("style_diff.zig");
     const in_svg = n.ns == .svg and !n.isTag("svg");
-    const stored: *const style.Style = blk: {
-        if (in_svg) {
-            if (old) |o| {
-                if (o != hit.computed and diff.compare(o, hit.computed) != .none) {
-                    e.doc.svg_style_version +%= 1;
-                    if (change) |c| c.* = c.max(.paint);
-                }
-            } else {
+    if (in_svg) {
+        if (old) |o| {
+            if (o != hit.computed and diff.compare(o, hit.computed) != .none) {
                 e.doc.svg_style_version +%= 1;
                 if (change) |c| c.* = c.max(.paint);
             }
-            break :blk hit.computed;
-        }
-        if (old) |o| {
-            const cmp = if (o == hit.computed) @import("cascade.zig").Change.none else diff.compare(o, hit.computed);
-            if (cmp != .none and n.ns == .svg) e.doc.svg_style_version +%= 1;
-            if (change) |c| c.* = c.max(cmp);
-            if (cmp == .layout) noteLayoutChange(e, n, o, hit.computed);
-            if (cmp == .none) break :blk o;
-            if (cmp == .paint) {
-                @constCast(o).* = hit.computed.*;
-                break :blk o;
-            }
         } else {
-            if (n.ns == .svg) e.doc.svg_style_version +%= 1;
-            if (change) |c| c.* = c.max(.layout);
-            noteLayoutChange(e, n, null, hit.computed);
+            e.doc.svg_style_version +%= 1;
+            if (change) |c| c.* = c.max(.paint);
         }
-        const copy = try e.genArena().create(style.Style);
-        copy.* = hit.computed.*;
-        break :blk copy;
-    };
-    n.computed = stored;
+        n.computed = hit.computed;
+    } else if (old) |o| {
+        const cmp = if (o == hit.computed) @import("cascade.zig").Change.none else diff.compare(o, hit.computed);
+        if (cmp != .none and n.ns == .svg) e.doc.svg_style_version +%= 1;
+        if (cmp == .none) {
+            n.computed = o;
+        } else if (cmp == .paint) {
+            if (rebindPaintStyle(n, o, hit.computed)) {
+                if (change) |c| c.* = c.max(.paint);
+            } else {
+                if (change) |c| c.* = c.max(.layout);
+                noteLayoutChange(e, n, o, hit.computed);
+            }
+            n.computed = hit.computed;
+        } else {
+            if (change) |c| c.* = c.max(.layout);
+            noteLayoutChange(e, n, o, hit.computed);
+            n.computed = hit.computed;
+        }
+    } else {
+        if (n.ns == .svg) e.doc.svg_style_version +%= 1;
+        if (change) |c| c.* = c.max(.layout);
+        noteLayoutChange(e, n, null, hit.computed);
+        n.computed = hit.computed;
+    }
     n.style_generation = e.generation;
     n.css_vars = hit.scope;
     n.before = null;
@@ -147,12 +231,14 @@ fn nearestContainer(n: *const dom.Node, name: []const u8) ?*const dom.Node {
 /// copied. A root with none has no entry.
 pub fn setScopedSheets(e: *Engine, roots: []const *dom.Node, lists: []const []const *const Sheet) void {
     var next: std.AutoHashMapUnmanaged(*dom.Node, []const *const Sheet) = .empty;
+    var existing_changed = false;
     for (roots, lists) |r, l| {
         if (e.scoped.fetchRemove(r)) |kv| {
             if (std.mem.eql(*const Sheet, kv.value, l)) {
                 next.put(e.gpa, r, kv.value) catch e.gpa.free(kv.value);
                 continue;
             }
+            existing_changed = true;
             e.gpa.free(kv.value);
         }
         const copy = e.gpa.dupe(*const Sheet, l) catch continue;
@@ -164,6 +250,7 @@ pub fn setScopedSheets(e: *Engine, roots: []const *dom.Node, lists: []const []co
     }
     var rem = e.scoped.iterator();
     while (rem.next()) |kv| {
+        existing_changed = true;
         e.doc.markStyle(kv.key_ptr.*.parent orelse kv.key_ptr.*);
         e.gpa.free(kv.value_ptr.*);
     }
@@ -171,11 +258,14 @@ pub fn setScopedSheets(e: *Engine, roots: []const *dom.Node, lists: []const []co
     e.scoped = next;
     e.last_scope_root = null;
     e.last_scope_ix = null;
+    if (existing_changed) bumpShareGen(e);
 }
 
 pub fn dropScopeIndexes(e: *Engine) void {
     e.last_scope_root = null;
     e.last_scope_ix = null;
+    e.any_scope_unpersist = false;
+    bumpShareGen(e);
     var it = e.scope_index.valueIterator();
     while (it.next()) |x| {
         x.*.deinit();
@@ -206,6 +296,7 @@ pub fn indexOfScope(e: *Engine, root: *dom.Node) Allocator.Error!?*rule_index.In
     const ranks = try rule_index.LayerRanks.build(a, list, e.viewport);
     var order: u32 = 0;
     for (list) |s| try ix.addSheet(s, e.viewport, false, &ranks, &order);
+    if (ix.uses_ancestor_positional or ix.uses_container) e.any_scope_unpersist = true;
     e.doc.rule_flags |= ix.ruleFlags();
     e.doc.rule_attr_filter |= ix.attr_filter;
     e.doc.rule_id_bloom |= ix.referenced_ids_bloom;

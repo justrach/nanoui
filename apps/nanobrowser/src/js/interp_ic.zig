@@ -39,6 +39,24 @@ inline fn pushOwnPoly(ic: *bc.IC, cur_sh: *shape_mod.Shape) void {
     }
 }
 
+inline fn hasProtoPoly(ic: *const bc.IC, sh: *const shape_mod.Shape) bool {
+    const base = bc.IC.protoHashBase(sh);
+    return ic.proto_shapes[base] == sh or ic.proto_shapes[base + 1] == sh;
+}
+
+inline fn insertProtoPoly(ic: *bc.IC, sh: *shape_mod.Shape) void {
+    const base = bc.IC.protoHashBase(sh);
+    if (ic.proto_shapes[base] == sh or ic.proto_shapes[base + 1] == sh) return;
+    if (ic.proto_shapes[base] == null) {
+        ic.proto_shapes[base] = sh;
+    } else if (ic.proto_shapes[base + 1] == null) {
+        ic.proto_shapes[base + 1] = sh;
+    } else {
+        ic.proto_shapes[base + (ic.proto_idx & 1)] = sh;
+        ic.proto_idx +%= 1;
+    }
+}
+
 pub fn callSetterSlot(vm: *Vm, ic: *bc.IC, slot_val: Value, receiver: Value, v: Value, strict: bool) Error!void {
     const a: *heap.Accessor = @fieldParentPtr("cell", slot_val.asCell());
     if (a.set.isUndefined()) {
@@ -104,18 +122,12 @@ pub fn getField(vm: *Vm, ic: *bc.IC, v: Value) Error!Value {
         return o.slots[ic.own_slots[k]];
     };
     if (ic.holder) |h| {
-        if (ic.epoch == vm.proto_epoch and h.shape == ic.holder_shape and ic.slot != bc.IC.missing_slot) {
-            inline for (0..bc.IC.proto_poly_cap) |k| {
-                if (ic.proto_shapes[k] == sh) {
-                    const sv = h.slots[ic.slot];
-                    return if (ic.is_accessor) props.callGetter(vm, sv, v) else sv;
-                }
-            }
+        if (ic.epoch == vm.proto_epoch and h.shape == ic.holder_shape and ic.slot != bc.IC.missing_slot and hasProtoPoly(ic, sh)) {
+            const sv = h.slots[ic.slot];
+            return if (ic.is_accessor) props.callGetter(vm, sv, v) else sv;
         }
-    } else if (ic.slot == bc.IC.missing_slot and ic.epoch == vm.proto_epoch) {
-        inline for (0..bc.IC.proto_poly_cap) |k| {
-            if (ic.proto_shapes[k] == sh) return Value.undefined;
-        }
+    } else if (ic.slot == bc.IC.missing_slot and ic.epoch == vm.proto_epoch and hasProtoPoly(ic, sh)) {
+        return Value.undefined;
     }
     const exotic_ok = !o.flags.exotic or o.class == .typedarray or (o.class == .host_exotic and o.payload.hooks.get_named == null and !ic.key.eql(vm.k.length));
     if (exotic_ok and !ic.key.isIndex()) {
@@ -155,14 +167,7 @@ pub fn getField(vm: *Vm, ic: *bc.IC, v: Value) Error!Value {
                     const acc = hs.flagsAt(slot).accessor;
                     pushOwnPoly(ic, cur_sh);
                     if (ic.holder == h and ic.holder_shape == hs and ic.slot == slot and ic.epoch == vm.proto_epoch and ic.shape != null and ic.shape != cur_sh and !ic.fast_own_data) {
-                        var found = false;
-                        inline for (0..bc.IC.proto_poly_cap) |k| if (ic.proto_shapes[k] == ic.shape) {
-                            found = true;
-                        };
-                        if (!found) {
-                            ic.proto_shapes[ic.proto_idx & (bc.IC.proto_poly_cap - 1)] = ic.shape;
-                            ic.proto_idx +%= 1;
-                        }
+                        insertProtoPoly(ic, ic.shape.?);
                     } else if (ic.holder != h or ic.holder_shape != hs or ic.slot != slot or ic.epoch != vm.proto_epoch or ic.fast_own_data) {
                         ic.proto_shapes = @splat(null);
                         ic.proto_idx = 0;
@@ -182,14 +187,7 @@ pub fn getField(vm: *Vm, ic: *bc.IC, v: Value) Error!Value {
             } else {
                 pushOwnPoly(ic, cur_sh);
                 if (ic.slot == bc.IC.missing_slot and ic.holder == null and ic.epoch == vm.proto_epoch and ic.shape != null and ic.shape != cur_sh and !ic.fast_own_data) {
-                    var found = false;
-                    inline for (0..bc.IC.proto_poly_cap) |k| if (ic.proto_shapes[k] == ic.shape) {
-                        found = true;
-                    };
-                    if (!found) {
-                        ic.proto_shapes[ic.proto_idx & (bc.IC.proto_poly_cap - 1)] = ic.shape;
-                        ic.proto_idx +%= 1;
-                    }
+                    insertProtoPoly(ic, ic.shape.?);
                 } else if (ic.slot != bc.IC.missing_slot or ic.holder != null or ic.epoch != vm.proto_epoch or ic.fast_own_data) {
                     ic.proto_shapes = @splat(null);
                     ic.proto_idx = 0;
@@ -233,12 +231,8 @@ pub fn putField(vm: *Vm, ic: *bc.IC, t: Value, v: Value, strict: bool) Error!voi
         return;
     };
     if (ic.is_accessor) if (ic.holder) |h| {
-        if (ic.epoch == vm.proto_epoch and h.shape == ic.holder_shape) {
-            inline for (0..bc.IC.proto_poly_cap) |k| {
-                if (ic.proto_shapes[k] == o.shape) {
-                    return callSetterSlot(vm, ic, h.slots[ic.slot], t, v, strict);
-                }
-            }
+        if (ic.epoch == vm.proto_epoch and h.shape == ic.holder_shape and hasProtoPoly(ic, o.shape)) {
+            return callSetterSlot(vm, ic, h.slots[ic.slot], t, v, strict);
         }
     };
     if (!o.flags.exotic and !ic.key.isIndex() and !o.flags.lazy_fn) {
@@ -282,15 +276,8 @@ pub fn putField(vm: *Vm, ic: *bc.IC, t: Value, v: Value, strict: bool) Error!voi
                 if (hs.find(ic.key)) |slot| {
                     if (hs.flagsAt(slot).accessor) {
                         if (ic.holder == h and ic.holder_shape == hs and ic.slot == slot and ic.epoch == vm.proto_epoch and ic.shape != null and ic.shape != sh and !ic.fast_own_data and !ic.is_transition) {
-                            var found = false;
-                            inline for (0..bc.IC.proto_poly_cap) |k| if (ic.proto_shapes[k] == ic.shape) {
-                                found = true;
-                            };
-                            if (!found) {
-                                ic.proto_shapes[ic.proto_idx & (bc.IC.proto_poly_cap - 1)] = ic.shape;
-                                ic.proto_idx +%= 1;
-                            }
-                        } else if (ic.holder != h or ic.holder_shape != hs or ic.slot != slot or ic.epoch != vm.proto_epoch) {
+                            insertProtoPoly(ic, ic.shape.?);
+                        } else if (ic.holder != h or ic.holder_shape != hs or ic.slot != slot or ic.epoch != vm.proto_epoch or ic.fast_own_data or ic.is_transition) {
                             ic.proto_shapes = @splat(null);
                             ic.proto_idx = 0;
                         }

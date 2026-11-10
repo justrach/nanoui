@@ -315,6 +315,7 @@ pub fn finish(c: *C, name: *JSString, start: u32, end: u32, length: u32) Error!*
         .nparams = @intCast(scope_mod.rawParamCount(f)),
         .nlocals = c.fi.nlocals,
         .max_stack = @intCast(c.max_depth + 8),
+        .stack_need_bytes = (c.fi.nlocals + @as(u32, @intCast(c.max_depth + 8)) + 64) * @sizeOf(Value),
         .strict = f.strict,
         .is_arrow = f.is_arrow,
         .is_async = f.is_async,

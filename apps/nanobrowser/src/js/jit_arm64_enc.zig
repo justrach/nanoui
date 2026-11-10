@@ -5,6 +5,7 @@ const bc = @import("bytecode.zig");
 const Op = bc.Op;
 const objmod = @import("object.zig");
 const Object = objmod.Object;
+const JSString = @import("string.zig").JSString;
 const Vm = @import("vm.zig").Vm;
 const jit = @import("jit.zig");
 
@@ -57,7 +58,13 @@ pub const Emitter = struct {
     pub inline fn mvn32(e: *Emitter, rd: u5, rm: u5) void { e.emit(0x2A2003E0 | (@as(u32, rm) << 16) | rd); }
     pub inline fn sxtw64(e: *Emitter, rd: u5, rn: u5) void { e.emit(0x93407C00 | (@as(u32, rn) << 5) | rd); }
     pub inline fn addReg64(e: *Emitter, rd: u5, rn: u5, rm: u5) void { e.emit(0x8B000000 | (@as(u32, rm) << 16) | (@as(u32, rn) << 5) | rd); }
+    pub inline fn addRegLsl64(e: *Emitter, rd: u5, rn: u5, rm: u5, shift: u6) void { e.emit(0x8B000000 | (@as(u32, rm) << 16) | (@as(u32, shift) << 10) | (@as(u32, rn) << 5) | rd); }
     pub inline fn subReg64(e: *Emitter, rd: u5, rn: u5, rm: u5) void { e.emit(0xCB000000 | (@as(u32, rm) << 16) | (@as(u32, rn) << 5) | rd); }
+    pub inline fn subRegLsl64(e: *Emitter, rd: u5, rn: u5, rm: u5, shift: u6) void { e.emit(0xCB000000 | (@as(u32, rm) << 16) | (@as(u32, shift) << 10) | (@as(u32, rn) << 5) | rd); }
+    pub inline fn madd64(e: *Emitter, rd: u5, rn: u5, rm: u5, ra: u5) void { e.emit(0x9B000000 | (@as(u32, rm) << 16) | (@as(u32, ra) << 10) | (@as(u32, rn) << 5) | rd); }
+    pub inline fn msub32(e: *Emitter, rd: u5, rn: u5, rm: u5, ra: u5) void { e.emit(0x1B008000 | (@as(u32, rm) << 16) | (@as(u32, ra) << 10) | (@as(u32, rn) << 5) | rd); }
+    pub inline fn sdiv32(e: *Emitter, rd: u5, rn: u5, rm: u5) void { e.emit(0x1AC00C00 | (@as(u32, rm) << 16) | (@as(u32, rn) << 5) | rd); }
+    pub inline fn csel32(e: *Emitter, rd: u5, rn: u5, rm: u5, cond: Cond) void { e.emit(0x1A800000 | (@as(u32, rm) << 16) | (@as(u32, @intFromEnum(cond)) << 12) | (@as(u32, rn) << 5) | rd); }
     pub inline fn scvtf32(e: *Emitter, dd: u5, wn: u5) void { e.emit(0x1E620000 | (@as(u32, wn) << 5) | dd); }
     pub inline fn scvtf64(e: *Emitter, dd: u5, xn: u5) void { e.emit(0x9E620000 | (@as(u32, xn) << 5) | dd); }
     pub inline fn fmovToD(e: *Emitter, dd: u5, xn: u5) void { e.emit(0x9E670000 | (@as(u32, xn) << 5) | dd); }
@@ -80,6 +87,7 @@ pub const Emitter = struct {
     pub inline fn orrReg64(e: *Emitter, rd: u5, rn: u5, rm: u5) void { e.emit(0xAA000000 | (@as(u32, rm) << 16) | (@as(u32, rn) << 5) | rd); }
     pub inline fn eorReg32(e: *Emitter, rd: u5, rn: u5, rm: u5) void { e.emit(0x4A000000 | (@as(u32, rm) << 16) | (@as(u32, rn) << 5) | rd); }
     pub inline fn eorReg64(e: *Emitter, rd: u5, rn: u5, rm: u5) void { e.emit(0xCA000000 | (@as(u32, rm) << 16) | (@as(u32, rn) << 5) | rd); }
+    pub inline fn eorRegLsr64(e: *Emitter, rd: u5, rn: u5, rm: u5, shift: u6) void { e.emit(0xCA400000 | (@as(u32, rm) << 16) | (@as(u32, shift) << 10) | (@as(u32, rn) << 5) | rd); }
     pub inline fn lslvReg32(e: *Emitter, rd: u5, rn: u5, rm: u5) void { e.emit(0x1AC02000 | (@as(u32, rm) << 16) | (@as(u32, rn) << 5) | rd); }
     pub inline fn lsrvReg32(e: *Emitter, rd: u5, rn: u5, rm: u5) void { e.emit(0x1AC02400 | (@as(u32, rm) << 16) | (@as(u32, rn) << 5) | rd); }
     pub inline fn asrvReg32(e: *Emitter, rd: u5, rn: u5, rm: u5) void { e.emit(0x1AC02800 | (@as(u32, rm) << 16) | (@as(u32, rn) << 5) | rd); }
@@ -90,7 +98,9 @@ pub const Emitter = struct {
     pub inline fn strImm64(e: *Emitter, rt: u5, rn: u5, idx8: u12) void { e.emit(0xF9000000 | (@as(u32, idx8) << 10) | (@as(u32, rn) << 5) | rt); }
     pub inline fn ldrImm32(e: *Emitter, rt: u5, rn: u5, idx4: u12) void { e.emit(0xB9400000 | (@as(u32, idx4) << 10) | (@as(u32, rn) << 5) | rt); }
     pub inline fn strImm32(e: *Emitter, rt: u5, rn: u5, idx4: u12) void { e.emit(0xB9000000 | (@as(u32, idx4) << 10) | (@as(u32, rn) << 5) | rt); }
+    pub inline fn ldrhImm(e: *Emitter, rt: u5, rn: u5, idx2: u12) void { e.emit(0x79400000 | (@as(u32, idx2) << 10) | (@as(u32, rn) << 5) | rt); }
     pub inline fn ldrbImm(e: *Emitter, rt: u5, rn: u5, idx1: u12) void { e.emit(0x39400000 | (@as(u32, idx1) << 10) | (@as(u32, rn) << 5) | rt); }
+    pub inline fn strbImm(e: *Emitter, rt: u5, rn: u5, idx1: u12) void { e.emit(0x39000000 | (@as(u32, idx1) << 10) | (@as(u32, rn) << 5) | rt); }
     pub inline fn ldrRegScaled64(e: *Emitter, rt: u5, rn: u5, rm: u5) void { e.emit(0xF8607800 | (@as(u32, rm) << 16) | (@as(u32, rn) << 5) | rt); }
     pub inline fn strRegScaled64(e: *Emitter, rt: u5, rn: u5, rm: u5) void { e.emit(0xF8207800 | (@as(u32, rm) << 16) | (@as(u32, rn) << 5) | rt); }
     pub inline fn ldur64(e: *Emitter, rt: u5, rn: u5, simm9: i9) void { e.emit(0xF8400000 | ((@as(u32, @bitCast(@as(i32, simm9))) & 0x1FF) << 12) | (@as(u32, rn) << 5) | rt); }
@@ -100,6 +110,7 @@ pub const Emitter = struct {
     pub inline fn stpPre64(e: *Emitter, rt1: u5, rt2: u5, rn: u5, simm7: i7) void { e.emit(0xA9800000 | ((@as(u32, @bitCast(@as(i32, simm7))) & 0x7F) << 15) | (@as(u32, rt2) << 10) | (@as(u32, rn) << 5) | rt1); }
     pub inline fn ldpPost64(e: *Emitter, rt1: u5, rt2: u5, rn: u5, simm7: i7) void { e.emit(0xA8C00000 | ((@as(u32, @bitCast(@as(i32, simm7))) & 0x7F) << 15) | (@as(u32, rt2) << 10) | (@as(u32, rn) << 5) | rt1); }
     pub inline fn bImm(e: *Emitter, offset_words: i32) void { e.emit(0x14000000 | (@as(u32, @bitCast(offset_words)) & 0x03FF_FFFF)); }
+    pub inline fn blImm(e: *Emitter, offset_words: i32) void { e.emit(0x94000000 | (@as(u32, @bitCast(offset_words)) & 0x03FF_FFFF)); }
 
     pub inline fn bCond(e: *Emitter, cond: Cond, offset_words: i32) void {
         if (offset_words < -262144 or offset_words > 262143) e.overflow = true;
@@ -136,6 +147,7 @@ pub const Emitter = struct {
         e.emit(0x36000000 | (@as(u32, bit) << 19) | (bits << 5) | rt);
     }
 
+    pub inline fn br(e: *Emitter, rn: u5) void { e.emit(0xD61F0000 | (@as(u32, rn) << 5)); }
     pub inline fn blr(e: *Emitter, rn: u5) void { e.emit(0xD63F0000 | (@as(u32, rn) << 5)); }
     pub inline fn ret(e: *Emitter) void { e.emit(0xD65F03C0); }
 
@@ -209,6 +221,7 @@ pub const Emitter = struct {
     pub const emitGetGlobal = @import("jit_arm64_ic.zig").emitGetGlobal;
     pub const emitGetLength = @import("jit_arm64_ic.zig").emitGetLength;
     pub const emitGetElem = @import("jit_arm64_ic.zig").emitGetElem;
+    pub const emitPutElem = @import("jit_arm64_ic.zig").emitPutElem;
 
     pub fn emitCompareOp(e: *Emitter, op: Op, pc_addr: usize, epilogue_idx: u32, pass: u1) void {
         e.ldur64(0, 22, -16);
@@ -221,7 +234,7 @@ pub const Emitter = struct {
             const b_slow2 = e.len;
             e.bCond(.lo, 0);
             e.cmpReg64(0, 1);
-            const b_eq = e.len;
+            const b_eq1 = e.len;
             e.bCond(.eq, 0);
             e.eorReg64(2, 0, 1);
             e.lsrImm64(2, 2, 48);
@@ -230,17 +243,46 @@ pub const Emitter = struct {
             e.subReg64(2, 0, 25);
             e.lsrImm64(2, 2, 48);
             e.cmpImm64(2, 3);
+            const b_ne2 = e.len;
+            e.bCond(.lo, 0);
+            const b_not_str = e.len;
+            e.bCond(.hi, 0);
+            e.ubfm64(2, 0, 0, 47);
+            e.ubfm64(3, 1, 0, 47);
+            e.ldrImm32(4, 2, @intCast(@offsetOf(JSString, "byte_len") / 4));
+            e.ldrImm32(5, 3, @intCast(@offsetOf(JSString, "byte_len") / 4));
+            e.cmpReg32(4, 5);
+            const b_ne3 = e.len;
+            e.bCond(.ne, 0);
+            e.ldrImm64(4, 2, @intCast(@offsetOf(JSString, "key") / 8));
             const b_slow3 = e.len;
-            e.bCond(.hs, 0);
+            e.cbz64(4, 0);
+            e.ldrImm64(5, 3, @intCast(@offsetOf(JSString, "key") / 8));
+            const b_slow4 = e.len;
+            e.cbz64(5, 0);
+            e.cmpReg64(4, 5);
+            const b_eq2 = e.len;
+            e.bCond(.eq, 0);
+            const b_ne4 = e.len;
+            e.bImm(0);
+
+            e.buf[b_not_str] |= (@as(u32, @intCast(e.len - b_not_str)) & 0x7FFFF) << 5;
+            e.cmpImm64(2, 4);
+            const b_slow5 = e.len;
+            e.bCond(.ne, 0);
 
             const ne_idx = e.len;
             e.buf[b_ne1] |= (@as(u32, @intCast(ne_idx - b_ne1)) & 0x7FFFF) << 5;
+            e.buf[b_ne2] |= (@as(u32, @intCast(ne_idx - b_ne2)) & 0x7FFFF) << 5;
+            e.buf[b_ne3] |= (@as(u32, @intCast(ne_idx - b_ne3)) & 0x7FFFF) << 5;
+            e.buf[b_ne4] |= @as(u32, @intCast(ne_idx - b_ne4)) & 0x03FF_FFFF;
             if (op == .seq) e.mov64(0, 26) else e.addImm64(0, 26, 1);
             const b_done1 = e.len;
             e.bImm(0);
 
             const eq_idx = e.len;
-            e.buf[b_eq] |= (@as(u32, @intCast(eq_idx - b_eq)) & 0x7FFFF) << 5;
+            e.buf[b_eq1] |= (@as(u32, @intCast(eq_idx - b_eq1)) & 0x7FFFF) << 5;
+            e.buf[b_eq2] |= (@as(u32, @intCast(eq_idx - b_eq2)) & 0x7FFFF) << 5;
             if (op == .seq) e.addImm64(0, 26, 1) else e.mov64(0, 26);
             const b_done2 = e.len;
             e.bImm(0);
@@ -249,9 +291,74 @@ pub const Emitter = struct {
             e.buf[b_slow1] |= (@as(u32, @intCast(slow_idx - b_slow1)) & 0x7FFFF) << 5;
             e.buf[b_slow2] |= (@as(u32, @intCast(slow_idx - b_slow2)) & 0x7FFFF) << 5;
             e.buf[b_slow3] |= (@as(u32, @intCast(slow_idx - b_slow3)) & 0x7FFFF) << 5;
+            e.buf[b_slow4] |= (@as(u32, @intCast(slow_idx - b_slow4)) & 0x7FFFF) << 5;
+            e.buf[b_slow5] |= (@as(u32, @intCast(slow_idx - b_slow5)) & 0x7FFFF) << 5;
             e.callHelper5(@intFromPtr(&jit.jitCompareOp), pc_addr, @intFromEnum(op), epilogue_idx, pass);
             e.buf[b_done1] |= @as(u32, @intCast(e.len - b_done1)) & 0x03FF_FFFF;
             e.buf[b_done2] |= @as(u32, @intCast(e.len - b_done2)) & 0x03FF_FFFF;
+        } else if (op == .eq or op == .ne) {
+            e.eorReg64(2, 0, 25);
+            e.eorReg64(3, 1, 25);
+            e.orrReg64(2, 2, 3);
+            e.lsrImm64(2, 2, 48);
+            const b_not_int = e.len;
+            e.cbnz64(2, 0);
+            e.cmpReg32(0, 1);
+            e.cset64(0, if (op == .eq) .eq else .ne);
+            e.orrReg64(0, 0, 26);
+            const b_done_int = e.len;
+            e.bImm(0);
+
+            e.buf[b_not_int] |= (@as(u32, @intCast(e.len - b_not_int)) & 0x7FFFF) << 5;
+            e.eorReg64(3, 1, 26);
+            e.lsrImm64(3, 3, 1);
+            e.cmpImm64(3, 1);
+            const b_not_b_nullish = e.len;
+            e.bCond(.ne, 0);
+            e.eorReg64(2, 0, 26);
+            e.lsrImm64(2, 2, 1);
+            e.cmpImm64(2, 1);
+            const b_eq_null = e.len;
+            e.bCond(.eq, 0);
+            e.eorReg64(2, 0, 27);
+            e.lsrImm64(3, 2, 48);
+            const b_ne_null1 = e.len;
+            e.cbnz64(3, 0);
+            e.ldrbImm(3, 2, @intCast(@offsetOf(Object, "flags")));
+            const b_ne_null2 = e.len;
+            e.tbz32(3, @bitOffsetOf(objmod.Flags, "html_dda"), 0);
+            const b_eq_dda = e.len;
+            e.bImm(0);
+
+            e.buf[b_not_b_nullish] |= (@as(u32, @intCast(e.len - b_not_b_nullish)) & 0x7FFFF) << 5;
+            e.cmpReg64(0, 25);
+            const b_slow1 = e.len;
+            e.bCond(.lo, 0);
+            e.cmpReg64(0, 1);
+            const b_slow2 = e.len;
+            e.bCond(.ne, 0);
+
+            const eq_l_idx = e.len;
+            e.buf[b_eq_null] |= (@as(u32, @intCast(eq_l_idx - b_eq_null)) & 0x7FFFF) << 5;
+            e.buf[b_eq_dda] |= @as(u32, @intCast(eq_l_idx - b_eq_dda)) & 0x03FF_FFFF;
+            if (op == .eq) e.addImm64(0, 26, 1) else e.mov64(0, 26);
+            const b_done_eq = e.len;
+            e.bImm(0);
+
+            const ne_l_idx = e.len;
+            e.buf[b_ne_null1] |= (@as(u32, @intCast(ne_l_idx - b_ne_null1)) & 0x7FFFF) << 5;
+            e.buf[b_ne_null2] |= (@as(u32, @intCast(ne_l_idx - b_ne_null2)) & 0x3FFF) << 5;
+            if (op == .eq) e.mov64(0, 26) else e.addImm64(0, 26, 1);
+            const b_done_ne = e.len;
+            e.bImm(0);
+
+            const slow_l_idx = e.len;
+            e.buf[b_slow1] |= (@as(u32, @intCast(slow_l_idx - b_slow1)) & 0x7FFFF) << 5;
+            e.buf[b_slow2] |= (@as(u32, @intCast(slow_l_idx - b_slow2)) & 0x7FFFF) << 5;
+            e.callHelper5(@intFromPtr(&jit.jitCompareOp), pc_addr, @intFromEnum(op), epilogue_idx, pass);
+            e.buf[b_done_int] |= @as(u32, @intCast(e.len - b_done_int)) & 0x03FF_FFFF;
+            e.buf[b_done_eq] |= @as(u32, @intCast(e.len - b_done_eq)) & 0x03FF_FFFF;
+            e.buf[b_done_ne] |= @as(u32, @intCast(e.len - b_done_ne)) & 0x03FF_FFFF;
         } else {
             e.eorReg64(2, 0, 25);
             e.eorReg64(3, 1, 25);
@@ -264,9 +371,7 @@ pub const Emitter = struct {
                 .lt => .lt,
                 .le => .le,
                 .gt => .gt,
-                .ge => .ge,
-                .eq => .eq,
-                else => .ne,
+                else => .ge,
             };
             e.cset64(0, cond);
             e.orrReg64(0, 0, 26);

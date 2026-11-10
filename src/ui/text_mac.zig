@@ -103,8 +103,9 @@ pub const TextSystem = struct {
     shaping: ?*stacks.Stack = null,
     /// `font_registry.generation` when the caches were last good.
     fonts_seen: u64 = 0,
-    /// The fast path's cached shaping of printable ASCII, per font.
+    /// The fast path's cached shaping of printable ASCII, by style key and run-font id.
     tables: std.AutoHashMapUnmanaged(FontKey, *shaper.Table) = .empty,
+    font_tables: std.AutoHashMapUnmanaged(u16, *shaper.Table) = .empty,
     layouts: std.AutoHashMapUnmanaged(u64, Layout) = .empty,
     previous: std.AutoHashMapUnmanaged(u64, Layout) = .empty,
     wraps: @import("wrap_cache.zig").WrapCache(Line) = .{},
@@ -133,11 +134,9 @@ pub const TextSystem = struct {
         var fit = self.fonts.valueIterator();
         while (fit.next()) |f| cf.CFRelease(f.ref);
         self.fonts.deinit(self.gpa);
-        var tit = self.tables.valueIterator();
-        while (tit.next()) |t| {
-            t.*.deinit(self.gpa);
-            self.gpa.destroy(t.*);
-        }
+        var tit = self.font_tables.valueIterator();
+        while (tit.next()) |t| { t.*.deinit(self.gpa); self.gpa.destroy(t.*); }
+        self.font_tables.deinit(self.gpa);
         self.tables.deinit(self.gpa);
         for (self.run_fonts.items) |f| cf.CFRelease(f);
         self.run_fonts.deinit(self.gpa);
@@ -169,13 +168,9 @@ pub const TextSystem = struct {
     /// Uses the theme's font families; a change drops every cached font,
     /// shaping and wrap.
     pub fn setFamilies(self: *TextSystem, family: ?[]const u8, mono_family: ?[]const u8) void {
-        const same = struct {
-            fn f(a: ?[]const u8, b: ?[]const u8) bool {
-                if (a == null or b == null) return a == null and b == null;
-                return std.mem.eql(u8, a.?, b.?);
-            }
-        }.f;
-        if (same(self.family, family) and same(self.mono_family, mono_family)) return;
+        const same_f = (self.family == null) == (family == null) and std.mem.eql(u8, self.family orelse "", family orelse "");
+        const same_m = (self.mono_family == null) == (mono_family == null) and std.mem.eql(u8, self.mono_family orelse "", mono_family orelse "");
+        if (same_f and same_m) return;
         self.family = family;
         self.mono_family = mono_family;
         self.dropCaches();
@@ -186,11 +181,9 @@ pub const TextSystem = struct {
         var fit = self.fonts.valueIterator();
         while (fit.next()) |f| cf.CFRelease(f.ref);
         self.fonts.clearRetainingCapacity();
-        var tit = self.tables.valueIterator();
-        while (tit.next()) |t| {
-            t.*.deinit(self.gpa);
-            self.gpa.destroy(t.*);
-        }
+        var tit = self.font_tables.valueIterator();
+        while (tit.next()) |t| { t.*.deinit(self.gpa); self.gpa.destroy(t.*); }
+        self.font_tables.clearRetainingCapacity();
         self.tables.clearRetainingCapacity();
         for (self.run_fonts.items) |f| cf.CFRelease(f);
         self.run_fonts.clearRetainingCapacity();
@@ -209,11 +202,20 @@ pub const TextSystem = struct {
         self.stacks.clearRetainingCapacity();
     }
 
-    /// Fonts came or went (`ui.registerFontFace`): what was shaped goes.
+    /// Fonts came or went (`ui.registerFontFace`): family stacks and shaped runs
+    /// go, while `run_fonts`, `tables`, `installed` and `atlas` stay warm.
     pub fn syncFonts(self: *TextSystem) void {
         if (self.fonts_seen == registry.generation) return;
         self.fonts_seen = registry.generation;
-        self.dropCaches();
+        if (self.run_fonts.items.len > 4096) return self.dropCaches();
+        var fit = self.fonts.valueIterator();
+        while (fit.next()) |f| cf.CFRelease(f.ref);
+        self.fonts.clearRetainingCapacity();
+        self.tables.clearRetainingCapacity();
+        self.dropStacks();
+        freeLayouts(self.gpa, &self.layouts);
+        freeLayouts(self.gpa, &self.previous);
+        self.wraps.clear(self.gpa);
     }
 
     /// Whether every font brought so far is in what this measures with.
@@ -455,19 +457,23 @@ pub const TextSystem = struct {
         return .{ .width = w, .glyphs = try glyphs.toOwnedSlice(self.gpa) };
     }
 
-    /// Printable ASCII through the cached tables, null if it needs CoreText.
-    fn shapeFast(self: *TextSystem, s: []const u8, style: types.TextStyle) !?Layout {
+    fn tableOf(self: *TextSystem, style: types.TextStyle) ?*shaper.Table {
         const fk = fontKey(style);
-        const gop = try self.tables.getOrPut(self.gpa, fk);
+        if (self.tables.get(fk)) |t| return t;
+        const fid = self.fontId(self.font(style).ref);
+        const gop = self.font_tables.getOrPut(self.gpa, fid) catch return null;
         if (!gop.found_existing) {
-            const t = self.gpa.create(shaper.Table) catch |err| {
-                _ = self.tables.remove(fk);
-                return err;
-            };
-            t.* = .{ .font = self.font(style).ref };
+            const t = self.gpa.create(shaper.Table) catch { _ = self.font_tables.remove(fid); return null; };
+            t.* = .{ .font = self.run_fonts.items[fid] };
             gop.value_ptr.* = t;
         }
-        const t = gop.value_ptr.*;
+        self.tables.put(self.gpa, fk, gop.value_ptr.*) catch {};
+        return gop.value_ptr.*;
+    }
+
+    /// Printable ASCII through the cached tables, null if it needs CoreText.
+    fn shapeFast(self: *TextSystem, s: []const u8, style: types.TextStyle) !?Layout {
+        const t = self.tableOf(style) orelse return null;
         var gs: [256]u16 = undefined;
         var xs: [256]f32 = undefined;
         var w: f32 = 0;
@@ -489,6 +495,14 @@ pub const TextSystem = struct {
 
     /// The width of `s` on one line.
     pub fn width(self: *TextSystem, s: []const u8, style: types.TextStyle) f32 {
+        if (s.len == 0) return 0;
+        const k = key(s, style, 1);
+        if (self.cached(k)) |l| return l.width;
+        const fast = if (self.stackOf(style)) |st| st.fast else true;
+        if (fast and s.len <= 256 and !style.tabular) if (self.tableOf(style)) |t| {
+            var w: f32 = 0;
+            if (t.width(self.gpa, s, &w)) return if (style.tracking != 0) w + style.tracking * @as(f32, @floatFromInt(s.len)) else w;
+        };
         return self.layout(s, style).width;
     }
 

@@ -13,6 +13,8 @@ const props = @import("props.zig");
 const conv = @import("conv.zig");
 const ops = @import("ops.zig");
 const calls = @import("interp_call.zig");
+const jit = @import("jit.zig");
+const jit_calls = @import("jit_calls.zig");
 const arr = @import("b_array.zig");
 const key = arr.key;
 const sorter = @import("b_array_sort.zig");
@@ -20,6 +22,73 @@ const sorter = @import("b_array_sort.zig");
 fn needCallback(vm: *Vm, v: Value) Error!void {
     if (!v.isCallable()) return vm.throwError(.TypeError, "callback is not a function");
 }
+
+const CbRunner = struct {
+    vm: *Vm,
+    cb: Value,
+    closure: ?*Object,
+    this_arg: Value,
+    o_val: Value,
+    saved_sp: [*]Value,
+
+    inline fn init(vm: *Vm, cb: Value, this_arg: Value, o: *Object) Error!CbRunner {
+        const cl: ?*Object = if (cb.isObject() and cb.asObject().class == .closure) cb.asObject() else null;
+        if (cl != null) {
+            vm.enterFromHost();
+            try vm.checkNativeStack();
+            const limit = @intFromPtr(vm.stack.ptr) + vm.stack.len * @sizeOf(Value);
+            if (@intFromPtr(vm.sp) + 12 * @sizeOf(Value) > limit) {
+                return vm.throwError(.RangeError, "Maximum call stack size exceeded");
+            }
+            vm.depth += 1;
+        }
+        return .{ .vm = vm, .cb = cb, .closure = cl, .this_arg = this_arg, .o_val = o.value(), .saved_sp = vm.sp };
+    }
+
+    inline fn deinit(r: *CbRunner) void {
+        if (r.closure != null) {
+            r.vm.sp = r.saved_sp;
+            r.vm.depth -= 1;
+        }
+    }
+
+    inline fn call3(r: *CbRunner, v: Value, i: usize) Error!Value {
+        if (r.closure) |cl| {
+            const base = r.saved_sp;
+            base[0] = r.this_arg;
+            base[1] = r.cb;
+            base[2] = v;
+            base[3] = Value.fromUsize(i);
+            base[4] = r.o_val;
+            r.vm.sp = base + 5;
+            const child_f = try calls.pushClosure(r.vm, cl, base + 2, 3, base, Value.undefined, r.this_arg, false);
+            const res = jit_calls.invokeChildFrame(r.vm, base, child_f);
+            r.vm.sp = base;
+            if (res.err != 0) return jit.decodeErr(res.err);
+            return base[0];
+        }
+        return calls.call(r.vm, r.cb, r.this_arg, &.{ v, Value.fromUsize(i), r.o_val });
+    }
+
+    inline fn call4(r: *CbRunner, a: Value, v: Value, i: usize) Error!Value {
+        if (r.closure) |cl| {
+            const base = r.saved_sp;
+            base[0] = Value.undefined;
+            base[1] = r.cb;
+            base[2] = a;
+            base[3] = v;
+            base[4] = Value.fromUsize(i);
+            base[5] = r.o_val;
+            r.vm.sp = base + 6;
+            const child_f = try calls.pushClosure(r.vm, cl, base + 2, 4, base, Value.undefined, Value.undefined, false);
+            const res = jit_calls.invokeChildFrame(r.vm, base, child_f);
+            r.vm.sp = base;
+            if (res.err != 0) return jit.decodeErr(res.err);
+            return base[0];
+        }
+        return calls.call(r.vm, r.cb, Value.undefined, &.{ a, v, Value.fromUsize(i), r.o_val });
+    }
+};
 
 /// The element at i, if present.
 inline fn elemIf(vm: *Vm, o: *Object, i: usize) Error!?Value {
@@ -41,9 +110,11 @@ fn forEach(vm: *Vm, this: Value, args: []const Value) Error!Value {
     const n = try conv.lengthOf(vm, o);
     const cb = u.arg(args, 0);
     try needCallback(vm, cb);
+    var run = try CbRunner.init(vm, cb, u.arg(args, 1), o);
+    defer run.deinit();
     var i: usize = 0;
     while (i < n) : (i += 1) {
-        if (try elemIf(vm, o, i)) |v| _ = try invoke(vm, cb, u.arg(args, 1), v, i, o);
+        if (try elemIf(vm, o, i)) |v| _ = try run.call3(v, i);
     }
     return Value.undefined;
 }
@@ -54,10 +125,12 @@ fn map(vm: *Vm, this: Value, args: []const Value) Error!Value {
     const cb = u.arg(args, 0);
     try needCallback(vm, cb);
     const r = try arr.speciesCreate(vm, o, n);
+    var run = try CbRunner.init(vm, cb, u.arg(args, 1), o);
+    defer run.deinit();
     var i: usize = 0;
     while (i < n) : (i += 1) {
         if (try elemIf(vm, o, i)) |v| {
-            const mapped = try invoke(vm, cb, u.arg(args, 1), v, i, o);
+            const mapped = try run.call3(v, i);
             if (arr.isPlain(r) and i < r.elems_len) {
                 r.elems[i] = mapped;
             } else {
@@ -74,11 +147,13 @@ fn filter(vm: *Vm, this: Value, args: []const Value) Error!Value {
     const cb = u.arg(args, 0);
     try needCallback(vm, cb);
     const r = try arr.speciesCreate(vm, o, 0);
+    var run = try CbRunner.init(vm, cb, u.arg(args, 1), o);
+    defer run.deinit();
     var at: usize = 0;
     var i: usize = 0;
     while (i < n) : (i += 1) {
         if (try elemIf(vm, o, i)) |v| {
-            if (ops.truthy(try invoke(vm, cb, u.arg(args, 1), v, i, o))) {
+            if (ops.truthy(try run.call3(v, i))) {
                 if (arr.isPlain(r) and at == r.elems_len) {
                     if (at >= r.elems_cap) try objmod.growElems(vm, r, at + 1);
                     r.elems[at] = v;
@@ -99,10 +174,12 @@ fn every(vm: *Vm, this: Value, args: []const Value) Error!Value {
     const n = try conv.lengthOf(vm, o);
     const cb = u.arg(args, 0);
     try needCallback(vm, cb);
+    var run = try CbRunner.init(vm, cb, u.arg(args, 1), o);
+    defer run.deinit();
     var i: usize = 0;
     while (i < n) : (i += 1) {
         if (try elemIf(vm, o, i)) |v| {
-            if (!ops.truthy(try invoke(vm, cb, u.arg(args, 1), v, i, o))) return Value.false;
+            if (!ops.truthy(try run.call3(v, i))) return Value.false;
         }
     }
     return Value.true;
@@ -113,10 +190,12 @@ fn some(vm: *Vm, this: Value, args: []const Value) Error!Value {
     const n = try conv.lengthOf(vm, o);
     const cb = u.arg(args, 0);
     try needCallback(vm, cb);
+    var run = try CbRunner.init(vm, cb, u.arg(args, 1), o);
+    defer run.deinit();
     var i: usize = 0;
     while (i < n) : (i += 1) {
         if (try elemIf(vm, o, i)) |v| {
-            if (ops.truthy(try invoke(vm, cb, u.arg(args, 1), v, i, o))) return Value.true;
+            if (ops.truthy(try run.call3(v, i))) return Value.true;
         }
     }
     return Value.false;
@@ -127,13 +206,15 @@ fn reduceImpl(vm: *Vm, this: Value, args: []const Value, right: bool) Error!Valu
     const n = try conv.lengthOf(vm, o);
     const cb = u.arg(args, 0);
     try needCallback(vm, cb);
+    var run = try CbRunner.init(vm, cb, Value.undefined, o);
+    defer run.deinit();
     var step: usize = 0;
     var acc: ?Value = if (args.len > 1) args[1] else null;
     while (step < n) : (step += 1) {
         const i = if (right) n - 1 - step else step;
         const v = (try elemIf(vm, o, i)) orelse continue;
         if (acc) |a| {
-            acc = try calls.call(vm, cb, Value.undefined, &.{ a, v, Value.fromUsize(i), o.value() });
+            acc = try run.call4(a, v, i);
         } else acc = v;
     }
     return acc orelse vm.throwError(.TypeError, "Reduce of empty array with no initial value");
@@ -152,7 +233,8 @@ fn findImpl(vm: *Vm, this: Value, args: []const Value, backward: bool, mode: Fin
     const n = try conv.lengthOf(vm, o);
     const cb = u.arg(args, 0);
     try needCallback(vm, cb);
-    const this_arg = u.arg(args, 1);
+    var run = try CbRunner.init(vm, cb, u.arg(args, 1), o);
+    defer run.deinit();
     var step: usize = 0;
     while (step < n) : (step += 1) {
         const i = if (backward) n - 1 - step else step;
@@ -160,7 +242,7 @@ fn findImpl(vm: *Vm, this: Value, args: []const Value, backward: bool, mode: Fin
             o.elems[i]
         else
             try props.get(vm, o, try key(vm, i));
-        if (ops.truthy(try invoke(vm, cb, this_arg, v, i, o))) {
+        if (ops.truthy(try run.call3(v, i))) {
             return if (mode == .value) v else Value.fromUsize(i);
         }
     }

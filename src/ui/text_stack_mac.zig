@@ -403,7 +403,7 @@ pub fn build(gpa: std.mem.Allocator, list: []const u8, style: types.TextStyle, z
         break;
     };
     const p = owned[st.primary];
-    st.fast = !p.brought and p.stroke == 0 and p.ranges.len == 0;
+    st.fast = !p.brought and p.stroke == 0 and st.primary == 0 and registry.rangesCoverPrintableAscii(p.ranges);
     return st;
 }
 
@@ -421,7 +421,7 @@ fn brought(gpa: std.mem.Allocator, face: *const registry.Face, style: types.Text
         return null;
     };
     const bold = weight >= 600 and face.weight[1] < 600;
-    return .{ .ref = ref, .ranges = ranges, .stroke = if (bold) strokeFor(@floatCast(size)) else 0, .brought = face.native != null };
+    return .{ .ref = ref, .ranges = ranges, .stroke = if (bold) strokeFor(@floatCast(size)) else 0, .brought = face.complex_ascii };
 }
 
 /// The names that mean the system's own fonts.

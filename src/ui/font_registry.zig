@@ -71,6 +71,8 @@ pub const Face = struct {
     gpa: std.mem.Allocator,
     /// The text system's handle for it, where it has one (a font descriptor).
     native: ?*anyopaque = null,
+    /// True when the sfnt carries AAT state tables or unshielded 3+-glyph ligatures.
+    complex_ascii: bool = false,
 
     pub fn covers(f: *const Face, cp: u21) bool {
         return rangesCover(f.ranges, cp);
@@ -81,6 +83,13 @@ pub fn rangesCover(ranges: []const [2]u21, cp: u21) bool {
     if (ranges.len == 0) return true;
     for (ranges) |r| if (cp >= r[0] and cp <= r[1]) return true;
     return false;
+}
+
+pub fn rangesCoverPrintableAscii(ranges: []const [2]u21) bool {
+    if (ranges.len == 0) return true;
+    var cp: u21 = 0x20;
+    while (cp < 0x7f) : (cp += 1) if (!rangesCover(ranges, cp)) return false;
+    return true;
 }
 
 pub const RegisterError = sfnt.Error;
@@ -123,6 +132,7 @@ pub fn registerFace(gpa: std.mem.Allocator, o: FaceOptions) RegisterError!void {
         .serial = serial,
         .gpa = gpa,
         .native = native,
+        .complex_ascii = bytes.len > 0 and sfnt.hasUnshieldedMultiLigature(bytes),
     };
     const list_gpa = faces_gpa orelse gpa;
     faces_gpa = list_gpa;
@@ -145,6 +155,7 @@ pub fn fillFace(family: []const u8, order: u32, bytes: []const u8, local: ?[]con
             errdefer f.gpa.free(decoded);
             if (!portable) f.native = @import("text_stack_mac.zig").describe(decoded) orelse return error.Unsupported;
             f.bytes = decoded;
+            f.complex_ascii = sfnt.hasUnshieldedMultiLigature(decoded);
         }
         generation += 1;
         return;

@@ -111,7 +111,9 @@ pub const Engine = struct {
     registered_scope: ?*const vars.Scope = null,
     style_share: @import("../perf_rules.zig").StyleShareCache = .{},
     share_gen: u32 = 0,
+    last_url_hash: u64 = 0,
     in_batch_flush: bool = false,
+    any_scope_unpersist: bool = false,
     last_scope_root: ?*const dom.Node = null,
     last_scope_ix: ?*rule_index.Index = null,
     layout_change_node: ?*dom.Node = null,
@@ -306,8 +308,7 @@ pub const Engine = struct {
         e.fonts.interned.clearRetainingCapacity();
         e.generation +%= 1;
         if (e.generation == 0) e.generation = 1;
-        e.share_gen +%= 1;
-        if (e.share_gen == 0) e.share_gen = 1;
+        scopes.resetShareForAll(e);
         e.root_font = 16;
         e.match_ctx = .{ .doc = e.doc };
         e.viewport_read = false;
@@ -324,8 +325,7 @@ pub const Engine = struct {
     }
 
     pub fn beginFlush(e: *Engine) void {
-        e.share_gen +%= 1;
-        if (e.share_gen == 0) e.share_gen = 1;
+        scopes.maybeInvalidateShare(e);
         e.in_batch_flush = true;
     }
 
@@ -337,7 +337,7 @@ pub const Engine = struct {
         if (e.generation == 0 or e.index_dirty) { try e.restyleAll(); return .layout; }
         const root = if (e.doc.documentElement() == node) node else null;
         const root_size_before = if (root) |r| if (r.computed) |c| c.font_size else 16 else 16;
-        if (!e.in_batch_flush) { e.share_gen +%= 1; if (e.share_gen == 0) e.share_gen = 1; }
+        if (!e.in_batch_flush) scopes.maybeInvalidateShare(e);
         e.match_ctx = .{ .doc = e.doc };
         var change: Change = .none;
         var at: ?*dom.Node = node;
@@ -450,17 +450,7 @@ pub const Engine = struct {
                 if (ch == .layout) scopes.noteLayoutChange(e, n, null, fresh_ptr);
             }
         }
-        const stored: *const Style = blk: {
-            if (old) |o| {
-                if (compared == .none) break :blk o;
-                // Boxes hold this one: only paint read it, and it stays theirs.
-                if (compared == .paint) { @constCast(o).* = e.scratch_fresh; break :blk o; }
-                const s = try e.genArena().create(Style);
-                s.* = e.scratch_fresh;
-                break :blk s;
-            }
-            break :blk fresh_ptr;
-        };
+        const stored = try scopes.storeComputedStyle(e, n, old, in_svg, fresh_ptr, compared, change);
         n.computed = stored;
         n.style_generation = e.generation;
         n.css_vars = r.scope;

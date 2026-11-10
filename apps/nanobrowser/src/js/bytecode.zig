@@ -202,8 +202,14 @@ pub const Op = enum(u8) {
 
 pub const IC = struct {
     pub const missing_slot: u32 = std.math.maxInt(u32);
-    pub const proto_poly_cap = 8;
+    pub const proto_poly_cap = 16;
     pub const own_poly_cap = 4;
+
+    pub inline fn protoHashBase(sh: *const Shape) usize {
+        const p = @intFromPtr(sh);
+        const x = p ^ (p >> 3);
+        return ((x >> 4) & 7) << 1;
+    }
 
     key: PropKey,
     shape: ?*Shape = null,
@@ -284,6 +290,7 @@ pub const FuncProto = struct {
     nparams: u16,
     nlocals: u32,
     max_stack: u32,
+    stack_need_bytes: u32 = 0,
     strict: bool,
     is_arrow: bool,
     is_async: bool,
@@ -300,9 +307,20 @@ pub const FuncProto = struct {
     borrowed_code: bool = false,
     module: ?*module.Module = null,
     jit_fn: ?*const anyopaque = null,
+    jit_fast_fn: ?*const anyopaque = null,
     jit_cache_slot: ?*?*const anyopaque = null,
     hot_count: u16 = 0,
     jit_disabled: bool = false,
+
+    pub const fast_entry_words = 24;
+
+    pub inline fn setJitFn(p: *FuncProto, jfn: ?*const anyopaque) void {
+        p.jit_fn = jfn;
+        p.jit_fast_fn = if (jfn != null and !p.is_class_ctor and !p.needs_args and p.nlocals <= 256)
+            @ptrFromInt(@intFromPtr(jfn.?) + fast_entry_words * @sizeOf(u32))
+        else
+            null;
+    }
 
     pub fn trace(p: *FuncProto, m: *heap.Marker) void {
         m.markValues(p.constants);
@@ -423,7 +441,7 @@ pub fn effect(op: Op) i32 {
         .iter_close, .iter_drop => -3,
         .async_iter_close => -2,
         .iter_result => 0,
-        .for_in_start => 0,
+        .for_in_start => 1,
         .for_in_next => 1,
         .async_start, .initial_yield => 0,
         .yield_, .yield_raw, .await_ => 1,

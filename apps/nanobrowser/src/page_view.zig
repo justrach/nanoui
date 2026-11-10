@@ -566,7 +566,9 @@ pub fn view(p: *Page, c: *ui.Context, rect: box.Rect) void {
         }
     }
     web.paintStart(p);
+    const rep_t0 = perf.nowNs();
     replay.replay(c, shown, Replay{ .p = p }, rect);
+    perf.prof_replay_ns += perf.nowNs() -| rep_t0;
     @import("find.zig").draw(p, c, shown, rect);
     scrollbar(c, shown, rect);
     controls.selectList(p, c, rect);

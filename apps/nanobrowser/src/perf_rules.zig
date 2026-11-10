@@ -80,10 +80,11 @@ pub fn isResourceTag(tag: []const u8) bool {
 /// Theorem 52 (`NanoUI.Speedometer3Climb.subtree_has_id_and_insertion_work_propagation_sound`):
 /// Whether an element tag requires post-insertion work in `mutate.inserted` (`script`, `iframe`, `link`, or custom element).
 pub fn isInsertionWorkTag(tag: []const u8) bool {
+    if (std.mem.indexOfScalar(u8, tag, '-') != null) return true;
     return switch (tag.len) {
         4 => std.mem.eql(u8, tag, "link"),
         6 => std.mem.eql(u8, tag, "script") or std.mem.eql(u8, tag, "iframe"),
-        else => std.mem.indexOfScalar(u8, tag, '-') != null,
+        else => false,
     };
 }
 
@@ -223,23 +224,75 @@ pub inline fn nodeSelfBloom(n: *const dom.Node) u64 {
     return b;
 }
 
-/// Computes `n.ancestor_bloom` from its parent (or walks up to the root if `n == root`).
+const anc_state_attr_mask: u64 = attrBit("disabled") | attrBit("open") | attrBit("inert") |
+    attrBit("lang") | attrBit("dir") | attrBit("readonly") | attrBit("required") |
+    attrBit("checked") | attrBit("selected") | attrBit("type") | attrBit("href");
+
+pub fn nodeSelfHash(n: *const dom.Node) u64 {
+    const doc = n.doc;
+    var h: u64 = std.hash.Wyhash.hash(@intFromEnum(n.ns), n.tag);
+    if (n.class_attr) |ca| h = std.hash.Wyhash.hash(h ^ 0x517CC1B727220A95, ca);
+    if (n.id_attr) |id| {
+        const ref_id = (doc.rule_id_bloom & attrBit(id)) != 0 or (doc.rule_attr_filter & attrBit("id")) != 0 or blk: {
+            if (std.mem.indexOfScalar(u8, doc.url, '#')) |idx| break :blk std.mem.eql(u8, doc.url[idx + 1 ..], id);
+            break :blk false;
+        };
+        if (ref_id) h = std.hash.Wyhash.hash(h ^ 0x94D049BB133111EB, id);
+    }
+    const mask = doc.rule_attr_filter | anc_state_attr_mask;
+    if ((n.attr_filter & mask) != 0) {
+        for (n.attrs.items) |a| {
+            if ((a.name.len == 5 and a.name[0] == 'c' and std.mem.eql(u8, a.name, "class")) or
+                (a.name.len == 2 and a.name[0] == 'i' and std.mem.eql(u8, a.name, "id"))) continue;
+            if ((attrBit(a.name) & mask) == 0) continue;
+            h = std.hash.Wyhash.hash(std.hash.Wyhash.hash(h ^ 0xBF58476D1CE4E5B9, a.name), a.value);
+        }
+    }
+    var flags: u64 = @intFromBool(doc.hover == n);
+    flags |= @as(u64, @intFromBool(doc.active == n)) << 1;
+    flags |= @as(u64, @intFromBool(doc.focus == n)) << 2;
+    if (doc.focus) |f| flags |= @as(u64, @intFromBool(n.contains(f))) << 3;
+    if (n.checked) |ck| flags |= (@as(u64, 1) + @intFromBool(ck)) << 4;
+    if (n.selected) |sl| flags |= (@as(u64, 1) + @intFromBool(sl)) << 6;
+    flags |= @as(u64, @intFromBool(n.modal)) << 8;
+    flags |= @as(u64, @intFromBool(n.popover_open)) << 9;
+    flags |= @as(u64, @intFromBool(n.value != null)) << 10;
+    return h ^ (flags *% 0xD6E8FEB86659FD93);
+}
+
+/// Computes `n.ancestor_bloom` and `n.ancestor_hash` from its parent (or walks up to the root if `n == root`).
 pub inline fn updateAncestorBloom(n: *dom.Node, root: *const dom.Node) void {
     if (n.parent) |p| if (p.is_shadow) {
         n.ancestor_bloom = 0;
+        n.ancestor_hash = 0;
         return;
     };
     if (n != root) if (n.parent) |p| if (p.kind == .element) {
         n.ancestor_bloom = p.ancestor_bloom | nodeSelfBloom(p);
+        n.ancestor_hash = (p.ancestor_hash *% 0x9E3779B97F4A7C15) ^ nodeSelfHash(p);
         return;
     };
     var b: u64 = 0;
+    var chain: [64]*const dom.Node = undefined;
+    var len: usize = 0;
     var at = n.parent;
     while (at) |x| : (at = x.parent) {
         if (x.is_shadow) break;
-        if (x.kind == .element) b |= nodeSelfBloom(x);
+        if (x.kind == .element) {
+            b |= nodeSelfBloom(x);
+            if (len < chain.len) {
+                chain[len] = x;
+                len += 1;
+            }
+        }
+    }
+    var h: u64 = 0;
+    while (len > 0) {
+        len -= 1;
+        h = (h *% 0x9E3779B97F4A7C15) ^ nodeSelfHash(chain[len]);
     }
     n.ancestor_bloom = b;
+    n.ancestor_hash = h;
 }
 
 /// Synchronizes `attr_filter`, `id_attr`, `class_attr`, `class_filter`, and `class_single` on `dom.Node`.
@@ -398,6 +451,8 @@ test "protoIcHits validates epoch and resource tags and layout-only flush" {
 }
 
 pub var prof_style_ns: u64 = 0;
+pub var prof_js_task_ns: u64 = 0;
+pub var prof_replay_ns: u64 = 0;
 pub var prof_style_shared: u64 = 0;
 pub var prof_style_elems: u64 = 0;
 pub var prof_ss_has: u64 = 0;
