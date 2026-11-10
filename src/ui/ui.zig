@@ -108,7 +108,16 @@ pub const dock = struct {
 /// as marked text: off, each typed letter is committed as it's typed, as
 /// a search field wants. On by default; no effect elsewhere.
 pub fn setInlinePredictions(on: bool) void {
-    if (comptime @import("builtin").os.tag == .macos) @import("textinput.zig").inline_predictions = on;
+    if (comptime @import("builtin").os.tag != .macos) return;
+    @import("textinput.zig").inline_predictions = on;
+    // The runtime library (`rt.zig`) keeps its own copy, and its text input
+    // reads that one.
+    if (comptime @import("../rt.zig").enabled) {
+        const Ext = struct {
+            extern fn nanoui_rt_set_inline_predictions(on: u8) callconv(.c) void;
+        };
+        Ext.nanoui_rt_set_inline_predictions(@intFromBool(on));
+    }
 }
 /// Holds the menu bar's key equivalents back while a view captures key
 /// combinations (a shortcut editor): ⌘ chords reach the view instead.
@@ -118,7 +127,17 @@ pub const suspendMenuKeyEquivalents = keys.suspendMenuKeyEquivalents;
 /// glyph at its outline's own weight, as a renderer of its own would. Set it
 /// before the first frame: glyphs already in the atlas keep their weight.
 pub fn setFontSmoothing(on: bool) void {
-    if (comptime !@import("text.zig").portable) @import("atlas.zig").smoothing_allowed = on;
+    if (comptime @import("text.zig").portable) return;
+    @import("atlas.zig").smoothing_allowed = on;
+    // The runtime library (`rt.zig`) keeps its own copy. Frames it draws read
+    // that one, so without this a frame the app's copy drew and one the
+    // library drew give the same glyphs different weights.
+    if (comptime @import("../rt.zig").enabled) {
+        const Ext = struct {
+            extern fn nanoui_rt_set_font_smoothing(on: u8) callconv(.c) void;
+        };
+        Ext.nanoui_rt_set_font_smoothing(@intFromBool(on));
+    }
 }
 
 pub const key = widgets.key;

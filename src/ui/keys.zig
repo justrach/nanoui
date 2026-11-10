@@ -44,6 +44,14 @@ pub var menu_key_equivalents_suspended: bool = false;
 /// again. Main thread. No effect where nanoui has no native menu bar.
 pub fn suspendMenuKeyEquivalents(on: bool) void {
     menu_key_equivalents_suspended = on;
+    // The runtime library (`rt.zig`) keeps its own copy, and its menu
+    // handling reads that one.
+    if (comptime @import("../rt.zig").enabled) {
+        const Ext = struct {
+            extern fn nanoui_rt_suspend_menu_key_equivalents(on: u8) callconv(.c) void;
+        };
+        Ext.nanoui_rt_suspend_menu_key_equivalents(@intFromBool(on));
+    }
 }
 
 /// The key a shifted punctuation mark is typed with on a US keyboard
