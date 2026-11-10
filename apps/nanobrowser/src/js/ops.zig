@@ -188,7 +188,7 @@ pub fn strictEquals(vm: *Vm, a: Value, b: Value) Error!bool {
     return false;
 }
 
-fn nullishOrDda(v: Value) bool {
+pub inline fn nullishOrDda(v: Value) bool {
     return v.isNullish() or (v.isObject() and v.asObject().flags.html_dda);
 }
 

@@ -58,6 +58,8 @@ pub const Attr = struct {
     op: AttrOp = .exists,
     /// The `i` flag; `s` clears it.
     ci: ?bool = null,
+    /// Whether `lower` is case-insensitive by default on HTML elements.
+    ci_html: bool = false,
 };
 
 pub const Nth = struct {

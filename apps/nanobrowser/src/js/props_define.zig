@@ -168,7 +168,10 @@ pub fn ordinaryDefine(vm: *Vm, o: *Object, key: PropKey, d: Desc) Error!bool {
         try sparsify(vm, o);
     }
     const s = o.shape.find(key).?;
-    if (o.flags.is_proto) vm.bumpProtoEpoch();
+    if (o.flags.is_proto) {
+        o.flags.proto_dirty = true;
+        vm.bumpProtoEpoch();
+    }
     if (@as(u8, @bitCast(nf)) != @as(u8, @bitCast(cf))) {
         if (!o.shape.is_dict) o.shape = try shape_mod.toDict(vm, o.shape, o.shape.proto);
         shape_mod.dictSetFlags(o.shape, s, nf);

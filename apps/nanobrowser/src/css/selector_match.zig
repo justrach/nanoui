@@ -161,11 +161,15 @@ const ci_attrs = std.StaticStringMap(void).initComptime(.{
     .{"type"},       .{"valign"},         .{"valuetype"}, .{"vlink"},
 });
 
+pub fn isCiHtmlAttr(lower_name: []const u8) bool {
+    return ci_attrs.has(lower_name);
+}
+
 fn attrMatches(a: *const sel.Attr, el: *const Node) bool {
     const is_html = el.ns == .html;
     const v = el.attr(if (is_html) a.lower else a.name) orelse return false;
     if (a.op == .exists) return true;
-    const ci = a.ci orelse (is_html and ci_attrs.has(a.lower));
+    const ci = a.ci orelse (is_html and a.ci_html);
     const want = a.value;
     return switch (a.op) {
         .exists => true,

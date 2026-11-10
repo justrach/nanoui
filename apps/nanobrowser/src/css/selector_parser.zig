@@ -248,7 +248,8 @@ pub const Parser = struct {
             if (name.kind != .ident) return null;
             c.i += 1;
         }
-        var a: Attr = .{ .name = name.text, .lower = try lower(p.arena, name.text) };
+        const low = try lower(p.arena, name.text);
+        var a: Attr = .{ .name = name.text, .lower = low, .ci_html = @import("selector_match.zig").isCiHtmlAttr(low) };
         c.skipWs();
         const op_tok = c.peek() orelse return null;
         if (op_tok.kind == .rbracket) {

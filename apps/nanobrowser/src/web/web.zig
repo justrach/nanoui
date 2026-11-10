@@ -349,7 +349,15 @@ pub fn setFocus(p: *Page, node: ?*dom.Node) void {
     const old = p.doc.focus;
     if (old == node) return;
     p.doc.focus = node;
-    p.doc.touchStyle();
+    if (p.doc.scan_dirty or p.doc.dirty_all) {
+        p.doc.touchStyle();
+    } else {
+        for ([_]?*dom.Node{ old, node }) |maybe| {
+            const n = maybe orelse continue;
+            const top = p.engine.invalidatedByState(n, .focus) orelse n;
+            p.doc.markStyle(top);
+        }
+    }
     const w = p.js orelse return;
     w.changed();
     w.blur_request = true;

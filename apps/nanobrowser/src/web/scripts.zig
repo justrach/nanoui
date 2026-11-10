@@ -91,7 +91,7 @@ pub fn hasScripts(doc: *dom.Document) bool {
     while (at) |n| : (at = n.nextDeep(root)) {
         if (n.kind != .element) continue;
         if (n.isTag("script") and kindOf(n) != null) return true;
-        for (n.attrs.items) |a| if (a.name.len > 2 and a.name[0] == 'o' and a.name[1] == 'n') return true;
+        if (n.has_on_attr) return true;
     }
     return false;
 }
@@ -102,7 +102,7 @@ pub fn begin(w: *World) void {
     var at = root.first_child;
     while (at) |n| : (at = n.nextDeep(root)) {
         if (n.kind != .element) continue;
-        for (n.attrs.items) |a| if (a.name.len > 2 and a.name[0] == 'o' and a.name[1] == 'n') w.listen(a.name[2..]);
+        if (n.has_on_attr) for (n.attrs.items) |a| if (a.name.len > 2 and a.name[0] == 'o' and a.name[1] == 'n') w.listen(a.name[2..]);
         if (n.isTag("script")) parserScript(w, n, null) catch {};
     }
     pump(w);

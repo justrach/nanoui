@@ -132,6 +132,16 @@ pub fn exec(vm: *Vm, f: *Frame, op: Op) Error!void {
             vm.sp = sp - 1;
             f.pc = pc + 7;
         },
+        .get_env_check => {
+            var e = f.env.?;
+            var d = pc[1];
+            while (d != 0) : (d -= 1) e = e.parent.?;
+            const v = e.slots()[u16At(pc + 2)];
+            if (v.isHole()) return throwTdz(vm, f, u32At(pc + 4));
+            sp[0] = v;
+            vm.sp = sp + 1;
+            f.pc = pc + 8;
+        },
         .put_env_check => {
             var e = f.env.?;
             var d = pc[1];
@@ -437,6 +447,41 @@ pub fn exec(vm: *Vm, f: *Frame, op: Op) Error!void {
         .to_object => {
             (sp - 1)[0] = (try conv.toObject(vm, (sp - 1)[0])).value();
             f.pc = pc + 1;
+        },
+        .new_object => {
+            sp[0] = (try objmod.newPlain(vm)).value();
+            vm.sp = sp + 1;
+            f.pc = pc + 1;
+        },
+        .define_field => {
+            const ic = &f.fp.ics[u32At(pc + 1)];
+            const o = (sp - 2)[0].asObject();
+            const v = (sp - 1)[0];
+            if (o.shape == ic.shape and ic.is_transition and ic.slot < o.slot_cap and !o.flags.is_proto) {
+                o.shape = ic.holder_shape.?;
+                o.slots[ic.slot] = v;
+            } else {
+                try icache.defineField(vm, ic, o, v);
+            }
+            vm.sp = sp - 1;
+            f.pc = pc + 5;
+        },
+        .array_from => {
+            const n = u32At(pc + 1);
+            const arr = try objmod.newArray(vm, (sp - n)[0..n]);
+            (sp - n)[0] = arr.value();
+            vm.sp = sp - n + 1;
+            f.pc = pc + 5;
+        },
+        .array_append => {
+            try objmod.arrayPush(vm, (sp - 2)[0].asObject(), (sp - 1)[0]);
+            vm.sp = sp - 1;
+            f.pc = pc + 1;
+        },
+        .closure => {
+            sp[0] = (try objectops.makeClosure(vm, f.fp.protos[u32At(pc + 1)], f.env)).value();
+            vm.sp = sp + 1;
+            f.pc = pc + 5;
         },
         .with_get, .with_get_call, .with_put, .with_delete => try execWith(vm, f, op),
         .nop => f.pc = pc + 1,

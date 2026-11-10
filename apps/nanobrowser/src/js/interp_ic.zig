@@ -35,6 +35,15 @@ pub fn callSetterSlot(vm: *Vm, ic: *bc.IC, slot_val: Value, receiver: Value, v: 
 pub fn getField(vm: *Vm, ic: *bc.IC, v: Value) Error!Value {
     if (!v.isObject()) return props.getV(vm, v, ic.key);
     const o = v.asObject();
+    if (o.shape == ic.shape) {
+        if (ic.fast_own_data) return o.slots[ic.slot];
+        if (ic.slot == bc.IC.missing_slot) {
+            if (ic.epoch == vm.proto_epoch) return Value.undefined;
+        } else if (if (ic.holder) |h| (h.shape == ic.holder_shape and ic.epoch == vm.proto_epoch) else true) {
+            const sv = (ic.holder orelse o).slots[ic.slot];
+            return if (ic.is_accessor) props.callGetter(vm, sv, v) else sv;
+        }
+    }
     if (!o.flags.exotic and !ic.key.isIndex()) {
         if (o.flags.lazy_fn) try props.touchLazy(vm, o, ic.key);
         const sh = o.shape;
@@ -47,20 +56,23 @@ pub fn getField(vm: *Vm, ic: *bc.IC, v: Value) Error!Value {
                 ic.slot = slot;
                 ic.epoch = 0;
                 ic.is_accessor = acc;
+                ic.is_transition = false;
+                ic.fast_own_data = !acc;
             }
             if (acc) return props.callGetter(vm, o.slots[slot], v);
             return o.slots[slot];
         }
         // A lazy function's name and length aren't in its shape yet, so "not found here" can't be cached.
         const is_lazy_key = ic.key.eql(vm.k.name) or ic.key.eql(vm.k.length) or ic.key.eql(vm.k.prototype);
-        if (!sh.is_dict and !(sh == vm.fn_root and is_lazy_key) and !(o.class == .array and ic.key.eql(vm.k.length))) {
+        const recv_may_be_lazy = is_lazy_key and (o.class == .closure or o.class == .native or sh == vm.fn_root);
+        if (!sh.is_dict and !recv_may_be_lazy and !(o.class == .array and ic.key.eql(vm.k.length))) {
             var cur = sh.proto;
             while (cur) |h| : (cur = h.shape.proto) {
                 if (h.flags.exotic or h.shape.is_dict) break;
                 if (h.flags.lazy_fn) try props.touchLazy(vm, h, ic.key);
                 if (h.class == .array and ic.key.eql(vm.k.length)) break;
                 const hs = h.shape;
-                if (hs == vm.fn_root and is_lazy_key) break;
+                if ((hs == vm.fn_root or h.class == .closure or h.class == .native) and is_lazy_key) break;
                 if (hs.find(ic.key)) |slot| {
                     const acc = hs.flagsAt(slot).accessor;
                     if (!hs.is_dict) {
@@ -70,10 +82,22 @@ pub fn getField(vm: *Vm, ic: *bc.IC, v: Value) Error!Value {
                         ic.slot = slot;
                         ic.epoch = vm.proto_epoch;
                         ic.is_accessor = acc;
+                        ic.is_transition = false;
+                        ic.fast_own_data = false;
                     }
                     if (acc) return props.callGetter(vm, h.slots[slot], v);
                     return h.slots[slot];
                 }
+            } else {
+                ic.shape = sh;
+                ic.holder = null;
+                ic.holder_shape = null;
+                ic.slot = bc.IC.missing_slot;
+                ic.epoch = vm.proto_epoch;
+                ic.is_accessor = false;
+                ic.is_transition = false;
+                ic.fast_own_data = false;
+                return Value.undefined;
             }
         }
     }
@@ -83,6 +107,21 @@ pub fn getField(vm: *Vm, ic: *bc.IC, v: Value) Error!Value {
 pub fn putField(vm: *Vm, ic: *bc.IC, t: Value, v: Value, strict: bool) Error!void {
     if (!t.isObject()) return putOnPrimitive(vm, t, ic.key, v, strict);
     const o = t.asObject();
+    if (o.shape == ic.shape) {
+        if (ic.fast_own_data) {
+            o.slots[ic.slot] = v;
+            return;
+        }
+        if (ic.is_transition and ic.epoch == vm.proto_epoch and o.flags.extensible and !o.flags.is_proto) {
+            if (ic.slot >= o.slot_cap) try objmod.growSlots(vm, o, ic.slot + 1);
+            o.shape = ic.holder_shape.?;
+            o.slots[ic.slot] = v;
+            return;
+        }
+        if (ic.is_accessor and (if (ic.holder) |h| (h.shape == ic.holder_shape and ic.epoch == vm.proto_epoch) else true)) {
+            return callSetterSlot(vm, ic, (ic.holder orelse o).slots[ic.slot], t, v, strict);
+        }
+    }
     if (!o.flags.exotic and !ic.key.isIndex() and !o.flags.lazy_fn) {
         const sh = o.shape;
         if (sh.find(ic.key)) |slot| {
@@ -95,6 +134,8 @@ pub fn putField(vm: *Vm, ic: *bc.IC, t: Value, v: Value, strict: bool) Error!voi
                     ic.slot = slot;
                     ic.epoch = 0;
                     ic.is_accessor = true;
+                    ic.is_transition = false;
+                    ic.fast_own_data = false;
                 }
                 return callSetterSlot(vm, ic, o.slots[slot], t, v, strict);
             }
@@ -106,6 +147,8 @@ pub fn putField(vm: *Vm, ic: *bc.IC, t: Value, v: Value, strict: bool) Error!voi
                     ic.slot = slot;
                     ic.epoch = 0;
                     ic.is_accessor = false;
+                    ic.is_transition = false;
+                    ic.fast_own_data = true;
                 }
                 o.slots[slot] = v;
                 return;
@@ -124,16 +167,62 @@ pub fn putField(vm: *Vm, ic: *bc.IC, t: Value, v: Value, strict: bool) Error!voi
                         ic.slot = slot;
                         ic.epoch = vm.proto_epoch;
                         ic.is_accessor = true;
+                        ic.is_transition = false;
+                        ic.fast_own_data = false;
                         return callSetterSlot(vm, ic, h.slots[slot], t, v, strict);
                     }
                     break;
                 }
+            } else if (o.flags.extensible and !o.flags.is_proto and sh.count < 512) {
+                const slot = sh.count;
+                if (slot >= o.slot_cap) try objmod.growSlots(vm, o, slot + 1);
+                const new_sh = try shape_mod.transition(vm, sh, ic.key, shape_mod.PropFlags.all);
+                o.shape = new_sh;
+                o.slots[slot] = v;
+                ic.shape = sh;
+                ic.holder = null;
+                ic.holder_shape = new_sh;
+                ic.slot = slot;
+                ic.epoch = vm.proto_epoch;
+                ic.is_accessor = false;
+                ic.is_transition = true;
+                ic.fast_own_data = false;
+                return;
             }
         }
     }
     if (!try props.setR(vm, o, ic.key, v, t)) {
         if (strict) return props.throwReadonly(vm, ic.key);
     }
+}
+
+pub fn defineField(vm: *Vm, ic: *bc.IC, o: *Object, v: Value) Error!void {
+    if (o.shape == ic.shape and ic.is_transition and !o.flags.is_proto) {
+        if (ic.slot >= o.slot_cap) try objmod.growSlots(vm, o, ic.slot + 1);
+        o.shape = ic.holder_shape.?;
+        o.slots[ic.slot] = v;
+        return;
+    }
+    const sh = o.shape;
+    if (!o.flags.exotic and !o.flags.lazy_fn and !o.flags.is_proto and !ic.key.isIndex() and !sh.is_dict and sh.count < 512 and !(o.class == .array and ic.key.eql(vm.k.length))) {
+        if (sh.find(ic.key) == null) {
+            const slot = sh.count;
+            if (slot >= o.slot_cap) try objmod.growSlots(vm, o, slot + 1);
+            const new_sh = try shape_mod.transition(vm, sh, ic.key, shape_mod.PropFlags.all);
+            o.shape = new_sh;
+            o.slots[slot] = v;
+            ic.shape = sh;
+            ic.holder = null;
+            ic.holder_shape = new_sh;
+            ic.slot = slot;
+            ic.epoch = 0;
+            ic.is_accessor = false;
+            ic.is_transition = true;
+            ic.fast_own_data = false;
+            return;
+        }
+    }
+    return props.defineData(vm, o, ic.key, v, shape_mod.PropFlags.all);
 }
 
 fn putOnPrimitive(vm: *Vm, t: Value, key: PropKey, v: Value, strict: bool) Error!void {

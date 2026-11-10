@@ -20,6 +20,7 @@ const slow = @import("interp_slow.zig");
 const icache = @import("interp_ic.zig");
 const calls = @import("interp_call.zig");
 const unwind = @import("interp_unwind.zig");
+const jit = @import("jit.zig");
 
 inline fn u16At(p: [*]const u8) u32 {
     return std.mem.readInt(u16, p[0..2], .little);
@@ -57,8 +58,23 @@ pub fn run(vm: *Vm) Error!Value {
     var sp: [*]Value = vm.sp;
     var argc: u32 = 0;
     var err: Error = error.Thrown;
-    while (true) {
+    loop: while (true) {
         dispatch: {
+            if (pc == f.fp.code.ptr and f.co == null) {
+                if (jit.getOrCompile(vm, f.fp)) |jfn| {
+                    const entry = f.is_entry;
+                    const r = ok(Value, jit.execFrame(vm, f, jfn, &sp), &err) orelse break :dispatch;
+                    if (entry) {
+                        vm.sp = sp;
+                        return r;
+                    }
+                    sp[0] = r;
+                    sp += 1;
+                    f = &vm.frames[vm.frame_top - 1];
+                    pc = f.pc;
+                    bp = f.bp;
+                }
+            }
             sw: switch (@as(Op, @fromBackingInt(@intCast(pc[0])))) {
                 .undef, .null_, .true_, .false_, .hole => |o| {
                     sp[0] = literals[@backingInt(o) - @backingInt(Op.undef)];
@@ -187,29 +203,13 @@ pub fn run(vm: *Vm) Error!Value {
                     const ic = &f.fp.ics[u32At(pc + 1)];
                     const v = (sp - 1)[0];
                     var r: Value = undefined;
-                    get: {
-                        if (v.isObject()) {
-                            const obj = v.asObject();
-                            if (obj.shape == ic.shape) {
-                                const h_ok = if (ic.holder) |h| (h.shape == ic.holder_shape and ic.epoch == vm.proto_epoch) else true;
-                                if (h_ok) {
-                                    const sv = (ic.holder orelse obj).slots[ic.slot];
-                                    if (!ic.is_accessor) {
-                                        r = sv;
-                                        break :get;
-                                    }
-                                    sync(vm, f, pc, sp);
-                                    r = ok(Value, icache.callGetterSlot(vm, sv, v), &err) orelse break :dispatch;
-                                    break :get;
-                                }
-                            }
-                        }
+                    if (v.isObject() and v.asObject().shape == ic.shape and ic.fast_own_data) {
+                        r = v.asObject().slots[ic.slot];
+                    } else {
                         sync(vm, f, pc, sp);
                         r = ok(Value, icache.getField(vm, ic, v), &err) orelse break :dispatch;
                     }
-                    if (o == .get_field) {
-                        (sp - 1)[0] = r;
-                    } else {
+                    if (o == .get_field) (sp - 1)[0] = r else {
                         sp[0] = r;
                         sp += 1;
                     }
@@ -220,22 +220,9 @@ pub fn run(vm: *Vm) Error!Value {
                     const ic = &f.fp.ics[u32At(pc + 1)];
                     const t = (sp - 2)[0];
                     const v = (sp - 1)[0];
-                    put: {
-                        if (t.isObject()) {
-                            const obj = t.asObject();
-                            if (obj.shape == ic.shape) {
-                                if (ic.holder == null and !ic.is_accessor) {
-                                    obj.slots[ic.slot] = v;
-                                    break :put;
-                                }
-                                const h_ok = if (ic.holder) |h| (h.shape == ic.holder_shape and ic.epoch == vm.proto_epoch) else true;
-                                if (ic.is_accessor and h_ok) {
-                                    sync(vm, f, pc, sp);
-                                    ok(void, icache.callSetterSlot(vm, ic, (ic.holder orelse obj).slots[ic.slot], t, v, f.fp.strict), &err) orelse break :dispatch;
-                                    break :put;
-                                }
-                            }
-                        }
+                    if (t.isObject() and t.asObject().shape == ic.shape and ic.fast_own_data) {
+                        t.asObject().slots[ic.slot] = v;
+                    } else {
                         sync(vm, f, pc, sp);
                         ok(void, icache.putField(vm, ic, t, v, f.fp.strict), &err) orelse break :dispatch;
                     }
@@ -403,17 +390,19 @@ pub fn run(vm: *Vm) Error!Value {
                     pc += 1;
                     continue :sw @fromBackingInt(@intCast(pc[0]));
                 },
-                inline .seq, .sne => |o| {
+                inline .seq, .sne, .eq, .ne => |o| {
                     const a = (sp - 2)[0];
                     const b = (sp - 1)[0];
                     var r: bool = undefined;
                     if (a.isInt() and b.isInt()) {
                         r = a.bits == b.bits;
+                    } else if ((o == .eq or o == .ne) and (a.isNullish() or b.isNullish())) {
+                        r = ops.nullishOrDda(a) and ops.nullishOrDda(b);
                     } else {
                         sync(vm, f, pc, sp);
-                        r = ok(bool, ops.strictEquals(vm, a, b), &err) orelse break :dispatch;
+                        r = ok(bool, if (o == .seq or o == .sne) ops.strictEquals(vm, a, b) else ops.looseEquals(vm, a, b), &err) orelse break :dispatch;
                     }
-                    (sp - 2)[0] = Value.fromBool(r == (o == .seq));
+                    (sp - 2)[0] = Value.fromBool(r == (o == .seq or o == .eq));
                     sp -= 1;
                     pc += 1;
                     continue :sw @fromBackingInt(@intCast(pc[0]));
@@ -440,6 +429,7 @@ pub fn run(vm: *Vm) Error!Value {
                 },
                 .loop => {
                     pc = jumpTo(pc + 5, relAt(pc + 1));
+                    f.fp.hot_count +|= 1;
                     vm.budget -= 1;
                     if (vm.budget <= 0) {
                         sync(vm, f, pc, sp);
@@ -486,6 +476,7 @@ pub fn run(vm: *Vm) Error!Value {
                         pc = f.pc;
                         bp = f.bp;
                         sp = vm.sp;
+                        if (jit.getOrCompile(vm, f.fp) != null) continue :loop;
                         continue :sw @fromBackingInt(@intCast(pc[0]));
                     }
                     const r = ok(Value, calls.callNonClosure(vm, callee, (sp - argc - 2)[0], (sp - argc)[0..argc]), &err) orelse break :dispatch;
@@ -508,6 +499,7 @@ pub fn run(vm: *Vm) Error!Value {
                         pc = f.pc;
                         bp = f.bp;
                         sp = vm.sp;
+                        if (jit.getOrCompile(vm, f.fp) != null) continue :loop;
                         continue :sw @fromBackingInt(@intCast(pc[0]));
                     }
                     const r = ok(Value, calls.construct(vm, callee, (sp - argc)[0..argc], callee), &err) orelse break :dispatch;

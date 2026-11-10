@@ -27,29 +27,159 @@ fn context(root: *Node) match.Ctx {
     return .{ .doc = root.doc, .scope = if (root.kind == .element) root else null };
 }
 
+fn isPlainIdent(s: []const u8) bool {
+    if (s.len == 0) return false;
+    if (s[0] == '-') {
+        if (s.len < 2 or !(std.ascii.isAlphabetic(s[1]) or s[1] == '_')) return false;
+    } else if (!(std.ascii.isAlphabetic(s[0]) or s[0] == '_')) {
+        return false;
+    }
+    for (s) |c| {
+        if (!(std.ascii.isAlphanumeric(c) or c == '_' or c == '-')) return false;
+    }
+    return true;
+}
+
+fn isPlainLowerIdent(s: []const u8) bool {
+    if (!isPlainIdent(s)) return false;
+    for (s) |c| if (c >= 'A' and c <= 'Z') return false;
+    return true;
+}
+
+inline fn fastTagMatches(want: []const u8, el: *const Node) bool {
+    return if (el.ns == .html) std.mem.eql(u8, want, el.tag) else std.ascii.eqlIgnoreCase(want, el.tag);
+}
+
+const Anchor = union(enum) {
+    full: *Node,
+    none,
+    single: *Node,
+};
+
+/// Theorem 19 (`id_anchored_query_selector_sound`): prunes `root`'s search space
+/// when a single selector is anchored on a `#id` in its leftmost compound.
+fn resolveIdAnchor(root: *Node, list: []const selectors.Selector) Anchor {
+    if (list.len != 1 or root.doc.quirks) return .{ .full = root };
+    const s = &list[0];
+    if (s.pseudo != .none or s.compounds.len == 0) return .{ .full = root };
+    var want_id: ?[]const u8 = null;
+    for (s.compounds[0].simples) |*sim| switch (sim.*) {
+        .id => |id| {
+            want_id = id;
+            break;
+        },
+        .host, .host_context => return .{ .full = root },
+        else => {},
+    };
+    const id = want_id orelse return .{ .full = root };
+    for (s.compounds[1..]) |*c| {
+        if (c.combinator != .descendant and c.combinator != .child) return .{ .full = root };
+    }
+    if (!root.doc.node.contains(root)) return .{ .full = root };
+    const first = root.doc.getElementById(id) orelse return .none;
+    if (root.doc.id_map_gen != root.doc.id_generation) {
+        @constCast(root.doc).id_last_key = "";
+        _ = root.doc.getElementById(id);
+    }
+    if (root.doc.id_has_dups) return .{ .full = root };
+    if (s.compounds.len == 1) {
+        if (first != root and root.contains(first)) return .{ .single = first };
+        return .none;
+    }
+    if (root.contains(first)) return .{ .full = first };
+    if (first.contains(root)) return .{ .full = root };
+    return .none;
+}
+
 /// The first element in `root` (not `root` itself) matching `selector`, in
 /// document order. `arena` holds the parsed selector.
 pub fn querySelector(root: *Node, selector: []const u8, arena: Allocator) Error!?*Node {
+    const trimmed = std.mem.trim(u8, selector, " \t\r\n\x0c");
+    if (!root.doc.quirks and trimmed.len > 1) {
+        if (trimmed[0] == '#' and isPlainIdent(trimmed[1..])) {
+            const want = trimmed[1..];
+            if (root == root.doc.node) return root.doc.getElementById(want);
+            if (root.doc.node.contains(root)) {
+                const first = root.doc.getElementById(want) orelse return null;
+                if (first != root and root.contains(first)) return first;
+            }
+            var at = root.first_child;
+            while (at) |n| : (at = n.nextInTree(root)) {
+                if (n.kind == .element) if (n.attr("id")) |v| if (std.mem.eql(u8, v, want)) return n;
+            }
+            return null;
+        }
+        if (trimmed[0] == '.' and isPlainIdent(trimmed[1..])) {
+            const want = trimmed[1..];
+            var at = root.first_child;
+            while (at) |n| : (at = n.nextInTree(root)) {
+                if (n.kind == .element and n.hasClass(want)) return n;
+            }
+            return null;
+        }
+    }
+    if (isPlainLowerIdent(trimmed)) {
+        var at = root.first_child;
+        while (at) |n| : (at = n.nextInTree(root)) {
+            if (n.kind == .element and fastTagMatches(trimmed, n)) return n;
+        }
+        return null;
+    }
     const list = try parse(arena, selector);
     var ctx = context(root);
-    var at = root.first_child;
-    while (at) |n| : (at = n.nextInTree(root)) {
-        if (n.kind == .element and hit(list, n, &ctx)) return n;
+    switch (resolveIdAnchor(root, list)) {
+        .none => return null,
+        .single => |n| return if (n.kind == .element and hit(list, n, &ctx)) n else null,
+        .full => |walk_root| {
+            var at = walk_root.first_child;
+            while (at) |n| : (at = n.nextInTree(walk_root)) {
+                if (n.kind == .element and hit(list, n, &ctx)) return n;
+            }
+            return null;
+        },
     }
-    return null;
 }
 
 /// Appends every matching element to `out`, which `arena` grows.
 pub fn querySelectorAll(root: *Node, selector: []const u8, arena: Allocator, out: *std.ArrayList(*Node)) Error!void {
+    const trimmed = std.mem.trim(u8, selector, " \t\r\n\x0c");
+    if (!root.doc.quirks and trimmed.len > 1 and trimmed[0] == '.' and isPlainIdent(trimmed[1..])) {
+        const want = trimmed[1..];
+        var at = root.first_child;
+        while (at) |n| : (at = n.nextInTree(root)) {
+            if (n.kind == .element and n.hasClass(want)) try out.append(arena, n);
+        }
+        return;
+    }
+    if (isPlainLowerIdent(trimmed)) {
+        var at = root.first_child;
+        while (at) |n| : (at = n.nextInTree(root)) {
+            if (n.kind == .element and fastTagMatches(trimmed, n)) try out.append(arena, n);
+        }
+        return;
+    }
     const list = try parse(arena, selector);
     var ctx = context(root);
-    var at = root.first_child;
-    while (at) |n| : (at = n.nextInTree(root)) {
-        if (n.kind == .element and hit(list, n, &ctx)) try out.append(arena, n);
+    switch (resolveIdAnchor(root, list)) {
+        .none => return,
+        .single => |n| if (n.kind == .element and hit(list, n, &ctx)) try out.append(arena, n),
+        .full => |walk_root| {
+            var at = walk_root.first_child;
+            while (at) |n| : (at = n.nextInTree(walk_root)) {
+                if (n.kind == .element and hit(list, n, &ctx)) try out.append(arena, n);
+            }
+        },
     }
 }
 
 pub fn matchesSelector(node: *Node, selector: []const u8, arena: Allocator) Error!bool {
+    const trimmed = std.mem.trim(u8, selector, " \t\r\n\x0c");
+    if (!node.doc.quirks and trimmed.len > 1 and trimmed[0] == '.' and isPlainIdent(trimmed[1..])) {
+        return node.kind == .element and node.hasClass(trimmed[1..]);
+    }
+    if (isPlainLowerIdent(trimmed)) {
+        return node.kind == .element and fastTagMatches(trimmed, node);
+    }
     const list = try parse(arena, selector);
     if (node.kind != .element) return false;
     var ctx = context(node);
@@ -58,6 +188,24 @@ pub fn matchesSelector(node: *Node, selector: []const u8, arena: Allocator) Erro
 
 /// `node` or its nearest ancestor that matches.
 pub fn closest(node: *Node, selector: []const u8, arena: Allocator) Error!?*Node {
+    const trimmed = std.mem.trim(u8, selector, " \t\r\n\x0c");
+    if (!node.doc.quirks and trimmed.len > 1 and trimmed[0] == '.' and isPlainIdent(trimmed[1..])) {
+        const want = trimmed[1..];
+        var at: ?*Node = if (node.kind == .element) node else node.parentElement();
+        while (at) |n| : (at = n.parentElement()) {
+            if (n.is_shadow) return null;
+            if (n.hasClass(want)) return n;
+        }
+        return null;
+    }
+    if (isPlainLowerIdent(trimmed)) {
+        var at: ?*Node = if (node.kind == .element) node else node.parentElement();
+        while (at) |n| : (at = n.parentElement()) {
+            if (n.is_shadow) return null;
+            if (fastTagMatches(trimmed, n)) return n;
+        }
+        return null;
+    }
     const list = try parse(arena, selector);
     var ctx = context(node);
     var at: ?*Node = if (node.kind == .element) node else node.parentElement();

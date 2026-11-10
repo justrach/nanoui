@@ -38,8 +38,10 @@ pub fn isFastArray(vm: *Vm, v: Value) Error!bool {
     const a = v.asObject();
     if (a.class != .array or a.flags.has_sparse) return false;
     if (a.shape.proto != vm.protos.array) return false;
+    if (!vm.protos.array.flags.proto_dirty and !vm.protos.array_iter.flags.proto_dirty and a.shape.count == 0) return true;
     const key = PropKey.fromSymbol(vm.sym.iterator);
     if (a.shape.count != 0 and a.shape.find(key) != null) return false;
+    if (!vm.protos.array.flags.proto_dirty and !vm.protos.array_iter.flags.proto_dirty) return true;
     const m = try props.get(vm, vm.protos.array, key);
     if (!m.isObject() or m.asObject() != vm.protos.array_values) return false;
     const nx = try props.get(vm, vm.protos.array_iter, vm.k.next);
@@ -257,6 +259,9 @@ pub fn execIter(vm: *Vm, f: *Frame, op: Op) Error!void {
             const slot = u16At(pc + 3);
             var i: u32 = @intCast(f.bp[slot].asInt());
             const obj = keys.elems[0];
+            const o = obj.asObject();
+            const fast_keep = !o.flags.exotic and !o.shape.is_dict and o.elems_len == 0 and
+                (o.shape.proto == null or (o.shape.proto == vm.protos.object and !vm.protos.object.flags.proto_dirty));
             while (true) {
                 i += 1;
                 if (i >= keys.elems_len) {
@@ -265,7 +270,7 @@ pub fn execIter(vm: *Vm, f: *Frame, op: Op) Error!void {
                 }
                 const k = keys.elems[i];
                 // A key deleted during the loop is skipped.
-                if (try stillThere(vm, obj.asObject(), try str.toKey(vm, k.asString()))) {
+                if (fast_keep or try stillThere(vm, o, try str.toKey(vm, k.asString()))) {
                     f.bp[slot] = Value.fromInt(@intCast(i));
                     sp[0] = k;
                     vm.sp = sp + 1;
@@ -376,6 +381,26 @@ fn forInKeys(vm: *Vm, v: Value) Error!Value {
     if (v.isNullish()) {
         try objmod.arrayPush(vm, out, try emptyHolder(vm));
         return out.value();
+    }
+    if (v.isObject()) {
+        const obj = v.asObject();
+        if (!obj.flags.exotic and !obj.flags.lazy_fn and !obj.shape.is_dict and obj.elems_len == 0 and obj.class == .object and
+            (obj.shape.proto == null or (obj.shape.proto == vm.protos.object and !vm.protos.object.flags.proto_dirty)))
+        {
+            const entries = obj.shape.entries();
+            try objmod.growElems(vm, out, entries.len + 1);
+            out.elems[0] = obj.value();
+            out.elems_len = 1;
+            out.arr_len = 1;
+            for (entries) |e| {
+                if (e.key.isSymbol() or !e.flags.enumerable) continue;
+                const kv = try str.keyToValue(vm, e.key);
+                out.elems[out.elems_len] = kv;
+                out.elems_len += 1;
+                out.arr_len += 1;
+            }
+            return out.value();
+        }
     }
     const obj = try conv.toObject(vm, v);
     try objmod.arrayPush(vm, out, obj.value());

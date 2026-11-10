@@ -51,14 +51,14 @@ fn log(vm: *Vm, _: Value, args: []const Value) Error!Value {
 /// The handler text of `on<type>` on a node, or null.
 fn inlineAttr(vm: *Vm, _: Value, args: []const Value) Error!Value {
     const n = bind.asNode(bind.arg(args, 0)) orelse return Value.null;
-    if (n.kind != .element) return Value.null;
+    if (!n.has_on_attr) return Value.null;
     const t = try bind.str(vm, args, 1);
-    var buf: [64]u8 = undefined;
-    if (t.len + 2 > buf.len) return Value.null;
-    buf[0] = 'o';
-    buf[1] = 'n';
-    @memcpy(buf[2..][0..t.len], t);
-    return bind.optStr(vm, n.attr(buf[0 .. t.len + 2]));
+    for (n.attrs.items) |a| {
+        if (a.name.len == t.len + 2 and a.name[0] == 'o' and a.name[1] == 'n' and std.mem.eql(u8, a.name[2..], t)) {
+            return vm.newString(a.value);
+        }
+    }
+    return Value.null;
 }
 
 /// The next object on an event's way up from a node.

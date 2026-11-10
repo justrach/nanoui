@@ -43,9 +43,11 @@ fn setInputValue(vm: *Vm, this: Value, args: []const Value) Error!Value {
         try mutate.setAttr(w, n, "value", s);
         return Value.undefined;
     }
-    if (std.mem.eql(u8, n.value orelse n.attr("value") orelse "", s)) return Value.undefined;
+    const old_val = n.value orelse n.attr("value") orelse "";
+    if (std.mem.eql(u8, old_val, s)) return Value.undefined;
     n.value = try bind.dupe(w, s);
-    n.doc.touchLayout();
+    if (n.hasAttr("placeholder") and (old_val.len == 0) != (s.len == 0)) n.doc.markStyle(n.parent orelse n);
+    if (typeIs(n, "button") or typeIs(n, "submit") or typeIs(n, "reset")) n.doc.touchLayout();
     w.changed();
     return Value.undefined;
 }
@@ -68,8 +70,10 @@ fn textareaValue(vm: *Vm, this: Value, _: []const Value) Error!Value {
 fn setTextareaValue(vm: *Vm, this: Value, args: []const Value) Error!Value {
     const n = try nodeOf(vm, this);
     const w = bind.world(vm);
-    n.value = try bind.dupe(w, try bind.strNullEmpty(vm, args, 0));
-    n.doc.touchLayout();
+    const s = try bind.strNullEmpty(vm, args, 0);
+    if (n.value) |old| if (std.mem.eql(u8, old, s)) return Value.undefined;
+    n.value = try bind.dupe(w, s);
+    if (n.hasAttr("placeholder")) n.doc.markStyle(n.parent orelse n);
     w.changed();
     return Value.undefined;
 }
@@ -99,7 +103,6 @@ fn setChecked(vm: *Vm, this: Value, args: []const Value) Error!Value {
     if (was != on) {
         // `:checked` and what follows it.
         n.doc.markStyle(n.parent orelse n);
-        n.doc.touchLayout();
         bind.world(vm).changed();
     }
     return Value.undefined;

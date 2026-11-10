@@ -178,6 +178,26 @@ const EntryMode = enum { keys, values, entries };
 
 fn enumerableOwn(vm: *Vm, v: Value, mode: EntryMode) Error!Value {
     const o = try conv.toObject(vm, v);
+    if (o.shape.all_plain_str and !o.flags.exotic and !o.flags.lazy_fn and o.elems_len == 0 and o.class == .object) {
+        const n = o.shape.count;
+        const out = try objmod.newArray(vm, &.{});
+        if (n == 0) return out.value();
+        try objmod.growElems(vm, out, n);
+        for (o.shape.entries(), 0..) |e, slot| {
+            const elem = switch (mode) {
+                .keys => try str.keyToValue(vm, e.key),
+                .values => o.slots[slot],
+                .entries => blk: {
+                    const pair = [_]Value{ try str.keyToValue(vm, e.key), o.slots[slot] };
+                    break :blk (try objmod.newArray(vm, &pair)).value();
+                },
+            };
+            out.elems[slot] = elem;
+            out.elems_len = @intCast(slot + 1);
+            out.arr_len = @intCast(slot + 1);
+        }
+        return out.value();
+    }
     const keys = try props.ownKeys(vm, o);
     defer vm.gpa.free(keys);
     const out = try objmod.newArray(vm, &.{});
@@ -213,6 +233,29 @@ fn assign(vm: *Vm, _: Value, args: []const Value) Error!Value {
     if (args.len > 1) {
         for (args[1..]) |src| {
             if (src.isNullish()) continue;
+            if (src.isObject()) {
+                const from = src.asObject();
+                if (from != t and from.shape.all_plain_str and !from.flags.exotic and !from.flags.lazy_fn and from.elems_len == 0 and from.class == .object and
+                    t.shape.all_plain_str and !t.flags.exotic and !t.flags.lazy_fn and !t.flags.is_proto and t.flags.extensible and t.elems_len == 0 and t.class == .object and
+                    (t.shape.proto == null or (t.shape.proto == vm.protos.object and !vm.protos.object.flags.proto_dirty)))
+                {
+                    if (t.shape == vm.object_root and from.shape.proto == vm.protos.object) {
+                        const n = from.shape.count;
+                        if (n > t.slot_cap) try objmod.growSlots(vm, t, n);
+                        @memcpy(t.slots[0..n], from.slots[0..n]);
+                        t.shape = from.shape;
+                        continue;
+                    }
+                    for (from.shape.entries(), 0..) |e, slot| {
+                        if (t.shape.find(e.key)) |tslot| {
+                            t.slots[tslot] = from.slots[slot];
+                        } else {
+                            try props.addProp(vm, t, e.key, from.slots[slot], PropFlags.all);
+                        }
+                    }
+                    continue;
+                }
+            }
             const from = try conv.toObject(vm, src);
             const keys = try props.ownKeys(vm, from);
             defer vm.gpa.free(keys);

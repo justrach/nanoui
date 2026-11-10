@@ -12,6 +12,42 @@ const Tag = tags.Tag;
 const Tags = tags.Tags;
 const Transform = geom.Transform;
 
+/// When `clip-path="url(#id)"` is a single unrounded axis-aligned `<rect>` in
+/// `userSpaceOnUse` with no nested clip, returns its pixel box `[x0, y0, x1, y1]`
+/// (Theorem 24, `NanoUI.JitPerf.svg_axis_clip_rect_intersection`).
+pub fn axisClipRect(r: *const Renderer, id: []const u8, st: *const Style) ?[4]f32 {
+    if (!st.t.axisAligned()) return null;
+    const at = r.ids.get(id) orelse return null;
+    var it: Tags = .{ .s = r.src, .i = at };
+    const tag = it.next() orelse return null;
+    if (!std.mem.eql(u8, tag.name, "clipPath") or tag.kind != .open) return null;
+    if (std.mem.eql(u8, tag.attr("clipPathUnits") orelse "", "objectBoundingBox")) return null;
+    var own: Style = .{ .t = st.t, .vp = st.vp, .clip_rule = st.clip_rule };
+    style.apply(&own, tag, null);
+    if (own.clip != null or !own.t.axisAligned()) return null;
+    const child = it.next() orelse return null;
+    if (!std.mem.eql(u8, child.name, "rect")) return null;
+    if (child.kind == .open) {
+        const close_rect = it.next() orelse return null;
+        if (close_rect.kind != .close) return null;
+    }
+    const close_clip = it.next() orelse return null;
+    if (close_clip.kind != .close) return null;
+    var rst: Style = .{ .t = own.t, .vp = st.vp, .clip_rule = own.clip_rule };
+    style.apply(&rst, child, null);
+    if (rst.hidden or !rst.visible or rst.clip != null or !rst.t.axisAligned()) return null;
+    if (child.attr("rx")) |v| if ((style.length(v, st.vp[0]) orelse 0) > 0) return null;
+    if (child.attr("ry")) |v| if ((style.length(v, st.vp[1]) orelse 0) > 0) return null;
+    const x = style.length(child.attr("x") orelse "", st.vp[0]) orelse 0;
+    const y = style.length(child.attr("y") orelse "", st.vp[1]) orelse 0;
+    const w = style.length(child.attr("width") orelse "", st.vp[0]) orelse 0;
+    const h = style.length(child.attr("height") orelse "", st.vp[1]) orelse 0;
+    if (w <= 0 or h <= 0) return .{ 0, 0, 0, 0 };
+    const a = rst.t.apply(.{ x, y });
+    const b = rst.t.apply(.{ x + w, y + h });
+    return .{ @min(a[0], b[0]), @min(a[1], b[1]), @max(a[0], b[0]), @max(a[1], b[1]) };
+}
+
 /// `clip-path="url(#id)"` under `st`: what its shapes cover, a shape's own
 /// rule and transform applied. Null if the id names no clip path, which then
 /// doesn't clip.

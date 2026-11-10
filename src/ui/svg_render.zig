@@ -145,13 +145,20 @@ pub const Renderer = struct {
     /// Premultiplied BGRA bytes of what was drawn.
     pub fn bytes(r: *Renderer, gpa: Allocator) ![]u8 {
         const out = try gpa.alloc(u8, r.w * r.h * 4);
+        @memset(out, 0);
         const acc = r.base.px;
-        for (0..r.w * r.h) |i| {
-            const px = acc[i * 4 ..][0..4];
-            out[i * 4 + 0] = byte(px[2]);
-            out[i * 4 + 1] = byte(px[1]);
-            out[i * 4 + 2] = byte(px[0]);
-            out[i * 4 + 3] = byte(px[3]);
+        const d = r.base.dirty;
+        for (d.y0..d.y1) |y| {
+            const row = y * r.w;
+            for (d.x0..d.x1) |x| {
+                const i = row + x;
+                const px = acc[i * 4 ..][0..4];
+                if (px[3] == 0 and px[0] == 0 and px[1] == 0 and px[2] == 0) continue;
+                out[i * 4 + 0] = byte(px[2]);
+                out[i * 4 + 1] = byte(px[1]);
+                out[i * 4 + 2] = byte(px[0]);
+                out[i * 4 + 3] = byte(px[3]);
+            }
         }
         return out;
     }
@@ -187,6 +194,10 @@ pub const Renderer = struct {
         var st = parent.inherit();
         style.apply(&st, tag, r.sheetOf());
         if (st.hidden) return skip(it, tag);
+        if (st.clip) |cid| if (mask_mod.axisClipRect(r, cid, &st)) |cr| {
+            st.clip_rect = if (st.clip_rect) |o| .{ @max(cr[0], o[0]), @max(cr[1], o[1]), @min(cr[2], o[2]), @min(cr[3], o[3]) } else cr;
+            st.clip = null;
+        };
         r.depth += 1;
         defer r.depth -= 1;
         const eq = std.mem.eql;

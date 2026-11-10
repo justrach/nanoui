@@ -196,8 +196,9 @@ fn matchAllFn(vm: *Vm, this: Value, args: []const Value) Error!Value {
     try checkThis(vm, this);
     const a0 = u.arg(args, 0);
     if (a0.isObject() and a0.asObject().class == .regexp) {
-        const f = try (try conv.toStr(vm, try props.get(vm, a0.asObject(), vm.k.flags))).flat(vm);
-        if (std.mem.indexOfScalar(u8, f, 'g') == null) return vm.throwError(.TypeError, "String.prototype.matchAll called with a non-global RegExp argument");
+        const ro = a0.asObject();
+        const is_g = if (re.isFastRegExp(vm, ro)) ro.payload.regexp.prog.flags.global else std.mem.indexOfScalar(u8, try (try conv.toStr(vm, try props.get(vm, ro, vm.k.flags))).flat(vm), 'g') != null;
+        if (!is_g) return vm.throwError(.TypeError, "String.prototype.matchAll called with a non-global RegExp argument");
     }
     if (try dispatch(vm, this, a0, vm.sym.matchAll, null)) |r| return r;
     const s = try thisStr(vm, this);
@@ -227,7 +228,7 @@ fn replaceOnce(vm: *Vm, s: *JSString, pat: *JSString, rv: Value, all: bool) Erro
     var any = false;
     while (try base.indexOfFrom(vm, s, pat, from)) |pos| {
         any = true;
-        if (pos > next) try b.str(try str.substring(vm, s, next, pos));
+        if (pos > next) try b.sub(s, next, pos);
         if (functional) {
             const r = try calls.call(vm, rv, Value.undefined, &.{ Value.fromString(pat), Value.fromUsize(pos), Value.fromString(s) });
             try b.str(try conv.toStr(vm, r));
@@ -239,7 +240,7 @@ fn replaceOnce(vm: *Vm, s: *JSString, pat: *JSString, rv: Value, all: bool) Erro
         if (!all or from > s.len16) break;
     }
     if (!any) return Value.fromString(s);
-    if (next < s.len16) try b.str(try str.substring(vm, s, next, s.len16));
+    if (next < s.len16) try b.sub(s, next, s.len16);
     return Value.fromString(try b.finish());
 }
 
@@ -253,8 +254,9 @@ fn replaceAll(vm: *Vm, this: Value, args: []const Value) Error!Value {
     try checkThis(vm, this);
     const a0 = u.arg(args, 0);
     if (a0.isObject() and a0.asObject().class == .regexp) {
-        const f = try (try conv.toStr(vm, try props.get(vm, a0.asObject(), vm.k.flags))).flat(vm);
-        if (std.mem.indexOfScalar(u8, f, 'g') == null) return vm.throwError(.TypeError, "replaceAll must be called with a global RegExp");
+        const ro = a0.asObject();
+        const is_g = if (re.isFastRegExp(vm, ro)) ro.payload.regexp.prog.flags.global else std.mem.indexOfScalar(u8, try (try conv.toStr(vm, try props.get(vm, ro, vm.k.flags))).flat(vm), 'g') != null;
+        if (!is_g) return vm.throwError(.TypeError, "replaceAll must be called with a global RegExp");
     }
     if (try dispatch(vm, this, a0, vm.sym.replace, u.arg(args, 1))) |r| return r;
     return replaceOnce(vm, try thisStr(vm, this), try conv.toStr(vm, a0), u.arg(args, 1), true);

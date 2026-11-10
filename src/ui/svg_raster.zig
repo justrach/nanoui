@@ -153,6 +153,16 @@ pub const Polygons = struct {
                 if (e.y1 > yf) try active.append(p.gpa, e);
             }
             if (active.items.len == 0) continue;
+            if (active.items.len == 2) {
+                const e0 = active.items[0];
+                const e1 = active.items[1];
+                if (e0.x0 == e0.x1 and e1.x0 == e1.x1 and e0.y0 <= yf and e0.y1 >= yf + 1 and e1.y0 <= yf and e1.y1 >= yf + 1 and e0.dir + e1.dir == 0) {
+                    const xa = @min(e0.x0, e1.x0);
+                    const xb = @max(e0.x0, e1.x0);
+                    span(row, std.math.clamp(xa, left, right), std.math.clamp(xb, left, right), 1.0);
+                    continue;
+                }
+            }
             for (0..samples) |k| {
                 const sy = yf + (@as(f32, @floatFromInt(k)) + 0.5) / samples;
                 xs.clearRetainingCapacity();
@@ -160,7 +170,11 @@ pub const Polygons = struct {
                     const t = (sy - e.y0) / (e.y1 - e.y0);
                     try xs.append(p.gpa, .{ .x = e.x0 + (e.x1 - e.x0) * t, .dir = e.dir });
                 };
-                std.mem.sort(Cross, xs.items, {}, Cross.lt);
+                if (xs.items.len == 2) {
+                    if (xs.items[1].x < xs.items[0].x) std.mem.swap(Cross, &xs.items[0], &xs.items[1]);
+                } else {
+                    std.mem.sort(Cross, xs.items, {}, Cross.lt);
+                }
                 var wind: i32 = 0;
                 for (xs.items, 0..) |c, i| {
                     wind += c.dir;

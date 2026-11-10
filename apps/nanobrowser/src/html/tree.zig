@@ -346,7 +346,12 @@ pub const Builder = struct {
 
     pub fn newElement(b: *Builder, name: []const u8, ns: dom.Ns, attrs: []dom.Attr) Error!*dom.Node {
         const n = try b.arena.create(dom.Node);
-        n.* = .{ .kind = .element, .doc = b.doc, .tag = name, .ns = ns, .has_resource = @import("../perf_rules.zig").isResourceTag(name) };
+        var has_on = false;
+        for (attrs) |a| if (a.name.len > 2 and a.name[0] == 'o' and a.name[1] == 'n') {
+            has_on = true;
+            break;
+        };
+        n.* = .{ .kind = .element, .doc = b.doc, .tag = name, .ns = ns, .has_resource = @import("../perf_rules.zig").isResourceTag(name), .has_on_attr = has_on };
         if (attrs.len > 0) n.attrs = .fromOwnedSlice(attrs);
         return n;
     }
@@ -451,6 +456,7 @@ pub const Builder = struct {
     pub fn addMissingAttrs(b: *Builder, n: *dom.Node, t: *const tz.Tag) Error!void {
         for (t.attrs) |a| {
             if (n.hasAttr(a.name)) continue;
+            if (a.name.len > 2 and a.name[0] == 'o' and a.name[1] == 'n') n.has_on_attr = true;
             try n.attrs.append(b.arena, a);
         }
     }

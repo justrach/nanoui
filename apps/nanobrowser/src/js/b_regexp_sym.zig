@@ -131,12 +131,16 @@ pub fn getSubstitution(vm: *Vm, b: *str.Builder, matched: *JSString, s: *JSStrin
     const t = try template.flat(vm);
     var i: usize = 0;
     while (i < t.len) {
-        const c = t[i];
-        if (c != '$' or i + 1 >= t.len) {
-            try b.byte(c);
-            i += 1;
-            continue;
+        const dollar = std.mem.indexOfScalarPos(u8, t, i, '$') orelse {
+            try b.bytes(t[i..]);
+            break;
+        };
+        if (dollar > i) try b.bytes(t[i..dollar]);
+        if (dollar + 1 >= t.len) {
+            try b.byte('$');
+            break;
         }
+        i = dollar;
         const d = t[i + 1];
         switch (d) {
             '$' => {
@@ -148,12 +152,12 @@ pub fn getSubstitution(vm: *Vm, b: *str.Builder, matched: *JSString, s: *JSStrin
                 i += 2;
             },
             '`' => {
-                try b.str(try str.substring(vm, s, 0, position));
+                try b.sub(s, 0, position);
                 i += 2;
             },
             '\'' => {
                 const after = position + matched.len16;
-                if (after < s.len16) try b.str(try str.substring(vm, s, after, s.len16));
+                if (after < s.len16) try b.sub(s, after, s.len16);
                 i += 2;
             },
             '0'...'9' => {
@@ -203,6 +207,62 @@ fn replaceFn(vm: *Vm, this: Value, args: []const Value) Error!Value {
     const rv = u.arg(args, 1);
     const functional = rv.isCallable();
     const template = if (functional) vm.empty else try conv.toStr(vm, rv);
+    if (re.isFastRegExp(vm, o) and (o.payload.regexp.prog.flags.global or o.slots[0].isInt())) {
+        const prog = o.payload.regexp.prog;
+        const pf = prog.flags;
+        const full = pf.unicode or pf.unicode_sets;
+        if (pf.global) o.slots[0] = Value.fromInt(0);
+        var pos: usize = if (pf.global) 0 else if (pf.sticky) @intCast(@max(0, o.slots[0].asInt())) else 0;
+        const total = prog.ncaps * 2 + prog.nregs;
+        var stack_regs: [64]i32 = undefined;
+        const regs = if (total <= stack_regs.len) stack_regs[0..total] else try vm.gpa.alloc(i32, total);
+        defer if (total > stack_regs.len) vm.gpa.free(regs);
+        if (pos > s.len16 or !try re.matchAt(vm, prog, s, pos, pf.sticky, regs)) {
+            if (pf.global or pf.sticky) o.slots[0] = Value.fromInt(0);
+            return Value.fromString(s);
+        }
+        if (!functional and prog.names.len == 0) {
+            const t_bytes = try template.flat(vm);
+            const has_dollar = std.mem.indexOfScalar(u8, t_bytes, '$') != null;
+            var b = str.Builder.init(vm);
+            defer b.deinit();
+            var next: usize = 0;
+            const ncap = prog.ncaps - 1;
+            var stack_caps: [32]Value = undefined;
+            const caps = if (!has_dollar or ncap == 0) stack_caps[0..0] else if (ncap <= stack_caps.len) stack_caps[0..ncap] else try vm.gpa.alloc(Value, ncap);
+            defer if (has_dollar and ncap > stack_caps.len) vm.gpa.free(caps);
+            while (true) {
+                const m_start: usize = @intCast(regs[0]);
+                const m_end: usize = @intCast(regs[1]);
+                if (m_start >= next) {
+                    if (m_start > next) try b.sub(s, next, m_start);
+                    if (!has_dollar) {
+                        try b.str(template);
+                    } else {
+                        const matched = try str.substring(vm, s, m_start, m_end);
+                        for (caps, 0..) |*c, i| {
+                            const ca = regs[(i + 1) * 2];
+                            const cb = regs[(i + 1) * 2 + 1];
+                            c.* = if (ca < 0 or cb < 0) Value.undefined else Value.fromString(try str.substring(vm, s, @intCast(ca), @intCast(cb)));
+                        }
+                        try getSubstitution(vm, &b, matched, s, m_start, caps, Value.undefined, template);
+                    }
+                    next = m_end;
+                }
+                if (!pf.global) {
+                    if (pf.sticky) o.slots[0] = Value.fromUsize(m_end);
+                    break;
+                }
+                pos = if (m_start == m_end) try advance(s, m_end, full, vm) else m_end;
+                if (pos > s.len16 or !try re.matchAt(vm, prog, s, pos, pf.sticky, regs)) {
+                    o.slots[0] = Value.fromInt(0);
+                    break;
+                }
+            }
+            if (next < s.len16) try b.sub(s, next, s.len16);
+            return Value.fromString(try b.finish());
+        }
+    }
     const f = try flagsOf(vm, o);
     const global = hasFlag(f, 'g');
     const full = hasFlag(f, 'u') or hasFlag(f, 'v');
@@ -288,6 +348,58 @@ fn splitFn(vm: *Vm, this: Value, args: []const Value) Error!Value {
     const o = try thisObj(vm, this);
     const s = try conv.toStr(vm, u.arg(args, 0));
     const c = try u.speciesConstructor(vm, o, vm.protos.regexp_ctor);
+    if (re.isFastRegExp(vm, o) and c.isObject() and c.asObject() == vm.protos.regexp_ctor) {
+        const out = try objmod.newArray(vm, &.{});
+        const lim: u32 = if (u.arg(args, 1).isUndefined()) 0xFFFF_FFFF else try conv.toUint32(vm, args[1]);
+        if (lim == 0) return out.value();
+        const prog = o.payload.regexp.prog;
+        const full = prog.flags.unicode or prog.flags.unicode_sets;
+        const total = prog.ncaps * 2 + prog.nregs;
+        var stack_regs: [64]i32 = undefined;
+        const regs = if (total <= stack_regs.len) stack_regs[0..total] else try vm.gpa.alloc(i32, total);
+        defer if (total > stack_regs.len) vm.gpa.free(regs);
+        const size: usize = s.len16;
+        if (size == 0) {
+            if (try re.matchAt(vm, prog, s, 0, true, regs)) return out.value();
+            try objmod.arrayPush(vm, out, Value.fromString(s));
+            return out.value();
+        }
+        const can_scan = s.is_ascii or !full;
+        var p: usize = 0;
+        var q: usize = 0;
+        while (q < size) {
+            if (can_scan) {
+                if (!try re.matchAt(vm, prog, s, q, false, regs)) break;
+                const match_q: usize = @intCast(regs[0]);
+                if (match_q >= size) break;
+                q = match_q;
+            } else {
+                if (!try re.matchAt(vm, prog, s, q, true, regs)) {
+                    q = try advance(s, q, full, vm);
+                    continue;
+                }
+            }
+            const e: usize = @min(@as(usize, @intCast(regs[1])), size);
+            if (e == p) {
+                q = try advance(s, q, full, vm);
+                continue;
+            }
+            try objmod.arrayPush(vm, out, Value.fromString(try str.substring(vm, s, p, q)));
+            if (out.arr_len == lim) return out.value();
+            p = e;
+            var i: u32 = 1;
+            while (i < prog.ncaps) : (i += 1) {
+                const ca = regs[i * 2];
+                const cb = regs[i * 2 + 1];
+                const cv = if (ca < 0 or cb < 0) Value.undefined else Value.fromString(try str.substring(vm, s, @intCast(ca), @intCast(cb)));
+                try objmod.arrayPush(vm, out, cv);
+                if (out.arr_len == lim) return out.value();
+            }
+            q = p;
+        }
+        try objmod.arrayPush(vm, out, Value.fromString(try str.substring(vm, s, p, size)));
+        return out.value();
+    }
     const f = try flagsOf(vm, o);
     const full = hasFlag(f, 'u') or hasFlag(f, 'v');
     var nf = str.Builder.init(vm);

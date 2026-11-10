@@ -21,14 +21,16 @@ $.hook("domException", (message, name) => new DOMException(message, name));
 // Private state also brands events from another same-origin realm. The frame
 // bridge carries this record by reference, so cancellation and dispatch flags
 // belong to the original event, not a copy or the receiving realm's prototype.
-const states = new WeakMap();
-const state = $.eventState = (event) => states.get(event) || $.remoteEventState?.(event);
-const STOP = "stop", STOPNOW = "stopNow", PATH = "path", PASSIVE = "passive", ACTIVE = "active", CANCELED = "canceled";
+const STATE = Symbol("state");
+const state = $.eventState = (event) => {
+  const s = event && event[STATE];
+  return (s && s.owner === event ? s : null) || $.remoteEventState?.(event);
+};
 
 class Event {
   constructor(type, init) {
     if (arguments.length === 0) throw new TypeError("Event: 1 argument required");
-    states.set(this, { [STOP]: false, [STOPNOW]: false, [PATH]: null, [PASSIVE]: false, [ACTIVE]: false, [CANCELED]: false });
+    def(this, STATE, { owner: this, stop: false, stopNow: false, path: null, passive: false, active: false, canceled: false });
     this.type = String(type);
     this.bubbles = !!(init && init.bubbles);
     this.cancelable = !!(init && init.cancelable);
@@ -39,23 +41,23 @@ class Event {
     this.isTrusted = false;
     this.timeStamp = $.now();
   }
-  get defaultPrevented() { return state(this)[CANCELED]; }
+  get defaultPrevented() { return state(this).canceled; }
   get srcElement() { return this.target; }
-  get cancelBubble() { return state(this)[STOP]; }
-  set cancelBubble(v) { if (v) state(this)[STOP] = true; }
-  get returnValue() { return !state(this)[CANCELED]; }
+  get cancelBubble() { return state(this).stop; }
+  set cancelBubble(v) { if (v) state(this).stop = true; }
+  get returnValue() { return !state(this).canceled; }
   set returnValue(v) { if (!v) this.preventDefault(); }
-  stopPropagation() { state(this)[STOP] = true; }
-  stopImmediatePropagation() { const st = state(this); st[STOP] = true; st[STOPNOW] = true; }
-  preventDefault() { const st = state(this); if (this.cancelable && !st[PASSIVE]) st[CANCELED] = true; }
-  composedPath() { const p = state(this)[PATH]; return p ? p.slice() : []; }
+  stopPropagation() { state(this).stop = true; }
+  stopImmediatePropagation() { const st = state(this); st.stop = true; st.stopNow = true; }
+  preventDefault() { const st = state(this); if (this.cancelable && !st.passive) st.canceled = true; }
+  composedPath() { const p = state(this).path; return p ? p.slice() : []; }
   initEvent(type, bubbles, cancelable) {
     const st = state(this);
-    if (st[ACTIVE]) return;
+    if (st.active) return;
     this.type = String(type);
     this.bubbles = !!bubbles;
     this.cancelable = !!cancelable;
-    st[STOP] = st[STOPNOW] = st[CANCELED] = false;
+    st.stop = st.stopNow = st.canceled = false;
   }
 }
 for (const [name, value] of [["NONE", 0], ["CAPTURING_PHASE", 1], ["AT_TARGET", 2], ["BUBBLING_PHASE", 3]]) {
@@ -158,7 +160,10 @@ function addEventListener(type, cb, opts) {
   if (!map) { map = new Map(); def(t, LS, map); }
   let list = map.get(type);
   if (!list) { list = []; map.set(type, list); }
-  for (const l of list) if (l.cb === cb && l.capture === capture) return;
+  for (let i = 0; i < list.length; i++) {
+    const l = list[i];
+    if (l.cb === cb && l.capture === capture) return;
+  }
   const l = { cb, capture, once, passive, removed: false, handler: false };
   list.push(l);
   $.listen(type);
@@ -179,7 +184,10 @@ function removeEventListener(type, cb, opts) {
   type = String(type);
   const list = map.get(type); if (!list) return;
   const capture = typeof opts === "boolean" ? opts : !!(opts && opts.capture);
-  for (const l of list) if (l.cb === cb && l.capture === capture) return removeFrom(t, type, l);
+  for (let i = 0; i < list.length; i++) {
+    const l = list[i];
+    if (l.cb === cb && l.capture === capture) return removeFrom(t, type, l);
+  }
 }
 
 // A `load` stops at the document: the window's own is its own event.
@@ -279,53 +287,73 @@ function runHandler(t, ev) {
 }
 
 function invoke(t, ev, phase, st) {
-  if (st[STOP]) return;
+  if (st.stop) return;
   ev.currentTarget = t;
   ev.eventPhase = phase;
   if (phase !== 1) runHandler(t, ev);
-  if (st[STOPNOW]) return;
+  if (st.stopNow) return;
   const map = t[LS]; if (!map) return;
-  const list = map.get(ev.type); if (!list) return;
-  const copy = list.slice();
-  for (const l of copy) {
-    if (l.removed) continue;
-    if (phase === 1 && !l.capture) continue;
-    if (phase === 3 && l.capture) continue;
+  const list = map.get(ev.type); if (!list || list.length === 0) return;
+  if (list.length === 1) {
+    const l = list[0];
+    if (l.removed || (phase === 1 && !l.capture) || (phase === 3 && l.capture)) return;
     if (l.once) removeFrom(t, ev.type, l);
-    st[PASSIVE] = l.passive;
+    st.passive = l.passive;
     try {
       const cb = l.cb;
       if (typeof cb === "function") cb.call(t, ev);
       else if (typeof cb.handleEvent === "function") cb.handleEvent(ev);
     } catch (e) { report(e); }
-    st[PASSIVE] = false;
-    if (st[STOPNOW]) break;
+    st.passive = false;
+    return;
+  }
+  let any = false;
+  for (let i = 0; i < list.length; i++) {
+    const l = list[i];
+    if (!l.removed && !(phase === 1 && !l.capture) && !(phase === 3 && l.capture)) { any = true; break; }
+  }
+  if (!any) return;
+  const copy = list.slice();
+  for (let i = 0; i < copy.length; i++) {
+    const l = copy[i];
+    if (l.removed) continue;
+    if (phase === 1 && !l.capture) continue;
+    if (phase === 3 && l.capture) continue;
+    if (l.once) removeFrom(t, ev.type, l);
+    st.passive = l.passive;
+    try {
+      const cb = l.cb;
+      if (typeof cb === "function") cb.call(t, ev);
+      else if (typeof cb.handleEvent === "function") cb.handleEvent(ev);
+    } catch (e) { report(e); }
+    st.passive = false;
+    if (st.stopNow) break;
   }
 }
 
 function dispatch(target, ev, st = state(ev)) {
   ev.target = target;
-  st[ACTIVE] = true;
-  st[STOP] = false; st[STOPNOW] = false;
+  st.active = true;
+  st.stop = false; st.stopNow = false;
   const path = pathOf(target, ev.type);
-  st[PATH] = path;
+  st.path = path;
   const savedEvent = g.event;
   g.event = ev;
   for (let i = path.length - 1; i > 0; i--) invoke(path[i], ev, 1, st);
   invoke(target, ev, 2, st);
   if (ev.bubbles) for (let i = 1; i < path.length; i++) invoke(path[i], ev, 3, st);
   g.event = savedEvent;
-  st[ACTIVE] = false;
+  st.active = false;
   ev.currentTarget = null;
   ev.eventPhase = 0;
-  st[PATH] = null;
-  return !st[CANCELED];
+  st.path = null;
+  return !st.canceled;
 }
 
 function dispatchEvent(ev) {
   const st = state(ev);
   if (!st) throw new TypeError("dispatchEvent: parameter 1 is not of type 'Event'");
-  if (st[ACTIVE]) throw new DOMException("The event is already being dispatched.", "InvalidStateError");
+  if (st.active) throw new DOMException("The event is already being dispatched.", "InvalidStateError");
   return dispatch(targetOf(this), ev, st);
 }
 $.dispatch = dispatch;

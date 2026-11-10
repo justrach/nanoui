@@ -206,6 +206,10 @@ fn setFound(vm: *Vm, o: *Object, s: u32, key: PropKey, val: Value, receiver: Val
     }
     if (!f.writable) return false;
     if (own) {
+        if (o.flags.is_proto) {
+            o.flags.proto_dirty = true;
+            vm.bumpProtoEpoch();
+        }
         o.slots[s] = val;
         return true;
     }
@@ -224,7 +228,10 @@ fn setOnReceiver(vm: *Vm, r: *Object, key: PropKey, val: Value) Error!bool {
 /// Adds a property known not to exist yet, ignoring extensibility. Index keys
 /// land in dense storage when they are near it and the flags are the defaults.
 pub fn addProp(vm: *Vm, o: *Object, key: PropKey, val: Value, flags: PropFlags) Error!void {
-    if (o.flags.is_proto) vm.bumpProtoEpoch();
+    if (o.flags.is_proto) {
+        o.flags.proto_dirty = true;
+        vm.bumpProtoEpoch();
+    }
     if (key.isIndex()) {
         const i = key.index();
         if (@as(u8, @bitCast(flags)) == @as(u8, @bitCast(PropFlags.all)) and !o.flags.elems_sealed and !o.flags.elems_frozen) {
@@ -312,7 +319,10 @@ pub fn delete(vm: *Vm, o: *Object, key: PropKey) Error!bool {
     }
     const s = o.shape.find(key) orelse return true;
     if (!o.shape.flagsAt(s).configurable) return false;
-    if (o.flags.is_proto) vm.bumpProtoEpoch();
+    if (o.flags.is_proto) {
+        o.flags.proto_dirty = true;
+        vm.bumpProtoEpoch();
+    }
     if (!o.shape.is_dict) o.shape = try shape_mod.toDict(vm, o.shape, o.shape.proto);
     shape_mod.dictRemove(o.shape, s);
     o.slots[s] = Value.undefined;
@@ -323,7 +333,10 @@ pub fn delete(vm: *Vm, o: *Object, key: PropKey) Error!bool {
 /// Moves an object's prototype; other objects sharing the old shape are untouched.
 pub fn setProtoRaw(vm: *Vm, o: *Object, proto: ?*Object) Error!void {
     if (o.shape.proto == proto) return;
-    if (o.flags.is_proto) vm.bumpProtoEpoch();
+    if (o.flags.is_proto) {
+        o.flags.proto_dirty = true;
+        vm.bumpProtoEpoch();
+    }
     if (o.shape.is_dict) {
         const d = try shape_mod.toDict(vm, o.shape, proto);
         o.shape = d;

@@ -77,6 +77,7 @@ pub const Node = struct {
     modal: bool = false,
     /// Upward-closed summary: this element or a descendant is a resource/sheet tag.
     has_resource: bool = false,
+    has_on_attr: bool = false,
     /// Queued in `Document.dirty_nodes` for the next `flushStyle` pass.
     style_queued: bool = false,
     /// An inline split around blocks: its boxes, whose union its rect is.
@@ -127,6 +128,7 @@ pub const Node = struct {
             return;
         };
         try n.attrs.append(gpa, .{ .name = try gpa.dupe(u8, name), .value = try gpa.dupe(u8, value) });
+        if (name.len > 2 and name[0] == 'o' and name[1] == 'n') n.has_on_attr = true;
         n.doc.touchAttr(n, name);
         if (changesBoxes(n, name)) n.doc.touchLayout();
     }
@@ -366,6 +368,14 @@ pub const Document = struct {
     generation: u32 = 0,
     /// Goes up when non-SVG-interior tree structure changes (outermost `<svg>` roots).
     svg_roots_generation: u32 = 0,
+    /// Goes up when tree structure or an `id` attribute changes (Theorem 16).
+    id_generation: u32 = 1,
+    id_map_gen: u32 = 0,
+    id_last_gen: u32 = 0,
+    id_has_dups: bool = false,
+    id_last_key: []const u8 = "",
+    id_last_node: ?*Node = null,
+    id_map: std.StringHashMapUnmanaged(*Node) = .empty,
     /// Goes up when anything in an inline `<svg>` changes: what's drawn from
     /// their markup is made again (`paint/svg_markup.zig`).
     svg_version: u32 = 0,
@@ -425,6 +435,7 @@ pub const Document = struct {
     /// selects by it reaches its siblings at most, unless it is the inline style.
     fn touchAttr(d: *Document, n: *Node, name: []const u8) void {
         d.generation +%= 1;
+        if (std.mem.eql(u8, name, "id")) d.id_generation +%= 1;
         if (n.has_resource) d.scan_dirty = true;
         if (!d.inDocument(n)) return;
         d.touchUnder(if (std.mem.eql(u8, name, "style")) n else n.parent orelse n);
@@ -433,6 +444,7 @@ pub const Document = struct {
     /// `n`'s children changed.
     fn touchTree(d: *Document, n: *Node) void {
         d.generation +%= 1;
+        d.id_generation +%= 1;
         if (!d.inDocument(n)) return;
         const disp_contents = n.computed != null and n.computed.?.display == .contents;
         if (!perf.isSvgInterior(n.ns == .svg, false, disp_contents)) {
@@ -520,11 +532,35 @@ pub const Document = struct {
     }
 
     pub fn getElementById(d: *const Document, id: []const u8) ?*Node {
+        if (id.len == 0) return null;
+        if (d.id_map_gen == d.id_generation) return d.id_map.get(id);
+        const self = @constCast(d);
+        if (d.id_last_gen == d.id_generation) {
+            if (std.mem.eql(u8, d.id_last_key, id)) return d.id_last_node;
+            self.id_map.clearRetainingCapacity();
+            self.id_has_dups = false;
+            var at = d.node.first_child;
+            while (at) |n| : (at = n.nextInTree(d.node)) {
+                if (n.kind == .element) if (n.attr("id")) |v| if (v.len != 0) {
+                    const gop = self.id_map.getOrPut(d.arena, v) catch break;
+                    if (!gop.found_existing) gop.value_ptr.* = n else self.id_has_dups = true;
+                };
+            }
+            self.id_map_gen = d.id_generation;
+            return d.id_map.get(id);
+        }
+        var found: ?*Node = null;
         var at = d.node.first_child;
         while (at) |n| : (at = n.nextInTree(d.node)) {
-            if (n.kind == .element) if (n.attr("id")) |v| if (std.mem.eql(u8, v, id)) return n;
+            if (n.kind == .element) if (n.attr("id")) |v| if (std.mem.eql(u8, v, id)) {
+                found = n;
+                self.id_last_key = v;
+                break;
+            };
         }
-        return null;
+        if (found != null) self.id_last_gen = d.id_generation;
+        self.id_last_node = found;
+        return found;
     }
 
     /// The first `<title>`'s text, whitespace collapsed by the caller.

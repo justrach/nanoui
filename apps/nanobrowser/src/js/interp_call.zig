@@ -178,13 +178,12 @@ pub fn call(vm: *Vm, callee: Value, this: Value, args: []const Value) Error!Valu
     if (o.class != .closure) return callNonClosure(vm, callee, this, args);
     vm.enterFromHost();
     const saved_sp = vm.sp;
+    defer vm.sp = saved_sp;
     vm.depth += 1;
     defer vm.depth -= 1;
     try vm.checkNativeStack();
     try pushEntry(vm, o, this, args, Value.undefined, false);
-    const r = interp.run(vm);
-    vm.sp = saved_sp;
-    return r;
+    return interp.run(vm);
 }
 
 /// The object `new` makes: ordinary, with new_target's prototype.
@@ -216,15 +215,14 @@ pub fn construct(vm: *Vm, callee: Value, args: []const Value, new_target: Value)
         .closure => {
             vm.enterFromHost();
             const saved_sp = vm.sp;
+            defer vm.sp = saved_sp;
             vm.depth += 1;
             defer vm.depth -= 1;
             try vm.checkNativeStack();
             var this = Value.hole;
             if (!o.flags.derived_ctor) this = (try allocThis(vm, o, new_target)).value();
             try pushEntry(vm, o, this, args, new_target, true);
-            const r = interp.run(vm);
-            vm.sp = saved_sp;
-            return r;
+            return interp.run(vm);
         },
         .native => {
             const saved_nt = vm.new_target;

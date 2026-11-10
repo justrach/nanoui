@@ -201,6 +201,8 @@ pub const Op = enum(u8) {
 };
 
 pub const IC = struct {
+    pub const missing_slot: u32 = std.math.maxInt(u32);
+
     key: PropKey,
     shape: ?*Shape = null,
     holder: ?*Object = null,
@@ -208,6 +210,8 @@ pub const IC = struct {
     slot: u32 = 0,
     epoch: u32 = 0,
     is_accessor: bool = false,
+    is_transition: bool = false,
+    fast_own_data: bool = false,
 };
 
 pub const LineEntry = struct { pc: u32, pos: u32 };
@@ -282,6 +286,9 @@ pub const FuncProto = struct {
     needs_home: bool,
     is_method: bool,
     module: ?*module.Module = null,
+    jit_fn: ?*const anyopaque = null,
+    hot_count: u16 = 0,
+    jit_disabled: bool = false,
 
     pub fn trace(p: *FuncProto, m: *heap.Marker) void {
         m.markValues(p.constants);
@@ -294,6 +301,8 @@ pub const FuncProto = struct {
             ic.holder_shape = null;
             ic.epoch = 0;
             ic.is_accessor = false;
+            ic.is_transition = false;
+            ic.fast_own_data = false;
         }
         m.markStr(p.name);
         m.markCell(&p.source.cell);

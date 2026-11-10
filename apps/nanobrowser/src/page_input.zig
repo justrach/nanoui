@@ -263,7 +263,6 @@ fn inputClick(p: *Page, n: *dom.Node) void {
 
 fn changed(p: *Page, n: *dom.Node) void {
     p.doc.markStyle(n.parent orelse n);
-    p.doc.touchLayout();
     web.simpleEvent(p, n, "input");
     web.simpleEvent(p, n, "change");
 }

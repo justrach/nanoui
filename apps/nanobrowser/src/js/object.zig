@@ -84,7 +84,9 @@ pub const Flags = packed struct(u16) {
     html_dda: bool = false,
     /// An object that is or was another object's [[Prototype]]; mutating its shape bumps `vm.proto_epoch`.
     is_proto: bool = false,
-    _pad: u2 = 0,
+    /// Set once any own property or prototype of an `is_proto` object is mutated after init.
+    proto_dirty: bool = false,
+    _pad: u1 = 0,
 };
 
 pub const NativeData = struct {

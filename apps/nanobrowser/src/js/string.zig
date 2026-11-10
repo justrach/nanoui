@@ -472,6 +472,14 @@ pub const Builder = struct {
     pub fn str(b: *Builder, s: *JSString) Error!void {
         try b.bytes(try s.flat(b.vm));
     }
+    pub fn sub(b: *Builder, s: *JSString, start: usize, end: usize) Error!void {
+        if (start >= end) return;
+        if (s.is_ascii) {
+            try b.bytes((try s.flat(b.vm))[start..end]);
+        } else {
+            try b.str(try substring(b.vm, s, start, end));
+        }
+    }
     pub fn cp(b: *Builder, c: u32) Error!void {
         var t: [4]u8 = undefined;
         const n = encode(c, &t);

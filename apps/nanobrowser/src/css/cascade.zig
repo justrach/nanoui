@@ -519,6 +519,8 @@ pub const Engine = struct {
         e.ensureIndex() catch return e.doc.documentElement();
         // Inside a shadow tree the tree's rules say; a whole tree restyles cheaply.
         if (node.tree_scope) |root| return root;
+        var at: ?*dom.Node = node;
+        while (at) |x| : (at = x.parent) if (x.is_shadow) return x;
         if (node.shadow_root != null) return node;
         return state.invalidatedBy(&e.index.?, e.doc, node, flip);
     }

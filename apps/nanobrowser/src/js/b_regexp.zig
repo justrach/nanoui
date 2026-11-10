@@ -157,7 +157,12 @@ pub fn setLastIndex(vm: *Vm, o: *Object, n: usize) Error!void {
     try props.put(vm, o, vm.k.lastIndex, Value.fromUsize(n));
 }
 
+pub inline fn isFastRegExp(vm: *Vm, o: *Object) bool {
+    return o.class == .regexp and !o.shape.is_dict and o.shape.count == 1 and o.shape.proto == vm.protos.regexp and !vm.protos.regexp.flags.proto_dirty;
+}
+
 pub fn hasBuiltinExec(vm: *Vm, o: *Object) bool {
+    if (isFastRegExp(vm, o)) return true;
     if (o.class != .regexp or o.shape.count != 1 or o.shape.proto != vm.protos.regexp) return false;
     const slot = vm.protos.regexp.shape.find(vm.k.exec) orelse return false;
     const flags = vm.protos.regexp.shape.flagsAt(slot);
@@ -348,9 +353,50 @@ fn sourceGet(vm: *Vm, this: Value, _: []const Value) Error!Value {
     return Value.fromString(try escapedSource(vm, (try thisRe(vm, this)).payload.regexp.source));
 }
 
+pub fn formatFlags(pf: rp.Flags, buf: *[8]u8) []const u8 {
+    var len: usize = 0;
+    if (pf.has_indices) {
+        buf[len] = 'd';
+        len += 1;
+    }
+    if (pf.global) {
+        buf[len] = 'g';
+        len += 1;
+    }
+    if (pf.ignore_case) {
+        buf[len] = 'i';
+        len += 1;
+    }
+    if (pf.multiline) {
+        buf[len] = 'm';
+        len += 1;
+    }
+    if (pf.dot_all) {
+        buf[len] = 's';
+        len += 1;
+    }
+    if (pf.unicode) {
+        buf[len] = 'u';
+        len += 1;
+    }
+    if (pf.unicode_sets) {
+        buf[len] = 'v';
+        len += 1;
+    }
+    if (pf.sticky) {
+        buf[len] = 'y';
+        len += 1;
+    }
+    return buf[0..len];
+}
+
 fn flagsGet(vm: *Vm, this: Value, _: []const Value) Error!Value {
     if (!this.isObject()) return vm.throwError(.TypeError, "RegExp.prototype.flags getter called on non-object");
     const o = this.asObject();
+    if (isFastRegExp(vm, o)) {
+        var buf: [8]u8 = undefined;
+        return Value.fromString(try str.fromUtf8(vm, formatFlags(o.payload.regexp.prog.flags, &buf)));
+    }
     var b = str.Builder.init(vm);
     defer b.deinit();
     const table = [_]struct { name: []const u8, c: u8 }{
@@ -423,4 +469,6 @@ pub fn init(vm: *Vm) Error!void {
     try u.getter(vm, p, "sticky", flagGetter("sticky"));
     try u.getter(vm, p, "hasIndices", flagGetter("has_indices"));
     try sym.init(vm, p);
+    p.flags.is_proto = true;
+    p.flags.proto_dirty = false;
 }

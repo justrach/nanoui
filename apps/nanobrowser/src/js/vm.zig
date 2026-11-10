@@ -22,6 +22,7 @@ const promise = @import("promise.zig");
 const module = @import("module.zig");
 const regexp_compile = @import("regexp_compile.zig");
 const b_regexp = @import("b_regexp.zig");
+const jit = @import("jit.zig");
 
 pub const Error = error{ Thrown, Terminated, OutOfMemory };
 
@@ -266,6 +267,7 @@ pub const Vm = struct {
     /// Bumped whenever an object with `flags.is_proto` changes shape or prototype,
     /// invalidating multi-hop prototype inline cache entries in O(1).
     proto_epoch: u32 = 1,
+    jit_pool: jit.JitPool = .{},
 
     pub const interrupt_interval = 16384;
 
@@ -290,6 +292,10 @@ pub const Vm = struct {
         vm.frames = try pages(frames.Frame, max_frames);
         try vm.initStrings();
         try builtins.init(vm);
+        vm.protos.object.flags.proto_dirty = false;
+        vm.protos.array.flags.proto_dirty = false;
+        vm.protos.array_iter.flags.proto_dirty = false;
+        vm.protos.regexp.flags.proto_dirty = false;
         return vm;
     }
 
@@ -329,6 +335,7 @@ pub const Vm = struct {
         vm.protected.deinit(vm.gpa);
         vm.modules.deinit(vm.gpa);
         vm.visiting.deinit(vm.gpa);
+        vm.jit_pool.deinit(raw);
         std.heap.page_allocator.free(vm.stack);
         std.heap.page_allocator.free(vm.frames);
         raw.destroy(vm);

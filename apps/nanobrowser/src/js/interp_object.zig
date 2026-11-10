@@ -222,6 +222,24 @@ pub fn runFields(vm: *Vm, this: Value, func: Value) Error!void {
 
 pub fn copyDataProps(vm: *Vm, target: *Object, src: Value, excluded: []const Value) Error!void {
     if (src.isNullish()) return;
+    if (src.isObject()) {
+        const from = src.asObject();
+        if (from.shape.all_plain_str and !from.flags.exotic and !from.flags.lazy_fn and from.elems_len == 0 and from.class == .object) {
+            if (excluded.len == 0 and target.shape == vm.object_root and target.elems_len == 0 and !target.flags.is_proto and from.shape.proto == vm.protos.object) {
+                const n = from.shape.count;
+                if (n > target.slot_cap) try objmod.growSlots(vm, target, n);
+                @memcpy(target.slots[0..n], from.slots[0..n]);
+                target.shape = from.shape;
+                return;
+            }
+            if (excluded.len == 0) {
+                for (from.shape.entries(), 0..) |e, slot| {
+                    try props.defineData(vm, target, e.key, from.slots[slot], PropFlags.all);
+                }
+                return;
+            }
+        }
+    }
     const from = try conv.toObject(vm, src);
     const keys = try props.ownKeys(vm, from);
     defer vm.gpa.free(keys);
@@ -264,7 +282,7 @@ pub fn exec(vm: *Vm, f: *Frame, op: Op) Error!void {
         },
         .define_field => {
             const ic = &f.fp.ics[u32At(pc + 1)];
-            try props.defineData(vm, (sp - 2)[0].asObject(), ic.key, (sp - 1)[0], PropFlags.all);
+            try icache.defineField(vm, ic, (sp - 2)[0].asObject(), (sp - 1)[0]);
             vm.sp = sp - 1;
             f.pc = pc + 5;
         },
