@@ -261,6 +261,7 @@ pub const Vm = struct {
     global_lex: *Object = undefined,
     empty: *JSString = undefined,
     char_strs: [128]*JSString = undefined,
+    kw_atoms: [37]?*JSString = @splat(null),
 
     // Execution state.
     stack: []Value = &.{},
@@ -345,15 +346,18 @@ pub const Vm = struct {
     }
 
     fn initStrings(vm: *Vm) Error!void {
-        const empty = try vm.gpa.dupe(u8, "");
         const e = try vm.heap.create(JSString, .string);
-        e.* = .{ .cell = e.cell, .is_ascii = true, .is_atom = true, .byte_len = 0, .len16 = 0, .ptr = empty.ptr };
-        try vm.atoms.put(vm.gpa, e.ptr[0..0], e);
+        e.* = .{ .cell = e.cell, .is_ascii = true, .is_atom = true, .byte_len = 0, .len16 = 0, .ptr = &e.inline_buf };
+        try vm.atoms.put(vm.gpa, e.inline_buf[0..0], e);
         vm.empty = e;
         var i: usize = 0;
         while (i < 128) : (i += 1) {
-            const b = [1]u8{@intCast(i)};
-            vm.char_strs[i] = try str.intern(vm, &b);
+            const c = try vm.heap.create(JSString, .string);
+            c.* = .{ .cell = c.cell, .is_ascii = true, .is_atom = true, .owns = false, .byte_len = 1, .len16 = 1, .ptr = &c.inline_buf };
+            c.inline_buf[0] = @intCast(i);
+            if (i < '0' or i > '9') c.key = PropKey.fromAtom(c);
+            try vm.atoms.put(vm.gpa, c.inline_buf[0..1], c);
+            vm.char_strs[i] = c;
         }
         inline for (@typeInfo(Names).@"struct".field_names) |n| {
             @field(vm.k, n) = PropKey.fromAtom(try str.intern(vm, n));
@@ -393,6 +397,7 @@ pub const Vm = struct {
         m.mark(vm.exception);
         m.markStr(vm.empty);
         for (vm.char_strs) |s| m.markStr(s);
+        for (vm.kw_atoms) |s| if (s) |a| m.markStr(a);
         inline for (@typeInfo(Names).@"struct".field_names) |n| m.markKey(@field(vm.k, n));
         inline for (@typeInfo(WellKnown).@"struct".field_names) |n| m.markCell(&@field(vm.sym, n).cell);
         inline for (@typeInfo(Protos).@"struct".field_names) |n| {

@@ -29,27 +29,54 @@ const hex_lut: [256]u8 = blk: {
 };
 
 pub fn parseHex(s: []const u8) ?Color {
+    const scale: f32 = 1.0 / 255.0;
+    if (s.len == 6) {
+        const d0 = hex_lut[s[0]];
+        const d1 = hex_lut[s[1]];
+        const d2 = hex_lut[s[2]];
+        const d3 = hex_lut[s[3]];
+        const d4 = hex_lut[s[4]];
+        const d5 = hex_lut[s[5]];
+        if ((d0 | d1 | d2 | d3 | d4 | d5) == 0xFF) return null;
+        return .{
+            .r = @as(f32, @floatFromInt(d0 * 16 + d1)) * scale,
+            .g = @as(f32, @floatFromInt(d2 * 16 + d3)) * scale,
+            .b = @as(f32, @floatFromInt(d4 * 16 + d5)) * scale,
+            .a = 1,
+        };
+    }
+    if (s.len == 3) {
+        const d0 = hex_lut[s[0]];
+        const d1 = hex_lut[s[1]];
+        const d2 = hex_lut[s[2]];
+        if ((d0 | d1 | d2) == 0xFF) return null;
+        return .{
+            .r = @as(f32, @floatFromInt(d0 * 17)) * scale,
+            .g = @as(f32, @floatFromInt(d1 * 17)) * scale,
+            .b = @as(f32, @floatFromInt(d2 * 17)) * scale,
+            .a = 1,
+        };
+    }
+    if (s.len != 4 and s.len != 8) return null;
     var d: [8]u8 = undefined;
-    if (s.len != 3 and s.len != 4 and s.len != 6 and s.len != 8) return null;
     for (s, 0..) |c, i| {
         const v = hex_lut[c];
         if (v == 0xFF) return null;
         d[i] = v;
     }
-    const scale: f32 = 1.0 / 255.0;
-    if (s.len <= 4) {
+    if (s.len == 4) {
         return .{
             .r = @as(f32, @floatFromInt(d[0] * 17)) * scale,
             .g = @as(f32, @floatFromInt(d[1] * 17)) * scale,
             .b = @as(f32, @floatFromInt(d[2] * 17)) * scale,
-            .a = if (s.len == 4) @as(f32, @floatFromInt(d[3] * 17)) * scale else 1,
+            .a = @as(f32, @floatFromInt(d[3] * 17)) * scale,
         };
     }
     return .{
         .r = @as(f32, @floatFromInt(d[0] * 16 + d[1])) * scale,
         .g = @as(f32, @floatFromInt(d[2] * 16 + d[3])) * scale,
         .b = @as(f32, @floatFromInt(d[4] * 16 + d[5])) * scale,
-        .a = if (s.len == 8) @as(f32, @floatFromInt(d[6] * 16 + d[7])) * scale else 1,
+        .a = @as(f32, @floatFromInt(d[6] * 16 + d[7])) * scale,
     };
 }
 
@@ -82,6 +109,13 @@ pub fn at(ctx: *const Ctx, c: *Cur) ?Color {
 
 /// A whole value that is one color.
 pub fn of(ctx: *const Ctx, t: []const Token) ?Color {
+    if (t.len == 1) {
+        return switch (t[0].kind) {
+            .hash => parseHex(t[0].text),
+            .ident => named_color(ctx, t[0].text),
+            else => null,
+        };
+    }
     var c = Cur.of(t);
     const v = at(ctx, &c) orelse return null;
     return if (c.atEnd()) v else null;

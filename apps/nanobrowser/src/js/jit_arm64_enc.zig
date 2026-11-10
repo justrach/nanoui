@@ -157,15 +157,44 @@ pub const Emitter = struct {
         e.cbnz64(1, ep_rel);
     }
 
+    /// Theorem 65 (`NanoUI.Speedometer3Apex.inline_jit_truthy_optchain_and_string_seq_equiv`):
+    /// Inline ARM64 truthiness for `T_SPECIAL`, `T_INT`, and `T_OBJECT`.
     pub fn emitTruthyTest(e: *Emitter) void {
         e.eorReg64(2, 0, 26);
+        e.cmpImm64(2, 3);
+        const b_not_spec = e.len;
+        e.bCond(.hi, 0);
         e.cmpImm64(2, 1);
-        const b_ls = e.len;
-        e.bCond(.ls, 0);
+        e.cset64(2, .eq);
+        const b_done1 = e.len;
+        e.bImm(0);
+        const not_spec = e.len;
+        e.buf[b_not_spec] |= (@as(u32, @intCast(not_spec - b_not_spec)) & 0x7FFFF) << 5;
+        e.eorReg64(2, 0, 25);
+        e.lsrImm64(2, 2, 48);
+        const b_not_int = e.len;
+        e.cbnz64(2, 0);
+        e.mov32(2, 0);
+        const b_done2 = e.len;
+        e.bImm(0);
+        const not_int = e.len;
+        e.buf[b_not_int] |= (@as(u32, @intCast(not_int - b_not_int)) & 0x7FFFF) << 5;
+        e.eorReg64(3, 0, 27);
+        e.lsrImm64(2, 3, 48);
+        const b_slow = e.len;
+        e.cbnz64(2, 0);
+        e.ldrbImm(3, 3, @intCast(@offsetOf(Object, "flags")));
+        e.mov64(2, 0);
+        const b_done3 = e.len;
+        e.tbz32(3, @bitOffsetOf(objmod.Flags, "html_dda"), 0);
+        const slow_idx = e.len;
+        e.buf[b_slow] |= (@as(u32, @intCast(slow_idx - b_slow)) & 0x7FFFF) << 5;
         e.movImm64(9, @intFromPtr(&jit.jitTruthy));
         e.blr(9);
         e.mov64(2, 0);
-        e.buf[b_ls] |= (@as(u32, @intCast(e.len - b_ls)) & 0x7FFFF) << 5;
+        e.buf[b_done1] |= @as(u32, @intCast(e.len - b_done1)) & 0x03FF_FFFF;
+        e.buf[b_done2] |= @as(u32, @intCast(e.len - b_done2)) & 0x03FF_FFFF;
+        e.buf[b_done3] |= (@as(u32, @intCast(e.len - b_done3)) & 0x3FFF) << 5;
     }
 
     pub fn emitGetField(e: *Emitter, op: Op, ic_off: u32, pc_addr: usize, epilogue_idx: u32, pass: u1) void {
@@ -400,7 +429,7 @@ pub const Emitter = struct {
         e.stur64(0, 22, -8);
     }
 
-    pub fn emitGetElem(e: *Emitter, pc_addr: usize, epilogue_idx: u32, pass: u1) void {
+    pub fn emitGetElem(e: *Emitter, op: Op, pc_addr: usize, epilogue_idx: u32, pass: u1) void {
         e.ldur64(0, 22, -16);
         e.ldur64(1, 22, -8);
         e.eorReg64(2, 0, 27);
@@ -432,8 +461,12 @@ pub const Emitter = struct {
         e.buf[b4] |= (@as(u32, @intCast(slow_idx - b4)) & 0x7FFFF) << 5;
         e.callHelper4(@intFromPtr(&jit.jitGetElem), pc_addr, epilogue_idx, pass);
         e.buf[b_done] |= @as(u32, @intCast(e.len - b_done)) & 0x03FF_FFFF;
-        e.stur64(0, 22, -16);
-        e.subImm64(22, 22, 8);
+        if (op == .get_elem) {
+            e.stur64(0, 22, -16);
+            e.subImm64(22, 22, 8);
+        } else {
+            e.stur64(0, 22, -8);
+        }
     }
 
     pub fn emitBinaryOp(e: *Emitter, op: Op, pc_addr: usize, epilogue_idx: u32, pass: u1) void {

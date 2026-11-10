@@ -162,6 +162,7 @@ pub fn animationEvents(p: *Page) void {
 pub fn frameStart(p: *Page) void {
     const w = p.js orelse return;
     w.redraw_asked = false;
+    w.redraw_due = false;
     w.in_frame = true;
     if (w.blur_request) {
         w.blur_request = false;

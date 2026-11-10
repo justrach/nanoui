@@ -119,20 +119,27 @@ fn fillItem(s: *const Setup, k: *Box) Error!Item {
     if (base == null and k.kind == .replaced and s.row) {
         base = (try @import("replaced.zig").size(c, k, s.cw, s.ch)).w;
     }
-    const content_main: ?f32 = if (base == null or !s.row) try contentMain(s, &it) else null;
+    const need_col_content = !s.row and st.min_height.kind == .auto and !st.clips() and !(fb.kind == .auto and st.flex_shrink <= 0);
+    const content_main: ?f32 = if (base == null or need_col_content) try contentMain(s, &it) else null;
     it.base = base orelse content_main.?;
 
     // Min and max along the main axis.
     if (s.row) {
         if (try ctx.specW(c, k, st.max_width, s.cw, bph)) |v| it.max = v;
         if (st.min_width.kind == .auto) {
-            it.min = try autoMinWidth(s, k, bph);
+            if (fb.kind == .auto and base != null and st.flex_shrink <= 0) {
+                it.min = @min(base.?, it.max);
+            } else {
+                it.min = try autoMinWidth(s, k, bph);
+            }
         } else if (try ctx.specW(c, k, st.min_width, s.cw, bph)) |v| it.min = v;
     } else {
         if (ctx.specH(k, st.max_height, s.ch, bpv)) |v| it.max = v;
         if (st.min_height.kind == .auto) {
             if (st.clips()) {
                 it.min = bpv;
+            } else if (fb.kind == .auto and base != null and st.flex_shrink <= 0) {
+                it.min = @min(base.?, it.max);
             } else {
                 const spec = ctx.specH(k, st.height, s.ch, bpv) orelse inf;
                 it.min = @min(spec, content_main.?);

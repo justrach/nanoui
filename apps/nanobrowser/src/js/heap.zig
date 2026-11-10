@@ -163,67 +163,105 @@ fn trace(m: *Marker, c: *Cell) void {
     }
 }
 
+fn sizeOfKind(kind: CellKind) usize {
+    return switch (kind) {
+        .object => @sizeOf(Object),
+        .string => @sizeOf(JSString),
+        .symbol => @sizeOf(Symbol),
+        .bigint => @sizeOf(BigInt),
+        .shape => @sizeOf(Shape),
+        .env => @sizeOf(Env),
+        .accessor => @sizeOf(Accessor),
+        .proto => @sizeOf(bc.FuncProto),
+        .coroutine => @sizeOf(coroutine.Coroutine),
+        .module => @sizeOf(module.Module),
+        .source => @sizeOf(bc.Source),
+    };
+}
+
 fn freeCell(vm: *Vm, c: *Cell, all: bool) void {
     const gpa = vm.gpa;
     switch (c.kind) {
         .object => {
             const o: *Object = @fieldParentPtr("cell", c);
             objmod.finalize(vm, o);
-            gpa.destroy(o);
         },
         .string => {
             const s: *JSString = @fieldParentPtr("cell", c);
             if (!all and s.is_atom) _ = vm.atoms.remove(s.ptr[0..s.byte_len]);
             s.finalize(gpa);
-            gpa.destroy(s);
         },
-        .symbol => gpa.destroy(@as(*Symbol, @fieldParentPtr("cell", c))),
+        .symbol => {},
         .bigint => {
             const b: *BigInt = @fieldParentPtr("cell", c);
             b.v.deinit();
-            gpa.destroy(b);
         },
         .shape => {
             const s: *Shape = @fieldParentPtr("cell", c);
             if (!all) s.unlink(vm);
             s.finalize(gpa);
-            gpa.destroy(s);
         },
         .env => {
             const e: *Env = @fieldParentPtr("cell", c);
             const size = Env.allocSize(e.len);
-            const bytes: [*]align(8) u8 = @ptrCast(e);
-            gpa.free(bytes[0..size]);
+            if (e.len <= Heap.max_pooled_env) {
+                vm.counting.bytes -= size;
+                if (!all) {
+                    c.next = vm.heap.env_free[e.len];
+                    vm.heap.env_free[e.len] = c;
+                }
+            } else {
+                const bytes: [*]align(8) u8 = @ptrCast(e);
+                gpa.free(bytes[0..size]);
+            }
+            return;
         },
-        .accessor => gpa.destroy(@as(*Accessor, @fieldParentPtr("cell", c))),
+        .accessor => {},
         .proto => {
             const p: *bc.FuncProto = @fieldParentPtr("cell", c);
             p.finalize(gpa);
-            gpa.destroy(p);
         },
         .coroutine => {
             const co: *coroutine.Coroutine = @fieldParentPtr("cell", c);
             co.finalize(gpa);
-            gpa.destroy(co);
         },
         .module => {
             const mo: *module.Module = @fieldParentPtr("cell", c);
             mo.finalize(gpa);
-            gpa.destroy(mo);
         },
         .source => {
             const so: *bc.Source = @fieldParentPtr("cell", c);
             so.finalize(gpa);
-            gpa.destroy(so);
         },
+    }
+    vm.counting.bytes -= sizeOfKind(c.kind);
+    if (!all) {
+        const idx = @intFromEnum(c.kind);
+        c.next = vm.heap.free_list[idx];
+        vm.heap.free_list[idx] = c;
     }
 }
 
-/// Owns the cell list. `gpa` is the counting allocator every JS thing goes through.
+const slab_bytes = 64 * 1024;
+const Slab = struct {
+    next: ?*Slab,
+    buf: [slab_bytes - @sizeOf(?*anyopaque)]u8 align(16),
+};
+
+/// Theorem 64 (`NanoUI.Speedometer3Apex.slab_cell_freelist_and_inline_string_equiv`):
+/// Fixed-size cells and small `Env` (`<= 8` slots) allocate from 64 KB slabs and recycle
+/// via per-kind free-lists while maintaining exact `Counting.bytes` and `Counting.limit`.
 pub const Heap = struct {
+    pub const max_pooled_env = 8;
+    const num_kinds = @typeInfo(CellKind).@"enum".field_names.len;
+
     gpa: Allocator,
     head: ?*Cell = null,
     count: usize = 0,
+    slab: ?*Slab = null,
+    slab_used: usize = slab_bytes,
+    free_list: [num_kinds]?*Cell = @splat(null),
+    env_free: [max_pooled_env + 1]?*Cell = @splat(null),
 
     pub inline fn link(h: *Heap, c: *Cell) void {
         c.next = h.head;
@@ -231,16 +269,50 @@ pub const Heap = struct {
         h.count += 1;
     }
 
+    noinline fn allocSlabBytes(h: *Heap, counting: *Counting, size: usize) Allocator.Error![*]align(8) u8 {
+        const aligned = (size + 7) & ~@as(usize, 7);
+        const cap = @sizeOf(@FieldType(Slab, "buf"));
+        if (h.slab == null or h.slab_used + aligned > cap) {
+            const s = try counting.gpa.create(Slab);
+            s.next = h.slab;
+            h.slab = s;
+            h.slab_used = 0;
+        }
+        const ptr: [*]align(8) u8 = @ptrCast(@alignCast(h.slab.?.buf[h.slab_used..].ptr));
+        h.slab_used += aligned;
+        counting.bytes += size;
+        return ptr;
+    }
+
     /// Allocates one fixed-size cell; the first field of T must be `cell: Cell`.
     pub fn create(h: *Heap, comptime T: type, kind: CellKind) Allocator.Error!*T {
-        const p = try h.gpa.create(T);
+        const counting: *Counting = @ptrCast(@alignCast(h.gpa.ptr));
+        if (counting.bytes + @sizeOf(T) > counting.limit) return error.OutOfMemory;
+        const p: *T = if (h.free_list[@intFromEnum(kind)]) |c| blk: {
+            h.free_list[@intFromEnum(kind)] = c.next;
+            counting.bytes += @sizeOf(T);
+            break :blk @fieldParentPtr("cell", c);
+        } else @ptrCast(try h.allocSlabBytes(counting, @sizeOf(T)));
         p.cell = .{ .kind = kind };
         h.link(&p.cell);
         return p;
     }
 
     pub fn newEnv(h: *Heap, parent: ?*Env, n: usize) Allocator.Error!*Env {
-        const bytes = try h.gpa.alignedAlloc(u8, .of(Env), Env.allocSize(n));
+        const size = Env.allocSize(n);
+        if (n <= max_pooled_env) {
+            const counting: *Counting = @ptrCast(@alignCast(h.gpa.ptr));
+            if (counting.bytes + size > counting.limit) return error.OutOfMemory;
+            const e: *Env = if (h.env_free[n]) |c| blk: {
+                h.env_free[n] = c.next;
+                counting.bytes += size;
+                break :blk @fieldParentPtr("cell", c);
+            } else @ptrCast(try h.allocSlabBytes(counting, size));
+            e.* = .{ .cell = .{ .kind = .env }, .parent = parent, .len = @intCast(n) };
+            h.link(&e.cell);
+            return e;
+        }
+        const bytes = try h.gpa.alignedAlloc(u8, .of(Env), size);
         const e: *Env = @ptrCast(bytes.ptr);
         e.* = .{ .cell = .{ .kind = .env }, .parent = parent, .len = @intCast(n) };
         h.link(&e.cell);
@@ -296,4 +368,11 @@ fn sweep(vm: *Vm, all: bool) void {
 /// Frees every cell; used by vm.deinit().
 pub fn freeAll(vm: *Vm) void {
     sweep(vm, true);
+    var s = vm.heap.slab;
+    while (s) |cur| {
+        s = cur.next;
+        vm.raw_gpa.destroy(cur);
+    }
+    vm.heap.slab = null;
+    vm.heap.slab_used = slab_bytes;
 }

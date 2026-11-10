@@ -111,7 +111,7 @@ fn innerBase(it: *const Item) f32 {
 }
 
 /// Where a line's cross size comes from, its items' cross sizes.
-fn crossSizes(s: *const Setup, items: []Item, line: *Line, item_ch: ?f32) Error!void {
+fn crossSizes(s: *const Setup, items: []Item, line: *Line, item_ch: ?f32, single_definite_cross: bool) Error!void {
     const c = s.c;
     for (items[line.from..line.to]) |*it| {
         const k = it.b;
@@ -125,6 +125,7 @@ fn crossSizes(s: *const Setup, items: []Item, line: *Line, item_ch: ?f32) Error!
                 line.down = @max(line.down, it.crossOuter() - it.ascent);
                 continue;
             }
+            if (single_definite_cross and it.stretches(true)) continue;
             it.cross = try sizing.measureH(c, k, it.target, item_ch);
         }
         line.cross = @max(line.cross, it.crossOuter());
@@ -169,7 +170,8 @@ pub fn run(s: *const Setup, items: []Item) Error!f32 {
 
     // Cross sizes.
     const item_ch: ?f32 = if (s.row) s.ch else null;
-    for (lines) |*line| try crossSizes(s, items, line, item_ch);
+    const single_definite_cross = s.row and lines.len == 1 and st.flex_wrap == .nowrap and s.cross != null;
+    for (lines) |*line| try crossSizes(s, items, line, item_ch, single_definite_cross);
     if (lines.len == 1 and st.flex_wrap == .nowrap) {
         if (s.cross) |cross| lines[0].cross = cross;
     }

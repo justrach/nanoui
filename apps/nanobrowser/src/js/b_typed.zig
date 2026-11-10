@@ -97,26 +97,28 @@ pub inline fn bytesOf(o: *Object) []u8 {
     return d.buffer.payload.buffer.bytes[d.offset..];
 }
 
-fn readNum(comptime T: type, b: []const u8) T {
+fn readNum(comptime T: type, b: [*]const u8) T {
     return std.mem.bytesToValue(T, b[0..@sizeOf(T)]);
 }
 
 /// Reads element i, which must be in range; reading past the end yields undefined.
-pub fn getIndex(vm: *Vm, o: *Object, i: u32) Error!Value {
-    if (i >= length(o)) return Value.undefined;
+pub inline fn getIndex(vm: *Vm, o: *Object, i: u32) Error!Value {
     const d = o.payload.typed;
-    const b = bytesOf(o)[i * elemSize(d.kind) ..];
+    const buf = d.buffer.payload.buffer;
+    if (buf.detached or i >= d.len) return Value.undefined;
+    const base = buf.bytes.ptr + d.offset;
+    const idx: usize = i;
     return switch (d.kind) {
-        .Int8 => Value.fromInt(readNum(i8, b)),
-        .Uint8, .Uint8Clamped => Value.fromInt(b[0]),
-        .Int16 => Value.fromInt(readNum(i16, b)),
-        .Uint16 => Value.fromInt(readNum(u16, b)),
-        .Int32 => Value.fromInt(readNum(i32, b)),
-        .Uint32 => Value.fromUsize(readNum(u32, b)),
-        .Float32 => Value.fromNumber(readNum(f32, b)),
-        .Float64 => Value.fromNumber(readNum(f64, b)),
-        .BigInt64 => big.fromU64(vm, readNum(u64, b), true),
-        .BigUint64 => big.fromU64(vm, readNum(u64, b), false),
+        .Int8 => Value.fromInt(@as(i8, @bitCast(base[idx]))),
+        .Uint8, .Uint8Clamped => Value.fromInt(base[idx]),
+        .Int16 => Value.fromInt(readNum(i16, base + idx * 2)),
+        .Uint16 => Value.fromInt(readNum(u16, base + idx * 2)),
+        .Int32 => Value.fromInt(readNum(i32, base + idx * 4)),
+        .Uint32 => Value.fromUsize(readNum(u32, base + idx * 4)),
+        .Float32 => Value.fromNumber(readNum(f32, base + idx * 4)),
+        .Float64 => Value.fromNumber(readNum(f64, base + idx * 8)),
+        .BigInt64 => big.fromU64(vm, readNum(u64, base + idx * 8), true),
+        .BigUint64 => big.fromU64(vm, readNum(u64, base + idx * 8), false),
     };
 }
 
@@ -130,7 +132,7 @@ fn clamp8(d: f64) u8 {
     return @intCast(r);
 }
 
-fn writeNum(comptime T: type, b: []u8, v: T) void {
+fn writeNum(comptime T: type, b: [*]u8, v: T) void {
     @memcpy(b[0..@sizeOf(T)], std.mem.asBytes(&v));
 }
 
@@ -139,20 +141,39 @@ pub fn setIndex(vm: *Vm, o: *Object, i: u32, v: Value) Error!void {
     const d = o.payload.typed;
     if (d.kind == .BigInt64 or d.kind == .BigUint64) {
         const x = try big.toU64(vm, try big.toBigInt(vm, v));
-        if (i < length(o)) writeNum(u64, bytesOf(o)[i * 8 ..], x);
+        if (i < length(o)) writeNum(u64, bytesOf(o).ptr + @as(usize, i) * 8, x);
+        return;
+    }
+    if (v.isInt()) {
+        const buf = d.buffer.payload.buffer;
+        if (buf.detached or i >= d.len) return;
+        const base = buf.bytes.ptr + d.offset;
+        const idx: usize = i;
+        const iv = v.asInt();
+        const uv: u32 = @bitCast(iv);
+        switch (d.kind) {
+            .Int8, .Uint8 => base[idx] = @truncate(uv),
+            .Uint8Clamped => base[idx] = if (iv <= 0) 0 else if (iv >= 255) 255 else @intCast(iv),
+            .Int16, .Uint16 => writeNum(u16, base + idx * 2, @truncate(uv)),
+            .Int32, .Uint32 => writeNum(u32, base + idx * 4, uv),
+            .Float32 => writeNum(f32, base + idx * 4, @floatFromInt(iv)),
+            .Float64 => writeNum(f64, base + idx * 8, @floatFromInt(iv)),
+            else => unreachable,
+        }
         return;
     }
     const n = try conv.toNumber(vm, v);
-    if (i >= length(o)) return;
-    const b = bytesOf(o)[i * elemSize(d.kind) ..];
+    const buf = d.buffer.payload.buffer;
+    if (buf.detached or i >= d.len) return;
+    const base = buf.bytes.ptr + d.offset;
+    const idx: usize = i;
     switch (d.kind) {
-        .Int8 => b[0] = @truncate(@as(u32, @bitCast(conv.doubleToInt32(n)))),
-        .Uint8 => b[0] = @truncate(@as(u32, @bitCast(conv.doubleToInt32(n)))),
-        .Uint8Clamped => b[0] = clamp8(n),
-        .Int16, .Uint16 => writeNum(u16, b, @truncate(@as(u32, @bitCast(conv.doubleToInt32(n))))),
-        .Int32, .Uint32 => writeNum(u32, b, @bitCast(conv.doubleToInt32(n))),
-        .Float32 => writeNum(f32, b, @floatCast(n)),
-        .Float64 => writeNum(f64, b, n),
+        .Int8, .Uint8 => base[idx] = @truncate(@as(u32, @bitCast(conv.doubleToInt32(n)))),
+        .Uint8Clamped => base[idx] = clamp8(n),
+        .Int16, .Uint16 => writeNum(u16, base + idx * 2, @truncate(@as(u32, @bitCast(conv.doubleToInt32(n))))),
+        .Int32, .Uint32 => writeNum(u32, base + idx * 4, @bitCast(conv.doubleToInt32(n))),
+        .Float32 => writeNum(f32, base + idx * 4, @floatCast(n)),
+        .Float64 => writeNum(f64, base + idx * 8, n),
         else => unreachable,
     }
 }

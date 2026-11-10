@@ -273,7 +273,8 @@ pub const World = struct {
 
     fn leaveInner(w: *World, prev_caller: ?*Page) void {
         const vm = w.vm;
-        const has_caller = w.caller != null;
+        const caller_page = w.caller;
+        const has_caller = caller_page != null;
         w.caller = prev_caller;
         // Microtasks are still this task: for them, JS is running.
         if (@import("../perf_rules.zig").isAgentMicrotaskCheckpoint(w.depth, has_caller)) {
@@ -282,7 +283,7 @@ pub const World = struct {
         w.depth -= 1;
         if (w.depth != 0) return;
         vm.setDeadline(0);
-        if (vm.bytesAllocated() > w.gc_next) {
+        if (!has_caller and vm.bytesAllocated() > w.gc_next) {
             vm.collect();
             w.gc_next = @max(first_collection, vm.bytesAllocated() * 2);
         }
@@ -298,9 +299,18 @@ pub const World = struct {
             w.pending_history = 0;
             p.host.history(p.host.ctx, p, by);
         }
-        if (w.redraw_due and !w.in_frame) {
-            w.redraw_due = false;
-            p.redraw();
+        if (w.redraw_due) {
+            if (caller_page) |cp| {
+                if (cp.js) |cw| {
+                    cw.redraw_due = true;
+                } else if (!w.in_frame) {
+                    w.redraw_due = false;
+                    p.redraw();
+                }
+            } else if (!w.in_frame) {
+                w.redraw_due = false;
+                p.redraw();
+            }
         }
         p.busy -= 1;
         p.maybeFree();

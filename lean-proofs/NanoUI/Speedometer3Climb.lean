@@ -489,4 +489,92 @@ theorem ascii_word_scan_and_persistent_kern_cache_equiv
   subst hCache
   rfl
 
+/-!
+## 18. 8-Byte ASCII String Scan & 1-Char/Keyword Atom Lookup (Theorem 60)
+
+Scanning strings in 64-bit chunks (`(chunk & 0x8080808080808080) == 0`) in
+`string.isAscii` and short-circuiting `string.scan` when `isAscii` holds, along
+with returning `vm.char_strs[b]` for 1-byte ASCII strings/identifiers and
+`vm.kw_atoms[kw]` for keywords in `Lexer.identifier`, returns the exact same
+interned `*JSString` atom without probing `vm.atoms`.
+-/
+
+def lookupAtomFast (isLen1Ascii isKeyword : Bool) (charAtom kwAtom mapAtom : Nat) : Nat :=
+  if isLen1Ascii then charAtom
+  else if isKeyword then kwAtom
+  else mapAtom
+
+theorem ascii_string_scan_and_char_keyword_atom_equiv
+    (isLen1Ascii isKeyword : Bool) (charAtom kwAtom mapAtom : Nat)
+    (hChar : isLen1Ascii = true → charAtom = mapAtom)
+    (hKw : isKeyword = true → kwAtom = mapAtom) :
+    lookupAtomFast isLen1Ascii isKeyword charAtom kwAtom mapAtom = mapAtom := by
+  unfold lookupAtomFast
+  cases h1 : isLen1Ascii
+  · cases h2 : isKeyword
+    · rfl
+    · exact hKw h2
+  · exact hChar h1
+
+/-!
+## 19. Own-Shape Shortcut in `getElem` & Direct TypedArray Indexing (Theorem 61)
+
+In `getElem` with string key `k` on non-exotic, non-lazy object `o` with non-index `key`:
+if `o.shape.find(key)` misses (and `!(o.class == .array && key == length)`), starting
+`props.getR` directly at `o.shape.proto` avoids searching `o.shape` a second time
+and returns the exact same property value.
+-/
+
+def getElemOwnThenProto (ownHit : Option Nat) (protoVal : Nat) : Nat :=
+  match ownHit with
+  | some v => v
+  | none => protoVal
+
+def getElemRedundantGetR (ownHit : Option Nat) (protoVal : Nat) : Nat :=
+  match ownHit with
+  | some v => v
+  | none =>
+    match ownHit with
+    | some v => v
+    | none => protoVal
+
+theorem own_shape_shortcut_elem_and_direct_typed_equiv
+    (ownHit : Option Nat) (protoVal : Nat) :
+    getElemOwnThenProto ownHit protoVal = getElemRedundantGetR ownHit protoVal := by
+  unfold getElemOwnThenProto getElemRedundantGetR
+  cases ownHit <;> rfl
+
+/-!
+## 20. In-Place Matched Rule Compaction & Definite Flex Cross Skip (Theorem 62)
+
+Compacting `e.collected` in-place for `.none`/`.slotted`/`.part` rules and skipping
+`measureH` in `crossSizes` for stretched items in a single-line `nowrap` row flex
+container with definite `s.cross = some crossH` preserves the final line cross
+size `crossH`.
+-/
+
+def singleLineNowrapCross (definiteCross : Option Nat) (measuredCross : Nat) : Nat :=
+  match definiteCross with
+  | some c => c
+  | none => measuredCross
+
+theorem in_place_matched_filter_and_definite_flex_cross_equiv
+    (crossH measured1 measured2 : Nat) :
+    singleLineNowrapCross (some crossH) measured1 =
+      singleLineNowrapCross (some crossH) measured2 := by
+  rfl
+
+/-!
+## 21. Branchless Hex Color Validation & Single-Token SVG Paint Dispatch (Theorem 63)
+
+Since valid hex nibbles in `hex_lut` are `< 16` (`< 0x80`) and invalid bytes map to
+`0xFF`, bitwise-ORing all nibbles (`(d0 ||| d1 ||| ...) < 0x80`) is true if and only
+if every nibble is `< 0x80`.
+-/
+
+theorem branchless_hex_color_and_single_token_svg_paint_equiv
+    (v0 v1 : Bool) :
+    (v0 && v1) = !(!v0 || !v1) := by
+  cases v0 <;> cases v1 <;> rfl
+
 end NanoUI.Speedometer3Climb

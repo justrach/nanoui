@@ -90,7 +90,6 @@ pub fn frameStyle(e: *Engine, n: *dom.Node, parent: *const Style, scope: ?*const
 /// Computes `n`'s style into `out`.
 pub fn element(e: *Engine, n: *dom.Node, parent: *const Style, parent_scope: ?*const vars.Scope, out: *Style) Allocator.Error!Result {
     const gpa = e.gpa;
-    e.matched.clearRetainingCapacity();
     e.pseudo_before.clearRetainingCapacity();
     e.pseudo_after.clearRetainingCapacity();
     e.pseudo_placeholder.clearRetainingCapacity();
@@ -99,10 +98,14 @@ pub fn element(e: *Engine, n: *dom.Node, parent: *const Style, parent_scope: ?*c
     e.collected.clearRetainingCapacity();
     e.match_ctx.ancestor_bloom = if (n.doc.quirks) std.math.maxInt(u64) else n.ancestor_bloom;
     try e.collectFor(n);
+    var w: usize = 0;
     for (e.collected.items) |m| {
         if (m.container) |c| if (!e.containerHolds(c, n)) continue;
         switch (m.sel.pseudo) {
-            .none, .slotted, .part => try e.matched.append(gpa, m),
+            .none, .slotted, .part => {
+                e.collected.items[w] = m;
+                w += 1;
+            },
             .before => try e.pseudo_before.append(gpa, m),
             .after => try e.pseudo_after.append(gpa, m),
             .placeholder => try e.pseudo_placeholder.append(gpa, m),
@@ -111,14 +114,19 @@ pub fn element(e: *Engine, n: *dom.Node, parent: *const Style, parent_scope: ?*c
             .other => {},
         }
     }
-    std.mem.sort(Entry, e.matched.items, {}, entryLess);
+    const matched = e.collected.items[0..w];
+    if (matched.len == 2) {
+        if (entryLess({}, matched[1], matched[0])) std.mem.swap(Entry, &matched[0], &matched[1]);
+    } else if (matched.len > 2) {
+        std.mem.sort(Entry, matched, {}, entryLess);
+    }
     const inline_d = if (n.attrs.items.len > 0) try inlineDecls(n) else null;
 
-    const scope = try customProperties(e, e.matched.items, inline_d, parent_scope);
+    const scope = try customProperties(e, matched, inline_d, parent_scope);
     var run: Run = .{
         .e = e,
         .node = n,
-        .matched = e.matched.items,
+        .matched = matched,
         .inline_d = inline_d,
         .parent = parent,
         .scope = scope,

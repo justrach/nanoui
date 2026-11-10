@@ -405,7 +405,11 @@ pub fn getElem(vm: *Vm, t: Value, k: Value) Error!Value {
             if (!o.flags.exotic and !o.flags.lazy_fn and !key.isIndex()) {
                 if (o.shape.find(key)) |slot| {
                     if (!o.shape.flagsAt(slot).accessor) return o.slots[slot];
+                    return props.callGetter(vm, o.slots[slot], t);
                 }
+                if (o.class == .array and key.eql(vm.k.length)) return Value.fromUsize(o.arr_len);
+                const p = o.shape.proto orelse return Value.undefined;
+                return props.getR(vm, p, key, t);
             }
             return props.getR(vm, o, key, t);
         }

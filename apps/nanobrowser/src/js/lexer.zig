@@ -184,6 +184,8 @@ pub const Lexer = struct {
     tok: Token = .{},
     /// Scratch for cooking literals; reused to avoid churn.
     buf: std.ArrayList(u8) = .empty,
+    id_keys: [64][]const u8 = @splat(""),
+    id_atoms: [64]*JSString = undefined,
 
     pub fn deinit(l: *Lexer) void {
         l.buf.deinit(l.vm.gpa);
@@ -312,11 +314,37 @@ pub const Lexer = struct {
         }
         l.i = i;
         const name = s[start..i];
-        l.tok.t = if (name.len <= 10 and name.len >= 2 and name[0] >= 'b' and name[0] <= 'w')
+        if (name.len == 1) {
+            l.tok.t = .ident;
+            l.tok.atom = l.vm.char_strs[name[0]];
+            return;
+        }
+        const t = if (name.len <= 10 and name[0] >= 'b' and name[0] <= 'w')
             keywords.get(name) orelse .ident
         else
             .ident;
-        l.tok.atom = try str.intern(l.vm, name);
+        l.tok.t = t;
+        if (t != .ident) {
+            const kw_idx = @backingInt(t) - @backingInt(T.kw_break);
+            if (l.vm.kw_atoms[kw_idx]) |a| {
+                l.tok.atom = a;
+                return;
+            }
+            const a = try str.intern(l.vm, name);
+            l.vm.kw_atoms[kw_idx] = a;
+            l.tok.atom = a;
+            return;
+        }
+        const h = (@as(usize, name[0]) *% 31 +% @as(usize, name[name.len - 1]) *% 17 +% name.len) & 63;
+        const cached = l.id_keys[h];
+        if (cached.len == name.len and std.mem.eql(u8, cached, name)) {
+            l.tok.atom = l.id_atoms[h];
+            return;
+        }
+        const a = try str.intern(l.vm, name);
+        l.id_keys[h] = name;
+        l.id_atoms[h] = a;
+        l.tok.atom = a;
     }
 
     fn slowIdentifier(l: *Lexer) Error!void {
@@ -356,20 +384,23 @@ pub const Lexer = struct {
     }
 
     fn punct(l: *Lexer, c: u8) Error!T {
+        switch (c) {
+            '{' => { l.i += 1; return .lbrace; },
+            '}' => { l.i += 1; return .rbrace; },
+            '(' => { l.i += 1; return .lparen; },
+            ')' => { l.i += 1; return .rparen; },
+            '[' => { l.i += 1; return .lbracket; },
+            ']' => { l.i += 1; return .rbracket; },
+            ';' => { l.i += 1; return .semi; },
+            ',' => { l.i += 1; return .comma; },
+            ':' => { l.i += 1; return .colon; },
+            '~' => { l.i += 1; return .tilde; },
+            else => {},
+        }
         const c1 = l.at(1);
         const c2 = l.at(2);
         const c3 = l.at(3);
         const r: struct { T, u32 } = switch (c) {
-            '{' => .{ .lbrace, 1 },
-            '}' => .{ .rbrace, 1 },
-            '(' => .{ .lparen, 1 },
-            ')' => .{ .rparen, 1 },
-            '[' => .{ .lbracket, 1 },
-            ']' => .{ .rbracket, 1 },
-            ';' => .{ .semi, 1 },
-            ',' => .{ .comma, 1 },
-            ':' => .{ .colon, 1 },
-            '~' => .{ .tilde, 1 },
             '.' => blk: {
                 if (c1 >= '0' and c1 <= '9') {
                     try lit.number(l);

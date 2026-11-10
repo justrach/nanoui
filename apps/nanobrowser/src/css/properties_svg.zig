@@ -96,6 +96,19 @@ fn stopColor(ctx: *Ctx, t: []const Token) bool {
 }
 
 fn readPaint(ctx: *Ctx, t: []const Token) ?SvgPaint {
+    if (t.len == 1) {
+        const tok = t[0];
+        if (tok.kind == .hash) {
+            const k = colors.parseHex(tok.text) orelse return null;
+            return .{ .kind = .color, .color = k };
+        }
+        if (tok.kind == .ident) {
+            if (tok.isIdent("none") or tok.isIdent("context-fill") or tok.isIdent("context-stroke")) return .{};
+            if (tok.isIdent("currentcolor")) return .{ .kind = .current };
+            const k = colors.of(ctx, t) orelse return null;
+            return .{ .kind = .color, .color = k };
+        }
+    }
     var c = Cur.of(t);
     const first = c.peek() orelse return null;
     if (first.isIdent("none")) return .{};

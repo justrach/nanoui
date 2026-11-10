@@ -32,12 +32,7 @@ const arm64 = @import("jit_arm64.zig");
 
 pub const enabled = builtin.cpu.arch == .aarch64 and builtin.os.tag == .macos;
 
-/// Returned in `(x0, x1)` under AAPCS64. `err == 0` means normal completion.
-pub const JitResult = extern struct {
-    bits: u64,
-    err: u64,
-};
-
+pub const JitResult = extern struct { bits: u64, err: u64 };
 pub const JitFn = *const fn (vm: *Vm, f: *Frame, bp: [*]Value, sp: [*]Value) callconv(.c) JitResult;
 
 const slab_size: usize = 2 * 1024 * 1024;
@@ -92,9 +87,11 @@ pub const JitPool = struct {
 
     pub fn deinit(pool: *JitPool, gpa: Allocator) void {
         if (comptime enabled) {
-            for (pool.slabs.items) |s| {
-                if (cached_slab == null) cached_slab = s else _ = darwin.munmap(s, slab_size);
-            }
+            for (pool.slabs.items) |s| if (cached_slab == null) {
+                cached_slab = s;
+            } else {
+                _ = darwin.munmap(s, slab_size);
+            };
         }
         pool.slabs.deinit(gpa);
     }
@@ -121,6 +118,15 @@ inline fn errRes(vm: *Vm, sp: [*]Value, e: Error) JitResult {
     return .{ .bits = 0, .err = encodeErr(e) };
 }
 
+noinline fn compileSlow(vm: *Vm, fp: *bc.FuncProto) ?JitFn {
+    if (arm64.compile(vm, fp)) |jfn| {
+        fp.jit_fn = @ptrCast(jfn);
+        return jfn;
+    }
+    fp.jit_disabled = true;
+    return null;
+}
+
 /// Theorem 58 (`NanoUI.Speedometer3Climb.loop_aware_jit_threshold_and_stack_pool_equiv`):
 /// Compiles loop-containing functions on their first call (`threshold = 1`) and
 /// loop-free functions on call 2, skipping one-shot module factory closures.
@@ -130,13 +136,7 @@ pub inline fn getOrCompile(vm: *Vm, fp: *bc.FuncProto) ?JitFn {
     if (fp.jit_disabled) return null;
     fp.hot_count +|= 1;
     const threshold: u16 = if (fp.has_loop and fp.code.len <= 4096) 1 else 2;
-    if (fp.hot_count < threshold) return null;
-    if (arm64.compile(vm, fp)) |jfn| {
-        fp.jit_fn = @ptrCast(jfn);
-        return jfn;
-    }
-    fp.jit_disabled = true;
-    return null;
+    return if (fp.hot_count < threshold) null else compileSlow(vm, fp);
 }
 
 pub inline fn execFrame(vm: *Vm, f: *Frame, jfn: JitFn, sp_out: *[*]Value) Error!Value {
@@ -210,10 +210,7 @@ pub fn jitGetLength(vm: *Vm, f: *Frame, sp: [*]Value, pc: [*]const u8) callconv(
         if (o.class == .array) return .{ .bits = Value.fromUsize(o.arr_len).bits, .err = 0 };
         if (o.class == .typedarray) return .{ .bits = Value.fromUsize(typed.length(o)).bits, .err = 0 };
         if (o.class == .arguments and (o.shape == vm.args_strict_shape or o.shape == vm.args_sloppy_shape)) return .{ .bits = o.slots[0].bits, .err = 0 };
-    }
-    if (v.isString()) {
-        return .{ .bits = Value.fromUsize(v.asString().len16).bits, .err = 0 };
-    }
+    } else if (v.isString()) return .{ .bits = Value.fromUsize(v.asString().len16).bits, .err = 0 };
     f.pc = pc;
     vm.sp = sp;
     const ic = &f.fp.ics[std.mem.readInt(u32, (pc + 1)[0..4], .little)];
@@ -332,7 +329,17 @@ pub fn jitCompareOp(vm: *Vm, f: *Frame, sp: [*]Value, pc: [*]const u8, op_raw: u
     }
     if (op == .seq or op == .sne) {
         if (a.bits == b.bits) return .{ .bits = Value.fromBool(op == .seq).bits, .err = 0 };
-        if ((!a.isString() or !b.isString()) and (!a.isBigInt() or !b.isBigInt())) {
+        if (a.isString() and b.isString()) {
+            const s1 = a.asString();
+            const s2 = b.asString();
+            if (s1.byte_len != s2.byte_len or s1.len16 != s2.len16 or (s1.is_atom and s2.is_atom)) {
+                return .{ .bits = Value.fromBool(op == .sne).bits, .err = 0 };
+            }
+            if (!s1.is_rope and !s2.is_rope) {
+                const eq = std.mem.eql(u8, s1.ptr[0..s1.byte_len], s2.ptr[0..s2.byte_len]);
+                return .{ .bits = Value.fromBool(eq == (op == .seq)).bits, .err = 0 };
+            }
+        } else if (!a.isBigInt() or !b.isBigInt()) {
             return .{ .bits = Value.fromBool(op == .sne).bits, .err = 0 };
         }
     }
@@ -361,15 +368,12 @@ pub fn jitUnaryOp(vm: *Vm, f: *Frame, sp: [*]Value, pc: [*]const u8, op_raw: u32
     return .{ .bits = r.bits, .err = 0 };
 }
 
-pub fn jitTruthy(bits: u64) callconv(.c) u64 {
-    return @intFromBool(ops.truthy(.{ .bits = bits }));
-}
-
+pub fn jitTruthy(bits: u64) callconv(.c) u64 { return @intFromBool(ops.truthy(.{ .bits = bits })); }
+pub fn jitTypeOf(vm: *Vm, bits: u64) callconv(.c) u64 { return ops.typeOf(vm, .{ .bits = bits }).bits; }
 pub fn jitThrowTdz(vm: *Vm, f: *Frame, sp: [*]Value, pc: [*]const u8, name_idx: u32) callconv(.c) JitResult {
     f.pc = pc;
     return errRes(vm, sp, slow.throwTdz(vm, f, name_idx));
 }
-
 pub fn jitInterrupt(vm: *Vm, f: *Frame, sp: [*]Value, pc: [*]const u8) callconv(.c) JitResult {
     f.pc = pc;
     vm.sp = sp;
@@ -439,7 +443,7 @@ inline fn invokeChildFrame(vm: *Vm, caller_sp: [*]Value, child_f: *Frame) JitRes
     return .{ .bits = @intFromPtr(ret_sp + 1), .err = 0 };
 }
 
-fn pushAndInvokeClosure(vm: *Vm, caller_sp: [*]Value, callee: *Object, args: [*]Value, argc: u32, ret_sp: [*]Value, this: Value) callconv(.c) JitResult {
+inline fn pushAndInvokeClosure(vm: *Vm, caller_sp: [*]Value, callee: *Object, args: [*]Value, argc: u32, ret_sp: [*]Value, this: Value) JitResult {
     const child_f = calls.pushClosure(vm, callee, args, argc, ret_sp, Value.undefined, this, false) catch |e| return errRes(vm, caller_sp, e);
     return invokeChildFrame(vm, caller_sp, child_f);
 }
@@ -457,16 +461,9 @@ pub fn runEntry(vm: *Vm) Error!Value {
     return interp.run(vm);
 }
 
-pub fn jitCall(vm: *Vm, f: *Frame, sp: [*]Value, next_pc: [*]const u8, argc: u32) callconv(.c) JitResult {
-    f.pc = next_pc;
-    vm.sp = sp;
-    const callee = (sp - argc - 1)[0];
-    const ret_sp = sp - argc - 2;
+noinline fn jitCallNonClosure(vm: *Vm, sp: [*]Value, argc: u32, ret_sp: [*]Value, callee: Value) JitResult {
     if (callee.isObject()) {
         const co = callee.asObject();
-        if (co.class == .closure) {
-            return pushAndInvokeClosure(vm, sp, co, sp - argc, argc, ret_sp, ret_sp[0]);
-        }
         if (co.class == .bound) {
             const b = co.payload.bound;
             if (b.target.class == .closure) {
@@ -481,8 +478,7 @@ pub fn jitCall(vm: *Vm, f: *Frame, sp: [*]Value, next_pc: [*]const u8, argc: u32
                     return pushAndInvokeClosure(vm, sp, b.target, base, blen + argc, ret_sp, b.this);
                 }
             }
-        }
-        if (co.class == .native) {
+        } else if (co.class == .native) {
             const nf = co.payload.native.func;
             if (nf == &b_fn.fnCall) {
                 const target = ret_sp[0];
@@ -545,6 +541,17 @@ pub fn jitCall(vm: *Vm, f: *Frame, sp: [*]Value, next_pc: [*]const u8, argc: u32
     const r = calls.callNonClosure(vm, callee, ret_sp[0], (sp - argc)[0..argc]) catch |e| return errRes(vm, sp, e);
     ret_sp[0] = r;
     return .{ .bits = @intFromPtr(ret_sp + 1), .err = 0 };
+}
+
+pub fn jitCall(vm: *Vm, f: *Frame, sp: [*]Value, next_pc: [*]const u8, argc: u32) callconv(.c) JitResult {
+    f.pc = next_pc;
+    vm.sp = sp;
+    const callee = (sp - argc - 1)[0];
+    const ret_sp = sp - argc - 2;
+    if (callee.isObject() and callee.asObject().class == .closure) {
+        return pushAndInvokeClosure(vm, sp, callee.asObject(), sp - argc, argc, ret_sp, ret_sp[0]);
+    }
+    return jitCallNonClosure(vm, sp, argc, ret_sp, callee);
 }
 
 pub fn jitNew(vm: *Vm, f: *Frame, sp: [*]Value, next_pc: [*]const u8, argc: u32) callconv(.c) JitResult {
