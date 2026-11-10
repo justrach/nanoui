@@ -378,7 +378,7 @@ fn add(p: *Page, f: *Face, bytes: []const u8, local: []const u8) bool {
 /// Everything measured may now measure differently.
 fn fontsChanged(p: *Page) void {
     p.faces.changed = true;
-    p.doc.touchStyle();
+    p.doc.touchLayout();
     p.redraw();
 }
 

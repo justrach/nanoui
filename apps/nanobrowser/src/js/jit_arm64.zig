@@ -54,7 +54,7 @@ fn instrLen(op: Op) ?usize {
         .init_global_lex, .delete_global, .get_import, .get_field, .get_field2, .put_field, .get_length => 5,
         .define_field, .new_private, .array_from, .closure, .push_try, .gosub => 5,
         .jump, .loop, .jump_false, .jump_true, .jump_false_keep, .jump_true_keep => 5,
-        .jump_notnull_keep, .jump_not_undef, .ctor_ret_check, .throw_const, .iter_next => 5,
+        .jump_notnull_keep, .jump_not_undef, .ctor_ret_check, .throw_const, .iter_next, .iter_result => 5,
         .decl_global_lex, .make_class, .opt_chain => 6,
         .get_loc_check, .put_loc_check => 7,
         .get_env_check, .put_env_check => 8,
@@ -250,7 +250,7 @@ fn emitFunction(e: *Emitter, fp: *bc.FuncProto, pc_map: []u32, epilogue_idx: u32
                 const depth = code[pc + 1];
                 const slot = u16At(code.ptr + pc + 2);
                 const slot_off = @sizeOf(heap.Env) / 8 + slot;
-                if (depth <= 6 and slot_off < 4096) {
+                if (depth <= 32 and slot_off < 4096) {
                     e.ldrImm64(2, 20, @intCast(@offsetOf(Frame, "env") / 8));
                     var d: u8 = 0;
                     while (d < depth) : (d += 1) {
@@ -503,7 +503,7 @@ fn emitFunction(e: *Emitter, fp: *bc.FuncProto, pc_map: []u32, epilogue_idx: u32
                     const g_step = instrLen(g_op) orelse return false;
                     if (g_op == .gosub) {
                         gosub_count += 1;
-                        if (gosub_count > 32) return false;
+                        if (gosub_count > 128) return false;
                         const ret_bc = g_pc + 5;
                         e.movz(2, @intCast(ret_bc), 0);
                         e.cmpReg32(0, 2);
@@ -513,7 +513,7 @@ fn emitFunction(e: *Emitter, fp: *bc.FuncProto, pc_map: []u32, epilogue_idx: u32
                     g_pc += g_step;
                 }
             },
-            .opt_chain, .ctor_ret_check, .iter_next, .for_in_next, .with_get, .with_get_call, .with_put, .with_delete => {
+            .opt_chain, .ctor_ret_check, .iter_next, .iter_result, .for_in_next, .with_get, .with_get_call, .with_put, .with_delete => {
                 const is_9 = op == .for_in_next or op == .with_get or op == .with_get_call or op == .with_put or op == .with_delete;
                 const rel_off: usize = if (is_9) 5 else 1;
                 const base_off: usize = if (is_9) 9 else 5;

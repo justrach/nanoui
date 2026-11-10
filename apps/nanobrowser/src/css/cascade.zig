@@ -402,6 +402,7 @@ pub const Engine = struct {
         } else if (parent) |p| {
             n.tree_scope = p.tree_scope;
         }
+        @import("../perf_rules.zig").updateAncestorBloom(n, root);
         var fresh: Style = undefined;
         const r = if (n.is_shadow) compute.shadowRoot(parent_style, parent_scope, &fresh) else try compute.element(e, n, parent_style, parent_scope, &fresh);
         if (fresh.container_type != .normal) try e.containers.put(e.gpa, n, {});
@@ -547,6 +548,7 @@ pub const Engine = struct {
         if (n.parent) |p| if (p.kind == .element) {
             up = try e.detached(p, memo, a) orelse return null;
         };
+        @import("../perf_rules.zig").updateAncestorBloom(n, n);
         var fresh: Style = undefined;
         const r = try compute.element(e, n, up.style, up.scope, &fresh);
         const s = try e.genArena().create(Style);

@@ -141,7 +141,7 @@ pub fn touchUnder(d: *dom.Document, n: *dom.Node) void {
     d.style_dirty = true;
     if (d.dirty_all) return;
     if (hasQueuedAncestor(n)) return;
-    if (d.dirty_nodes.items.len >= 4096) {
+    if (d.dirty_nodes.items.len >= 16384) {
         d.dirty_all = true;
         return;
     }
@@ -152,13 +152,14 @@ pub fn touchUnder(d: *dom.Document, n: *dom.Node) void {
     };
 }
 
-/// Theorem 28 & 29 (`NanoUI.Speedometer3Perf.attr_invalidation_scope`, `svg_geometry_attr_style_invariance`):
+/// Theorem 28, 29 & 43 (`NanoUI.Speedometer3Perf.attr_invalidation_scope`,
+/// `svg_geometry_attr_style_invariance`, `NanoUI.Speedometer3Climb.resource_tag_only_scan_dirty_sound`):
 /// Scoped style invalidation when attribute `name` changes on element `n`.
 pub fn touchAttr(d: *dom.Document, n: *dom.Node, name: []const u8) void {
     d.generation +%= 1;
     const is_id = std.mem.eql(u8, name, "id");
     if (is_id) d.id_generation +%= 1;
-    if (n.has_resource) d.scan_dirty = true;
+    if (isResourceTag(n.tag)) d.scan_dirty = true;
     if (!d.inDocument(n)) return;
     if (std.mem.eql(u8, name, "style")) {
         touchUnder(d, n);
@@ -195,8 +196,37 @@ pub inline fn classBit(name: []const u8) u64 {
     return @as(u64, 1) << @intCast(mix & 63);
 }
 
-/// Synchronizes `id_attr`, `class_attr`, `class_filter`, and `class_single` on `dom.Node`.
+/// Theorem 44 (`NanoUI.Speedometer3Climb.ancestor_and_attr_bloom_filter_sound`):
+/// Self Bloom filter of an element's tag, `id`, and `class` tokens for ancestor selector filtering.
+pub inline fn nodeSelfBloom(n: *const dom.Node) u64 {
+    var b: u64 = n.class_filter | attrBit(n.tag);
+    if (n.id_attr) |id| b |= attrBit(id);
+    return b;
+}
+
+/// Computes `n.ancestor_bloom` from its parent (or walks up to the root if `n == root`).
+pub inline fn updateAncestorBloom(n: *dom.Node, root: *const dom.Node) void {
+    if (n != root) if (n.parent) |p| if (p.kind == .element) {
+        n.ancestor_bloom = p.ancestor_bloom | (if (p.is_shadow) 0 else nodeSelfBloom(p));
+        return;
+    };
+    var b: u64 = 0;
+    var at = n.parent;
+    while (at) |x| : (at = x.parent) {
+        if (x.kind == .element and !x.is_shadow) b |= nodeSelfBloom(x);
+    }
+    n.ancestor_bloom = b;
+}
+
+/// Synchronizes `attr_filter`, `id_attr`, `class_attr`, `class_filter`, and `class_single` on `dom.Node`.
 pub fn syncNodeAttr(n: *dom.Node, name: []const u8, val: ?[]const u8) void {
+    if (val != null) {
+        n.attr_filter |= attrBit(name);
+    } else {
+        var ab: u64 = 0;
+        for (n.attrs.items) |at| ab |= attrBit(at.name);
+        n.attr_filter = ab;
+    }
     if (std.mem.eql(u8, name, "id")) {
         n.id_attr = val;
     } else if (std.mem.eql(u8, name, "class")) {

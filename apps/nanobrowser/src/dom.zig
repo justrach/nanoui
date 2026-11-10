@@ -43,10 +43,12 @@ pub const Node = struct {
     css_vars: ?*const anyopaque = null,
     style_generation: u32 = 0,
 
-    /// `hasClass`'s filter, cached `id`/`class` slices, and single-class fast state (Theorem 35).
+    /// `hasClass`'s filter, cached `id`/`class` slices, and single-class fast state (Theorem 35 & 44).
     id_attr: ?[]const u8 = null,
     class_attr: ?[]const u8 = null,
     class_filter: u64 = 0,
+    attr_filter: u64 = 0,
+    ancestor_bloom: u64 = 0,
     class_src: [*]const u8 = "".ptr,
     class_src_len: usize = 0,
     class_single: bool = false,
@@ -115,6 +117,7 @@ pub const Node = struct {
         if (n.attrs.items.len == 0) return null;
         if (std.mem.eql(u8, name, "id")) return n.id_attr;
         if (std.mem.eql(u8, name, "class")) return n.class_attr;
+        if ((n.attr_filter & perf.attrBit(name)) == 0) return null;
         for (n.attrs.items) |a| if (std.mem.eql(u8, a.name, name)) return a.value;
         return null;
     }

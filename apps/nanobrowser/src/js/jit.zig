@@ -27,6 +27,7 @@ const iter = @import("iter.zig");
 const str = @import("string.zig");
 const api = @import("vm_api.zig");
 const b_fn = @import("b_function.zig");
+const typed = @import("b_typed.zig");
 const arm64 = @import("jit_arm64.zig");
 
 pub const enabled = builtin.cpu.arch == .aarch64 and builtin.os.tag == .macos;
@@ -117,7 +118,7 @@ pub inline fn getOrCompile(vm: *Vm, fp: *bc.FuncProto) ?JitFn {
     if (fp.jit_fn) |p| return @ptrCast(@alignCast(p));
     if (fp.jit_disabled) return null;
     fp.hot_count +|= 1;
-    const threshold: u16 = if (fp.code.len <= 2048) 2 else if (fp.code.len <= 8192) 3 else 8;
+    const threshold: u16 = if (fp.code.len <= 4096) 1 else 2;
     if (fp.hot_count < threshold) return null;
     if (arm64.compile(vm, fp)) |jfn| {
         fp.jit_fn = @ptrCast(jfn);
@@ -241,8 +242,10 @@ pub fn jitPutGlobal(vm: *Vm, f: *Frame, sp: [*]Value, pc: [*]const u8) callconv(
 
 pub fn jitGetLength(vm: *Vm, f: *Frame, sp: [*]Value, pc: [*]const u8) callconv(.c) JitResult {
     const v = (sp - 1)[0];
-    if (v.isObject() and v.asObject().class == .array) {
-        return .{ .bits = Value.fromUsize(v.asObject().arr_len).bits, .err = 0 };
+    if (v.isObject()) {
+        const o = v.asObject();
+        if (o.class == .array) return .{ .bits = Value.fromUsize(o.arr_len).bits, .err = 0 };
+        if (o.class == .typedarray) return .{ .bits = Value.fromUsize(typed.length(o)).bits, .err = 0 };
     }
     if (v.isString()) {
         return .{ .bits = Value.fromUsize(v.asString().len16).bits, .err = 0 };
@@ -257,13 +260,18 @@ pub fn jitGetLength(vm: *Vm, f: *Frame, sp: [*]Value, pc: [*]const u8) callconv(
 pub fn jitGetElem(vm: *Vm, f: *Frame, sp: [*]Value, pc: [*]const u8) callconv(.c) JitResult {
     const t = (sp - 2)[0];
     const k = (sp - 1)[0];
-    if (k.isInt()) {
+    if (k.isInt() and k.asInt() >= 0) {
         const i: u32 = @bitCast(k.asInt());
         if (t.isObject()) {
             const o = t.asObject();
             if (i < o.elems_len and !o.flags.exotic) {
                 const r = o.elems[i];
                 if (!r.isHole()) return .{ .bits = r.bits, .err = 0 };
+            } else if (o.class == .typedarray) {
+                f.pc = pc;
+                vm.sp = sp;
+                const r = typed.getIndex(vm, o, i) catch |e| return errRes(vm, sp, e);
+                return .{ .bits = r.bits, .err = 0 };
             }
         } else if (t.isString()) {
             const s = t.asString();
@@ -282,11 +290,24 @@ pub fn jitPutElem(vm: *Vm, f: *Frame, sp: [*]Value, pc: [*]const u8) callconv(.c
     const t = (sp - 3)[0];
     const k = (sp - 2)[0];
     const v = (sp - 1)[0];
-    if (k.isInt() and t.isObject()) {
+    if (k.isInt() and k.asInt() >= 0 and t.isObject()) {
         const o = t.asObject();
         const i: u32 = @bitCast(k.asInt());
-        if (i < o.elems_len and !o.flags.exotic and !o.flags.elems_frozen and !o.elems[i].isHole()) {
-            o.elems[i] = v;
+        if (!o.flags.exotic and !o.flags.elems_frozen) {
+            if (i < o.elems_len and !o.elems[i].isHole()) {
+                o.elems[i] = v;
+                return .{ .bits = 0, .err = 0 };
+            }
+            if (o.class == .array and i == o.elems_len and i < o.elems_cap and o.shape.proto == vm.protos.array and !vm.protos.array.flags.proto_dirty and !vm.protos.object.flags.proto_dirty and o.flags.extensible and !o.flags.elems_sealed and !o.flags.length_readonly and !o.flags.is_proto) {
+                o.elems[i] = v;
+                o.elems_len = i + 1;
+                if (i >= o.arr_len) o.arr_len = i + 1;
+                return .{ .bits = 0, .err = 0 };
+            }
+        } else if (o.class == .typedarray) {
+            f.pc = pc;
+            vm.sp = sp;
+            typed.setIndex(vm, o, i, v) catch |e| return errRes(vm, sp, e);
             return .{ .bits = 0, .err = 0 };
         }
     }
@@ -482,14 +503,44 @@ pub fn jitCall(vm: *Vm, f: *Frame, sp: [*]Value, next_pc: [*]const u8, argc: u32
                 return invokeChildFrame(vm, sp, child_f);
             }
         }
-        if (co.class == .native and co.payload.native.func == &b_fn.fnCall) {
-            const target = ret_sp[0];
-            if (target.isObject() and target.asObject().class == .closure) {
-                const sub_this = if (argc > 0) (sp - argc)[0] else Value.undefined;
-                const sub_args = if (argc > 0) sp - argc + 1 else sp;
-                const sub_argc = if (argc > 0) argc - 1 else 0;
-                const child_f = calls.pushClosure(vm, target.asObject(), sub_args, sub_argc, ret_sp, Value.undefined, sub_this, false) catch |e| return errRes(vm, sp, e);
-                return invokeChildFrame(vm, sp, child_f);
+        if (co.class == .native) {
+            const nf = co.payload.native.func;
+            if (nf == &b_fn.fnCall) {
+                const target = ret_sp[0];
+                if (target.isObject() and target.asObject().class == .closure) {
+                    const sub_this = if (argc > 0) (sp - argc)[0] else Value.undefined;
+                    const sub_args = if (argc > 0) sp - argc + 1 else sp;
+                    const sub_argc = if (argc > 0) argc - 1 else 0;
+                    const child_f = calls.pushClosure(vm, target.asObject(), sub_args, sub_argc, ret_sp, Value.undefined, sub_this, false) catch |e| return errRes(vm, sp, e);
+                    return invokeChildFrame(vm, sp, child_f);
+                }
+            } else if (nf == &b_fn.fnApply) {
+                const target = ret_sp[0];
+                if (target.isObject() and target.asObject().class == .closure) {
+                    const sub_this = if (argc > 0) (sp - argc)[0] else Value.undefined;
+                    const arr_val = if (argc > 1) (sp - argc + 1)[0] else Value.undefined;
+                    if (arr_val.isNullish()) {
+                        const child_f = calls.pushClosure(vm, target.asObject(), sp, 0, ret_sp, Value.undefined, sub_this, false) catch |e| return errRes(vm, sp, e);
+                        return invokeChildFrame(vm, sp, child_f);
+                    }
+                    if (arr_val.isObject()) {
+                        const ao = arr_val.asObject();
+                        const n = ao.arr_len;
+                        if (!ao.flags.exotic and ao.class == .array and !ao.flags.has_sparse and ao.elems_len == n and n <= 64) {
+                            var has_hole = false;
+                            for (ao.elems[0..n]) |el| if (el.isHole()) {
+                                has_hole = true;
+                                break;
+                            };
+                            if (!has_hole) {
+                                const sub_args = sp - argc;
+                                @memcpy(sub_args[0..n], ao.elems[0..n]);
+                                const child_f = calls.pushClosure(vm, target.asObject(), sub_args, n, ret_sp, Value.undefined, sub_this, false) catch |e| return errRes(vm, sp, e);
+                                return invokeChildFrame(vm, sp, child_f);
+                            }
+                        }
+                    }
+                }
             }
         }
     }

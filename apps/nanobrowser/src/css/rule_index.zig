@@ -18,6 +18,8 @@ pub const Entry = struct {
     /// Sorting by this gives cascade order, lowest first: origin, layer,
     /// specificity, source order.
     key: u64,
+    ancestor_bloom: u64 = 0,
+    attr_bloom: u64 = 0,
     layer: u16,
     ua: bool,
     /// The `@container` it sits under: checked when an element has matched it.
@@ -126,6 +128,8 @@ pub const Index = struct {
                     .sel = selector,
                     .decls = r.decls,
                     .key = makeKey(ua, layer, selector.specificity, order.*),
+                    .ancestor_bloom = if (ix.quirks) 0 else selectorAncestorBloom(selector),
+                    .attr_bloom = selectorSubjectAttrBloom(selector),
                     .layer = layer,
                     .ua = ua,
                     .container = r.container,
@@ -181,13 +185,17 @@ pub const Index = struct {
     pub fn collect(ix: *const Index, gpa: Allocator, el: *dom.Node, ctx: *match.Ctx, out: *List) Allocator.Error!void {
         try tryList(gpa, ix.universal.items, el, ctx, out);
         if (el.attrs.items.len > 0) {
-            if (el.attr("id")) |id| if (ix.ids.count() > 0) {
+            if (el.id_attr) |id| if (ix.ids.count() > 0) {
                 if (ix.lookup(&ix.ids, id)) |l| try tryList(gpa, l.items, el, ctx, out);
             };
-            if (el.attr("class")) |classes| if (ix.classes.count() > 0) {
-                var it = std.mem.tokenizeAny(u8, classes, " \t\r\n\x0c");
-                while (it.next()) |c| {
-                    if (ix.lookup(&ix.classes, c)) |l| try tryList(gpa, l.items, el, ctx, out);
+            if (el.class_attr) |classes| if (ix.classes.count() > 0) {
+                if (el.class_single) {
+                    if (ix.lookup(&ix.classes, el.class_src[0..el.class_src_len])) |l| try tryList(gpa, l.items, el, ctx, out);
+                } else {
+                    var it = std.mem.tokenizeAny(u8, classes, " \t\r\n\x0c");
+                    while (it.next()) |c| {
+                        if (ix.lookup(&ix.classes, c)) |l| try tryList(gpa, l.items, el, ctx, out);
+                    }
                 }
             };
         }
@@ -220,13 +228,44 @@ fn isHostRule(s: *const sel.Selector) bool {
     return false;
 }
 
+fn selectorAncestorBloom(s: *const sel.Selector) u64 {
+    if (s.compounds.len <= 1) return 0;
+    var bloom: u64 = 0;
+    var i: usize = s.compounds.len - 1;
+    while (i > 0) {
+        const comb = s.compounds[i].combinator;
+        if (comb != .child and comb != .descendant) break;
+        i -= 1;
+        for (s.compounds[i].simples) |x| switch (x) {
+            .tag => |t| bloom |= perf.attrBit(t),
+            .id => |id| bloom |= perf.attrBit(id),
+            .class => |c| bloom |= perf.classBit(c),
+            else => {},
+        };
+    }
+    return bloom;
+}
+
+fn selectorSubjectAttrBloom(s: *const sel.Selector) u64 {
+    if (s.compounds.len == 0) return 0;
+    var bloom: u64 = 0;
+    for (s.compounds[s.compounds.len - 1].simples) |x| switch (x) {
+        .attr => |a| bloom |= perf.attrBit(a.lower),
+        else => {},
+    };
+    return bloom;
+}
+
 /// The rules of `items` that match `el`, as `collect` gives them.
 pub fn collectFrom(gpa: Allocator, items: []const Entry, el: *dom.Node, ctx: *match.Ctx, out: *List) Allocator.Error!void {
     try tryList(gpa, items, el, ctx, out);
 }
 
 fn tryList(gpa: Allocator, items: []const Entry, el: *dom.Node, ctx: *match.Ctx, out: *List) Allocator.Error!void {
+    const anc = ctx.ancestor_bloom;
+    const attrs = el.attr_filter;
     for (items) |e| {
+        if ((e.ancestor_bloom & anc) != e.ancestor_bloom or (e.attr_bloom & attrs) != e.attr_bloom) continue;
         if (match.matches(e.sel, el, ctx)) try out.append(gpa, e);
     }
 }

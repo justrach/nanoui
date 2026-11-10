@@ -225,18 +225,102 @@ pub fn late(node: *Node, ctx: *values.Ctx) void {
     };
 }
 
-/// SVG's attributes that are style: read as CSS, below every author rule.
+/// SVG's attributes that are style: read as CSS, below every author rule (Theorem 45).
 fn svgAttributes(node: *Node, ctx: *values.Ctx) void {
     for (node.attrs.items) |a| {
-        if (!isPresentation(a.name)) continue;
-        presentation(ctx, a.name, a.value);
+        const p = svg_pres_map.get(a.name) orelse continue;
+        if (!fastSvgPresentation(ctx, p, a.value)) presentation(ctx, a.name, a.value);
     }
 }
 
-fn isPresentation(name: []const u8) bool {
-    const l = [_][]const u8{ "fill", "fill-opacity", "fill-rule", "clip-rule", "clip-path", "mask", "stroke", "stroke-width", "stroke-opacity", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stroke-dasharray", "stroke-dashoffset", "stop-color", "stop-opacity", "opacity", "visibility", "display", "paint-order", "vector-effect" };
-    for (l) |x| if (std.mem.eql(u8, name, x)) return true;
-    return false;
+const svg_pres_map = std.StaticStringMap(prop.Prop).initComptime(.{
+    .{ "fill", .fill },                         .{ "fill-opacity", .fill_opacity },
+    .{ "fill-rule", .fill_rule },               .{ "clip-rule", .clip_rule },
+    .{ "clip-path", .clip_path },               .{ "mask", .mask },
+    .{ "stroke", .stroke },                     .{ "stroke-width", .stroke_width },
+    .{ "stroke-opacity", .stroke_opacity },     .{ "stroke-linecap", .stroke_linecap },
+    .{ "stroke-linejoin", .stroke_linejoin },   .{ "stroke-miterlimit", .stroke_miterlimit },
+    .{ "stroke-dasharray", .stroke_dasharray }, .{ "stroke-dashoffset", .stroke_dashoffset },
+    .{ "stop-color", .stop_color },             .{ "stop-opacity", .stop_opacity },
+    .{ "opacity", .opacity },                   .{ "visibility", .visibility },
+    .{ "display", .display },                   .{ "paint-order", .paint_order },
+    .{ "vector-effect", .vector_effect },
+});
+
+fn fastSvgPresentation(ctx: *values.Ctx, p: prop.Prop, raw: []const u8) bool {
+    const v = std.mem.trim(u8, raw, " \t\r\n\x0c");
+    if (v.len == 0) return false;
+    const svg = &ctx.style.svg;
+    switch (p) {
+        .fill, .stroke => {
+            const dst = if (p == .fill) &svg.fill else &svg.stroke;
+            if (v[0] == '#') {
+                if (colors.parseHex(v[1..])) |col| {
+                    dst.* = .{ .kind = .color, .color = col };
+                    return true;
+                }
+                return false;
+            }
+            if (eqCi(v, "none")) {
+                dst.* = .{};
+                return true;
+            }
+            if (eqCi(v, "currentcolor")) {
+                dst.* = .{ .kind = .current };
+                return true;
+            }
+            return false;
+        },
+        .stop_color => {
+            if (v[0] == '#') {
+                if (colors.parseHex(v[1..])) |col| {
+                    svg.stop_color = .{ .kind = .color, .color = col };
+                    return true;
+                }
+            }
+            return false;
+        },
+        .stroke_width => {
+            if (!std.ascii.isDigit(v[0]) and v[0] != '.') return false;
+            const n = std.fmt.parseFloat(f32, v) catch return false;
+            svg.stroke_width = n;
+            return true;
+        },
+        .opacity, .fill_opacity, .stroke_opacity, .stop_opacity => {
+            if (!std.ascii.isDigit(v[0]) and v[0] != '.') return false;
+            const n = std.fmt.parseFloat(f32, v) catch return false;
+            const clamped = std.math.clamp(n, 0, 1);
+            switch (p) {
+                .opacity => ctx.style.opacity = clamped,
+                .fill_opacity => svg.fill_opacity = clamped,
+                .stroke_opacity => svg.stroke_opacity = clamped,
+                .stop_opacity => svg.stop_opacity = clamped,
+                else => unreachable,
+            }
+            return true;
+        },
+        .fill_rule, .clip_rule => {
+            const dst = if (p == .fill_rule) &svg.fill_evenodd else &svg.clip_evenodd;
+            if (eqCi(v, "evenodd")) {
+                dst.* = true;
+                return true;
+            }
+            if (eqCi(v, "nonzero")) {
+                dst.* = false;
+                return true;
+            }
+            return false;
+        },
+        .stroke_linecap => {
+            if (eqCi(v, "butt")) svg.cap = .butt else if (eqCi(v, "round")) svg.cap = .round else if (eqCi(v, "square")) svg.cap = .square else return false;
+            return true;
+        },
+        .stroke_linejoin => {
+            if (eqCi(v, "miter")) svg.join = .miter else if (eqCi(v, "round")) svg.join = .round else if (eqCi(v, "bevel")) svg.join = .bevel else return false;
+            return true;
+        },
+        else => return false,
+    }
 }
 
 fn presentation(ctx: *values.Ctx, name: []const u8, value: []const u8) void {

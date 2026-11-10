@@ -12,6 +12,7 @@ const world_mod = @import("world.zig");
 const bind = @import("bind.zig");
 const scripts = @import("scripts.zig");
 const page_input = @import("../page_input.zig");
+const loader = @import("../loader.zig");
 const Value = js.Value;
 
 pub const World = world_mod.World;
@@ -349,9 +350,8 @@ pub fn setFocus(p: *Page, node: ?*dom.Node) void {
     const old = p.doc.focus;
     if (old == node) return;
     p.doc.focus = node;
-    if (p.doc.scan_dirty or p.doc.dirty_all) {
-        p.doc.touchStyle();
-    } else {
+    if (p.doc.scan_dirty) loader.scan(p);
+    if (!p.doc.dirty_all) {
         for ([_]?*dom.Node{ old, node }) |maybe| {
             const n = maybe orelse continue;
             const top = p.engine.invalidatedByState(n, .focus) orelse n;

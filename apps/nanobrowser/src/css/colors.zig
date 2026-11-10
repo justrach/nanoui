@@ -20,28 +20,36 @@ fn fromHex(v: u32) Color {
     };
 }
 
+const hex_lut: [256]u8 = blk: {
+    var t: [256]u8 = @splat(0xFF);
+    for ('0'..'9' + 1) |c| t[c] = c - '0';
+    for ('a'..'f' + 1) |c| t[c] = c - 'a' + 10;
+    for ('A'..'F' + 1) |c| t[c] = c - 'A' + 10;
+    break :blk t;
+};
+
 pub fn parseHex(s: []const u8) ?Color {
     var d: [8]u8 = undefined;
     if (s.len != 3 and s.len != 4 and s.len != 6 and s.len != 8) return null;
-    for (s, 0..) |c, i| d[i] = std.fmt.charToDigit(c, 16) catch return null;
-    const b = struct {
-        fn byte(x: u8) f32 {
-            return @as(f32, @floatFromInt(x)) / 255;
-        }
-    };
+    for (s, 0..) |c, i| {
+        const v = hex_lut[c];
+        if (v == 0xFF) return null;
+        d[i] = v;
+    }
+    const scale: f32 = 1.0 / 255.0;
     if (s.len <= 4) {
         return .{
-            .r = b.byte(d[0] * 17),
-            .g = b.byte(d[1] * 17),
-            .b = b.byte(d[2] * 17),
-            .a = if (s.len == 4) b.byte(d[3] * 17) else 1,
+            .r = @as(f32, @floatFromInt(d[0] * 17)) * scale,
+            .g = @as(f32, @floatFromInt(d[1] * 17)) * scale,
+            .b = @as(f32, @floatFromInt(d[2] * 17)) * scale,
+            .a = if (s.len == 4) @as(f32, @floatFromInt(d[3] * 17)) * scale else 1,
         };
     }
     return .{
-        .r = b.byte(d[0] * 16 + d[1]),
-        .g = b.byte(d[2] * 16 + d[3]),
-        .b = b.byte(d[4] * 16 + d[5]),
-        .a = if (s.len == 8) b.byte(d[6] * 16 + d[7]) else 1,
+        .r = @as(f32, @floatFromInt(d[0] * 16 + d[1])) * scale,
+        .g = @as(f32, @floatFromInt(d[2] * 16 + d[3])) * scale,
+        .b = @as(f32, @floatFromInt(d[4] * 16 + d[5])) * scale,
+        .a = if (s.len == 8) @as(f32, @floatFromInt(d[6] * 16 + d[7])) * scale else 1,
     };
 }
 

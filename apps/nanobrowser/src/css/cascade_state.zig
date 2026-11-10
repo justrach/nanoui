@@ -20,11 +20,13 @@ fn pseudoFlips(p: sel.PseudoClass, flip: Flip, is_self: bool) bool {
     };
 }
 
-fn listFlips(l: []const sel.Selector, flip: Flip) bool {
+fn listFlips(l: []const sel.Selector, flip: Flip, is_self: bool, all_self: bool) bool {
     for (l) |*x| {
         if (!x.uses_state) continue;
-        // Anywhere inside a list, an element other than `node` may be the one tested.
-        for (x.compounds) |*c| if (compoundFlips(c, flip, true)) return true;
+        for (x.compounds, 0..) |*c, idx| {
+            const self_here = all_self or (is_self and idx + 1 == x.compounds.len);
+            if (compoundFlips(c, flip, self_here)) return true;
+        }
     }
     return false;
 }
@@ -35,8 +37,9 @@ fn listFlips(l: []const sel.Selector, flip: Flip) bool {
 fn compoundFlips(c: *const sel.Compound, flip: Flip, is_self: bool) bool {
     for (c.simples) |*s| switch (s.*) {
         .pseudo => |p| if (pseudoFlips(p, flip, is_self)) return true,
-        .not, .is, .has, .host, .host_context => |l| if (listFlips(l, flip)) return true,
-        .nth => |n| if (listFlips(n.of, flip)) return true,
+        .not, .is, .host, .host_context => |l| if (listFlips(l, flip, is_self, false)) return true,
+        .has => |l| if (listFlips(l, flip, true, true)) return true,
+        .nth => |n| if (listFlips(n.of, flip, is_self, false)) return true,
         else => {},
     };
     return false;
@@ -46,7 +49,7 @@ fn hasStateOnSibling(s: *const sel.Selector, flip: Flip) bool {
     for (s.compounds) |*c| for (c.simples) |*x| switch (x.*) {
         .has => |l| for (l) |*y| {
             if (y.leading != .next and y.leading != .later) continue;
-            if (listFlips(y[0..1], flip)) return true;
+            if (listFlips(y[0..1], flip, true, true)) return true;
         },
         else => {},
     };

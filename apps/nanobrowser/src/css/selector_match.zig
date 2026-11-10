@@ -19,6 +19,7 @@ pub const Ctx = struct {
     /// keeps a restyle of a long list from being quadratic.
     nth_node: ?*const Node = null,
     nth_index: i32 = 0,
+    ancestor_bloom: u64 = std.math.maxInt(u64),
 };
 
 pub fn matches(s: *const Selector, el: *Node, ctx: *Ctx) bool {

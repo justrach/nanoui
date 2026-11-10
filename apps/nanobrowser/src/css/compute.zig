@@ -95,6 +95,7 @@ pub fn element(e: *Engine, n: *dom.Node, parent: *const Style, parent_scope: ?*c
     e.pseudo_marker.clearRetainingCapacity();
     e.pseudo_backdrop.clearRetainingCapacity();
     e.collected.clearRetainingCapacity();
+    e.match_ctx.ancestor_bloom = if (n.doc.quirks) std.math.maxInt(u64) else n.ancestor_bloom;
     try e.collectFor(n);
     for (e.collected.items) |m| {
         if (m.container) |c| if (!e.containerHolds(c, n)) continue;
