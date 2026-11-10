@@ -294,6 +294,7 @@ pub const FuncProto = struct {
     needs_home: bool,
     is_method: bool,
     needs_args: bool = false,
+    has_loop: bool = false,
     module: ?*module.Module = null,
     jit_fn: ?*const anyopaque = null,
     hot_count: u16 = 0,

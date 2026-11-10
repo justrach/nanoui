@@ -86,7 +86,7 @@ const Fonts = struct {
     }
 
     fn measurer(f: *Fonts) box.Measurer {
-        return .{ .ctx = f, .width = width, .metrics = metrics, .image = image };
+        return .{ .ctx = f, .width = width, .metrics = metrics, .image = image, .widths = &f.p.widths, .widths_gpa = f.p.gpa };
     }
 };
 

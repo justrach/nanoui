@@ -72,25 +72,29 @@ pub fn same(comptime T: type, a: T, b: T) bool {
 
 /// What changed from `a` to `b`.
 pub fn compare(a: *const Style, b: *const Style) Change {
+    @setEvalBranchQuota(10_000);
+    if (std.mem.eql(u8, std.mem.asBytes(a), std.mem.asBytes(b))) return .none;
     var change: Change = .none;
     // A transform is a containing block for what's in it, whatever it does.
     if (a.hasTransform() != b.hasTransform()) return .layout;
     const names = @typeInfo(Style).@"struct".field_names;
     inline for (names) |n| {
-        // What they come to is compared instead.
-        if (comptime std.mem.eql(u8, n, "anim_raw") or std.mem.eql(u8, n, "trans_raw")) continue;
+        if (comptime std.mem.eql(u8, n, "anim_raw") or std.mem.eql(u8, n, "trans_raw") or paint_only.has(n)) continue;
         const x = @field(a, n);
         const y = @field(b, n);
-        if (@TypeOf(x) == style.Border and !comptime std.mem.eql(u8, n, "outline")) {
+        if (@TypeOf(x) == style.Border) {
             change = change.max(borderDiff(x, y));
-            if (change == .layout) return change;
+            if (change == .layout) return .layout;
         } else if (!same(@TypeOf(x), x, y)) {
-            if (paint_only.has(n)) {
-                change = change.max(.paint);
-            } else {
-                return .layout;
-            }
+            return .layout;
         }
     }
-    return change;
+    if (change == .paint) return .paint;
+    inline for (names) |n| {
+        if (comptime !paint_only.has(n)) continue;
+        const x = @field(a, n);
+        const y = @field(b, n);
+        if (!same(@TypeOf(x), x, y)) return .paint;
+    }
+    return .none;
 }

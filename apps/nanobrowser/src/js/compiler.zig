@@ -59,6 +59,7 @@ pub const C = struct {
     completion: ?u32 = null,
     labels: std.ArrayList(*JSString) = .empty,
     module_mode: bool = false,
+    has_loop: bool = false,
 
     pub inline fn adj(c: *C, n: i32) void {
         c.depth += n;
@@ -110,6 +111,7 @@ pub const C = struct {
     }
     /// A backward jump to a known address.
     pub fn loopTo(c: *C, target: u32) Error!void {
+        c.has_loop = true;
         try c.op(.loop);
         const rel: i32 = @intCast(@as(i64, target) - (@as(i64, c.pc()) + 4));
         try c.code.appendSlice(c.a, &std.mem.toBytes(rel));
@@ -324,6 +326,7 @@ pub fn finish(c: *C, name: *JSString, start: u32, end: u32, length: u32) Error!*
         .needs_home = c.fi.uses_super or c.fi.home_var != null,
         .is_method = f.is_method,
         .needs_args = c.fi.arguments_var != null or (f.is_default_ctor and f.is_derived) or f.is_generator or f.is_async or (f.params.len > 0 and f.params[f.params.len - 1].data == .spread),
+        .has_loop = c.has_loop,
     };
     return p;
 }

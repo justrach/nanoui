@@ -93,7 +93,7 @@ pub const Deferred = union(enum) {
 pub const max_console = 1000;
 /// How long one task may run. A test may shorten it.
 pub var task_deadline_ns: u64 = 5 * std.time.ns_per_s;
-const first_collection = 48 << 20;
+const first_collection = 192 << 20;
 
 pub var log_to_stderr = false;
 

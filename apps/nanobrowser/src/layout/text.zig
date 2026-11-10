@@ -149,6 +149,16 @@ fn addWord(b: *Builder, data: []const u8, from: usize, node: ?*@import("../dom.z
     var start = from;
     var chars: f32 = 0;
     while (i < data.len and !isSpace(data[i])) {
+        if (data[i] < 0x80 and data[i] != '-') {
+            const ascii_start = i;
+            i += 1;
+            while (i < data.len and data[i] < 0x80 and !isSpace(data[i]) and data[i] != '-') : (i += 1) {}
+            if (i < data.len and data[i] >= 0x80) i -= 1;
+            if (i > ascii_start) {
+                chars += @floatFromInt(i - ascii_start);
+                continue;
+            }
+        }
         const n = seqLen(data, i);
         const cp = decode(data[i .. i + n]);
         chars += 1;
@@ -198,6 +208,7 @@ fn kernSpace(b: *Builder, text: []const u8, font: box.Font) Error!void {
 }
 
 fn sameFont(a: box.Font, f: box.Font) bool {
+    if (a.hash != 0 and f.hash != 0 and a.hash != f.hash) return false;
     return a.size == f.size and a.weight == f.weight and a.italic == f.italic and a.stretch == f.stretch and a.tabular == f.tabular and a.ligatures == f.ligatures and (a.family.ptr == f.family.ptr or std.mem.eql(u8, a.family, f.family));
 }
 

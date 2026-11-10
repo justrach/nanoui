@@ -82,6 +82,10 @@ pub const Engine = struct {
     root_font: f32 = 16,
     /// The root element's parent: the initial style.
     root_parent: Style = .{},
+    scratch_initial: Style = .{},
+    scratch_base: Style = .{},
+    scratch_ua: Style = .{},
+    scratch_fresh: Style = .{},
     /// `<meta name=color-scheme>` asks for dark.
     meta_dark: bool = false,
     /// Family lists, the sheets' `@font-face` names, and real font measures.
@@ -403,14 +407,14 @@ pub const Engine = struct {
             n.tree_scope = p.tree_scope;
         }
         @import("../perf_rules.zig").updateAncestorBloom(n, root);
-        var fresh: Style = undefined;
-        const r = if (n.is_shadow) compute.shadowRoot(parent_style, parent_scope, &fresh) else try compute.element(e, n, parent_style, parent_scope, &fresh);
-        if (fresh.container_type != .normal) try e.containers.put(e.gpa, n, {});
-        try e.anim.styled(e, n, .none, parent_style, r.scope, e.previous(n, .none), &fresh);
+        const fresh_ptr: *Style = if (old == null) try e.genArena().create(Style) else &e.scratch_fresh;
+        const r = if (n.is_shadow) compute.shadowRoot(parent_style, parent_scope, fresh_ptr) else try compute.element(e, n, parent_style, parent_scope, fresh_ptr);
+        if (fresh_ptr.container_type != .normal) try e.containers.put(e.gpa, n, {});
+        try e.anim.styled(e, n, .none, parent_style, r.scope, e.previous(n, .none), fresh_ptr);
         const in_svg = n.ns == .svg and !n.isTag("svg");
         var compared: Change = .layout;
         if (old) |o| {
-            compared = diff.compare(o, &fresh);
+            compared = diff.compare(o, fresh_ptr);
             if (change) |c| c.* = c.max(if (in_svg and compared == .layout) .paint else compared);
         } else if (change) |c| c.* = c.max(if (in_svg) .paint else .layout);
         const stored: *const Style = blk: {
@@ -418,13 +422,14 @@ pub const Engine = struct {
                 if (compared == .none) break :blk o;
                 // Boxes hold this one: only paint read it, and it stays theirs.
                 if (compared == .paint) {
-                    @constCast(o).* = fresh;
+                    @constCast(o).* = e.scratch_fresh;
                     break :blk o;
                 }
+                const s = try e.genArena().create(Style);
+                s.* = e.scratch_fresh;
+                break :blk s;
             }
-            const s = try e.genArena().create(Style);
-            s.* = fresh;
-            break :blk s;
+            break :blk fresh_ptr;
         };
         n.computed = stored;
         n.style_generation = e.generation;

@@ -123,7 +123,7 @@ pub fn decodeFit(gpa: std.mem.Allocator, bytes: []const u8, max_side: u32) !Fitt
     const orig_w: u32 = if (width > 0) @intCast(width) else 0;
     const orig_h: u32 = if (height > 0) @intCast(height) else 0;
     const orig_longest: u32 = @max(orig_w, orig_h);
-    if (orig_longest > 0 and orig_longest <= 256) {
+    if (orig_longest > 0 and (orig_longest <= 256 or orig_longest <= max_side)) {
         const img = CGImageSourceCreateImageAtIndex(src, 0, null) orelse return error.NotImage;
         defer CGImageRelease(img);
         const iw = CGImageGetWidth(img);

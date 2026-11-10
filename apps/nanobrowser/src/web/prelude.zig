@@ -85,6 +85,7 @@ pub fn workerScope(w: *World) Error!void {
 fn runChunk(w: *World, c: *const Chunk) Error!void {
     const vm = w.vm;
     const f = try vm.eval(c.source, c.name);
+    if (f.isObject()) f.asObject().payload.fp.jit_disabled = true;
     _ = try vm.call(f, Value.undefined, &.{ w.internals.value(), vm.global().value() });
 }
 

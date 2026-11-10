@@ -238,9 +238,9 @@ fn corner(d: *Style, s: *const Style, i: usize) void {
 }
 
 /// A new element's start: initial values, with the inherited ones from `p`.
-pub fn inherit(p: *const Style) Style {
-    var s: Style = .{};
-    sides(&s, p, &.{
+pub fn inheritInto(s: *Style, p: *const Style) void {
+    s.* = .{};
+    sides(s, p, &.{
         "visibility",      "cursor",           "pointer_events",       "color",
         "font_size",       "font_weight",      "italic",               "mono",
         "serif",           "mono_generic",     "font_family",          "font_stretch",
@@ -254,6 +254,11 @@ pub fn inherit(p: *const Style) Style {
         "text_balance",    "list_style_text",
     });
     s.svg = p.svg.inherited();
+}
+
+pub fn inherit(p: *const Style) Style {
+    var s: Style = undefined;
+    inheritInto(&s, p);
     return s;
 }
 

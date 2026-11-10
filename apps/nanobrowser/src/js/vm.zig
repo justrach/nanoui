@@ -185,12 +185,55 @@ pub const Protos = struct {
 pub const max_frames = 12000;
 pub const stack_slots = 1024 * 1024;
 
+threadlocal var cached_stacks: [2]?[]Value = .{ null, null };
+threadlocal var cached_frames: [2]?[]frames.Frame = .{ null, null };
+
 /// Whole pages straight from the OS, left untouched so they commit only when reached.
 fn pages(comptime T: type, n: usize) Error![]T {
     const a = std.heap.page_allocator;
     const raw = a.rawAlloc(n * @sizeOf(T), .of(T), @returnAddress()) orelse return error.OutOfMemory;
     const p: [*]T = @ptrCast(@alignCast(raw));
     return p[0..n];
+}
+
+fn allocStack() Error![]Value {
+    for (&cached_stacks) |*slot| {
+        if (slot.*) |s| {
+            slot.* = null;
+            return s;
+        }
+    }
+    return pages(Value, stack_slots);
+}
+
+fn freeStack(s: []Value) void {
+    for (&cached_stacks) |*slot| {
+        if (slot.* == null) {
+            slot.* = s;
+            return;
+        }
+    }
+    std.heap.page_allocator.free(s);
+}
+
+fn allocFrames() Error![]frames.Frame {
+    for (&cached_frames) |*slot| {
+        if (slot.*) |f| {
+            slot.* = null;
+            return f;
+        }
+    }
+    return pages(frames.Frame, max_frames);
+}
+
+fn freeFrames(f: []frames.Frame) void {
+    for (&cached_frames) |*slot| {
+        if (slot.* == null) {
+            slot.* = f;
+            return;
+        }
+    }
+    std.heap.page_allocator.free(f);
 }
 
 pub const Vm = struct {
@@ -289,9 +332,9 @@ pub const Vm = struct {
         };
         vm.gpa = vm.counting.allocator();
         vm.heap = .{ .gpa = vm.gpa };
-        vm.stack = try pages(Value, stack_slots);
+        vm.stack = try allocStack();
         vm.sp = vm.stack.ptr;
-        vm.frames = try pages(frames.Frame, max_frames);
+        vm.frames = try allocFrames();
         try vm.initStrings();
         try builtins.init(vm);
         vm.protos.object.flags.proto_dirty = false;
@@ -338,8 +381,8 @@ pub const Vm = struct {
         vm.modules.deinit(vm.gpa);
         vm.visiting.deinit(vm.gpa);
         vm.jit_pool.deinit(raw);
-        std.heap.page_allocator.free(vm.stack);
-        std.heap.page_allocator.free(vm.frames);
+        freeStack(vm.stack);
+        freeFrames(vm.frames);
         raw.destroy(vm);
     }
 

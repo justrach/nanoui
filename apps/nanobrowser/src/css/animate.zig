@@ -140,12 +140,12 @@ pub const Animator = struct {
     /// when it had a style at all.
     pub fn styled(a: *Animator, e: *Engine, n: *dom.Node, which: Pseudo, parent: *const Style, scope: ?*const vars.Scope, prior: ?*const Style, fresh: *Style) Allocator.Error!void {
         const key: Key = .{ .node = n, .pseudo = which };
-        const had = a.states.get(key);
+        const had = if (a.states.count() > 0) a.states.get(key) else null;
         // Nothing running, nothing to run, and nothing to transition from.
         if (had == null and fresh.animations.len == 0) {
             if (fresh.transitions.len == 0) return;
             const b = prior orelse return;
-            if (diff.compare(b, fresh) == .none) return;
+            if (!hasTransitionChange(b, fresh)) return;
         }
         if (fresh.display == .none) {
             if (had) |s| a.drop(key, s, e.now);
@@ -160,8 +160,10 @@ pub const Animator = struct {
         const before: ?*const Style = if (had != null) &s.base else prior;
         const unchanged = had != null and diff.compare(&s.base, fresh) == .none;
         if (before) |b| if (!unchanged) try a.startTransitions(s, key, b, fresh, e.now);
-        s.base = fresh.*;
-        s.generation = e.generation;
+        if (had != null) {
+            s.base = fresh.*;
+            s.generation = e.generation;
+        }
         try a.syncAnimations(e, s, key, parent, scope, unchanged, e.now);
         if (s.animations.items.len == 0 and s.moving.items.len == 0) {
             _ = a.states.remove(key);
@@ -169,6 +171,24 @@ pub const Animator = struct {
             return;
         }
         a.overlay(s, key, fresh, e.now, null);
+    }
+
+    fn hasTransitionChange(before: *const Style, fresh: *const Style) bool {
+        if (diff.compare(before, fresh) == .none) return false;
+        for (std.enums.values(Smooth)) |what| {
+            if (!v.equal(v.get(before, what), v.get(fresh, what))) {
+                if (specFor(fresh, what) != null) return true;
+            }
+        }
+        for (fresh.transitions) |t| {
+            const all = std.ascii.eqlIgnoreCase(t.name, "all");
+            const names: []const []const u8 = if (all) &jump_names else &.{t.name};
+            for (names) |name| {
+                const p = prop.lookup(name) orelse continue;
+                if (!isSmoothName(name) and changed(p, before, fresh)) return true;
+            }
+        }
+        return false;
     }
 
     /// A pass over the whole document ended: what it never reached has no style.

@@ -49,6 +49,16 @@ pub const Ctx = struct {
         const k = font.wordKey(text);
         const slot: usize = @as(usize, @truncate(k)) & 255;
         if (k != 0 and c.l1_keys[slot] == k) return c.l1_vals[slot];
+        if (k != 0) if (c.m.widths) |wm| if (wm.get(k)) |cw| {
+            const w = clean(cw);
+            c.l1_keys[slot] = k;
+            c.l1_vals[slot] = w;
+            if (is_space) {
+                c.space_font_key = font.key();
+                c.space_w = w;
+            }
+            return w;
+        };
         const w = clean(c.m.width(c.m.ctx, text, font));
         if (k != 0) {
             c.l1_keys[slot] = k;
@@ -61,21 +71,41 @@ pub const Ctx = struct {
         return w;
     }
 
+    /// Theorem 59 (`NanoUI.Speedometer3Climb.ascii_word_scan_and_persistent_kern_cache_equiv`):
+    /// Caches space-kerning deltas in both `c.kern_keys` and the page-persistent `widths` map.
     pub fn kernSpaceDelta(c: *Ctx, tail: []const u8, head: []const u8, font: box.Font) f32 {
         if (font.mono or font.tabular or font.size <= 0) return 0;
+        if (tail.len + head.len + 1 > 10) return 0;
+        var k: u64 = if (tail.len == 1 and head.len == 1) blk: {
+            var x = font.key() ^ ((@as(u64, tail[0]) | (@as(u64, head[0]) << 8)) *% 0x9E3779B97F4A7C15) ^ 0x4B45_524E_5350_4143;
+            x = (x ^ (x >> 30)) *% 0xBF58476D1CE4E5B9;
+            break :blk x ^ (x >> 31);
+        } else blk: {
+            var tmp: [10]u8 = undefined;
+            @memcpy(tmp[0..tail.len], tail);
+            tmp[tail.len] = ' ';
+            @memcpy(tmp[tail.len + 1 ..][0..head.len], head);
+            break :blk font.wordKey(tmp[0 .. tail.len + 1 + head.len]) ^ 0x4B45_524E_5350_4143;
+        };
+        if (k == 0) k = 1;
+        const slot: usize = @as(usize, @truncate(k)) & 255;
+        if (c.kern_keys[slot] == k) return c.kern_vals[slot];
+        if (c.m.widths) |wm| if (wm.get(k)) |cached_d| {
+            c.kern_keys[slot] = k;
+            c.kern_vals[slot] = cached_d;
+            return cached_d;
+        };
         var buf: [10]u8 = undefined;
-        if (tail.len + head.len + 1 > buf.len) return 0;
         @memcpy(buf[0..tail.len], tail);
         buf[tail.len] = ' ';
         @memcpy(buf[tail.len + 1 ..][0..head.len], head);
         const slice = buf[0 .. tail.len + 1 + head.len];
-        var k = font.wordKey(slice) ^ 0x4B45_524E_5350_4143;
-        if (k == 0) k = 1;
-        const slot: usize = @as(usize, @truncate(k)) & 255;
-        if (c.kern_keys[slot] == k) return c.kern_vals[slot];
         const d = c.width(slice, font) - (c.width(tail, font) + c.width(head, font) + c.width(" ", font));
         c.kern_keys[slot] = k;
         c.kern_vals[slot] = d;
+        if (c.m.widths) |wm| if (c.m.widths_gpa) |gpa| {
+            if (wm.contains(font.wordKey(slice))) wm.put(gpa, k, d) catch {};
+        };
         return d;
     }
 
@@ -84,7 +114,14 @@ pub const Ctx = struct {
     pub fn anonStyle(c: *Ctx, parent: *const Style, display: css.Display) Error!*const Style {
         if (display == .block and c.anon_from == parent) return c.anon_block.?;
         const s = try c.arena.create(Style);
-        s.* = inheritFrom(parent);
+        @import("../css/properties_wide.zig").inheritInto(s, parent);
+        s.visibility = parent.inherited_visibility;
+        s.underline = parent.underline;
+        s.line_through = parent.line_through;
+        s.overline = parent.overline;
+        s.text_decoration_color = parent.text_decoration_color;
+        s.cursor = parent.cursor;
+        s.pointer_events = parent.pointer_events;
         s.display = display;
         if (display == .block) {
             c.anon_from = parent;
@@ -101,52 +138,6 @@ pub const Ctx = struct {
         return m.ascent + m.descent + m.gap;
     }
 };
-
-fn inheritFrom(p: *const Style) Style {
-    var s: Style = .{};
-    s.color = p.color;
-    s.font_size = p.font_size;
-    s.font_weight = p.font_weight;
-    s.italic = p.italic;
-    s.mono = p.mono;
-    s.serif = p.serif;
-    s.mono_generic = p.mono_generic;
-    s.font_family = p.font_family;
-    s.font_size_abs = p.font_size_abs;
-    s.font_stretch = p.font_stretch;
-    s.tabular = p.tabular;
-    s.line_height = p.line_height;
-    s.line_height_factor = p.line_height_factor;
-    s.letter_spacing = p.letter_spacing;
-    s.word_spacing = p.word_spacing;
-    s.text_align = p.text_align;
-    s.text_indent = p.text_indent;
-    s.white_space = p.white_space;
-    s.text_transform = p.text_transform;
-    s.list_style = p.list_style;
-    s.list_inside = p.list_inside;
-    s.rtl = p.rtl;
-    s.inherited_visibility = p.inherited_visibility;
-    s.visibility = p.inherited_visibility;
-    s.border_collapse = p.border_collapse;
-    s.border_spacing = p.border_spacing;
-    s.border_spacing_y = p.border_spacing_y;
-    s.word_break_all = p.word_break_all;
-    s.line_break_anywhere = p.line_break_anywhere;
-    s.overflow_wrap_anywhere = p.overflow_wrap_anywhere;
-    s.caption_bottom = p.caption_bottom;
-    s.tab_size = p.tab_size;
-    s.text_balance = p.text_balance;
-    s.list_style_text = p.list_style_text;
-    s.dark_scheme = p.dark_scheme;
-    s.underline = p.underline;
-    s.line_through = p.line_through;
-    s.overline = p.overline;
-    s.text_decoration_color = p.text_decoration_color;
-    s.cursor = p.cursor;
-    s.pointer_events = p.pointer_events;
-    return s;
-}
 
 /// NaN to zero, and anything huge to the limit.
 pub inline fn clean(v: f32) f32 {

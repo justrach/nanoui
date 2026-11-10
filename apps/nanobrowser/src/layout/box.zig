@@ -105,6 +105,8 @@ pub const Measurer = struct {
     /// A picture's own size; a negative `w`: it has none, and `h` is its shape
     /// (width over height), as an SVG with only a viewBox.
     image: *const fn (ctx: *anyopaque, node: *dom.Node) ?Size,
+    widths: ?*std.AutoHashMapUnmanaged(u64, f32) = null,
+    widths_gpa: ?std.mem.Allocator = null,
 };
 
 pub const Kind = enum {

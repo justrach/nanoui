@@ -280,7 +280,8 @@ fn rootWidth(c: *Ctx, b: *Box, cw: f32, ch: ?f32) Error!f32 {
 /// and `align` on what holds it; `margin: 0 auto` in all but name.
 fn legacyAlign(b: *const Box) ?css.TextAlign {
     const n = (b.parent orelse return null).node orelse return null;
-    if (n.isTag("center")) return .center;
+    if (n.tag.len == 6 and n.isTag("center")) return .center;
+    if ((n.attr_filter & comptime @import("../perf_rules.zig").attrBit("align")) == 0) return null;
     const name = n.attr("align") orelse return null;
     if (std.ascii.eqlIgnoreCase(name, "center") or std.ascii.eqlIgnoreCase(name, "middle")) return .center;
     if (std.ascii.eqlIgnoreCase(name, "right")) return .right;

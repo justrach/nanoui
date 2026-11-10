@@ -28,7 +28,8 @@ pub fn interrupt(vm: *Vm) Error!void {
     }
 }
 
-fn classCallError(vm: *Vm, callee: *Object) Error {
+noinline fn classCallError(vm: *Vm, callee: *Object) Error {
+    @branchHint(.cold);
     var buf: [120]u8 = undefined;
     const name = callee.payload.fp.name.flat(vm) catch "";
     const m = std.fmt.bufPrint(&buf, "Class constructor {s} cannot be invoked without 'new'", .{name[0..@min(name.len, 64)]}) catch "Class constructor cannot be invoked without 'new'";
@@ -36,7 +37,7 @@ fn classCallError(vm: *Vm, callee: *Object) Error {
 }
 
 /// Pushes a frame for a closure. On return, vm.sp is the new frame's operand stack.
-pub fn pushClosure(vm: *Vm, callee: *Object, args: [*]Value, argc: u32, ret_sp: [*]Value, new_target: Value, this_in: Value, is_construct: bool) Error!*Frame {
+pub inline fn pushClosure(vm: *Vm, callee: *Object, args: [*]Value, argc: u32, ret_sp: [*]Value, new_target: Value, this_in: Value, is_construct: bool) Error!*Frame {
     const fp = callee.payload.fp;
     if (fp.is_class_ctor and !is_construct) return classCallError(vm, callee);
     if (vm.frame_top >= vm_mod.max_frames) return vm.throwError(.RangeError, "Maximum call stack size exceeded");

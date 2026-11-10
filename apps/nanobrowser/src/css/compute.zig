@@ -33,9 +33,11 @@ pub const Result = struct {
     backdrop: bool = false,
 };
 
+const default_style: Style = .{};
+
 /// A shadow root's stand-in: nothing matches it, and it adds no box.
 pub fn shadowRoot(parent: *const Style, parent_scope: ?*const vars.Scope, out: *Style) Result {
-    out.* = wide.inherit(parent);
+    wide.inheritInto(out, parent);
     out.display = .contents;
     return .{ .scope = parent_scope };
 }
@@ -206,22 +208,18 @@ const Run = struct {
     scope: ?*const vars.Scope,
     is_element: bool,
     ua_only: bool = false,
+    phase2_borders: bool = false,
+    has_ua_style: bool = false,
     ctx: values.Ctx = undefined,
-    /// Initial values, with the current color and medium borders in place once
-    /// the color is known.
-    initial: Style = .{},
-    base: Style = .{},
-    ua_style: ?Style = null,
 
     fn compute(r: *Run, out: *Style) Allocator.Error!bool {
         const e = r.e;
-        r.base = wide.inherit(r.parent);
-        if (r.parent == &e.root_parent) r.base.dark_scheme = e.meta_dark;
-        out.* = r.base;
+        wide.inheritInto(out, r.parent);
+        if (r.parent == &e.root_parent) out.dark_scheme = e.meta_dark;
         r.ctx = .{
             .style = out,
             .parent = r.parent,
-            .base = &r.base,
+            .base = r.parent,
             .root_font = e.root_font,
             .vw = e.viewport.width,
             .vh = e.viewport.height,
@@ -241,15 +239,37 @@ const Run = struct {
 
         // Borders and outlines start at `medium` and the current color;
         // `finish` zeroes the ones with no style.
-        for ([_]*Style{ out, &r.base, &r.initial }) |s| {
-            for ([_]*style.Border{ &s.border_top, &s.border_right, &s.border_bottom, &s.border_left, &s.outline }) |b| {
-                b.* = .{ .width = 3, .style = .none, .color = out.color };
-            }
+        r.phase2_borders = true;
+        for ([_]*style.Border{ &out.border_top, &out.border_right, &out.border_bottom, &out.border_left, &out.outline }) |b| {
+            b.* = .{ .width = 3, .style = .none, .color = out.color };
         }
 
         try r.pass(2);
         r.finish(out);
         return r.ctx.has_content;
+    }
+
+    fn initialStyle(r: *Run) *const Style {
+        if (!r.phase2_borders) return &default_style;
+        const s = &r.e.scratch_initial;
+        const col = r.ctx.style.color;
+        for ([_]*style.Border{ &s.border_top, &s.border_right, &s.border_bottom, &s.border_left, &s.outline }) |b| {
+            b.* = .{ .width = 3, .style = .none, .color = col };
+        }
+        return s;
+    }
+
+    fn baseStyle(r: *Run) *const Style {
+        const s = &r.e.scratch_base;
+        wide.inheritInto(s, r.parent);
+        if (r.parent == &r.e.root_parent) s.dark_scheme = r.e.meta_dark;
+        if (r.phase2_borders) {
+            const col = r.ctx.style.color;
+            for ([_]*style.Border{ &s.border_top, &s.border_right, &s.border_bottom, &s.border_left, &s.outline }) |b| {
+                b.* = .{ .width = 3, .style = .none, .color = col };
+            }
+        }
+        return s;
     }
 
     /// Everything of one phase: the UA's rules, presentational hints, author
@@ -326,8 +346,8 @@ const Run = struct {
         switch (w) {
             .none => {},
             .inherit => wide.copy(d.prop, s, r.parent),
-            .initial => wide.copy(d.prop, s, &r.initial),
-            .unset => wide.copy(d.prop, s, if (prop.isInherited(d.prop)) r.parent else &r.initial),
+            .initial => wide.copy(d.prop, s, r.initialStyle()),
+            .unset => wide.copy(d.prop, s, if (prop.isInherited(d.prop)) r.parent else r.initialStyle()),
             .revert => wide.copy(d.prop, s, try r.reverted()),
         }
     }
@@ -337,8 +357,8 @@ const Run = struct {
         switch (w) {
             .none => {},
             .inherit => wide.copyAll(s, r.parent, ph),
-            .initial => wide.copyAll(s, &r.initial, ph),
-            .unset => wide.copyAll(s, &r.base, ph),
+            .initial => wide.copyAll(s, r.initialStyle(), ph),
+            .unset => wide.copyAll(s, r.baseStyle(), ph),
             .revert => wide.copyAll(s, try r.reverted(), ph),
         }
     }
@@ -346,8 +366,8 @@ const Run = struct {
     /// The style the UA sheet alone gives; at the UA's own level, `revert`
     /// is `unset`.
     fn reverted(r: *Run) Allocator.Error!*const Style {
-        if (r.ua_only) return &r.base;
-        if (r.ua_style == null) {
+        if (r.ua_only) return r.baseStyle();
+        if (!r.has_ua_style) {
             var sub: Run = .{
                 .e = r.e,
                 .node = r.node,
@@ -358,11 +378,10 @@ const Run = struct {
                 .is_element = r.is_element,
                 .ua_only = true,
             };
-            var out: Style = undefined;
-            _ = try sub.compute(&out);
-            r.ua_style = out;
+            _ = try sub.compute(&r.e.scratch_ua);
+            r.has_ua_style = true;
         }
-        return &r.ua_style.?;
+        return &r.e.scratch_ua;
     }
 
     /// Computed-value fix-ups once everything has been applied.

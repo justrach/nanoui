@@ -58,6 +58,7 @@ const darwin = struct {
 pub const JitPool = struct {
     slabs: std.ArrayList([*]align(16384) u8) = .empty,
     used: usize = slab_size,
+    threadlocal var cached_slab: ?[*]align(16384) u8 = null;
 
     pub fn allocCode(pool: *JitPool, gpa: Allocator, words: []const u32) ?JitFn {
         if (comptime !enabled) return null;
@@ -65,11 +66,16 @@ pub const JitPool = struct {
         const aligned_len = (bytes_len + 15) & ~@as(usize, 15);
         if (aligned_len > slab_size) return null;
         if (pool.used + aligned_len > slab_size) {
-            const raw = darwin.mmap(null, slab_size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0) orelse return null;
-            if (@intFromPtr(raw) == std.math.maxInt(usize)) return null;
-            const p: [*]align(16384) u8 = @ptrCast(@alignCast(raw));
+            const p: [*]align(16384) u8 = if (cached_slab) |s| blk: {
+                cached_slab = null;
+                break :blk s;
+            } else blk: {
+                const raw = darwin.mmap(null, slab_size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0) orelse return null;
+                if (@intFromPtr(raw) == std.math.maxInt(usize)) return null;
+                break :blk @ptrCast(@alignCast(raw));
+            };
             pool.slabs.append(gpa, p) catch {
-                _ = darwin.munmap(raw, slab_size);
+                _ = darwin.munmap(p, slab_size);
                 return null;
             };
             pool.used = 0;
@@ -86,7 +92,9 @@ pub const JitPool = struct {
 
     pub fn deinit(pool: *JitPool, gpa: Allocator) void {
         if (comptime enabled) {
-            for (pool.slabs.items) |s| _ = darwin.munmap(s, slab_size);
+            for (pool.slabs.items) |s| {
+                if (cached_slab == null) cached_slab = s else _ = darwin.munmap(s, slab_size);
+            }
         }
         pool.slabs.deinit(gpa);
     }
@@ -113,12 +121,15 @@ inline fn errRes(vm: *Vm, sp: [*]Value, e: Error) JitResult {
     return .{ .bits = 0, .err = encodeErr(e) };
 }
 
+/// Theorem 58 (`NanoUI.Speedometer3Climb.loop_aware_jit_threshold_and_stack_pool_equiv`):
+/// Compiles loop-containing functions on their first call (`threshold = 1`) and
+/// loop-free functions on call 2, skipping one-shot module factory closures.
 pub inline fn getOrCompile(vm: *Vm, fp: *bc.FuncProto) ?JitFn {
     if (comptime !enabled) return null;
     if (fp.jit_fn) |p| return @ptrCast(@alignCast(p));
     if (fp.jit_disabled) return null;
     fp.hot_count +|= 1;
-    const threshold: u16 = if (fp.code.len <= 4096) 1 else 2;
+    const threshold: u16 = if (fp.has_loop and fp.code.len <= 4096) 1 else 2;
     if (fp.hot_count < threshold) return null;
     if (arm64.compile(vm, fp)) |jfn| {
         fp.jit_fn = @ptrCast(jfn);
@@ -428,7 +439,7 @@ inline fn invokeChildFrame(vm: *Vm, caller_sp: [*]Value, child_f: *Frame) JitRes
     return .{ .bits = @intFromPtr(ret_sp + 1), .err = 0 };
 }
 
-fn pushAndInvokeClosure(vm: *Vm, caller_sp: [*]Value, callee: *Object, args: [*]Value, argc: u32, ret_sp: [*]Value, this: Value) JitResult {
+fn pushAndInvokeClosure(vm: *Vm, caller_sp: [*]Value, callee: *Object, args: [*]Value, argc: u32, ret_sp: [*]Value, this: Value) callconv(.c) JitResult {
     const child_f = calls.pushClosure(vm, callee, args, argc, ret_sp, Value.undefined, this, false) catch |e| return errRes(vm, caller_sp, e);
     return invokeChildFrame(vm, caller_sp, child_f);
 }
