@@ -15,7 +15,7 @@
 //!                            pages report with nanoui.log() and finish with nanoui.window.close()
 const std = @import("std");
 const ui = @import("ui/ui.zig");
-const runFor = @import("platform.zig").runFor;
+const platform = @import("platform.zig");
 
 pub const Flags = struct {
     generate_dir: ?[]const u8 = null,
@@ -69,12 +69,21 @@ pub fn snapshot(app: anytype, path: []const u8) !void {
         // Live state first: the event loop runs (replies, timers) without a
         // visible window, and the view is drawn as it goes, so what it asks
         // for as it draws (a picture, a map's tiles) is asked for and answered.
-        var waited: f64 = 0;
+        const clock = @import("ui/clock.zig");
+        const start = clock.now();
         const dt = t.dt;
         // Its clock goes as the event loop's does: what animates arrives on time.
-        t.dt = 0.05;
-        while (waited < app.flags.wait) : (waited += 0.05) {
-            runFor(0.05);
+        var last = start;
+        while (true) {
+            const now = clock.now();
+            const left = app.flags.wait - (now - start);
+            if (left <= 0) break;
+            const step = if (t.ctx.animating) @min(left, 1.0 / 60.0) else @min(left, 0.05);
+            platform.runUntil(step, &t.woken);
+            t.woken.store(false, .release);
+            const after = clock.now();
+            t.dt = @floatCast(@max(0.001, after - last));
+            last = after;
             t.frame();
         }
         t.dt = dt;

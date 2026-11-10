@@ -168,6 +168,7 @@ pub const World = struct {
     exports: std.ArrayList(Value) = .empty,
     export_ids: std.AutoHashMapUnmanaged(*js.Object, u32) = .empty,
     imports: std.AutoHashMapUnmanaged(*js.Object, @import("api_frames.zig").Remote) = .empty,
+    import_by_remote: std.AutoHashMapUnmanaged(u64, *js.Object) = .empty,
     caller: ?*Page = null,
     /// `document.open()` is in force: what's been written since.
     doc_open: bool = false,
@@ -215,6 +216,7 @@ pub const World = struct {
         w.doc_written.deinit(gpa);
         w.export_ids.deinit(gpa);
         w.imports.deinit(gpa);
+        w.import_by_remote.deinit(gpa);
         if (w.pending_nav) |n| {
             gpa.free(n.url);
             gpa.free(n.body);

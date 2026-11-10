@@ -71,6 +71,8 @@ fn indexOfScope(e: *Engine, root: *dom.Node) Allocator.Error!?*rule_index.Index 
     const ranks = try rule_index.LayerRanks.build(a, list, e.viewport);
     var order: u32 = 0;
     for (list) |s| try ix.addSheet(s, e.viewport, false, &ranks, &order);
+    e.doc.rule_flags |= ix.ruleFlags();
+    e.doc.rule_attr_filter |= ix.attr_filter;
     try e.scope_index.put(e.gpa, key, ix);
     return ix;
 }

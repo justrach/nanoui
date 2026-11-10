@@ -5,3 +5,4 @@ import NanoUI.MarkdownSpec
 import NanoUI.BuildSplit
 import NanoUI.BrowserPerf
 import NanoUI.JitPerf
+import NanoUI.Speedometer3Perf

@@ -222,6 +222,7 @@ pub fn dispatchMain(context: ?*anyopaque, work: *const fn (?*anyopaque) callconv
 }
 
 pub fn dispatchAfter(ns: u64, context: ?*anyopaque, work: *const fn (?*anyopaque) callconv(.c) void) void {
+    if (ns == 0) return dispatch_async_f(mainQueue(), context, work);
     dispatch_after_f(dispatch_time(0, @intCast(ns)), mainQueue(), context, work);
 }
 

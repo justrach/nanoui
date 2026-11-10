@@ -254,6 +254,8 @@ pub const Engine = struct {
             }
         }
         e.media_signature = e.signature();
+        e.doc.rule_flags = ix.ruleFlags();
+        e.doc.rule_attr_filter = ix.attr_filter;
         e.index_dirty = false;
     }
 

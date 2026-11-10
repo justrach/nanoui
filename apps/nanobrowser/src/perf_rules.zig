@@ -98,6 +98,96 @@ pub inline fn isSvgInterior(in_svg_ns: bool, is_svg_root: bool, display_contents
     return in_svg_ns and !is_svg_root and !display_contents;
 }
 
+/// Theorem 28 & 29 (`NanoUI.Speedometer3Perf.attr_invalidation_scope`, `svg_geometry_attr_style_invariance`):
+/// 64-bit Bloom filter bit for a lowercase CSS attribute name.
+pub fn attrBit(name: []const u8) u64 {
+    if (name.len == 0) return 0;
+    const c0 = std.ascii.toLower(name[0]);
+    const c1 = std.ascii.toLower(name[name.len - 1]);
+    const mix = @as(u32, c0) *% 31 +% @as(u32, c1) *% 17 +% @as(u32, @truncate(name.len));
+    return @as(u64, 1) << @intCast(mix & 63);
+}
+
+const svg_pres_attrs = std.StaticStringMap(void).initComptime(.{
+    .{"color"},             .{"fill"},              .{"fill-opacity"},      .{"fill-rule"},
+    .{"clip-rule"},         .{"clip-path"},         .{"mask"},              .{"stroke"},
+    .{"stroke-width"},      .{"stroke-opacity"},    .{"stroke-linecap"},    .{"stroke-linejoin"},
+    .{"stroke-miterlimit"}, .{"stroke-dasharray"},  .{"stroke-dashoffset"}, .{"stop-color"},
+    .{"stop-opacity"},      .{"opacity"},           .{"visibility"},        .{"display"},
+    .{"paint-order"},       .{"vector-effect"},
+});
+
+const html_style_attrs = std.StaticStringMap(void).initComptime(.{
+    .{"href"},        .{"disabled"},    .{"checked"},     .{"selected"},   .{"readonly"},
+    .{"required"},    .{"placeholder"}, .{"open"},        .{"value"},      .{"type"},
+    .{"lang"},        .{"dir"},         .{"size"},        .{"face"},       .{"color"},
+    .{"text"},        .{"cellpadding"}, .{"cellspacing"}, .{"border"},     .{"bgcolor"},
+    .{"background"},  .{"width"},       .{"height"},      .{"align"},      .{"valign"},
+    .{"nowrap"},      .{"frameborder"}, .{"hspace"},      .{"vspace"},     .{"noshade"},
+    .{"hidden"},      .{"popover"},     .{"title"},       .{"multiple"},
+});
+
+/// Theorem 27 (`NanoUI.Speedometer3Perf.ancestor_style_queued_subsumption`):
+/// Whether `n` or any of its ancestors is already queued in `dirty_nodes`.
+pub inline fn hasQueuedAncestor(n: *const dom.Node) bool {
+    var at: ?*const dom.Node = n;
+    while (at) |x| : (at = x.parent) {
+        if (x.style_queued) return true;
+    }
+    return false;
+}
+
+pub fn touchUnder(d: *dom.Document, n: *dom.Node) void {
+    d.style_dirty = true;
+    if (d.dirty_all) return;
+    if (hasQueuedAncestor(n)) return;
+    if (d.dirty_nodes.items.len >= 4096) {
+        d.dirty_all = true;
+        return;
+    }
+    n.style_queued = true;
+    d.dirty_nodes.append(d.arena, n) catch {
+        n.style_queued = false;
+        d.dirty_all = true;
+    };
+}
+
+/// Theorem 28 & 29 (`NanoUI.Speedometer3Perf.attr_invalidation_scope`, `svg_geometry_attr_style_invariance`):
+/// Scoped style invalidation when attribute `name` changes on element `n`.
+pub fn touchAttr(d: *dom.Document, n: *dom.Node, name: []const u8) void {
+    d.generation +%= 1;
+    const is_id = std.mem.eql(u8, name, "id");
+    if (is_id) d.id_generation +%= 1;
+    if (n.has_resource) d.scan_dirty = true;
+    if (!d.inDocument(n)) return;
+    if (std.mem.eql(u8, name, "style")) {
+        touchUnder(d, n);
+        return;
+    }
+    const is_class = std.mem.eql(u8, name, "class");
+    const in_filter = (d.rule_attr_filter & attrBit(name)) != 0;
+    if (n.ns == .svg and !n.isTag("svg")) {
+        if (!is_class and !is_id and !in_filter and !svg_pres_attrs.has(name) and !std.mem.eql(u8, name, "lang")) {
+            return;
+        }
+    } else if (n.ns == .html) {
+        if (!is_class and !is_id and !in_filter and !html_style_attrs.has(name) and !std.mem.eql(u8, name, "slot") and !std.mem.eql(u8, name, "part")) {
+            return;
+        }
+    }
+    const uses_has = (d.rule_flags & 1) != 0;
+    const uses_next = (d.rule_flags & 2) != 0;
+    const uses_later = (d.rule_flags & 4) != 0;
+    if (uses_has or uses_later or n.tree_scope != null or n.shadow_root != null) {
+        touchUnder(d, n.parent orelse n);
+        return;
+    }
+    touchUnder(d, n);
+    if (uses_next) {
+        if (n.nextElement()) |nx| touchUnder(d, nx);
+    }
+}
+
 test "hover hold is quiescent when element under pointer matches old hover" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

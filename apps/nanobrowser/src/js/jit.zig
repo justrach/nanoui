@@ -26,6 +26,7 @@ const interp = @import("interp.zig");
 const iter = @import("iter.zig");
 const str = @import("string.zig");
 const api = @import("vm_api.zig");
+const b_fn = @import("b_function.zig");
 const arm64 = @import("jit_arm64.zig");
 
 pub const enabled = builtin.cpu.arch == .aarch64 and builtin.os.tag == .macos;
@@ -255,12 +256,19 @@ pub fn jitGetLength(vm: *Vm, f: *Frame, sp: [*]Value, pc: [*]const u8) callconv(
 pub fn jitGetElem(vm: *Vm, f: *Frame, sp: [*]Value, pc: [*]const u8) callconv(.c) JitResult {
     const t = (sp - 2)[0];
     const k = (sp - 1)[0];
-    if (k.isInt() and t.isObject()) {
-        const o = t.asObject();
+    if (k.isInt()) {
         const i: u32 = @bitCast(k.asInt());
-        if (i < o.elems_len and !o.flags.exotic) {
-            const r = o.elems[i];
-            if (!r.isHole()) return .{ .bits = r.bits, .err = 0 };
+        if (t.isObject()) {
+            const o = t.asObject();
+            if (i < o.elems_len and !o.flags.exotic) {
+                const r = o.elems[i];
+                if (!r.isHole()) return .{ .bits = r.bits, .err = 0 };
+            }
+        } else if (t.isString()) {
+            const s = t.asString();
+            if (i < s.len16 and s.is_ascii and !s.is_rope) {
+                return .{ .bits = Value.fromString(vm.char_strs[s.ptr[i]]).bits, .err = 0 };
+            }
         }
     }
     f.pc = pc;
@@ -335,6 +343,12 @@ pub fn jitCompareOp(vm: *Vm, f: *Frame, sp: [*]Value, pc: [*]const u8, op_raw: u
             else => x != y,
         };
         return .{ .bits = Value.fromBool(r).bits, .err = 0 };
+    }
+    if (op == .seq or op == .sne) {
+        if (a.bits == b.bits) return .{ .bits = Value.fromBool(op == .seq).bits, .err = 0 };
+        if ((!a.isString() or !b.isString()) and (!a.isBigInt() or !b.isBigInt())) {
+            return .{ .bits = Value.fromBool(op == .sne).bits, .err = 0 };
+        }
     }
     if (op == .eq or op == .ne) {
         if (a.bits == b.bits and !a.isDouble()) return .{ .bits = Value.fromBool(op == .eq).bits, .err = 0 };
@@ -441,9 +455,22 @@ pub fn jitCall(vm: *Vm, f: *Frame, sp: [*]Value, next_pc: [*]const u8, argc: u32
     vm.sp = sp;
     const callee = (sp - argc - 1)[0];
     const ret_sp = sp - argc - 2;
-    if (callee.isObject() and callee.asObject().class == .closure) {
-        const child_f = calls.pushClosure(vm, callee.asObject(), sp - argc, argc, ret_sp, Value.undefined, ret_sp[0], false) catch |e| return errRes(vm, sp, e);
-        return invokeChildFrame(vm, sp, child_f);
+    if (callee.isObject()) {
+        const co = callee.asObject();
+        if (co.class == .closure) {
+            const child_f = calls.pushClosure(vm, co, sp - argc, argc, ret_sp, Value.undefined, ret_sp[0], false) catch |e| return errRes(vm, sp, e);
+            return invokeChildFrame(vm, sp, child_f);
+        }
+        if (co.class == .native and co.payload.native.func == &b_fn.fnCall) {
+            const target = ret_sp[0];
+            if (target.isObject() and target.asObject().class == .closure) {
+                const sub_this = if (argc > 0) (sp - argc)[0] else Value.undefined;
+                const sub_args = if (argc > 0) sp - argc + 1 else sp;
+                const sub_argc = if (argc > 0) argc - 1 else 0;
+                const child_f = calls.pushClosure(vm, target.asObject(), sub_args, sub_argc, ret_sp, Value.undefined, sub_this, false) catch |e| return errRes(vm, sp, e);
+                return invokeChildFrame(vm, sp, child_f);
+            }
+        }
     }
     const r = calls.callNonClosure(vm, callee, ret_sp[0], (sp - argc)[0..argc]) catch |e| return errRes(vm, sp, e);
     ret_sp[0] = r;

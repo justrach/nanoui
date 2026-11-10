@@ -109,6 +109,7 @@ pub const Browser = struct {
         const b: *Browser = @ptrCast(@alignCast(ctx));
         b.dirty = true;
         if (b.window) |w| w.redraw();
+        if (b.context) |c| if (!c.building) if (c.waker) |waker| waker.wake(waker.ctx);
     }
 
     /// A page asks to go somewhere: a link, a form, `location.href`.

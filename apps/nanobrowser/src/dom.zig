@@ -247,7 +247,20 @@ pub const Node = struct {
     }
 
     pub fn removeChildren(n: *Node) void {
-        while (n.first_child) |c| c.remove();
+        var c = n.first_child orelse return;
+        n.first_child = null;
+        n.last_child = null;
+        var scan = n.isTag("style");
+        while (true) {
+            const next = c.next;
+            if (c.has_resource) scan = true;
+            c.parent = null;
+            c.prev = null;
+            c.next = null;
+            c = next orelse break;
+        }
+        if (scan) n.doc.scan_dirty = true;
+        n.doc.touchTree(n);
     }
 
     /// The next node in document order; stays inside `root`.
@@ -380,6 +393,8 @@ pub const Document = struct {
     /// their markup is made again (`paint/svg_markup.zig`).
     svg_version: u32 = 0,
     svg_dirty: bool = false,
+    rule_flags: u8 = 7,
+    rule_attr_filter: u64 = std.math.maxInt(u64),
     /// What a restyle has to look at: everything, or under just these.
     dirty_all: bool = true,
     dirty_nodes: std.ArrayList(*Node) = .empty,
@@ -403,7 +418,7 @@ pub const Document = struct {
         d.dirty_all = true;
     }
 
-    fn inDocument(d: *const Document, n: *const Node) bool {
+    pub fn inDocument(d: *const Document, n: *const Node) bool {
         var at: ?*const Node = n;
         while (at) |x| : (at = x.parent) if (x == d.node) return true;
         return false;
@@ -415,30 +430,14 @@ pub const Document = struct {
     }
 
     /// The style of what's under `n` may have changed: only that restyles.
-    fn touchUnder(d: *Document, n: *Node) void {
-        d.style_dirty = true;
-        if (d.dirty_all) return;
-        const parent_queued = if (n.parent) |p| p.style_queued else false;
-        if (!perf.shouldQueueDirtyNode(n.style_queued, parent_queued)) return;
-        if (d.dirty_nodes.items.len >= 512) {
-            d.dirty_all = true;
-            return;
-        }
-        n.style_queued = true;
-        d.dirty_nodes.append(d.arena, n) catch {
-            n.style_queued = false;
-            d.dirty_all = true;
-        };
+    pub fn touchUnder(d: *Document, n: *Node) void {
+        perf.touchUnder(d, n);
     }
 
     /// An attribute of `n` changed. Layout follows only if style did. What
     /// selects by it reaches its siblings at most, unless it is the inline style.
     fn touchAttr(d: *Document, n: *Node, name: []const u8) void {
-        d.generation +%= 1;
-        if (std.mem.eql(u8, name, "id")) d.id_generation +%= 1;
-        if (n.has_resource) d.scan_dirty = true;
-        if (!d.inDocument(n)) return;
-        d.touchUnder(if (std.mem.eql(u8, name, "style")) n else n.parent orelse n);
+        perf.touchAttr(d, n, name);
     }
 
     /// `n`'s children changed.

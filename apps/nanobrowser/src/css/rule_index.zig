@@ -8,6 +8,7 @@ const sheet = @import("sheet.zig");
 const sel = @import("selectors.zig");
 const match = @import("selector_match.zig");
 const media = @import("media.zig");
+const perf = @import("../perf_rules.zig");
 
 const Declarations = sheet.Declarations;
 
@@ -65,9 +66,44 @@ pub const Index = struct {
     parts: List = .empty,
     /// Some author rule uses `:has`: a change can reach its ancestors.
     uses_has: bool = false,
+    /// Some rule uses `+` (`.next`) or `~` / `:nth-child(of S)` (`.later`).
+    uses_next_sibling: bool = false,
+    uses_later_sibling: bool = false,
+    /// 64-bit Bloom filter of attribute names in `[attr]` selectors.
+    attr_filter: u64 = 0,
     /// Some rule sits under `@container`.
     uses_container: bool = false,
     quirks: bool = false,
+
+    pub fn ruleFlags(ix: *const Index) u8 {
+        return @as(u8, @intFromBool(ix.uses_has)) |
+            (@as(u8, @intFromBool(ix.uses_next_sibling)) << 1) |
+            (@as(u8, @intFromBool(ix.uses_later_sibling)) << 2);
+    }
+
+    fn scanSelector(ix: *Index, selector: *const sel.Selector, ua: bool) void {
+        for (selector.compounds, 0..) |*c, idx| {
+            if (!ua and idx > 0) switch (c.combinator) {
+                .next => ix.uses_next_sibling = true,
+                .later => ix.uses_later_sibling = true,
+                else => {},
+            };
+            for (c.simples) |x| switch (x) {
+                .attr => |a| ix.attr_filter |= perf.attrBit(a.lower),
+                .nth => |n| if (n.of.len > 0) {
+                    ix.uses_later_sibling = true;
+                    for (n.of) |*sub| ix.scanSelector(sub, ua);
+                },
+                .not, .is, .host, .host_context => |l| for (l) |*sub| ix.scanSelector(sub, ua),
+                .has => |l| {
+                    if (!ua) ix.uses_has = true;
+                    for (l) |*sub| ix.scanSelector(sub, ua);
+                },
+                else => {},
+            };
+        }
+        for (selector.slotted) |*sub| ix.scanSelector(sub, ua);
+    }
 
     pub fn init(gpa: Allocator) Index {
         return .{ .arena = std.heap.ArenaAllocator.init(gpa) };
@@ -104,12 +140,7 @@ pub const Index = struct {
                     try ix.host.append(a, entry.outerWeak());
                 } else try ix.add(entry);
                 if (selector.uses_state and !ua) try ix.state_deps.append(ix.arena.allocator(), .{ .sel = selector });
-                if (!ua and !ix.uses_has) {
-                    for (selector.compounds) |*c| for (c.simples) |x| switch (x) {
-                        .has => ix.uses_has = true,
-                        else => {},
-                    };
-                }
+                ix.scanSelector(selector, ua);
             }
         }
     }

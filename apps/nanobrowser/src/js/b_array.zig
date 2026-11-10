@@ -108,7 +108,14 @@ fn fromFn(vm: *Vm, this: Value, args: []const Value) Error!Value {
         fn add(c: @This(), v0: Value) Error!void {
             var v = v0;
             if (!c.mapper.isUndefined()) v = try calls.call(c.vm, c.mapper, c.this_arg, &.{ v, Value.fromUsize(c.i.*) });
-            try props.defineData(c.vm, c.out, try key(c.vm, c.i.*), v, u.PropFlags.all);
+            if (isPlain(c.out) and c.i.* == c.out.elems_len) {
+                if (c.i.* >= c.out.elems_cap) try objmod.growElems(c.vm, c.out, c.i.* + 1);
+                c.out.elems[c.i.*] = v;
+                c.out.elems_len = @intCast(c.i.* + 1);
+                c.out.arr_len = c.out.elems_len;
+            } else {
+                try props.defineData(c.vm, c.out, try key(c.vm, c.i.*), v, u.PropFlags.all);
+            }
             c.i.* += 1;
         }
     };

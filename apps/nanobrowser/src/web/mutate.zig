@@ -122,18 +122,38 @@ fn forgetState(w: *World, n: *Node) void {
     };
 }
 
+fn forgetChildrenState(w: *World, n: *Node) void {
+    const d = n.doc;
+    if (d.focus) |f| if (f != n and n.contains(f)) {
+        d.focus = null;
+    };
+    if (d.hover) |f| if (f != n and n.contains(f)) {
+        d.hover = null;
+    };
+    if (d.active) |f| if (f != n and n.contains(f)) {
+        d.active = null;
+    };
+    if (w.page.open_select) |s| if (s != n and n.contains(s)) {
+        w.page.open_select = null;
+    };
+}
+
 /// Empties `n`.
 pub fn removeAllChildren(w: *World, n: *Node) Error!void {
     if (bind.firstChild(n) == null) return;
+    const connected = inPage(w, n);
+    forgetChildrenState(w, n);
+    if (w.observed.items.len == 0 and (!connected or w.custom.upgraded.count() == 0)) {
+        n.removeChildren();
+        w.changed();
+        if (connected and w.page.frames.list.items.len > 0) frames.sweep(w.page);
+        return;
+    }
     var list: std.ArrayList(*Node) = .empty;
     defer list.deinit(w.gpa);
     var k = bind.firstChild(n);
     while (k) |x| : (k = x.next) try list.append(w.gpa, x);
-    const connected = inPage(w, n);
-    for (list.items) |x| {
-        forgetState(w, x);
-        x.remove();
-    }
+    for (list.items) |x| x.remove();
     if (w.observed.items.len > 0) try recordChildren(w, n, &.{}, list.items, null, null);
     w.changed();
     if (connected) for (list.items) |x| try removed(w, x);
@@ -142,17 +162,32 @@ pub fn removeAllChildren(w: *World, n: *Node) Error!void {
 /// `n`'s children become what `fragment` holds, as one change.
 pub fn replaceAllWith(w: *World, n: *Node, fragment: ?*Node) Error!void {
     svgChanged(n);
+    const connected = inPage(w, n);
+    forgetChildrenState(w, n);
+    if (w.observed.items.len == 0 and (!connected or w.custom.upgraded.count() == 0)) {
+        n.removeChildren();
+        var added: std.ArrayList(*Node) = .empty;
+        defer added.deinit(w.gpa);
+        if (fragment) |f| {
+            var k = f.first_child;
+            while (k) |x| : (k = x.next) try added.append(w.gpa, x);
+            for (added.items) |x| {
+                adoptTree(x, n.doc);
+                n.insertBefore(x, null);
+            }
+        }
+        w.changed();
+        if (connected and w.page.frames.list.items.len > 0) frames.sweep(w.page);
+        for (added.items) |x| try inserted(w, x);
+        return afterChildren(w, n);
+    }
     var gone: std.ArrayList(*Node) = .empty;
     defer gone.deinit(w.gpa);
     var added: std.ArrayList(*Node) = .empty;
     defer added.deinit(w.gpa);
     var k = bind.firstChild(n);
     while (k) |x| : (k = x.next) try gone.append(w.gpa, x);
-    const connected = inPage(w, n);
-    for (gone.items) |x| {
-        forgetState(w, x);
-        x.remove();
-    }
+    for (gone.items) |x| x.remove();
     if (fragment) |f| {
         k = f.first_child;
         while (k) |x| : (k = x.next) try added.append(w.gpa, x);

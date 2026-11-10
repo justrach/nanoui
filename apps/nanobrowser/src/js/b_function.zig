@@ -31,16 +31,49 @@ pub fn listFromArrayLike(vm: *Vm, v: Value) Error![]Value {
     return out;
 }
 
-fn fnCall(vm: *Vm, this: Value, args: []const Value) Error!Value {
+pub fn fnCall(vm: *Vm, this: Value, args: []const Value) Error!Value {
     const rest = if (args.len > 1) args[1..] else args[0..0];
     return calls.call(vm, this, u.arg(args, 0), rest);
 }
 
-fn fnApply(vm: *Vm, this: Value, args: []const Value) Error!Value {
+pub fn fnApply(vm: *Vm, this: Value, args: []const Value) Error!Value {
     if (!this.isCallable()) return vm.throwError(.TypeError, "Function.prototype.apply was called on a non-function");
-    const list = try listFromArrayLike(vm, u.arg(args, 1));
+    const this_arg = u.arg(args, 0);
+    const arr_val = u.arg(args, 1);
+    if (arr_val.isNullish()) return calls.call(vm, this, this_arg, &.{});
+    if (!arr_val.isObject()) return vm.throwError(.TypeError, "CreateListFromArrayLike called on non-object");
+    const o = arr_val.asObject();
+    var stack_buf: [32]Value = undefined;
+    if (!o.flags.exotic and o.class == .array and !o.flags.has_sparse and o.elems_len == o.arr_len and o.arr_len <= stack_buf.len) {
+        var has_hole = false;
+        for (o.elems[0..o.arr_len]) |el| {
+            if (el.isHole()) {
+                has_hole = true;
+                break;
+            }
+        }
+        if (!has_hole) {
+            @memcpy(stack_buf[0..o.arr_len], o.elems[0..o.arr_len]);
+            return calls.call(vm, this, this_arg, stack_buf[0..o.arr_len]);
+        }
+    }
+    const n = try conv.lengthOf(vm, o);
+    if (n <= stack_buf.len) {
+        for (0..n) |i| {
+            if (i < o.elems_len and !o.flags.exotic) {
+                const el = o.elems[i];
+                if (!el.isHole()) {
+                    stack_buf[i] = el;
+                    continue;
+                }
+            }
+            stack_buf[i] = try props.get(vm, o, PropKey.fromIndex(@intCast(i)));
+        }
+        return calls.call(vm, this, this_arg, stack_buf[0..n]);
+    }
+    const list = try listFromArrayLike(vm, arr_val);
     defer vm.gpa.free(list);
-    return calls.call(vm, this, u.arg(args, 0), list);
+    return calls.call(vm, this, this_arg, list);
 }
 
 fn fnBind(vm: *Vm, this: Value, args: []const Value) Error!Value {

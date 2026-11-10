@@ -56,7 +56,12 @@ fn map(vm: *Vm, this: Value, args: []const Value) Error!Value {
     var i: usize = 0;
     while (i < n) : (i += 1) {
         if (try elemIf(vm, o, i)) |v| {
-            try props.defineData(vm, r, try key(vm, i), try invoke(vm, cb, u.arg(args, 1), v, i, o), u.PropFlags.all);
+            const mapped = try invoke(vm, cb, u.arg(args, 1), v, i, o);
+            if (arr.isPlain(r) and i < r.elems_len) {
+                r.elems[i] = mapped;
+            } else {
+                try props.defineData(vm, r, try key(vm, i), mapped, u.PropFlags.all);
+            }
         }
     }
     return r.value();
@@ -73,7 +78,14 @@ fn filter(vm: *Vm, this: Value, args: []const Value) Error!Value {
     while (i < n) : (i += 1) {
         if (try elemIf(vm, o, i)) |v| {
             if (ops.truthy(try invoke(vm, cb, u.arg(args, 1), v, i, o))) {
-                try props.defineData(vm, r, try key(vm, at), v, u.PropFlags.all);
+                if (arr.isPlain(r) and at == r.elems_len) {
+                    if (at >= r.elems_cap) try objmod.growElems(vm, r, at + 1);
+                    r.elems[at] = v;
+                    r.elems_len = @intCast(at + 1);
+                    r.arr_len = r.elems_len;
+                } else {
+                    try props.defineData(vm, r, try key(vm, at), v, u.PropFlags.all);
+                }
                 at += 1;
             }
         }
