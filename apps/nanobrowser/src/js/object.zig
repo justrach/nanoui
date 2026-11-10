@@ -141,7 +141,7 @@ pub const Payload = extern union {
     module: *module.Module,
 };
 
-pub const inline_slots = 4;
+pub const inline_slots = 5;
 
 pub const Object = struct {
     cell: heap.Cell,
@@ -240,7 +240,7 @@ pub fn newPlain(vm: *Vm) Error!*Object {
 /// Grows named-property storage to at least n slots.
 pub fn growSlots(vm: *Vm, o: *Object, n: u32) Error!void {
     if (n <= o.slot_cap) return;
-    const cap = @max(n, o.slot_cap * 2);
+    const cap = @max(n, @max(@as(u32, 12), o.slot_cap * 2));
     const mem = try vm.gpa.alloc(Value, cap);
     @memcpy(mem[0..o.slot_cap], o.slots[0..o.slot_cap]);
     if (o.slots != @as([*]Value, &o.inline_store)) vm.gpa.free(o.slots[0..o.slot_cap]);

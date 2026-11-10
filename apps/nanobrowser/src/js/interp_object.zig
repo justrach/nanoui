@@ -33,16 +33,18 @@ inline fn u32At(p: [*]const u8) u32 {
 }
 
 pub fn argumentsObject(vm: *Vm, f: *Frame) Error!*Object {
-    const a = try objmod.create(vm, vm.protos.object, .arguments);
+    const sh = if (f.fp.strict) vm.args_strict_shape else vm.args_sloppy_shape;
+    const a = try objmod.alloc(vm, sh, .arguments);
     const n = f.argc;
     if (n != 0) {
         try objmod.growElems(vm, a, n);
         @memcpy(a.elems[0..n], f.args[0..n]);
         a.elems_len = n;
     }
-    try props.addProp(vm, a, vm.k.length, Value.fromUsize(n), PropFlags.hidden);
-    try props.addProp(vm, a, PropKey.fromSymbol(vm.sym.iterator), vm.protos.array_values.value(), PropFlags.hidden);
-    if (!f.fp.strict) try props.addProp(vm, a, vm.k.callee, f.func.value(), PropFlags.hidden);
+    a.arr_len = n;
+    a.slots[0] = Value.fromUsize(n);
+    a.slots[1] = vm.protos.array_values.value();
+    if (!f.fp.strict) a.slots[2] = f.func.value();
     return a;
 }
 

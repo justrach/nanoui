@@ -78,10 +78,7 @@ fn setTextContent(vm: *Vm, this: Value, args: []const Value) Error!Value {
         try mutate.setData(w, n, s);
         return Value.undefined;
     }
-    // One record, replacing everything by one text.
-    const f = try w.page.doc.createFragment();
-    if (s.len > 0) f.appendChild(try n.doc.createText(s));
-    try mutate.replaceAllWith(w, n, f);
+    try mutate.replaceWithText(w, n, s);
     return Value.undefined;
 }
 
@@ -203,6 +200,8 @@ pub fn clone(w: *bind.World, n: *Node, deep: bool, doc: *dom.Document) Error!*No
         .ns = n.ns,
         .data = n.data,
         .has_resource = @import("../perf_rules.zig").isResourceTag(n.tag),
+        .has_id = n.id_attr != null and n.id_attr.?.len != 0,
+        .has_insertion_work = @import("../perf_rules.zig").isInsertionWorkTag(n.tag),
         .has_on_attr = n.has_on_attr,
         .id_attr = n.id_attr,
         .class_attr = n.class_attr,
@@ -241,6 +240,8 @@ pub fn clone(w: *bind.World, n: *Node, deep: bool, doc: *dom.Document) Error!*No
                     .ns = child.ns,
                     .data = child.data,
                     .has_resource = @import("../perf_rules.zig").isResourceTag(child.tag),
+                    .has_id = child.id_attr != null and child.id_attr.?.len != 0,
+                    .has_insertion_work = @import("../perf_rules.zig").isInsertionWorkTag(child.tag),
                     .has_on_attr = child.has_on_attr,
                     .id_attr = child.id_attr,
                     .class_attr = child.class_attr,

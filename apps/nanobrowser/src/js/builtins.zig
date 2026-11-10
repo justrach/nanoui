@@ -51,11 +51,18 @@ pub fn init(vm: *Vm) Error!void {
     p.boolean.payload = .{ .value = Value.false };
     p.symbol = try objmod.create(vm, p.object, .object);
     vm.global_obj = try objmod.create(vm, p.object, .object);
+    vm.global_obj.flags.is_proto = true;
     vm.global_lex = try objmod.create(vm, null, .object);
+    vm.global_lex.flags.is_proto = true;
     var s = vm.object_root;
     s = try shape.transition(vm, s, vm.k.value, shape.PropFlags.all);
     s = try shape.transition(vm, s, vm.k.done, shape.PropFlags.all);
     vm.iter_result_shape = s;
+    var as = vm.object_root;
+    as = try shape.transition(vm, as, vm.k.length, shape.PropFlags.hidden);
+    as = try shape.transition(vm, as, value.PropKey.fromSymbol(vm.sym.iterator), shape.PropFlags.hidden);
+    vm.args_strict_shape = as;
+    vm.args_sloppy_shape = try shape.transition(vm, as, vm.k.callee, shape.PropFlags.hidden);
 
     try b_array_iter.initIterators(vm);
     try b_object.init(vm);

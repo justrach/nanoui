@@ -98,6 +98,8 @@ pub const Marker = struct {
     stack: std.ArrayList(*Cell) = .empty,
     /// Live weak containers discovered during marking.
     weak: std.ArrayList(*Object) = .empty,
+    /// Live function prototypes whose ICs need weak sweeping after marking.
+    protos: std.ArrayList(*bc.FuncProto) = .empty,
 
     pub fn mark(m: *Marker, v: Value) void {
         if (v.heapCell()) |c| m.markCell(c);
@@ -161,7 +163,7 @@ fn trace(m: *Marker, c: *Cell) void {
     }
 }
 
-fn freeCell(vm: *Vm, c: *Cell) void {
+fn freeCell(vm: *Vm, c: *Cell, all: bool) void {
     const gpa = vm.gpa;
     switch (c.kind) {
         .object => {
@@ -171,6 +173,7 @@ fn freeCell(vm: *Vm, c: *Cell) void {
         },
         .string => {
             const s: *JSString = @fieldParentPtr("cell", c);
+            if (!all and s.is_atom) _ = vm.atoms.remove(s.ptr[0..s.byte_len]);
             s.finalize(gpa);
             gpa.destroy(s);
         },
@@ -182,6 +185,7 @@ fn freeCell(vm: *Vm, c: *Cell) void {
         },
         .shape => {
             const s: *Shape = @fieldParentPtr("cell", c);
+            if (!all) s.unlink(vm);
             s.finalize(gpa);
             gpa.destroy(s);
         },
@@ -256,6 +260,7 @@ pub fn collect(vm: *Vm) void {
     var m = Marker{ .vm = vm };
     defer m.stack.deinit(vm.raw_gpa);
     defer m.weak.deinit(vm.raw_gpa);
+    defer m.protos.deinit(vm.raw_gpa);
     vm.markRoots(&m);
     m.drain();
     // Ephemerons: a WeakMap value is live only if its key is; iterate to a fixed point.
@@ -269,19 +274,7 @@ pub fn collect(vm: *Vm) void {
         m.drain();
     }
     for (m.weak.items) |o| objmod.sweepWeak(vm, o);
-    // Weak tables must forget dying entries before any of those cells are freed.
-    var it = vm.heap.head;
-    while (it) |c| : (it = c.next) {
-        if (c.marked) continue;
-        switch (c.kind) {
-            .shape => @as(*Shape, @fieldParentPtr("cell", c)).unlink(vm),
-            .string => {
-                const s: *JSString = @fieldParentPtr("cell", c);
-                if (s.is_atom) _ = vm.atoms.remove(s.ptr[0..s.byte_len]);
-            },
-            else => {},
-        }
-    }
+    for (m.protos.items) |p| p.sweepICs();
     sweep(vm, false);
     vm.counting.limit = vm.heap_limit;
 }
@@ -295,7 +288,7 @@ fn sweep(vm: *Vm, all: bool) void {
         } else {
             link.* = c.next;
             vm.heap.count -= 1;
-            freeCell(vm, c);
+            freeCell(vm, c, all);
         }
     }
 }

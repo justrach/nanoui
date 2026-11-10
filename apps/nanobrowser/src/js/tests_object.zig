@@ -111,3 +111,48 @@ test "Error" {
         .{ .src = "try{throw {a:1}}catch(e){e.a}", .want = "1" },
     });
 }
+
+test "polymorphic IC, 12 inline slots, prebuilt arguments, and bound JIT calls" {
+    try t.expectAll(&.{
+        .{
+            .src =
+            \\class Base { get val() { return this.x; } }
+            \\class C1 extends Base { constructor(x){super();this.a=1;this.x=x;} }
+            \\class C2 extends Base { constructor(x){super();this.b=2;this.x=x;} }
+            \\class C3 extends Base { constructor(x){super();this.c=3;this.x=x;} }
+            \\class C4 extends Base { constructor(x){super();this.d=4;this.x=x;} }
+            \\class C5 extends Base { constructor(x){super();this.e=5;this.x=x;} }
+            \\class C6 extends Base { constructor(x){super();this.f=6;this.x=x;} }
+            \\var arr = [new C1(1), new C2(2), new C3(3), new C4(4), new C5(5), new C6(6)];
+            \\function sumPoly(items) { var s = 0; for (var i = 0; i < items.length; i++) s += items[i].val + items[i].x; return s; }
+            \\var total = 0; for (var k = 0; k < 20; k++) total = sumPoly(arr);
+            \\total
+            ,
+            .want = "42",
+        },
+        .{
+            .src =
+            \\function make12(i) {
+            \\  var o = {};
+            \\  o.p0 = i; o.p1 = 1; o.p2 = 2; o.p3 = 3; o.p4 = 4; o.p5 = 5;
+            \\  o.p6 = 6; o.p7 = 7; o.p8 = 8; o.p9 = 9; o.p10 = 10; o.p11 = 11;
+            \\  return o.p0 + o.p11;
+            \\}
+            \\var s = 0; for (var i = 0; i < 20; i++) s += make12(i);
+            \\s
+            ,
+            .want = "410",
+        },
+        .{
+            .src =
+            \\function add3(a, b, c) { return a + b + c; }
+            \\var b2 = add3.bind(null, 10, 20);
+            \\function forward() { return b2.apply(null, arguments) + arguments.length; }
+            \\var acc = 0; for (var i = 0; i < 20; i++) acc += forward(i);
+            \\acc
+            ,
+            .want = "810",
+        },
+    });
+}
+

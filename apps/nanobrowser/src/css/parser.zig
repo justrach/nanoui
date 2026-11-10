@@ -423,11 +423,16 @@ const P = struct {
 
 pub fn makeDeclarations(arena: Allocator, items: []const Declaration) Allocator.Error!*Declarations {
     const d = try arena.create(Declarations);
-    d.* = .{ .items = try arena.dupe(Declaration, items) };
+    d.* = .{ .items = try arena.dupe(Declaration, items), .phase_mask = 0, .important_phase_mask = 0 };
     for (items) |x| {
         if (x.important) d.has_important = true;
-        if (x.prop == .custom) d.has_custom = true;
+        if (x.prop == .custom) {
+            d.has_custom = true;
+            continue;
+        }
         if (x.prop == .content) d.has_content = true;
+        const bit: u8 = if (x.prop == .all) 0b111 else (@as(u8, 1) << x.phase);
+        if (x.important) d.important_phase_mask |= bit else d.phase_mask |= bit;
     }
     return d;
 }

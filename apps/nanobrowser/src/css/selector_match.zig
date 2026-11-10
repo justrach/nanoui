@@ -101,8 +101,9 @@ pub fn compound(c: *const Compound, el: *Node, ctx: *Ctx) bool {
     return true;
 }
 
-fn tagMatches(want: []const u8, el: *const Node) bool {
-    if (el.ns == .html) return std.mem.eql(u8, want, el.tag);
+inline fn tagMatches(want: []const u8, el: *const Node) bool {
+    if (want.len != el.tag.len) return false;
+    if (el.ns == .html) return want.len == 0 or (want[0] == el.tag[0] and std.mem.eql(u8, want, el.tag));
     return std.ascii.eqlIgnoreCase(want, el.tag);
 }
 

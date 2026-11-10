@@ -74,6 +74,16 @@ pub fn isResourceTag(tag: []const u8) bool {
     };
 }
 
+/// Theorem 52 (`NanoUI.Speedometer3Climb.subtree_has_id_and_insertion_work_propagation_sound`):
+/// Whether an element tag requires post-insertion work in `mutate.inserted` (`script`, `iframe`, `link`, or custom element).
+pub fn isInsertionWorkTag(tag: []const u8) bool {
+    return switch (tag.len) {
+        4 => std.mem.eql(u8, tag, "link"),
+        6 => std.mem.eql(u8, tag, "script") or std.mem.eql(u8, tag, "iframe"),
+        else => std.mem.indexOfScalar(u8, tag, '-') != null,
+    };
+}
+
 /// Theorem 10 (`NanoUI.BrowserPerf.layout_only_flush_sound`):
 /// Whether `flushLayoutOnly` needs to recompute style or box layout for `getBoundingClientRect` / `offsetWidth`.
 pub fn needsLayoutFlush(style_dirty: bool, layout_dirty: bool, has_tree: bool, vw_same: bool, vh_same: bool) bool {
@@ -229,6 +239,13 @@ pub fn syncNodeAttr(n: *dom.Node, name: []const u8, val: ?[]const u8) void {
     }
     if (std.mem.eql(u8, name, "id")) {
         n.id_attr = val;
+        if (val) |v| if (v.len != 0 and !n.has_id) {
+            var at: ?*dom.Node = n;
+            while (at) |x| : (at = x.parent) {
+                if (x.has_id) break;
+                x.has_id = true;
+            }
+        };
     } else if (std.mem.eql(u8, name, "class")) {
         n.class_attr = val;
         if (val) |list| {
@@ -261,6 +278,41 @@ pub inline fn hasNodeClass(n: *const dom.Node, name: []const u8) bool {
     var it = std.mem.tokenizeAny(u8, list, " \t\r\n\x0c");
     while (it.next()) |c| if (std.mem.eql(u8, c, name)) return true;
     return false;
+}
+
+/// Theorem 42 & 52 (`NanoUI.Speedometer3Perf.id_lookup_negative_cache_escalation_sound`,
+/// `NanoUI.Speedometer3Climb.subtree_has_id_and_insertion_work_propagation_sound`):
+/// Subtree-skipping and generation-cached `Document.getElementById`.
+pub fn getElementById(d: *const dom.Document, id: []const u8) ?*dom.Node {
+    if (id.len == 0 or !d.node.has_id) return null;
+    if (d.id_map_gen == d.id_generation) return d.id_map.get(id);
+    const self = @constCast(d);
+    if (d.id_last_gen == d.id_generation) {
+        if (std.mem.eql(u8, d.id_last_key, id)) return d.id_last_node;
+        self.id_map.clearRetainingCapacity();
+        self.id_has_dups = false;
+        var at = d.node.first_child;
+        while (at) |n| : (at = if (n.has_id) n.nextInTree(d.node) else n.nextSkippingChildren(d.node)) {
+            if (n.kind == .element) if (n.id_attr) |v| if (v.len != 0) {
+                const gop = self.id_map.getOrPut(d.arena, v) catch break;
+                if (!gop.found_existing) gop.value_ptr.* = n else self.id_has_dups = true;
+            };
+        }
+        self.id_map_gen = d.id_generation;
+        return d.id_map.get(id);
+    }
+    var found: ?*dom.Node = null;
+    var at = d.node.first_child;
+    while (at) |n| : (at = if (n.has_id) n.nextInTree(d.node) else n.nextSkippingChildren(d.node)) {
+        if (n.kind == .element) if (n.id_attr) |v| if (std.mem.eql(u8, v, id)) {
+            found = n;
+            break;
+        };
+    }
+    self.id_last_gen = d.id_generation;
+    self.id_last_key = if (found) |f| f.id_attr.? else d.arena.dupe(u8, id) catch "";
+    self.id_last_node = found;
+    return found;
 }
 
 test "hover hold is quiescent when element under pointer matches old hover" {

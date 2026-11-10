@@ -125,6 +125,11 @@ pub const Emitter = struct {
         e.emit(0x37000000 | (@as(u32, bit) << 19) | (bits << 5) | rt);
     }
 
+    pub inline fn tbz32(e: *Emitter, rt: u5, bit: u5, offset_words: i14) void {
+        const bits: u32 = @as(u32, @bitCast(@as(i32, offset_words))) & 0x3FFF;
+        e.emit(0x36000000 | (@as(u32, bit) << 19) | (bits << 5) | rt);
+    }
+
     pub inline fn blr(e: *Emitter, rn: u5) void { e.emit(0xD63F0000 | (@as(u32, rn) << 5)); }
     pub inline fn ret(e: *Emitter) void { e.emit(0xD65F03C0); }
 
@@ -300,36 +305,71 @@ pub const Emitter = struct {
     }
 
     pub fn emitPutField(e: *Emitter, ic_off: u32, pc_addr: usize, epilogue_idx: u32, pass: u1) void {
+        e.ldur64(0, 22, -16);
+        e.ldur64(6, 22, -8);
+        e.eorReg64(2, 0, 27);
+        e.lsrImm64(3, 2, 48);
+        const b1 = e.len;
+        e.cbnz64(3, 0);
         if (ic_off < 4096) {
-            e.ldur64(0, 22, -16);
-            e.ldur64(6, 22, -8);
-            e.eorReg64(2, 0, 27);
-            e.lsrImm64(3, 2, 48);
-            const b1 = e.len;
-            e.cbnz64(3, 0);
             e.addImm64(4, 24, @intCast(ic_off));
-            e.ldrImm64(3, 2, @intCast(@offsetOf(Object, "shape") / 8));
-            e.ldrImm64(5, 4, @intCast(@offsetOf(bc.IC, "shape") / 8));
-            e.cmpReg64(3, 5);
-            const b2 = e.len;
-            e.bCond(.ne, 0);
-            e.ldrbImm(5, 4, @intCast(@offsetOf(bc.IC, "fast_own_data")));
-            const b3 = e.len;
-            e.cbz32(5, 0);
-            e.ldrImm32(5, 4, @intCast(@offsetOf(bc.IC, "slot") / 4));
-            e.ldrImm64(3, 2, @intCast(@offsetOf(Object, "slots") / 8));
-            e.strRegScaled64(6, 3, 5);
-            const b_done = e.len;
-            e.bImm(0);
-            const slow_idx = e.len;
-            e.buf[b1] |= (@as(u32, @intCast(slow_idx - b1)) & 0x7FFFF) << 5;
-            e.buf[b2] |= (@as(u32, @intCast(slow_idx - b2)) & 0x7FFFF) << 5;
-            e.buf[b3] |= (@as(u32, @intCast(slow_idx - b3)) & 0x7FFFF) << 5;
-            e.callHelper4(@intFromPtr(&jit.jitPutField), pc_addr, epilogue_idx, pass);
-            e.buf[b_done] |= @as(u32, @intCast(e.len - b_done)) & 0x03FF_FFFF;
         } else {
-            e.callHelper4(@intFromPtr(&jit.jitPutField), pc_addr, epilogue_idx, pass);
+            e.movImm64(4, ic_off);
+            e.addReg64(4, 24, 4);
         }
+        e.ldrImm64(3, 2, @intCast(@offsetOf(Object, "shape") / 8));
+        e.ldrImm64(5, 4, @intCast(@offsetOf(bc.IC, "shape") / 8));
+        e.cmpReg64(3, 5);
+        const b2 = e.len;
+        e.bCond(.ne, 0);
+        e.ldrbImm(5, 4, @intCast(@offsetOf(bc.IC, "fast_own_data")));
+        const b_trans = e.len;
+        e.cbz32(5, 0);
+        e.ldrImm32(5, 4, @intCast(@offsetOf(bc.IC, "slot") / 4));
+        e.ldrImm64(3, 2, @intCast(@offsetOf(Object, "slots") / 8));
+        e.strRegScaled64(6, 3, 5);
+        const b_done1 = e.len;
+        e.bImm(0);
+
+        const trans_idx = e.len;
+        e.buf[b_trans] |= (@as(u32, @intCast(trans_idx - b_trans)) & 0x7FFFF) << 5;
+        e.ldrbImm(5, 4, @intCast(@offsetOf(bc.IC, "is_transition")));
+        const b_t1 = e.len;
+        e.cbz32(5, 0);
+        e.ldrImm32(5, 4, @intCast(@offsetOf(bc.IC, "epoch") / 4));
+        e.ldrImm32(3, 19, @intCast(@offsetOf(Vm, "proto_epoch") / 4));
+        e.cmpReg32(5, 3);
+        const b_t2 = e.len;
+        e.bCond(.ne, 0);
+        e.ldrImm32(5, 4, @intCast(@offsetOf(bc.IC, "slot") / 4));
+        e.ldrImm32(3, 2, @intCast(@offsetOf(Object, "slot_cap") / 4));
+        e.cmpReg32(5, 3);
+        const b_t3 = e.len;
+        e.bCond(.hs, 0);
+        e.ldrbImm(3, 2, @intCast(@offsetOf(Object, "flags")));
+        const b_t4 = e.len;
+        e.tbz32(3, @bitOffsetOf(objmod.Flags, "extensible"), 0);
+        e.ldrbImm(3, 2, @intCast(@offsetOf(Object, "flags") + 1));
+        const b_t5 = e.len;
+        e.tbnz32(3, @bitOffsetOf(objmod.Flags, "is_proto") - 8, 0);
+        e.ldrImm64(3, 4, @intCast(@offsetOf(bc.IC, "holder_shape") / 8));
+        e.strImm64(3, 2, @intCast(@offsetOf(Object, "shape") / 8));
+        e.ldrImm64(3, 2, @intCast(@offsetOf(Object, "slots") / 8));
+        e.strRegScaled64(6, 3, 5);
+        const b_done2 = e.len;
+        e.bImm(0);
+
+        const slow_idx = e.len;
+        e.buf[b1] |= (@as(u32, @intCast(slow_idx - b1)) & 0x7FFFF) << 5;
+        e.buf[b2] |= (@as(u32, @intCast(slow_idx - b2)) & 0x7FFFF) << 5;
+        e.buf[b_t1] |= (@as(u32, @intCast(slow_idx - b_t1)) & 0x7FFFF) << 5;
+        e.buf[b_t2] |= (@as(u32, @intCast(slow_idx - b_t2)) & 0x7FFFF) << 5;
+        e.buf[b_t3] |= (@as(u32, @intCast(slow_idx - b_t3)) & 0x7FFFF) << 5;
+        e.buf[b_t4] |= (@as(u32, @intCast(slow_idx - b_t4)) & 0x3FFF) << 5;
+        e.buf[b_t5] |= (@as(u32, @intCast(slow_idx - b_t5)) & 0x3FFF) << 5;
+        e.callHelper4(@intFromPtr(&jit.jitPutField), pc_addr, epilogue_idx, pass);
+        e.buf[b_done1] |= @as(u32, @intCast(e.len - b_done1)) & 0x03FF_FFFF;
+        e.buf[b_done2] |= @as(u32, @intCast(e.len - b_done2)) & 0x03FF_FFFF;
         e.ldur64(0, 22, -8);
         e.stur64(0, 22, -16);
         e.subImm64(22, 22, 8);

@@ -80,7 +80,7 @@ pub fn pushClosure(vm: *Vm, callee: *Object, args: [*]Value, argc: u32, ret_sp: 
     return f;
 }
 
-fn callNative(vm: *Vm, o: *Object, this: Value, args: []const Value) Error!Value {
+pub inline fn callNative(vm: *Vm, o: *Object, this: Value, args: []const Value) Error!Value {
     const saved_nt = vm.new_target;
     const saved_callee = vm.callee;
     vm.new_target = Value.undefined;

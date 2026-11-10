@@ -271,22 +271,23 @@ const Run = struct {
         for (m[ua_end..]) |x| try r.applyList(x.decls, ph, false);
         if (r.inline_d) |d| try r.applyList(d, ph, false);
         // `!important`: author rules with the layer order turned over.
+        const bit = @as(u8, 1) << ph;
         var any = false;
-        for (m) |x| if (x.decls.has_important) {
+        for (m) |x| if ((x.decls.important_phase_mask & bit) != 0) {
             any = true;
             break;
         };
-        if (r.inline_d) |d| if (d.has_important) {
+        if (r.inline_d) |d| if ((d.important_phase_mask & bit) != 0) {
             any = true;
         };
         if (!any) return;
         var layer_order: std.ArrayList(Entry) = .empty;
         defer layer_order.deinit(r.e.gpa);
-        for (m[ua_end..]) |x| if (x.decls.has_important) try layer_order.append(r.e.gpa, x);
+        for (m[ua_end..]) |x| if ((x.decls.important_phase_mask & bit) != 0) try layer_order.append(r.e.gpa, x);
         std.mem.sort(Entry, layer_order.items, {}, importantLess);
         for (layer_order.items) |x| try r.applyList(x.decls, ph, true);
         if (r.inline_d) |d| try r.applyList(d, ph, true);
-        for (m[0..ua_end]) |x| if (x.decls.has_important) try r.applyList(x.decls, ph, true);
+        for (m[0..ua_end]) |x| if ((x.decls.important_phase_mask & bit) != 0) try r.applyList(x.decls, ph, true);
     }
 
     fn importantLess(_: void, a: Entry, b: Entry) bool {
@@ -295,7 +296,8 @@ const Run = struct {
     }
 
     fn applyList(r: *Run, d: *const Declarations, ph: u2, important: bool) Allocator.Error!void {
-        if (important and !d.has_important) return;
+        const mask = if (important) d.important_phase_mask else d.phase_mask;
+        if ((mask & (@as(u8, 1) << ph)) == 0) return;
         for (d.items) |*x| {
             if (x.important != important) continue;
             if (x.prop == .custom) continue;

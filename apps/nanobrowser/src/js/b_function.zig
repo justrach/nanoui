@@ -44,17 +44,19 @@ pub fn fnApply(vm: *Vm, this: Value, args: []const Value) Error!Value {
     if (!arr_val.isObject()) return vm.throwError(.TypeError, "CreateListFromArrayLike called on non-object");
     const o = arr_val.asObject();
     var stack_buf: [32]Value = undefined;
-    if (!o.flags.exotic and o.class == .array and !o.flags.has_sparse and o.elems_len == o.arr_len and o.arr_len <= stack_buf.len) {
+    const is_fast_args = o.class == .arguments and (o.shape == vm.args_strict_shape or o.shape == vm.args_sloppy_shape) and o.slots[0].bits == Value.fromUsize(o.elems_len).bits;
+    if (!o.flags.exotic and !o.flags.has_sparse and ((o.class == .array and o.elems_len == o.arr_len) or is_fast_args) and o.elems_len <= stack_buf.len) {
+        const len = o.elems_len;
         var has_hole = false;
-        for (o.elems[0..o.arr_len]) |el| {
+        for (o.elems[0..len]) |el| {
             if (el.isHole()) {
                 has_hole = true;
                 break;
             }
         }
         if (!has_hole) {
-            @memcpy(stack_buf[0..o.arr_len], o.elems[0..o.arr_len]);
-            return calls.call(vm, this, this_arg, stack_buf[0..o.arr_len]);
+            @memcpy(stack_buf[0..len], o.elems[0..len]);
+            return calls.call(vm, this, this_arg, stack_buf[0..len]);
         }
     }
     const n = try conv.lengthOf(vm, o);

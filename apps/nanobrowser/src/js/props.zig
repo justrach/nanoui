@@ -35,6 +35,12 @@ const max_dense_gap = 1024;
 pub inline fn callGetter(vm: *Vm, slot: Value, receiver: Value) Error!Value {
     const a: *heap.Accessor = @fieldParentPtr("cell", slot.asCell());
     if (a.get.isUndefined()) return Value.undefined;
+    if (a.get.isObject()) {
+        const go = a.get.asObject();
+        if (go.class == .native and !go.flags.host_class) {
+            return interp.callNative(vm, go, receiver, &.{});
+        }
+    }
     return interp.call(vm, a.get, receiver, &.{});
 }
 
@@ -238,7 +244,7 @@ fn setFound(vm: *Vm, o: *Object, s: u32, key: PropKey, val: Value, receiver: Val
     }
     if (!f.writable) return false;
     if (own) {
-        if (o.flags.is_proto) {
+        if (o.flags.is_proto and key.isIndex()) {
             o.flags.proto_dirty = true;
             vm.bumpProtoEpoch();
         }

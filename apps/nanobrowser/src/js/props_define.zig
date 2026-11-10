@@ -87,6 +87,10 @@ fn sparsify(vm: *Vm, o: *Object) Error!void {
     };
     o.elems_len = 0;
     o.flags.has_sparse = true;
+    if (o.flags.is_proto) {
+        o.flags.proto_dirty = true;
+        vm.bumpProtoEpoch();
+    }
     if (!o.shape.is_dict) o.shape = try shape_mod.toDict(vm, o.shape, o.shape.proto);
     var i: u32 = 0;
     while (i < n) : (i += 1) {

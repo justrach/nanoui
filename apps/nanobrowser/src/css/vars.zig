@@ -21,6 +21,7 @@ pub const Entry = struct {
 pub const Scope = struct {
     parent: ?*const Scope = null,
     entries: []const Entry = &.{},
+    index: []const u16 = &.{},
     /// Those of `entries` declared here for properties that don't inherit
     /// (`@property`): what this scope's children have to put back.
     local: []const Entry = &.{},
@@ -30,8 +31,20 @@ pub const Scope = struct {
     pub fn get(s: *const Scope, name: []const u8, hash: u32) ?[]const Token {
         var at: ?*const Scope = s;
         while (at) |x| : (at = x.parent) {
-            for (x.entries) |*e| {
-                if (e.hash == hash and std.mem.eql(u8, e.name, name)) return e.value;
+            if (x.index.len > 0) {
+                const mask: u32 = @intCast(x.index.len - 1);
+                var slot = hash & mask;
+                while (true) {
+                    const raw = x.index[slot];
+                    if (raw == 0) break;
+                    const e = &x.entries[raw - 1];
+                    if (e.hash == hash and std.mem.eql(u8, e.name, name)) return e.value;
+                    slot = (slot + 1) & mask;
+                }
+            } else {
+                for (x.entries) |*e| {
+                    if (e.hash == hash and std.mem.eql(u8, e.name, name)) return e.value;
+                }
             }
         }
         return null;
@@ -113,8 +126,20 @@ pub const Builder = struct {
             e.* = .{ .hash = p.hash, .name = p.name, .value = p.value };
             if (p.declared) if (registered.get(p.name)) |r| if (!r.inherits) try local.append(arena, e.*);
         }
+        var index: []u16 = &.{};
+        if (entries.len > 8 and entries.len <= 32767) {
+            const cap = std.math.ceilPowerOfTwoAssert(usize, entries.len * 2);
+            index = try arena.alloc(u16, cap);
+            @memset(index, 0);
+            const mask = cap - 1;
+            for (entries, 0..) |*e, idx| {
+                var slot = @as(usize, e.hash) & mask;
+                while (index[slot] != 0) slot = (slot + 1) & mask;
+                index[slot] = @intCast(idx + 1);
+            }
+        }
         const s = try arena.create(Scope);
-        s.* = .{ .parent = parent, .entries = entries, .local = local.items };
+        s.* = .{ .parent = parent, .entries = entries, .index = index, .local = local.items };
         return s;
     }
 
@@ -165,7 +190,12 @@ pub fn substitute(arena: Allocator, value: []const Token, scope: ?*const Scope) 
     return substituteWith(arena, value, &look);
 }
 
+/// Theorem 53 (`NanoUI.Speedometer3Climb.decl_phase_mask_and_zero_alloc_single_var_subst_equiv`):
+/// Zero-allocation fast path for single `var(--name)` token sequences.
 fn substituteWith(arena: Allocator, value: []const Token, look: *const Lookup) Allocator.Error!?[]const Token {
+    if (value.len == 3 and value[0].isFunction("var") and value[1].kind == .ident and value[2].kind == .rparen) {
+        return try look.get(value[1].text);
+    }
     var out: std.ArrayList(Token) = .empty;
     try out.ensureTotalCapacity(arena, value.len + 4);
     if (!try walk(arena, value, look, &out, 0)) return null;

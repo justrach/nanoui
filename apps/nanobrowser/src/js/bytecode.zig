@@ -202,6 +202,8 @@ pub const Op = enum(u8) {
 
 pub const IC = struct {
     pub const missing_slot: u32 = std.math.maxInt(u32);
+    pub const proto_poly_cap = 8;
+    pub const own_poly_cap = 4;
 
     key: PropKey,
     shape: ?*Shape = null,
@@ -213,6 +215,11 @@ pub const IC = struct {
     is_transition: bool = false,
     fast_own_data: bool = false,
     fast_proto_data: bool = false,
+    proto_idx: u8 = 0,
+    own_idx: u8 = 0,
+    own_slots: [own_poly_cap]u32 = @splat(0),
+    own_shapes: [own_poly_cap]?*Shape = @splat(null),
+    proto_shapes: [proto_poly_cap]?*Shape = @splat(null),
 };
 
 pub const LineEntry = struct { pc: u32, pos: u32 };
@@ -295,20 +302,44 @@ pub const FuncProto = struct {
     pub fn trace(p: *FuncProto, m: *heap.Marker) void {
         m.markValues(p.constants);
         for (p.protos) |c| m.markCell(&c.cell);
-        for (p.ics) |*ic| {
-            m.markKey(ic.key);
-            // Caches are weak; a collection simply starts them cold.
-            ic.shape = null;
-            ic.holder = null;
-            ic.holder_shape = null;
-            ic.epoch = 0;
-            ic.is_accessor = false;
-            ic.is_transition = false;
-            ic.fast_own_data = false;
-        }
+        for (p.ics) |*ic| m.markKey(ic.key);
+        if (p.ics.len != 0) m.protos.append(m.vm.raw_gpa, p) catch @panic("gc: out of memory");
         m.markStr(p.name);
         m.markCell(&p.source.cell);
         if (p.module) |mo| m.markCell(&mo.cell);
+    }
+
+    /// Theorem 51 (`NanoUI.Speedometer3Climb.single_pass_gc_sweep_and_warm_ic_sound`):
+    /// Preserves warm inline caches across GC when their referenced cells remain live.
+    pub fn sweepICs(p: *FuncProto) void {
+        for (p.ics) |*ic| {
+            const dead = (if (ic.shape) |s| !s.cell.marked else false) or
+                (if (ic.holder) |h| !h.cell.marked else false) or
+                (if (ic.holder_shape) |hs| !hs.cell.marked else false);
+            if (dead) {
+                ic.shape = null;
+                ic.holder = null;
+                ic.holder_shape = null;
+                ic.epoch = 0;
+                ic.is_accessor = false;
+                ic.is_transition = false;
+                ic.fast_own_data = false;
+                ic.fast_proto_data = false;
+                ic.proto_idx = 0;
+                ic.proto_shapes = @splat(null);
+            } else {
+                for (&ic.proto_shapes) |*ps| {
+                    if (ps.*) |s| if (!s.cell.marked) {
+                        ps.* = null;
+                    };
+                }
+            }
+            for (&ic.own_shapes) |*os| {
+                if (os.*) |s| if (!s.cell.marked) {
+                    os.* = null;
+                };
+            }
+        }
     }
 
     pub fn finalize(p: *FuncProto, gpa: Allocator) void {

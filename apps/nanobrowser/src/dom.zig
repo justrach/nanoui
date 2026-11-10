@@ -82,6 +82,8 @@ pub const Node = struct {
     modal: bool = false,
     /// Upward-closed summary: this element or a descendant is a resource/sheet tag.
     has_resource: bool = false,
+    has_id: bool = false,
+    has_insertion_work: bool = false,
     has_on_attr: bool = false,
     /// Queued in `Document.dirty_nodes` for the next `flushStyle` pass.
     style_queued: bool = false,
@@ -109,16 +111,15 @@ pub const Node = struct {
         return n.kind == .element;
     }
 
-    pub fn isTag(n: *const Node, tag: []const u8) bool {
-        return n.kind == .element and std.mem.eql(u8, n.tag, tag);
+    pub inline fn isTag(n: *const Node, tag: []const u8) bool {
+        return n.kind == .element and n.tag.len == tag.len and (n.tag.len == 0 or (n.tag[0] == tag[0] and std.mem.eql(u8, n.tag, tag)));
     }
 
-    pub fn attr(n: *const Node, name: []const u8) ?[]const u8 {
-        if (n.attrs.items.len == 0) return null;
-        if (std.mem.eql(u8, name, "id")) return n.id_attr;
-        if (std.mem.eql(u8, name, "class")) return n.class_attr;
+    pub inline fn attr(n: *const Node, name: []const u8) ?[]const u8 {
         if ((n.attr_filter & perf.attrBit(name)) == 0) return null;
-        for (n.attrs.items) |a| if (std.mem.eql(u8, a.name, name)) return a.value;
+        if (name.len == 2 and name[0] == 'i' and name[1] == 'd') return n.id_attr;
+        if (name.len == 5 and name[0] == 'c' and std.mem.eql(u8, name, "class")) return n.class_attr;
+        for (n.attrs.items) |a| if (a.name.len == name.len and (name.len == 0 or (a.name[0] == name[0] and std.mem.eql(u8, a.name, name)))) return a.value;
         return null;
     }
 
@@ -219,7 +220,21 @@ pub const Node = struct {
             while (at) |x| : (at = x.parent) x.has_resource = true;
             n.doc.scan_dirty = true;
         }
-        n.doc.touchTree(n);
+        if (child.has_id and !n.has_id) {
+            var at: ?*Node = n;
+            while (at) |x| : (at = x.parent) {
+                if (x.has_id) break;
+                x.has_id = true;
+            }
+        }
+        if (child.has_insertion_work and !n.has_insertion_work) {
+            var at: ?*Node = n;
+            while (at) |x| : (at = x.parent) {
+                if (x.has_insertion_work) break;
+                x.has_insertion_work = true;
+            }
+        }
+        n.doc.touchTree(n, child.has_id);
     }
 
     pub fn appendChild(n: *Node, child: *Node) void {
@@ -235,7 +250,7 @@ pub const Node = struct {
         n.prev = null;
         n.next = null;
         if (n.has_resource or p.isTag("style")) n.doc.scan_dirty = true;
-        n.doc.touchTree(p);
+        n.doc.touchTree(p, n.has_id);
     }
 
     pub fn removeChildren(n: *Node) void {
@@ -243,16 +258,18 @@ pub const Node = struct {
         n.first_child = null;
         n.last_child = null;
         var scan = n.isTag("style");
+        var had_id = false;
         while (true) {
             const next = c.next;
             if (c.has_resource) scan = true;
+            if (c.has_id) had_id = true;
             c.parent = null;
             c.prev = null;
             c.next = null;
             c = next orelse break;
         }
         if (scan) n.doc.scan_dirty = true;
-        n.doc.touchTree(n);
+        n.doc.touchTree(n, had_id);
     }
 
     /// The next node in document order; stays inside `root`.
@@ -304,7 +321,7 @@ pub const Node = struct {
         root.shadow_declarative = declarative;
         root.parent = n;
         n.shadow_root = root;
-        n.doc.touchTree(n);
+        n.doc.touchTree(n, false);
         return root;
     }
 
@@ -433,10 +450,10 @@ pub const Document = struct {
     }
 
     /// `n`'s children changed.
-    fn touchTree(d: *Document, n: *Node) void {
+    fn touchTree(d: *Document, n: *Node, id_changed: bool) void {
         d.generation +%= 1;
-        d.id_generation +%= 1;
         if (!d.inDocument(n)) return;
+        if (id_changed) d.id_generation +%= 1;
         const disp_contents = n.computed != null and n.computed.?.display == .contents;
         if (!perf.isSvgInterior(n.ns == .svg, false, disp_contents)) {
             d.layout_dirty = true;
@@ -481,7 +498,7 @@ pub const Document = struct {
         const n = try d.arena.create(Node);
         const name = try d.arena.dupe(u8, tag);
         if (ns == .html) _ = std.ascii.lowerString(name, name);
-        n.* = .{ .kind = .element, .doc = d, .tag = name, .ns = ns, .has_resource = perf.isResourceTag(name) };
+        n.* = .{ .kind = .element, .doc = d, .tag = name, .ns = ns, .has_resource = perf.isResourceTag(name), .has_insertion_work = perf.isInsertionWorkTag(name) };
         return n;
     }
 
@@ -523,35 +540,7 @@ pub const Document = struct {
     }
 
     pub fn getElementById(d: *const Document, id: []const u8) ?*Node {
-        if (id.len == 0) return null;
-        if (d.id_map_gen == d.id_generation) return d.id_map.get(id);
-        const self = @constCast(d);
-        if (d.id_last_gen == d.id_generation) {
-            if (std.mem.eql(u8, d.id_last_key, id)) return d.id_last_node;
-            self.id_map.clearRetainingCapacity();
-            self.id_has_dups = false;
-            var at = d.node.first_child;
-            while (at) |n| : (at = n.nextInTree(d.node)) {
-                if (n.kind == .element) if (n.attr("id")) |v| if (v.len != 0) {
-                    const gop = self.id_map.getOrPut(d.arena, v) catch break;
-                    if (!gop.found_existing) gop.value_ptr.* = n else self.id_has_dups = true;
-                };
-            }
-            self.id_map_gen = d.id_generation;
-            return d.id_map.get(id);
-        }
-        var found: ?*Node = null;
-        var at = d.node.first_child;
-        while (at) |n| : (at = n.nextInTree(d.node)) {
-            if (n.kind == .element) if (n.attr("id")) |v| if (std.mem.eql(u8, v, id)) {
-                found = n;
-                break;
-            };
-        }
-        self.id_last_gen = d.id_generation;
-        self.id_last_key = if (found) |f| f.id_attr.? else d.arena.dupe(u8, id) catch "";
-        self.id_last_node = found;
-        return found;
+        return perf.getElementById(d, id);
     }
 
     /// The first `<title>`'s text, whitespace collapsed by the caller.

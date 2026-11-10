@@ -31,6 +31,8 @@ pub const Declaration = struct {
 
 pub const Declarations = struct {
     items: []const Declaration = &.{},
+    phase_mask: u8 = 0b111,
+    important_phase_mask: u8 = 0,
     has_important: bool = false,
     has_custom: bool = false,
     has_content: bool = false,

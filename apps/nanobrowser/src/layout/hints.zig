@@ -47,23 +47,23 @@ fn valignOf(raw: []const u8) ?css.VerticalAlign {
 
 /// The style the element lays out with: `s` itself unless an attribute adds to
 /// it. The cascade applies most of these too, in which case nothing changes here.
-pub fn apply(c: *Ctx, n: *dom.Node, s: *const Style) Error!*const Style {
+pub fn apply(c: *Ctx, n: *dom.Node, s: *const Style, htag: gen.HtmlTag) Error!*const Style {
     if (n.ns != .html) return s;
     var out = s.*;
     var changed = false;
-    if (n.isTag("td") or n.isTag("th")) {
-        changed = cellHints(n, &out);
-    } else if (n.attrs.items.len == 0) {
-        return s;
-    } else if (n.isTag("table")) {
-        changed = tableHints(n, &out);
-    } else if (n.isTag("tr")) {
-        if (s.height.kind == .auto) if (dimLen(n, "height")) |h| {
+    switch (htag) {
+        .cell => changed = cellHints(n, &out),
+        .table => if (n.attrs.items.len > 0) {
+            changed = tableHints(n, &out);
+        },
+        .tr => if (n.attrs.items.len > 0 and s.height.kind == .auto) if (dimLen(n, "height")) |h| {
             out.height = h;
             changed = true;
-        };
-    } else if (n.isTag("img")) {
-        changed = imageHints(n, &out);
+        },
+        .img => if (n.attrs.items.len > 0) {
+            changed = imageHints(n, &out);
+        },
+        else => return s,
     }
     if (!changed) return s;
     const copy = try c.arena.create(Style);
@@ -171,37 +171,41 @@ fn defaultPadding(s: *const Style) bool {
 }
 
 /// What the attributes pass on to what is inside, and a list's counter.
-pub fn descend(g: *gen.Gen, n: *dom.Node) void {
+pub fn descend(g: *gen.Gen, n: *dom.Node, htag: gen.HtmlTag) void {
     if (n.ns != .html) return;
-    if (n.isTag("table")) {
+    if (htag == .table) {
         g.text_align = null;
         g.nowrap = false;
-    } else if (n.isTag("center")) {
+        return;
+    }
+    if (htag == .center) {
         g.text_align = .center;
-    } else if (n.attr("align")) |a| {
-        if (!n.isTag("img") and !n.isTag("input") and !n.isTag("caption")) {
+    } else if (n.attrs.items.len > 0 and htag != .img and htag != .input) {
+        if (n.attr("align")) |a| if (!n.isTag("caption")) {
             if (std.ascii.eqlIgnoreCase(a, "center") or std.ascii.eqlIgnoreCase(a, "middle")) g.text_align = .center;
             if (std.ascii.eqlIgnoreCase(a, "right")) g.text_align = .right;
             if (std.ascii.eqlIgnoreCase(a, "left")) g.text_align = .left;
             if (std.ascii.eqlIgnoreCase(a, "justify")) g.text_align = .justify;
-        }
+        };
     }
-    if ((n.isTag("td") or n.isTag("th")) and n.hasAttr("nowrap")) g.nowrap = true;
-    if (n.isTag("ol") or n.isTag("ul") or n.isTag("menu") or n.isTag("dir")) {
+    if (htag == .cell and n.hasAttr("nowrap")) g.nowrap = true;
+    if (htag == .list) {
         g.counter_step = 1;
         g.counter = 1;
-        const reversed = n.hasAttr("reversed");
-        if (reversed) {
-            g.counter_step = -1;
-            var count: i64 = 0;
-            var k = n.first_child;
-            while (k) |x| : (k = x.next) {
-                if (x.isTag("li")) count += 1;
+        if (n.attrs.items.len > 0) {
+            const reversed = n.hasAttr("reversed");
+            if (reversed) {
+                g.counter_step = -1;
+                var count: i64 = 0;
+                var k = n.first_child;
+                while (k) |x| : (k = x.next) {
+                    if (x.isTag("li")) count += 1;
+                }
+                g.counter = count;
             }
-            g.counter = count;
-        }
-        if (n.attr("start")) |v| {
-            g.counter = std.fmt.parseInt(i64, std.mem.trim(u8, v, " \t\r\n"), 10) catch g.counter;
+            if (n.attr("start")) |v| {
+                g.counter = std.fmt.parseInt(i64, std.mem.trim(u8, v, " \t\r\n"), 10) catch g.counter;
+            }
         }
     }
 }

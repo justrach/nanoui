@@ -209,6 +209,8 @@ pub const Vm = struct {
     array_root: *Shape = undefined,
     fn_root: *Shape = undefined,
     iter_result_shape: *Shape = undefined,
+    args_strict_shape: *Shape = undefined,
+    args_sloppy_shape: *Shape = undefined,
     function_has_instance: *Object = undefined,
     intl_protos: [6]*Object = undefined,
     regex_cache: std.StringHashMapUnmanaged(*regexp_compile.Program) = .empty,
@@ -365,6 +367,8 @@ pub const Vm = struct {
         for (vm.intl_protos) |o| m.markObj(o);
         for (vm.pending_rejections.items) |o| m.markObj(o);
         m.markCell(&vm.iter_result_shape.cell);
+        m.markCell(&vm.args_strict_shape.cell);
+        m.markCell(&vm.args_sloppy_shape.cell);
         var it = vm.symbol_registry.valueIterator();
         while (it.next()) |s| m.markCell(&s.*.cell);
         var pi = vm.protected.keyIterator();

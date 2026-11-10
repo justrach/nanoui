@@ -176,7 +176,7 @@ pub fn run(vm: *Vm) Error!Value {
                 .get_global => {
                     const ic = &f.fp.ics[u32At(pc + 1)];
                     var v = Value.hole;
-                    if (ic.shape == vm.global_lex.shape and ic.holder_shape == vm.global_obj.shape and ic.holder != null) {
+                    if (ic.shape == vm.global_lex.shape and ic.holder_shape == vm.global_obj.shape and ic.holder != null and ic.epoch == vm.proto_epoch) {
                         v = ic.holder.?.slots[ic.slot];
                     }
                     if (v.isHole()) {
@@ -190,7 +190,7 @@ pub fn run(vm: *Vm) Error!Value {
                 },
                 .put_global => {
                     const ic = &f.fp.ics[u32At(pc + 1)];
-                    if (ic.shape == vm.global_lex.shape and ic.holder_shape == vm.global_obj.shape and ic.holder != null and !ic.holder.?.slots[ic.slot].isHole()) {
+                    if (ic.shape == vm.global_lex.shape and ic.holder_shape == vm.global_obj.shape and ic.holder != null and ic.epoch == vm.proto_epoch and !ic.holder.?.slots[ic.slot].isHole()) {
                         ic.holder.?.slots[ic.slot] = (sp - 1)[0];
                     } else {
                         sync(vm, f, pc, sp);

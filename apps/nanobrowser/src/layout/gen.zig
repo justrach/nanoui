@@ -109,32 +109,58 @@ fn kindFor(s: *const Style) box.Kind {
     };
 }
 
-fn isReplacedTag(n: *const dom.Node) bool {
-    if (n.ns == .svg) return n.isTag("svg");
-    if (n.ns != .html) return false;
-    for ([_][]const u8{ "img", "canvas", "video", "iframe", "object", "embed" }) |t| {
-        if (n.isTag(t)) return true;
-    }
-    return false;
-}
+pub const HtmlTag = enum {
+    other,
+    br,
+    wbr,
+    input,
+    button,
+    control,
+    img,
+    replaced,
+    list,
+    table,
+    tr,
+    cell,
+    center,
+    details,
+    slot,
+};
+
+const html_tags = std.StaticStringMap(HtmlTag).initComptime(.{
+    .{ "br", .br },
+    .{ "wbr", .wbr },
+    .{ "input", .input },
+    .{ "button", .button },
+    .{ "select", .control },
+    .{ "textarea", .control },
+    .{ "progress", .control },
+    .{ "meter", .control },
+    .{ "img", .img },
+    .{ "canvas", .replaced },
+    .{ "video", .replaced },
+    .{ "iframe", .replaced },
+    .{ "object", .replaced },
+    .{ "embed", .replaced },
+    .{ "ol", .list },
+    .{ "ul", .list },
+    .{ "menu", .list },
+    .{ "dir", .list },
+    .{ "table", .table },
+    .{ "tr", .tr },
+    .{ "td", .cell },
+    .{ "th", .cell },
+    .{ "center", .center },
+    .{ "details", .details },
+    .{ "slot", .slot },
+});
 
 fn inputType(n: *const dom.Node) []const u8 {
     return n.attr("type") orelse "text";
 }
 
-fn isButtonInput(n: *const dom.Node) bool {
-    if (!n.isTag("input")) return false;
-    const t = inputType(n);
+fn isButtonInputType(t: []const u8) bool {
     return std.ascii.eqlIgnoreCase(t, "submit") or std.ascii.eqlIgnoreCase(t, "button") or std.ascii.eqlIgnoreCase(t, "reset");
-}
-
-fn isControlTag(n: *const dom.Node) bool {
-    if (n.ns != .html) return false;
-    if (isButtonInput(n)) return false;
-    for ([_][]const u8{ "input", "select", "textarea", "progress", "meter" }) |t| {
-        if (n.isTag(t)) return true;
-    }
-    return false;
 }
 
 /// An atom must not be an inline box whatever the sheet says.
@@ -160,10 +186,14 @@ fn element(g: *Gen, n: *dom.Node) Error!void {
         if (g.in_top != n) return;
         s0 = g.top_style.?;
     }
-    if (n.ns == .html) {
-        if (n.isTag("br")) return push(g, .{ .tag = .br, .style = s0 });
-        if (n.isTag("wbr")) return push(g, .{ .tag = .wbr });
-        if (n.isTag("input") and std.ascii.eqlIgnoreCase(inputType(n), "hidden")) return;
+    const htag: HtmlTag = if (n.ns == .html) (html_tags.get(n.tag) orelse .other) else .other;
+    var is_btn_input = false;
+    if (htag == .br) return push(g, .{ .tag = .br, .style = s0 });
+    if (htag == .wbr) return push(g, .{ .tag = .wbr });
+    if (htag == .input) {
+        const it = inputType(n);
+        if (std.ascii.eqlIgnoreCase(it, "hidden")) return;
+        is_btn_input = isButtonInputType(it);
     }
     if (s0.display == .table_column or s0.display == .table_column_group) return;
     g.depth += 1;
@@ -172,13 +202,13 @@ fn element(g: *Gen, n: *dom.Node) Error!void {
     defer g.counters.leave(g.depth);
     if (s0.display == .contents) {
         try pseudo(g, n, n.before);
-        try children(g, n, s0);
+        try children(g, n, s0, htag);
         try pseudo(g, n, n.after);
         return;
     }
     const saved_align = g.text_align;
     const saved_nowrap = g.nowrap;
-    const is_list = n.isTag("ol") or n.isTag("ul") or n.isTag("menu") or n.isTag("dir");
+    const is_list = (htag == .list);
     const saved_counter = g.counter;
     const saved_step = g.counter_step;
     defer {
@@ -189,21 +219,22 @@ fn element(g: *Gen, n: *dom.Node) Error!void {
             g.counter_step = saved_step;
         }
     }
-    const s = try hints.apply(g.c, n, s0);
-    hints.descend(g, n);
+    const s = try hints.apply(g.c, n, s0, htag);
+    hints.descend(g, n, htag);
 
-    if (isReplacedTag(n)) {
-        if (brokenAlt(g.c, n)) |alt| return altBox(g, n, s, alt);
+    const is_replaced = if (n.ns == .svg) n.isTag("svg") else (htag == .img or htag == .replaced);
+    if (is_replaced) {
+        if (htag == .img) if (brokenAlt(g.c, n)) |alt| return altBox(g, n, s, alt);
         const b = try newBox(g.c, .replaced, n, try atomStyle(g.c, s));
         n.box = b;
         return push(g, .{ .tag = .box, .box = b, .style = b.style });
     }
-    if (isControlTag(n)) {
+    if (htag == .control or (htag == .input and !is_btn_input)) {
         const b = try newBox(g.c, .control, n, try atomStyle(g.c, s));
         n.box = b;
         return push(g, .{ .tag = .box, .box = b, .style = b.style });
     }
-    const is_button = n.ns == .html and (n.isTag("button") or isButtonInput(n));
+    const is_button = (htag == .button or is_btn_input);
     const st = if (is_button) try atomStyle(g.c, s) else s;
     const b = try newBox(g.c, kindFor(st), n, st);
     n.box = b;
@@ -220,10 +251,10 @@ fn element(g: *Gen, n: *dom.Node) Error!void {
     const base = g.stack.items.len;
     if (st.display == .list_item) try marker(g, b, n, st);
     try pseudo(g, n, n.before);
-    if (isButtonInput(n)) {
+    if (is_btn_input) {
         const v = n.value orelse n.attr("value") orelse buttonDefault(n);
         if (v.len > 0) try push(g, .{ .tag = .generated, .text = v, .style = st });
-    } else try children(g, n, st);
+    } else try children(g, n, st, htag);
     try pseudo(g, n, n.after);
     try finish(g, b, base);
 }
@@ -300,11 +331,11 @@ fn marker(g: *Gen, b: *Box, n: *dom.Node, s: *const Style) Error!void {
     b.lay.marker_text = text_str orelse "";
 }
 
-fn children(g: *Gen, n: *dom.Node, s: *const Style) Error!void {
+fn children(g: *Gen, n: *dom.Node, s: *const Style, htag: HtmlTag) Error!void {
     // A shadow host renders its shadow tree; its own children go by its slots.
     if (n.shadow_root) |root| return element(g, root);
-    if (n.ns == .html and n.isTag("details") and !n.hasAttr("open")) return closedDetails(g, n, s);
-    if (!n.is_shadow and n.isTag("slot")) if (shadowHostOf(n)) |host| {
+    if (htag == .details and !n.hasAttr("open")) return closedDetails(g, n, s);
+    if (!n.is_shadow and (htag == .slot or (n.ns != .html and n.isTag("slot")))) if (shadowHostOf(n)) |host| {
         if (try slotted(g, n, host, s)) return;
     };
     var k = n.first_child;

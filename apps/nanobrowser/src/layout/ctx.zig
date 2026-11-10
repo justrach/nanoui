@@ -27,6 +27,12 @@ pub const Ctx = struct {
     /// The metrics last asked for: fonts come in long runs.
     last_font: box.Font = .{ .size = -1 },
     last_metrics: box.Metrics = .{},
+    space_font_key: u64 = 0,
+    space_w: f32 = 0,
+    l1_keys: [256]u64 = @splat(0),
+    l1_vals: [256]f32 = @splat(0),
+    kern_keys: [256]u64 = @splat(0),
+    kern_vals: [256]f32 = @splat(0),
 
     pub fn metrics(c: *Ctx, font: box.Font) box.Metrics {
         if (std.meta.eql(font, c.last_font)) return c.last_metrics;
@@ -37,7 +43,40 @@ pub const Ctx = struct {
     }
 
     pub fn width(c: *Ctx, text: []const u8, font: box.Font) f32 {
-        return clean(c.m.width(c.m.ctx, text, font));
+        if (font.size <= 0) return 0;
+        const is_space = text.len == 1 and text[0] == ' ';
+        if (is_space and c.space_font_key == font.key()) return c.space_w;
+        const k = font.wordKey(text);
+        const slot: usize = @as(usize, @truncate(k)) & 255;
+        if (k != 0 and c.l1_keys[slot] == k) return c.l1_vals[slot];
+        const w = clean(c.m.width(c.m.ctx, text, font));
+        if (k != 0) {
+            c.l1_keys[slot] = k;
+            c.l1_vals[slot] = w;
+        }
+        if (is_space) {
+            c.space_font_key = font.key();
+            c.space_w = w;
+        }
+        return w;
+    }
+
+    pub fn kernSpaceDelta(c: *Ctx, tail: []const u8, head: []const u8, font: box.Font) f32 {
+        if (font.mono or font.tabular or font.size <= 0) return 0;
+        var buf: [10]u8 = undefined;
+        if (tail.len + head.len + 1 > buf.len) return 0;
+        @memcpy(buf[0..tail.len], tail);
+        buf[tail.len] = ' ';
+        @memcpy(buf[tail.len + 1 ..][0..head.len], head);
+        const slice = buf[0 .. tail.len + 1 + head.len];
+        var k = font.wordKey(slice) ^ 0x4B45_524E_5350_4143;
+        if (k == 0) k = 1;
+        const slot: usize = @as(usize, @truncate(k)) & 255;
+        if (c.kern_keys[slot] == k) return c.kern_vals[slot];
+        const d = c.width(slice, font) - (c.width(tail, font) + c.width(head, font) + c.width(" ", font));
+        c.kern_keys[slot] = k;
+        c.kern_vals[slot] = d;
+        return d;
     }
 
     /// The style of an anonymous box in one of `parent`: inherited properties
@@ -110,19 +149,20 @@ fn inheritFrom(p: *const Style) Style {
 }
 
 /// NaN to zero, and anything huge to the limit.
-pub fn clean(v: f32) f32 {
+pub inline fn clean(v: f32) f32 {
     if (v != v) return 0;
     return std.math.clamp(v, -limit, limit);
 }
 
 /// A length against `ref`; zero for what is not a length.
-pub fn len(l: Len, ref: f32) f32 {
+pub inline fn len(l: Len, ref: f32) f32 {
     if (l.kind != .length) return 0;
     if (l.math != null) return clean(l.at(ref));
-    return clean(clean(l.px) + clean(l.pct) * ref / 100);
+    if (l.pct == 0) return if (l.px == 0) 0 else clean(l.px);
+    return clean(clean(l.px) + clean(l.pct) * ref * 0.01);
 }
 
-pub fn borderWidth(b: css.Border) f32 {
+pub inline fn borderWidth(b: css.Border) f32 {
     if (b.style == .none or b.style == .hidden) return 0;
     return @max(0, clean(b.width));
 }
@@ -130,7 +170,7 @@ pub fn borderWidth(b: css.Border) f32 {
 pub const EdgeSet = struct { margin: box.Edges, border: box.Edges, padding: box.Edges };
 
 /// A style's edges against a containing block's width; auto margins are zero.
-pub fn edgesOf(s: *const Style, cw: f32) EdgeSet {
+pub inline fn edgesOf(s: *const Style, cw: f32) EdgeSet {
     return .{
         .margin = .{
             .top = len(s.margin_top, cw),
@@ -154,26 +194,26 @@ pub fn edgesOf(s: *const Style, cw: f32) EdgeSet {
 }
 
 /// Fills in a box's edges.
-pub fn setEdges(b: *Box, cw: f32) void {
+pub inline fn setEdges(b: *Box, cw: f32) void {
     const e = edgesOf(b.style, cw);
     b.margin = e.margin;
     b.border = e.border;
     b.padding = e.padding;
 }
 
-pub fn bpH(b: *const Box) f32 {
+pub inline fn bpH(b: *const Box) f32 {
     return b.border.horizontal() + b.padding.horizontal();
 }
 
-pub fn bpV(b: *const Box) f32 {
+pub inline fn bpV(b: *const Box) f32 {
     return b.border.vertical() + b.padding.vertical();
 }
 
-pub fn bpTop(b: *const Box) f32 {
+pub inline fn bpTop(b: *const Box) f32 {
     return b.border.top + b.padding.top;
 }
 
-pub fn bpLeft(b: *const Box) f32 {
+pub inline fn bpLeft(b: *const Box) f32 {
     return b.border.left + b.padding.left;
 }
 

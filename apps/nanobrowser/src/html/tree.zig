@@ -346,12 +346,13 @@ pub const Builder = struct {
 
     pub fn newElement(b: *Builder, name: []const u8, ns: dom.Ns, attrs: []dom.Attr) Error!*dom.Node {
         const n = try b.arena.create(dom.Node);
-        n.* = .{ .kind = .element, .doc = b.doc, .tag = name, .ns = ns, .has_resource = @import("../perf_rules.zig").isResourceTag(name) };
+        const perf = @import("../perf_rules.zig");
+        n.* = .{ .kind = .element, .doc = b.doc, .tag = name, .ns = ns, .has_resource = perf.isResourceTag(name), .has_insertion_work = perf.isInsertionWorkTag(name) };
         if (attrs.len > 0) {
             n.attrs = .fromOwnedSlice(attrs);
             for (attrs) |a| {
                 if (a.name.len > 2 and a.name[0] == 'o' and a.name[1] == 'n') n.has_on_attr = true;
-                @import("../perf_rules.zig").syncNodeAttr(n, a.name, a.value);
+                perf.syncNodeAttr(n, a.name, a.value);
             }
         }
         return n;

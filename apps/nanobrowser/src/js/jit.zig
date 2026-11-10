@@ -145,79 +145,31 @@ pub inline fn execFrame(vm: *Vm, f: *Frame, jfn: JitFn, sp_out: *[*]Value) Error
 
 pub fn jitGetField(vm: *Vm, f: *Frame, sp: [*]Value, pc: [*]const u8) callconv(.c) JitResult {
     const ic = &f.fp.ics[std.mem.readInt(u32, (pc + 1)[0..4], .little)];
-    const v = (sp - 1)[0];
-    if (v.isObject()) {
-        const obj = v.asObject();
-        if (obj.shape == ic.shape) {
-            if (ic.slot == bc.IC.missing_slot) {
-                if (ic.epoch == vm.proto_epoch) return .{ .bits = Value.undefined.bits, .err = 0 };
-            } else {
-                const h_ok = if (ic.holder) |h| (h.shape == ic.holder_shape and ic.epoch == vm.proto_epoch) else true;
-                if (h_ok) {
-                    const sv = (ic.holder orelse obj).slots[ic.slot];
-                    if (!ic.is_accessor) return .{ .bits = sv.bits, .err = 0 };
-                    f.pc = pc;
-                    vm.sp = sp;
-                    const r = icache.callGetterSlot(vm, sv, v) catch |e| return errRes(vm, sp, e);
-                    return .{ .bits = r.bits, .err = 0 };
-                }
-            }
-        }
-    }
     f.pc = pc;
     vm.sp = sp;
-    const r = icache.getField(vm, ic, v) catch |e| return errRes(vm, sp, e);
+    const r = icache.getField(vm, ic, (sp - 1)[0]) catch |e| return errRes(vm, sp, e);
     return .{ .bits = r.bits, .err = 0 };
 }
 
 pub fn jitPutField(vm: *Vm, f: *Frame, sp: [*]Value, pc: [*]const u8) callconv(.c) JitResult {
     const ic = &f.fp.ics[std.mem.readInt(u32, (pc + 1)[0..4], .little)];
-    const t = (sp - 2)[0];
-    const v = (sp - 1)[0];
-    if (t.isObject()) {
-        const obj = t.asObject();
-        if (obj.shape == ic.shape) {
-            if (ic.is_transition) {
-                if (ic.epoch == vm.proto_epoch and obj.flags.extensible and !obj.flags.is_proto and ic.slot < obj.slot_cap) {
-                    obj.shape = ic.holder_shape.?;
-                    obj.slots[ic.slot] = v;
-                    return .{ .bits = 0, .err = 0 };
-                }
-            } else if (ic.is_accessor) {
-                const h_ok = if (ic.holder) |h| (h.shape == ic.holder_shape and ic.epoch == vm.proto_epoch) else true;
-                if (h_ok) {
-                    f.pc = pc;
-                    vm.sp = sp;
-                    icache.callSetterSlot(vm, ic, (ic.holder orelse obj).slots[ic.slot], t, v, f.fp.strict) catch |e| return errRes(vm, sp, e);
-                    return .{ .bits = 0, .err = 0 };
-                }
-            }
-        }
-    }
     f.pc = pc;
     vm.sp = sp;
-    icache.putField(vm, ic, t, v, f.fp.strict) catch |e| return errRes(vm, sp, e);
+    icache.putField(vm, ic, (sp - 2)[0], (sp - 1)[0], f.fp.strict) catch |e| return errRes(vm, sp, e);
     return .{ .bits = 0, .err = 0 };
 }
 
 pub fn jitDefineField(vm: *Vm, f: *Frame, sp: [*]Value, pc: [*]const u8) callconv(.c) JitResult {
     const ic = &f.fp.ics[std.mem.readInt(u32, (pc + 1)[0..4], .little)];
-    const o = (sp - 2)[0].asObject();
-    const v = (sp - 1)[0];
-    if (o.shape == ic.shape and ic.is_transition and ic.slot < o.slot_cap and !o.flags.is_proto) {
-        o.shape = ic.holder_shape.?;
-        o.slots[ic.slot] = v;
-        return .{ .bits = 0, .err = 0 };
-    }
     f.pc = pc;
     vm.sp = sp;
-    icache.defineField(vm, ic, o, v) catch |e| return errRes(vm, sp, e);
+    icache.defineField(vm, ic, (sp - 2)[0].asObject(), (sp - 1)[0]) catch |e| return errRes(vm, sp, e);
     return .{ .bits = 0, .err = 0 };
 }
 
 pub fn jitGetGlobal(vm: *Vm, f: *Frame, sp: [*]Value, pc: [*]const u8) callconv(.c) JitResult {
     const ic = &f.fp.ics[std.mem.readInt(u32, (pc + 1)[0..4], .little)];
-    if (ic.shape == vm.global_lex.shape and ic.holder_shape == vm.global_obj.shape and ic.holder != null) {
+    if (ic.shape == vm.global_lex.shape and ic.holder_shape == vm.global_obj.shape and ic.holder != null and ic.epoch == vm.proto_epoch) {
         const v = ic.holder.?.slots[ic.slot];
         if (!v.isHole()) return .{ .bits = v.bits, .err = 0 };
     }
@@ -230,7 +182,7 @@ pub fn jitGetGlobal(vm: *Vm, f: *Frame, sp: [*]Value, pc: [*]const u8) callconv(
 pub fn jitPutGlobal(vm: *Vm, f: *Frame, sp: [*]Value, pc: [*]const u8) callconv(.c) JitResult {
     const ic = &f.fp.ics[std.mem.readInt(u32, (pc + 1)[0..4], .little)];
     const v = (sp - 1)[0];
-    if (ic.shape == vm.global_lex.shape and ic.holder_shape == vm.global_obj.shape and ic.holder != null and !ic.holder.?.slots[ic.slot].isHole()) {
+    if (ic.shape == vm.global_lex.shape and ic.holder_shape == vm.global_obj.shape and ic.holder != null and ic.epoch == vm.proto_epoch and !ic.holder.?.slots[ic.slot].isHole()) {
         ic.holder.?.slots[ic.slot] = v;
         return .{ .bits = 0, .err = 0 };
     }
@@ -246,6 +198,7 @@ pub fn jitGetLength(vm: *Vm, f: *Frame, sp: [*]Value, pc: [*]const u8) callconv(
         const o = v.asObject();
         if (o.class == .array) return .{ .bits = Value.fromUsize(o.arr_len).bits, .err = 0 };
         if (o.class == .typedarray) return .{ .bits = Value.fromUsize(typed.length(o)).bits, .err = 0 };
+        if (o.class == .arguments and (o.shape == vm.args_strict_shape or o.shape == vm.args_sloppy_shape)) return .{ .bits = o.slots[0].bits, .err = 0 };
     }
     if (v.isString()) {
         return .{ .bits = Value.fromUsize(v.asString().len16).bits, .err = 0 };
@@ -413,51 +366,54 @@ pub fn jitInterrupt(vm: *Vm, f: *Frame, sp: [*]Value, pc: [*]const u8) callconv(
     return .{ .bits = 0, .err = 0 };
 }
 
-fn invokeChildFrame(vm: *Vm, caller_sp: [*]Value, child_f: *Frame) JitResult {
+noinline fn handleChildErr(vm: *Vm, caller_sp: [*]Value, child_f: *Frame, err_code: u64) JitResult {
+    @branchHint(.cold);
+    var err = decodeErr(err_code);
+    if (err == error.OutOfMemory) {
+        api.throwOutOfMemory(vm);
+        err = error.Thrown;
+    }
+    if (err == error.Thrown) {
+        const base = child_f.bp + child_f.fp.nlocals;
+        var s = vm.sp;
+        while (@intFromPtr(s) > @intFromPtr(base)) {
+            s -= 1;
+            const v = s[0];
+            if (!v.isInternal()) continue;
+            if (fr.isCatchMarker(v)) {
+                const saved = (s - 1)[0];
+                child_f.env = if (saved.isUndefined()) null else @fieldParentPtr("cell", saved.asCell());
+                child_f.pc = child_f.fp.code.ptr + fr.catchOffset(v);
+                (s - 1)[0] = vm.exception;
+                vm.exception = Value.undefined;
+                vm.sp = s;
+                child_f.is_entry = true;
+                const r = interp.run(vm) catch |e| return errRes(vm, caller_sp, e);
+                const ret_sp = vm.sp;
+                ret_sp[0] = r;
+                return .{ .bits = @intFromPtr(ret_sp + 1), .err = 0 };
+            }
+            if (v.same(fr.iter_marker) or v.same(fr.async_iter_marker)) {
+                vm.sp = s + 1;
+                iter.closeQuiet(vm, (s - 2)[0]) catch |e| {
+                    if (e == error.Terminated) err = e;
+                };
+                if (err != error.Thrown) break;
+            }
+        }
+    }
+    vm.frame_top -= 1;
+    return errRes(vm, caller_sp, err);
+}
+
+inline fn invokeChildFrame(vm: *Vm, caller_sp: [*]Value, child_f: *Frame) JitResult {
     vm.checkNativeStack() catch |e| {
         vm.frame_top -= 1;
         return errRes(vm, caller_sp, e);
     };
     if (getOrCompile(vm, child_f.fp)) |jfn| {
         const res = jfn(vm, child_f, child_f.bp, vm.sp);
-        if (res.err != 0) {
-            var err = decodeErr(res.err);
-            if (err == error.OutOfMemory) {
-                api.throwOutOfMemory(vm);
-                err = error.Thrown;
-            }
-            if (err == error.Thrown) {
-                const base = child_f.bp + child_f.fp.nlocals;
-                var s = vm.sp;
-                while (@intFromPtr(s) > @intFromPtr(base)) {
-                    s -= 1;
-                    const v = s[0];
-                    if (!v.isInternal()) continue;
-                    if (fr.isCatchMarker(v)) {
-                        const saved = (s - 1)[0];
-                        child_f.env = if (saved.isUndefined()) null else @fieldParentPtr("cell", saved.asCell());
-                        child_f.pc = child_f.fp.code.ptr + fr.catchOffset(v);
-                        (s - 1)[0] = vm.exception;
-                        vm.exception = Value.undefined;
-                        vm.sp = s;
-                        child_f.is_entry = true;
-                        const r = interp.run(vm) catch |e| return errRes(vm, caller_sp, e);
-                        const ret_sp = vm.sp;
-                        ret_sp[0] = r;
-                        return .{ .bits = @intFromPtr(ret_sp + 1), .err = 0 };
-                    }
-                    if (v.same(fr.iter_marker) or v.same(fr.async_iter_marker)) {
-                        vm.sp = s + 1;
-                        iter.closeQuiet(vm, (s - 2)[0]) catch |e| {
-                            if (e == error.Terminated) err = e;
-                        };
-                        if (err != error.Thrown) break;
-                    }
-                }
-            }
-            vm.frame_top -= 1;
-            return errRes(vm, caller_sp, err);
-        }
+        if (res.err != 0) return handleChildErr(vm, caller_sp, child_f, res.err);
         var r = Value{ .bits = res.bits };
         if (child_f.is_construct and !r.isObject()) r = child_f.this;
         const ret_sp = child_f.ret_sp;
@@ -470,6 +426,11 @@ fn invokeChildFrame(vm: *Vm, caller_sp: [*]Value, child_f: *Frame) JitResult {
     const ret_sp = vm.sp;
     ret_sp[0] = r;
     return .{ .bits = @intFromPtr(ret_sp + 1), .err = 0 };
+}
+
+fn pushAndInvokeClosure(vm: *Vm, caller_sp: [*]Value, callee: *Object, args: [*]Value, argc: u32, ret_sp: [*]Value, this: Value) JitResult {
+    const child_f = calls.pushClosure(vm, callee, args, argc, ret_sp, Value.undefined, this, false) catch |e| return errRes(vm, caller_sp, e);
+    return invokeChildFrame(vm, caller_sp, child_f);
 }
 
 /// Theorem 37 (`NanoUI.Speedometer3Perf.single_tier_up_check_per_call`):
@@ -493,54 +454,80 @@ pub fn jitCall(vm: *Vm, f: *Frame, sp: [*]Value, next_pc: [*]const u8, argc: u32
     if (callee.isObject()) {
         const co = callee.asObject();
         if (co.class == .closure) {
-            const child_f = calls.pushClosure(vm, co, sp - argc, argc, ret_sp, Value.undefined, ret_sp[0], false) catch |e| return errRes(vm, sp, e);
-            return invokeChildFrame(vm, sp, child_f);
+            return pushAndInvokeClosure(vm, sp, co, sp - argc, argc, ret_sp, ret_sp[0]);
         }
         if (co.class == .bound) {
             const b = co.payload.bound;
-            if (b.args.len == 0 and b.target.class == .closure) {
-                const child_f = calls.pushClosure(vm, b.target, sp - argc, argc, ret_sp, Value.undefined, b.this, false) catch |e| return errRes(vm, sp, e);
-                return invokeChildFrame(vm, sp, child_f);
+            if (b.target.class == .closure) {
+                if (b.args.len == 0) {
+                    return pushAndInvokeClosure(vm, sp, b.target, sp - argc, argc, ret_sp, b.this);
+                }
+                if (b.args.len + argc <= 64) {
+                    const base = sp - argc;
+                    const blen: u32 = @intCast(b.args.len);
+                    std.mem.copyBackwards(Value, (base + blen)[0..argc], base[0..argc]);
+                    @memcpy(base[0..blen], b.args);
+                    return pushAndInvokeClosure(vm, sp, b.target, base, blen + argc, ret_sp, b.this);
+                }
             }
         }
         if (co.class == .native) {
             const nf = co.payload.native.func;
             if (nf == &b_fn.fnCall) {
                 const target = ret_sp[0];
-                if (target.isObject() and target.asObject().class == .closure) {
+                if (target.isObject()) {
+                    const to = target.asObject();
                     const sub_this = if (argc > 0) (sp - argc)[0] else Value.undefined;
                     const sub_args = if (argc > 0) sp - argc + 1 else sp;
                     const sub_argc = if (argc > 0) argc - 1 else 0;
-                    const child_f = calls.pushClosure(vm, target.asObject(), sub_args, sub_argc, ret_sp, Value.undefined, sub_this, false) catch |e| return errRes(vm, sp, e);
-                    return invokeChildFrame(vm, sp, child_f);
+                    if (to.class == .closure) {
+                        return pushAndInvokeClosure(vm, sp, to, sub_args, sub_argc, ret_sp, sub_this);
+                    }
+                    if (to.class == .bound and to.payload.bound.args.len == 0 and to.payload.bound.target.class == .closure) {
+                        return pushAndInvokeClosure(vm, sp, to.payload.bound.target, sub_args, sub_argc, ret_sp, to.payload.bound.this);
+                    }
                 }
             } else if (nf == &b_fn.fnApply) {
                 const target = ret_sp[0];
-                if (target.isObject() and target.asObject().class == .closure) {
-                    const sub_this = if (argc > 0) (sp - argc)[0] else Value.undefined;
-                    const arr_val = if (argc > 1) (sp - argc + 1)[0] else Value.undefined;
-                    if (arr_val.isNullish()) {
-                        const child_f = calls.pushClosure(vm, target.asObject(), sp, 0, ret_sp, Value.undefined, sub_this, false) catch |e| return errRes(vm, sp, e);
-                        return invokeChildFrame(vm, sp, child_f);
+                if (target.isObject()) {
+                    const to = target.asObject();
+                    var closure_target: ?*objmod.Object = null;
+                    var sub_this = if (argc > 0) (sp - argc)[0] else Value.undefined;
+                    if (to.class == .closure) {
+                        closure_target = to;
+                    } else if (to.class == .bound and to.payload.bound.args.len == 0 and to.payload.bound.target.class == .closure) {
+                        closure_target = to.payload.bound.target;
+                        sub_this = to.payload.bound.this;
                     }
-                    if (arr_val.isObject()) {
-                        const ao = arr_val.asObject();
-                        const n = ao.arr_len;
-                        if (!ao.flags.exotic and ao.class == .array and !ao.flags.has_sparse and ao.elems_len == n and n <= 64) {
-                            var has_hole = false;
-                            for (ao.elems[0..n]) |el| if (el.isHole()) {
-                                has_hole = true;
-                                break;
-                            };
-                            if (!has_hole) {
-                                const sub_args = sp - argc;
-                                @memcpy(sub_args[0..n], ao.elems[0..n]);
-                                const child_f = calls.pushClosure(vm, target.asObject(), sub_args, n, ret_sp, Value.undefined, sub_this, false) catch |e| return errRes(vm, sp, e);
-                                return invokeChildFrame(vm, sp, child_f);
+                    if (closure_target) |ct| {
+                        const arr_val = if (argc > 1) (sp - argc + 1)[0] else Value.undefined;
+                        if (arr_val.isNullish()) {
+                            return pushAndInvokeClosure(vm, sp, ct, sp, 0, ret_sp, sub_this);
+                        }
+                        if (arr_val.isObject()) {
+                            const ao = arr_val.asObject();
+                            const n = ao.elems_len;
+                            const is_fast_args = ao.class == .arguments and (ao.shape == vm.args_strict_shape or ao.shape == vm.args_sloppy_shape) and ao.slots[0].bits == Value.fromUsize(n).bits;
+                            if (!ao.flags.exotic and !ao.flags.has_sparse and ((ao.class == .array and n == ao.arr_len) or is_fast_args) and n <= 64) {
+                                var has_hole = false;
+                                for (ao.elems[0..n]) |el| if (el.isHole()) {
+                                    has_hole = true;
+                                    break;
+                                };
+                                if (!has_hole) {
+                                    const sub_args = sp - argc;
+                                    @memcpy(sub_args[0..n], ao.elems[0..n]);
+                                    return pushAndInvokeClosure(vm, sp, ct, sub_args, n, ret_sp, sub_this);
+                                }
                             }
                         }
                     }
                 }
+            }
+            if (!co.flags.host_class) {
+                const r = calls.callNative(vm, co, ret_sp[0], (sp - argc)[0..argc]) catch |e| return errRes(vm, sp, e);
+                ret_sp[0] = r;
+                return .{ .bits = @intFromPtr(ret_sp + 1), .err = 0 };
             }
         }
     }
