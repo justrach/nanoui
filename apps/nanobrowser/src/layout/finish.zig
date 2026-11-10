@@ -12,7 +12,21 @@ const Box = box.Box;
 const Ctx = ctx.Ctx;
 const Error = ctx.Error;
 
-const Cbs = struct { abs: *Box, fixed: ?*Box };
+pub const Cbs = struct { abs: *Box, fixed: ?*Box };
+
+/// Places and finishes a single out-of-flow child `x` of a parent box at page offset `(ox, oy)`.
+pub fn placeOutOfFlowChild(c: *Ctx, x: *Box, ox: f32, oy: f32, cbs: Cbs) Error!void {
+    const fixed = x.style.position == .fixed;
+    const cb: ?*Box = if (fixed) cbs.fixed else cbs.abs;
+    try positioned.place(c, x, x.x + ox, x.y + oy, cb);
+    try inside(c, x, x.x, x.y, nextCbs(x, cbs));
+    if (!fixed or cb != null) {
+        const target = cb.?;
+        const reach = extents(x);
+        target.lay.extra_r = @max(target.lay.extra_r, reach[0]);
+        target.lay.extra_b = @max(target.lay.extra_b, reach[1]);
+    }
+}
 
 /// Finishes the tree under the initial containing block.
 pub fn run(c: *Ctx, root: *Box) Error!void {
@@ -90,16 +104,7 @@ fn inside(c: *Ctx, b: *Box, ox: f32, oy: f32, cbs: Cbs) Error!void {
     var k = b.first_child;
     while (k) |x| : (k = x.next) {
         if (x.style.isOutOfFlow()) {
-            const fixed = x.style.position == .fixed;
-            const cb: ?*Box = if (fixed) cbs.fixed else cbs.abs;
-            try positioned.place(c, x, x.x + ox, x.y + oy, cb);
-            try inside(c, x, x.x, x.y, nextCbs(x, cbs));
-            if (!fixed or cb != null) {
-                const target = cb.?;
-                const reach = extents(x);
-                target.lay.extra_r = @max(target.lay.extra_r, reach[0]);
-                target.lay.extra_b = @max(target.lay.extra_b, reach[1]);
-            }
+            try placeOutOfFlowChild(c, x, ox, oy, cbs);
             continue;
         }
         try visit(c, x, ox, oy, cbs);

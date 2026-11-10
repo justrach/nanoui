@@ -79,14 +79,20 @@ fn hasAllClasses(n: *const Node, names: []const u8) bool {
 
 fn collGetIndex(vm: *Vm, o: *js.Object, i: u32) Error!?Value {
     const c = collOf(o);
-    try fill(bind.world(vm), c);
+    if (!c.filled or (c.kind != .static and c.generation != c.root.doc.generation)) {
+        try fill(bind.world(vm), c);
+    }
     if (i >= c.items.items.len) return null;
-    return try bind.wrap(vm, c.items.items[i]);
+    const n = c.items.items[i];
+    if (n.js_object) |obj| return Value.fromObject(@ptrCast(@alignCast(obj)));
+    return try bind.wrap(vm, n);
 }
 
 fn collLength(vm: *Vm, o: *js.Object) Error!u32 {
     const c = collOf(o);
-    try fill(bind.world(vm), c);
+    if (!c.filled or (c.kind != .static and c.generation != c.root.doc.generation)) {
+        try fill(bind.world(vm), c);
+    }
     return @intCast(c.items.items.len);
 }
 

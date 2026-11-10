@@ -176,7 +176,7 @@ fn push(g: *Gen, e: Entry) Error!void {
     try g.stack.append(g.c.arena, e);
 }
 
-fn element(g: *Gen, n: *dom.Node) Error!void {
+pub fn element(g: *Gen, n: *dom.Node) Error!void {
     if (g.depth >= max_depth) return;
     const s_in = n.computed orelse return;
     if (s_in.display == .none) return;

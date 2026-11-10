@@ -27,6 +27,8 @@ pub fn parseDocumentWith(doc: *dom.Document, source: []const u8, options: Option
     var b = try tree.Builder.init(doc, source, doc.node);
     b.scripting = options.scripting;
     try b.run();
+    if (doc.node.has_id) doc.id_generation +%= 1;
+    if (doc.node.has_resource) doc.scan_dirty = true;
     doc.touchStyle();
 }
 

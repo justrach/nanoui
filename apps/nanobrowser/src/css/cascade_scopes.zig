@@ -6,8 +6,34 @@ const dom = @import("../dom.zig");
 const sheet_mod = @import("sheet.zig");
 const rule_index = @import("rule_index.zig");
 const match = @import("selector_match.zig");
+const style = @import("style.zig");
 const Engine = @import("cascade.zig").Engine;
 const Sheet = sheet_mod.Sheet;
+
+fn isOofOrNone(s: ?*const style.Style) bool {
+    const st = s orelse return true;
+    return st.display == .none or (st.isOutOfFlow() and st.display != .contents);
+}
+
+fn hasOofBox(s: ?*const style.Style) bool {
+    const st = s orelse return false;
+    return st.display != .none and st.display != .contents and st.isOutOfFlow();
+}
+
+pub fn noteLayoutChange(e: *Engine, n: *dom.Node, old: ?*const style.Style, fresh: ?*const style.Style) void {
+    if (e.layout_change_many) return;
+    if (e.layout_change_node) |cur| {
+        if (cur.contains(n)) return;
+        e.layout_change_many = true;
+        e.layout_change_node = null;
+        return;
+    }
+    if (n.kind != .element or !isOofOrNone(old) or !isOofOrNone(fresh) or (!hasOofBox(old) and !hasOofBox(fresh))) {
+        e.layout_change_many = true;
+        return;
+    }
+    e.layout_change_node = n;
+}
 
 /// The nearest ancestor that is a container, with this name if one is given.
 fn nearestContainer(n: *const dom.Node, name: []const u8) ?*const dom.Node {
@@ -47,9 +73,13 @@ pub fn setScopedSheets(e: *Engine, roots: []const *dom.Node, lists: []const []co
     }
     e.scoped.deinit(e.gpa);
     e.scoped = next;
+    e.last_scope_root = null;
+    e.last_scope_ix = null;
 }
 
 pub fn dropScopeIndexes(e: *Engine) void {
+    e.last_scope_root = null;
+    e.last_scope_ix = null;
     var it = e.scope_index.valueIterator();
     while (it.next()) |x| {
         x.*.deinit();
@@ -59,10 +89,19 @@ pub fn dropScopeIndexes(e: *Engine) void {
 }
 
 /// The rules of a shadow tree, or none. Lists that are the same share an index.
-fn indexOfScope(e: *Engine, root: *dom.Node) Allocator.Error!?*rule_index.Index {
-    const list = e.scoped.get(root) orelse return null;
+pub fn indexOfScope(e: *Engine, root: *dom.Node) Allocator.Error!?*rule_index.Index {
+    if (e.last_scope_root == root) return e.last_scope_ix;
+    const list = e.scoped.get(root) orelse {
+        e.last_scope_root = root;
+        e.last_scope_ix = null;
+        return null;
+    };
     const key = std.hash.Wyhash.hash(0, std.mem.sliceAsBytes(list));
-    if (e.scope_index.get(key)) |x| return x;
+    if (e.scope_index.get(key)) |x| {
+        e.last_scope_root = root;
+        e.last_scope_ix = x;
+        return x;
+    }
     const ix = try e.gpa.create(rule_index.Index);
     errdefer e.gpa.destroy(ix);
     ix.* = rule_index.Index.init(e.gpa);
@@ -74,6 +113,8 @@ fn indexOfScope(e: *Engine, root: *dom.Node) Allocator.Error!?*rule_index.Index 
     e.doc.rule_flags |= ix.ruleFlags();
     e.doc.rule_attr_filter |= ix.attr_filter;
     try e.scope_index.put(e.gpa, key, ix);
+    e.last_scope_root = root;
+    e.last_scope_ix = ix;
     return ix;
 }
 
@@ -102,7 +143,7 @@ pub fn collectFor(e: *Engine, n: *dom.Node) Allocator.Error!void {
         if (hops >= 16) break;
         through = slotFor(root, through) orelse break;
     }
-    if (n.tree_scope) |root| if (n.attr("part")) |names| {
+    if (n.tree_scope) |root| if ((n.attr_filter & @import("../perf_rules.zig").attrBit("part")) != 0) if (n.attr("part")) |names| {
         const host = root.parent orelse return;
         const outer = if (host.tree_scope) |r2| try indexOfScope(e, r2) else &e.index.?;
         const ix = outer orelse return;

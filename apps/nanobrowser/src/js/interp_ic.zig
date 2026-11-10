@@ -24,6 +24,21 @@ pub inline fn callGetterSlot(vm: *Vm, slot_val: Value, receiver: Value) Error!Va
     return props.callGetter(vm, slot_val, receiver);
 }
 
+inline fn pushOwnPoly(ic: *bc.IC, cur_sh: *shape_mod.Shape) void {
+    if (ic.fast_own_data and ic.shape != null and ic.shape != cur_sh) {
+        var found = false;
+        inline for (0..bc.IC.own_poly_cap) |k| if (ic.own_shapes[k] == ic.shape) {
+            found = true;
+        };
+        if (!found) {
+            const idx = ic.own_idx & (bc.IC.own_poly_cap - 1);
+            ic.own_shapes[idx] = ic.shape;
+            ic.own_slots[idx] = ic.slot;
+            ic.own_idx +%= 1;
+        }
+    }
+}
+
 pub fn callSetterSlot(vm: *Vm, ic: *bc.IC, slot_val: Value, receiver: Value, v: Value, strict: bool) Error!void {
     const a: *heap.Accessor = @fieldParentPtr("cell", slot_val.asCell());
     if (a.set.isUndefined()) {
@@ -81,18 +96,16 @@ pub fn getField(vm: *Vm, ic: *bc.IC, v: Value) Error!Value {
             return if (ic.is_accessor) props.callGetter(vm, sv, v) else sv;
         }
     }
-    inline for (0..bc.IC.own_poly_cap) |k| {
-        if (ic.own_shapes[k] == sh) {
-            const slot = ic.own_slots[k];
-            if (ic.fast_own_data and ic.shape != null) {
-                ic.own_shapes[k] = ic.shape;
-                ic.own_slots[k] = ic.slot;
-                ic.shape = sh;
-                ic.slot = slot;
-            }
-            return o.slots[slot];
+    inline for (0..bc.IC.own_poly_cap) |k| if (ic.own_shapes[k] == sh) {
+        const slot = ic.own_slots[k];
+        if (ic.fast_own_data and ic.shape != null) {
+            ic.own_shapes[k] = ic.shape;
+            ic.own_slots[k] = ic.slot;
+            ic.shape = sh;
+            ic.slot = slot;
         }
-    }
+        return o.slots[slot];
+    };
     if (ic.holder) |h| {
         if (ic.epoch == vm.proto_epoch and h.shape == ic.holder_shape and ic.slot != bc.IC.missing_slot) {
             inline for (0..bc.IC.proto_poly_cap) |k| {
@@ -107,24 +120,14 @@ pub fn getField(vm: *Vm, ic: *bc.IC, v: Value) Error!Value {
             }
         }
     }
-    if (!o.flags.exotic and !ic.key.isIndex()) {
+    const exotic_ok = !o.flags.exotic or o.class == .typedarray or (o.class == .host_exotic and o.payload.hooks.get_named == null and !ic.key.eql(vm.k.length));
+    if (exotic_ok and !ic.key.isIndex()) {
         if (o.flags.lazy_fn) try props.touchLazy(vm, o, ic.key);
         const cur_sh = o.shape;
         if (cur_sh.find(ic.key)) |slot| {
             const acc = cur_sh.flagsAt(slot).accessor;
             if (!cur_sh.is_dict) {
-                if (!acc and ic.fast_own_data and ic.shape != null and ic.shape != cur_sh) {
-                    var found = false;
-                    inline for (0..bc.IC.own_poly_cap) |k| if (ic.own_shapes[k] == ic.shape) {
-                        found = true;
-                    };
-                    if (!found) {
-                        const idx = ic.own_idx & (bc.IC.own_poly_cap - 1);
-                        ic.own_shapes[idx] = ic.shape;
-                        ic.own_slots[idx] = ic.slot;
-                        ic.own_idx +%= 1;
-                    }
-                }
+                if (!acc) pushOwnPoly(ic, cur_sh);
                 ic.shape = cur_sh;
                 ic.holder = null;
                 ic.holder_shape = null;
@@ -211,19 +214,17 @@ pub fn putField(vm: *Vm, ic: *bc.IC, t: Value, v: Value, strict: bool) Error!voi
             return callSetterSlot(vm, ic, (ic.holder orelse o).slots[ic.slot], t, v, strict);
         }
     }
-    inline for (0..bc.IC.own_poly_cap) |k| {
-        if (ic.own_shapes[k] == o.shape) {
-            const slot = ic.own_slots[k];
-            if (ic.fast_own_data and ic.shape != null) {
-                ic.own_shapes[k] = ic.shape;
-                ic.own_slots[k] = ic.slot;
-                ic.shape = o.shape;
-                ic.slot = slot;
-            }
-            o.slots[slot] = v;
-            return;
+    inline for (0..bc.IC.own_poly_cap) |k| if (ic.own_shapes[k] == o.shape) {
+        const slot = ic.own_slots[k];
+        if (ic.fast_own_data and ic.shape != null) {
+            ic.own_shapes[k] = ic.shape;
+            ic.own_slots[k] = ic.slot;
+            ic.shape = o.shape;
+            ic.slot = slot;
         }
-    }
+        o.slots[slot] = v;
+        return;
+    };
     if (ic.is_accessor) if (ic.holder) |h| {
         if (ic.epoch == vm.proto_epoch and h.shape == ic.holder_shape) {
             inline for (0..bc.IC.proto_poly_cap) |k| {
@@ -256,18 +257,7 @@ pub fn putField(vm: *Vm, ic: *bc.IC, t: Value, v: Value, strict: bool) Error!voi
             }
             if (f.writable) {
                 if (!sh.is_dict and !o.flags.is_proto) {
-                    if (ic.fast_own_data and ic.shape != null and ic.shape != sh) {
-                        var found = false;
-                        inline for (0..bc.IC.own_poly_cap) |k| if (ic.own_shapes[k] == ic.shape) {
-                            found = true;
-                        };
-                        if (!found) {
-                            const idx = ic.own_idx & (bc.IC.own_poly_cap - 1);
-                            ic.own_shapes[idx] = ic.shape;
-                            ic.own_slots[idx] = ic.slot;
-                            ic.own_idx +%= 1;
-                        }
-                    }
+                    pushOwnPoly(ic, sh);
                     ic.shape = sh;
                     ic.holder = null;
                     ic.holder_shape = null;
@@ -389,6 +379,12 @@ pub fn getElem(vm: *Vm, t: Value, k: Value) Error!Value {
                 if (!r.isHole()) return r;
             }
             if (o.class == .typedarray) return typed.getIndex(vm, o, i);
+            if (o.class == .host_exotic) {
+                if (o.payload.hooks.get_index) |gi| {
+                    if (try gi(vm, o, i)) |v| return v;
+                    if (!o.flags.has_sparse and o.shape.count == 0 and !vm.protos.object.flags.proto_dirty and (o.shape.proto == null or !o.shape.proto.?.flags.proto_dirty)) return Value.undefined;
+                }
+            }
             if (!o.flags.exotic and !o.flags.has_sparse) {
                 if ((o.shape.proto == vm.protos.array and !vm.protos.array.flags.proto_dirty and !vm.protos.object.flags.proto_dirty) or
                     (o.shape.proto == vm.protos.object and !vm.protos.object.flags.proto_dirty) or

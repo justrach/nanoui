@@ -71,6 +71,12 @@ pub const Index = struct {
     /// Some rule uses `+` (`.next`) or `~` / `:nth-child(of S)` (`.later`).
     uses_next_sibling: bool = false,
     uses_later_sibling: bool = false,
+    uses_nth_index: bool = false,
+    uses_chained_next: bool = false,
+    uses_first_child: bool = false,
+    uses_last_child: bool = false,
+    uses_empty: bool = false,
+    uses_attr_before_next: bool = false,
     /// 64-bit Bloom filter of attribute names in `[attr]` selectors.
     attr_filter: u64 = 0,
     /// Some rule sits under `@container`.
@@ -85,18 +91,55 @@ pub const Index = struct {
 
     fn scanSelector(ix: *Index, selector: *const sel.Selector, ua: bool) void {
         for (selector.compounds, 0..) |*c, idx| {
+            const is_subject = idx + 1 == selector.compounds.len;
+            const before_next = !is_subject and selector.compounds[idx + 1].combinator == .next;
             if (!ua and idx > 0) switch (c.combinator) {
-                .next => ix.uses_next_sibling = true,
+                .next => {
+                    ix.uses_next_sibling = true;
+                    if (!is_subject or (idx > 1 and selector.compounds[idx - 1].combinator != .descendant and selector.compounds[idx - 1].combinator != .child)) {
+                        ix.uses_chained_next = true;
+                    }
+                },
                 .later => ix.uses_later_sibling = true,
                 else => {},
             };
             for (c.simples) |x| switch (x) {
-                .attr => |a| ix.attr_filter |= perf.attrBit(a.lower),
-                .nth => |n| if (n.of.len > 0) {
-                    ix.uses_later_sibling = true;
-                    for (n.of) |*sub| ix.scanSelector(sub, ua);
+                .attr => |a| {
+                    ix.attr_filter |= perf.attrBit(a.lower);
+                    if (!ua and before_next) ix.uses_attr_before_next = true;
                 },
-                .not, .is, .host, .host_context => |l| for (l) |*sub| ix.scanSelector(sub, ua),
+                .pseudo => |p| if (!ua) {
+                    if (p == .only_of_type) ix.uses_nth_index = true;
+                    if (p == .only_child) { ix.uses_first_child = true; ix.uses_last_child = true; }
+                    if (p == .empty) ix.uses_empty = true;
+                    if (before_next and (p == .only_child or p == .empty)) ix.uses_chained_next = true;
+                },
+                .nth => |n| {
+                    if (!ua) {
+                        if (n.a != 0 or n.b != 1 or n.of_type or n.of.len > 0) {
+                            ix.uses_nth_index = true;
+                        } else if (n.from_end) {
+                            ix.uses_last_child = true;
+                        } else {
+                            ix.uses_first_child = true;
+                        }
+                        if (before_next) ix.uses_chained_next = true;
+                    }
+                    if (n.of.len > 0) {
+                        ix.uses_later_sibling = true;
+                        for (n.of) |*sub| ix.scanSelector(sub, ua);
+                    }
+                },
+                .not, .is, .host, .host_context => |l| for (l) |*sub| {
+                    if (!ua) for (sub.compounds) |*sc| for (sc.simples) |sx| switch (sx) {
+                        .nth, .has => ix.uses_nth_index = true,
+                        .pseudo => |sp| if (sp == .only_child or sp == .only_of_type or sp == .empty) {
+                            ix.uses_nth_index = true;
+                        },
+                        else => {},
+                    };
+                    ix.scanSelector(sub, ua);
+                },
                 .has => |l| {
                     if (!ua) ix.uses_has = true;
                     for (l) |*sub| ix.scanSelector(sub, ua);

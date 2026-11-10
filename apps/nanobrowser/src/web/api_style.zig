@@ -326,7 +326,7 @@ fn computedText(vm: *Vm, n: *Node, prop: []const u8) Error!Value {
             }
         }
     }
-    geometry.flushStyle(w);
+    geometry.flushStyleForNode(w, n);
     if (p.engine.computedValue(n, prop)) |v| return vm.newString(v);
     return vm.newString("");
 }

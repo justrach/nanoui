@@ -77,7 +77,7 @@ pub fn layoutBfc(c: *Ctx, b: *Box, w_in: f32, def_in: ?f32) Error!f32 {
 
 /// How a flex or grid container's absolute children stand when they have no
 /// insets: as its only item would, aligned in its content box.
-fn staticPositions(b: *Box, cw: f32, ch: f32) void {
+pub fn staticPositions(b: *Box, cw: f32, ch: f32) void {
     const st = b.style;
     const reversed = st.flex_direction == .row_reverse or st.flex_direction == .column_reverse;
     const wrap_reversed = st.flex_wrap == .wrap_reverse;

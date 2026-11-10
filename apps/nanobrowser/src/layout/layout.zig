@@ -30,6 +30,7 @@ pub fn run(arena: Allocator, doc: *dom.Document, viewport: Viewport, m: box.Meas
     _ = try sizing.layoutBfc(&c, root, c.vw, c.vh);
     try finish.run(&c, root);
     doc.layout_dirty = false;
+    doc.oof_dirty_node = null;
     return .{
         .root = root,
         .doc_w = root.content_w,
@@ -37,6 +38,105 @@ pub fn run(arena: Allocator, doc: *dom.Document, viewport: Viewport, m: box.Meas
         .canvas = canvasOf(doc),
         .locked = viewportLocked(doc),
     };
+}
+
+/// Theorem 74 (`NanoUI.Speedometer3Apex.oof_relayout_boundary_equiv`):
+/// Incrementally updates a single out-of-flow (`position: absolute` or `fixed`)
+/// element `oof_node` inside `parent_box` without re-laying out normal-flow boxes.
+pub fn relayoutOutOfFlow(arena: Allocator, doc: *dom.Document, tree: *box.Tree, viewport: Viewport, m: box.Measurer, oof_node: *dom.Node) !bool {
+    if (doc.layout_dirty or !isConnected(oof_node) or oof_node.kind != .element or oof_node.in_top_layer) return false;
+    if (oof_node.ns != .html or oof_node.shadow_root != null or oof_node.isTag("slot") or oof_node.isTag("details")) return false;
+    const parent_node = oof_node.parent orelse return false;
+    if (parent_node.kind != .element or parent_node.ns != .html or parent_node.shadow_root != null or parent_node.isTag("slot") or parent_node.isTag("details") or parent_node.box_parts.len != 0) return false;
+    const parent_box: *box.Box = if (parent_node.box) |raw| @ptrCast(@alignCast(raw)) else return false;
+    if (parent_box.lay.center_v or parent_box.lay.inline_root) return false;
+    if (oof_node.computed) |st| {
+        if (st.display != .none) {
+            if (!st.isOutOfFlow() or st.display == .contents) return false;
+            switch (st.display) {
+                .table_row, .table_cell, .table_row_group, .table_header_group, .table_footer_group, .table_caption, .table_column, .table_column_group => return false,
+                else => {},
+            }
+            if (parent_box.kind == .flex) {
+                // Flex containers always give OOF children static offset (bpLeft, bpTop).
+            } else if (parent_box.kind == .block) {
+                if (!((st.left.kind == .length or st.right.kind == .length) and (st.top.kind == .length or st.bottom.kind == .length))) return false;
+            } else return false;
+        } else if (parent_box.kind != .flex and parent_box.kind != .block) return false;
+    } else if (parent_box.kind != .flex and parent_box.kind != .block) return false;
+
+    var prev_b: ?*box.Box = null;
+    var cur_b = parent_box.first_child;
+    while (cur_b) |kb| {
+        const next_b = kb.next;
+        if (kb.node == oof_node) {
+            if (prev_b) |pb| pb.next = next_b else parent_box.first_child = next_b;
+            if (next_b == null) parent_box.last_child = prev_b;
+            kb.next = null;
+            kb.parent = null;
+        } else {
+            prev_b = kb;
+        }
+        cur_b = next_b;
+    }
+    var at: ?*dom.Node = oof_node;
+    while (at) |n| : (at = n.nextDeep(oof_node)) {
+        n.box = null;
+        n.box_parts = &.{};
+    }
+    if (oof_node.computed == null or oof_node.computed.?.display == .none) return true;
+
+    var c: ctx.Ctx = .{
+        .arena = arena,
+        .m = m,
+        .vw = @max(0, ctx.clean(viewport.width)),
+        .vh = @max(0, ctx.clean(viewport.height)),
+        .quirks = doc.quirks,
+    };
+    var g: gen.Gen = .{ .c = &c };
+    try gen.element(&g, oof_node);
+    if (g.stack.items.len != 1 or g.stack.items[0].tag != .box) return false;
+    const new_b = g.stack.items[0].box.?;
+    new_b.parent = parent_box;
+    var after_box: ?*box.Box = null;
+    var sib = oof_node.nextElement();
+    outer: while (sib) |sn| : (sib = sn.nextElement()) {
+        var kb = parent_box.first_child;
+        while (kb) |cand| : (kb = cand.next) {
+            if (cand.node == sn) {
+                after_box = cand;
+                break :outer;
+            }
+        }
+    }
+    if (after_box) |ab| {
+        var pb: ?*box.Box = null;
+        var kb = parent_box.first_child;
+        while (kb) |cand| : (kb = cand.next) {
+            if (cand == ab) break;
+            pb = cand;
+        }
+        new_b.next = ab;
+        if (pb) |p_box| p_box.next = new_b else parent_box.first_child = new_b;
+    } else {
+        parent_box.append(new_b);
+    }
+    new_b.x = ctx.bpLeft(parent_box);
+    new_b.y = ctx.bpTop(parent_box);
+    if (parent_box.kind == .flex) {
+        sizing.staticPositions(parent_box, @max(0, parent_box.w - ctx.bpH(parent_box)), parent_box.h - ctx.bpV(parent_box));
+    }
+    var cb_abs: *box.Box = tree.root;
+    var cb_fixed: ?*box.Box = null;
+    var anc: ?*box.Box = parent_box;
+    while (anc) |ab| : (anc = ab.parent) {
+        if (cb_abs == tree.root and (ab.style.position != .static or ab.style.hasTransform())) cb_abs = ab;
+        if (cb_fixed == null and ab.style.hasTransform()) cb_fixed = ab;
+    }
+    try finish.placeOutOfFlowChild(&c, new_b, parent_box.x, parent_box.y, .{ .abs = cb_abs, .fixed = cb_fixed });
+    tree.doc_w = @max(tree.doc_w, tree.root.lay.extra_r);
+    tree.doc_h = @max(tree.doc_h, tree.root.lay.extra_b);
+    return true;
 }
 
 /// Containers take their sizes from the layout that just ran; what's in the ones

@@ -23,6 +23,15 @@ pub fn listFromArrayLike(vm: *Vm, v: Value) Error![]Value {
     if (v.isNullish()) return vm.gpa.alloc(Value, 0);
     if (!v.isObject()) return vm.throwError(.TypeError, "CreateListFromArrayLike called on non-object");
     const o = v.asObject();
+    if (o.class == .host_exotic) {
+        if (o.payload.hooks.length_index) |li| if (o.payload.hooks.get_index) |gi| {
+            const n = try li(vm, o);
+            const out = try vm.gpa.alloc(Value, n);
+            errdefer vm.gpa.free(out);
+            for (out, 0..) |*slot, i| slot.* = (try gi(vm, o, @intCast(i))) orelse try props.get(vm, o, PropKey.fromIndex(@intCast(i)));
+            return out;
+        };
+    }
     const n = try conv.lengthOf(vm, o);
     if (n > 1 << 24) return vm.throwError(.RangeError, "Too many arguments");
     const out = try vm.gpa.alloc(Value, n);

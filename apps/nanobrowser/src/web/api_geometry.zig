@@ -27,6 +27,12 @@ pub fn flushStyle(w: *World) void {
     view.flushStyle(w.page);
 }
 
+/// Cone-scoped style flush for `getComputedStyle(n)`.
+pub fn flushStyleForNode(w: *World, n: *Node) void {
+    page_loader.sheetsNow(w.page);
+    view.flushStyleForNode(w.page, n);
+}
+
 /// Style and box layout (`p.tree`) up to date. False when there is no context to measure with.
 pub fn flushLayout(w: *World) bool {
     const p = w.page;
@@ -35,7 +41,7 @@ pub fn flushLayout(w: *World) bool {
     const size = p.host.viewport(p.host.ctx);
     const vw = if (p.viewport_w > 0) p.viewport_w else size[0];
     const vh = if (p.viewport_h > 0) p.viewport_h else size[1];
-    if (!perf.needsLayoutFlush(p.doc.style_dirty, p.doc.layout_dirty, p.tree != null, vw == p.viewport_w, vh == p.viewport_h)) return true;
+    if (!perf.needsLayoutFlush(p.doc.style_dirty, p.doc.layout_dirty or p.doc.oof_dirty_node != null, p.tree != null, vw == p.viewport_w, vh == p.viewport_h)) return true;
     const c = p.host.uiContext(p.host.ctx) orelse return false;
     view.flushLayoutOnly(p, c, vw, vh);
     return p.tree != null;
@@ -49,7 +55,7 @@ pub fn flushDisplayList(w: *World) bool {
     const size = p.host.viewport(p.host.ctx);
     const vw = if (p.viewport_w > 0) p.viewport_w else size[0];
     const vh = if (p.viewport_h > 0) p.viewport_h else size[1];
-    if (perf.needsPrepare(p.doc.style_dirty, p.doc.layout_dirty, p.list_dirty, p.doc.svg_dirty, p.list != null) or vw != p.viewport_w or vh != p.viewport_h) {
+    if (perf.needsPrepare(p.doc.style_dirty, p.doc.layout_dirty or p.doc.oof_dirty_node != null, p.list_dirty, p.doc.svg_dirty, p.list != null) or vw != p.viewport_w or vh != p.viewport_h) {
         const c = p.host.uiContext(p.host.ctx) orelse return false;
         view.prepare(p, c, vw, vh);
     }

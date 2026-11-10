@@ -3,6 +3,9 @@
 const std = @import("std");
 const dom = @import("dom.zig");
 const box = @import("layout/box.zig");
+const style = @import("css/style.zig");
+const vars = @import("css/vars.zig");
+const rule_index = @import("css/rule_index.zig");
 const Rect = box.Rect;
 
 /// Theorem 1 (`NanoUI.BrowserPerf.isHoverHeld`):
@@ -168,9 +171,9 @@ pub fn touchUnder(d: *dom.Document, n: *dom.Node) void {
 pub fn touchAttr(d: *dom.Document, n: *dom.Node, name: []const u8) void {
     d.generation +%= 1;
     const is_id = std.mem.eql(u8, name, "id");
-    if (is_id) d.id_generation +%= 1;
     if (isResourceTag(n.tag)) d.scan_dirty = true;
     if (!d.inDocument(n)) return;
+    if (is_id) d.id_generation +%= 1;
     if (std.mem.eql(u8, name, "style")) {
         touchUnder(d, n);
         return;
@@ -186,6 +189,12 @@ pub fn touchAttr(d: *dom.Document, n: *dom.Node, name: []const u8) void {
             return;
         }
     }
+    touchState(d, n);
+}
+
+/// Scoped style invalidation when element state (`:checked`, `:placeholder-shown`) changes on `n`.
+pub fn touchState(d: *dom.Document, n: *dom.Node) void {
+    if (!d.inDocument(n)) return;
     const uses_has = (d.rule_flags & 1) != 0;
     const uses_next = (d.rule_flags & 2) != 0;
     const uses_later = (d.rule_flags & 4) != 0;
@@ -314,6 +323,178 @@ pub fn getElementById(d: *const dom.Document, id: []const u8) ?*dom.Node {
     self.id_last_node = found;
     return found;
 }
+
+const unshareable_tags = std.StaticStringMap(void).initComptime(.{
+    .{"body"}, .{"td"}, .{"th"}, .{"noscript"}, .{"select"},
+    .{"textarea"}, .{"option"}, .{"optgroup"}, .{"fieldset"}, .{"progress"}, .{"summary"},
+});
+
+const html_style_attr_mask: u64 = blk: {
+    var m: u64 = attrBit("style") | attrBit("slot") | attrBit("part") | attrBit("inert");
+    for (html_style_attrs.keys()) |k| m |= attrBit(k);
+    break :blk m;
+};
+
+fn eqlOptSlice(a: ?[]const u8, b: ?[]const u8) bool {
+    if (a == null and b == null) return true;
+    if (a == null or b == null) return false;
+    return std.mem.eql(u8, a.?, b.?);
+}
+
+pub const ShareCand = struct {
+    slot: usize,
+    pos_flags: u8,
+    uses_next: bool = false,
+    extra_name: []const u8 = "",
+    extra_val: ?[]const u8 = null,
+    prev_tag: []const u8 = "",
+    prev_class: ?[]const u8 = null,
+};
+
+/// Theorem 72 (`NanoUI.Speedometer3Apex.sibling_cousin_style_sharing_equiv`):
+/// 32-slot direct-mapped per-generation style sharing cache for sibling and cousin elements.
+pub const StyleShareEntry = struct {
+    generation: u32 = 0,
+    tree_scope: ?*const dom.Node = null,
+    parent: ?*const dom.Node = null,
+    parent_shared: bool = false,
+    parent_style: ?*const style.Style = null,
+    parent_scope: ?*const vars.Scope = null,
+    ancestor_bloom: u64 = 0,
+    tag: []const u8 = "",
+    class_attr: ?[]const u8 = null,
+    extra_name: []const u8 = "",
+    extra_val: ?[]const u8 = null,
+    pos_flags: u8 = 0,
+    prev_tag: []const u8 = "",
+    prev_class: ?[]const u8 = null,
+    computed: *const style.Style = undefined,
+    before: ?*const style.Style = null,
+    after: ?*const style.Style = null,
+    scope: ?*const vars.Scope = null,
+};
+
+pub const StyleShareCache = struct {
+    entries: [32]StyleShareEntry = @splat(.{}),
+
+    fn slotOf(parent_style: *const style.Style, tag: []const u8, class_filter: u64, pos_flags: u8) usize {
+        var h: u64 = (@intFromPtr(parent_style) >> 4) *% 0x9E3779B97F4A7C15;
+        h ^= class_filter *% 0x517CC1B727220A95;
+        h ^= (@as(u64, tag.len) << 8) | (if (tag.len > 0) @as(u64, tag[0]) else 0);
+        h ^= @as(u64, pos_flags) *% 0x94D049BB133111EB;
+        return @intCast((h ^ (h >> 32)) & 31);
+    }
+
+    pub fn canShare(n: *const dom.Node, ix: *const rule_index.Index, parent_style: *const style.Style, parent_is_root: bool, parent_contents: bool, parent_is_host: bool, has_anim: bool) ?ShareCand {
+        if (n.ns != .html or parent_is_root or parent_contents or parent_is_host or has_anim or n.doc.quirks) return null;
+        if (n.is_shadow or n.shadow_root != null or n.id_attr != null) return null;
+        if (n.tree_scope != null and (n.attr_filter & attrBit("part")) != 0) return null;
+        if (n.modal or n.popover_open or n.checked != null or n.selected != null or n.value != null) return null;
+        if (ix.uses_has or ix.uses_container or ix.uses_nth_index or ix.uses_later_sibling) return null;
+        const doc = n.doc;
+        if (doc.hover != null or doc.active != null) return null;
+        if (doc.focus) |f| {
+            if (f == n) return null;
+            if (n.first_child != null and !(n.parent != null and (n.parent.?.style_shared or f.parent == n.parent)) and n.contains(f)) return null;
+        }
+        if (unshareable_tags.has(n.tag)) return null;
+        if ((n.isTag("button") or n.isTag("input")) and (n.ancestor_bloom & (attrBit("fieldset") | attrBit("optgroup"))) != 0) return null;
+        const rel_mask = ix.attr_filter | html_style_attr_mask;
+        var extra_name: []const u8 = "";
+        var extra_val: ?[]const u8 = null;
+        if (n.attrs.items.len > @as(usize, @intFromBool(n.class_attr != null))) {
+            if ((n.attr_filter & rel_mask) != 0) {
+                for (n.attrs.items) |a| {
+                    if (a.name.len == 5 and a.name[0] == 'c' and std.mem.eql(u8, a.name, "class")) continue;
+                    if ((attrBit(a.name) & rel_mask) == 0) continue;
+                    if (a.name.len == 5 and a.name[0] == 's' and std.mem.eql(u8, a.name, "style")) return null;
+                    if (extra_val != null) return null;
+                    extra_name = a.name;
+                    extra_val = a.value;
+                }
+            }
+        }
+        const prev = if (ix.uses_first_child or ix.uses_next_sibling) n.prevElement() else null;
+        var prev_tag: []const u8 = "";
+        var prev_class: ?[]const u8 = null;
+        if (ix.uses_next_sibling) {
+            if (ix.uses_chained_next and prev != null) return null;
+            if (prev) |pr| {
+                if (pr.id_attr != null or pr.checked != null or pr.selected != null or pr.value != null or pr.modal or pr.popover_open or doc.focus == pr) return null;
+                if ((pr.attr_filter & (attrBit("checked") | attrBit("disabled") | attrBit("open") | attrBit("readonly") | attrBit("required"))) != 0) return null;
+                if (ix.uses_attr_before_next and (pr.attr_filter & ~attrBit("class") & rel_mask) != 0) return null;
+                prev_tag = pr.tag;
+                prev_class = pr.class_attr;
+            }
+        }
+        var pos_flags: u8 = 0;
+        if (ix.uses_first_child and prev == null) pos_flags |= 1;
+        if (ix.uses_last_child and n.nextElement() == null) pos_flags |= 2;
+        if (ix.uses_empty) {
+            var is_empty = true;
+            var ch = n.first_child;
+            while (ch) |k| : (ch = k.next) {
+                if (k.kind == .element or (k.kind == .text and k.data.len > 0)) {
+                    is_empty = false;
+                    break;
+                }
+            }
+            if (is_empty) pos_flags |= 4;
+        }
+        return .{
+            .slot = slotOf(parent_style, n.tag, n.class_filter, pos_flags),
+            .pos_flags = pos_flags,
+            .uses_next = ix.uses_next_sibling,
+            .extra_name = extra_name,
+            .extra_val = extra_val,
+            .prev_tag = prev_tag,
+            .prev_class = prev_class,
+        };
+    }
+
+    pub fn lookup(self: *const StyleShareCache, gen: u32, n: *const dom.Node, parent_style: *const style.Style, parent_scope: ?*const vars.Scope, cand: ShareCand) ?*const StyleShareEntry {
+        const entry = &self.entries[cand.slot];
+        if (entry.generation != gen or entry.tree_scope != n.tree_scope or entry.parent_style != parent_style or entry.parent_scope != parent_scope) return null;
+        if (entry.pos_flags != cand.pos_flags or entry.ancestor_bloom != n.ancestor_bloom) return null;
+        if (n.parent != entry.parent and !(n.parent != null and n.parent.?.style_shared and entry.parent_shared)) return null;
+        if (!std.mem.eql(u8, entry.tag, n.tag) or !eqlOptSlice(entry.class_attr, n.class_attr)) return null;
+        if (!std.mem.eql(u8, entry.extra_name, cand.extra_name) or !eqlOptSlice(entry.extra_val, cand.extra_val)) return null;
+        if (cand.uses_next) {
+            if (!std.mem.eql(u8, entry.prev_tag, cand.prev_tag) or !eqlOptSlice(entry.prev_class, cand.prev_class)) return null;
+        }
+        return entry;
+    }
+
+    pub fn record(self: *StyleShareCache, gen: u32, n: *dom.Node, parent_style: *const style.Style, parent_scope: ?*const vars.Scope, cand: ShareCand, stored: *const style.Style, before: ?*const style.Style, after: ?*const style.Style, scope: ?*const vars.Scope, has_extra_pseudo: bool) void {
+        if (has_extra_pseudo or stored.display == .none or stored.container_type != .normal) return;
+        if (stored.transitions.len != 0 or stored.animations.len != 0) return;
+        if (stored.counter_reset.len != 0 or stored.counter_increment.len != 0 or stored.counter_set.len != 0) return;
+        if (before) |b| if (b.transitions.len != 0 or b.animations.len != 0 or b.content_parts.len != 0) return;
+        if (after) |a| if (a.transitions.len != 0 or a.animations.len != 0 or a.content_parts.len != 0) return;
+        n.style_shared = true;
+        n.style_canon = stored;
+        self.entries[cand.slot] = .{
+            .generation = gen,
+            .tree_scope = n.tree_scope,
+            .parent = n.parent,
+            .parent_shared = if (n.parent) |p| p.style_shared else false,
+            .parent_style = parent_style,
+            .parent_scope = parent_scope,
+            .ancestor_bloom = n.ancestor_bloom,
+            .tag = n.tag,
+            .class_attr = n.class_attr,
+            .extra_name = cand.extra_name,
+            .extra_val = cand.extra_val,
+            .pos_flags = cand.pos_flags,
+            .prev_tag = cand.prev_tag,
+            .prev_class = cand.prev_class,
+            .computed = stored,
+            .before = before,
+            .after = after,
+            .scope = scope,
+        };
+    }
+};
 
 test "hover hold is quiescent when element under pointer matches old hover" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);

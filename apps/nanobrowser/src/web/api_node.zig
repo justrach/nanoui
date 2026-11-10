@@ -260,7 +260,7 @@ pub fn clone(w: *bind.World, n: *Node, deep: bool, doc: *dom.Document) Error!*No
                     c2.image = child.image;
                     c2.image_key = child.image_key;
                 }
-                to.appendChild(c2);
+                to.parserInsert(c2, null);
                 if (child.isTag("template")) {
                     if (collections.templateContent(w, child)) |t| c2.template_content = try clone(w, t, true, doc);
                 }

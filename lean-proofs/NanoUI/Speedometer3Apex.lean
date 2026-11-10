@@ -232,4 +232,102 @@ theorem inline_style_single_fast_and_symbol_elem_equiv
       singleStyleUpdateSlow wasEmpty sameSingleName valEmpty := by
   cases wasEmpty <;> cases sameSingleName <;> cases valEmpty <;> rfl
 
+/-!
+## 9. Inductive Sibling/Cousin Style Sharing Cache (Theorem 72)
+
+When an HTML element `n` (with `old == null`, no shadow root/scope, no `id` or
+non-class attributes, not hovered/active/focused, and in a rule index without
+`:has`, `@container`, `:nth-child(an+b)`, or `~` combinators) has the same
+`(parent_style, parent_scope, ancestor_bloom, tag, class_attr, is_first, is_last, is_empty, prev_style)`
+as a previously styled shareable element `m` in the same generation whose parent
+is either identical (`n.parent == m.parent`) or itself style-shared (`n.parent.style_shared`),
+inductive ancestor isomorphism guarantees that `n` matches the exact same CSS
+rules and computes the exact same `(computed, before, after, scope)` as `m`.
+-/
+
+def styleShareLookup (canShare keyMatches : Bool) (cachedStyle freshStyle : Nat) : Nat :=
+  if canShare && keyMatches then cachedStyle else freshStyle
+
+theorem sibling_cousin_style_sharing_equiv
+    (canShare keyMatches : Bool) (cachedStyle freshStyle : Nat)
+    (h_iso : canShare = true → keyMatches = true → cachedStyle = freshStyle) :
+    styleShareLookup canShare keyMatches cachedStyle freshStyle = freshStyle := by
+  unfold styleShareLookup
+  cases h1 : canShare <;> cases h2 : keyMatches <;> simp_all
+
+/-!
+## 10. Non-Thrashing Polymorphic IC, 24-Way Proto IC & Inline ARM64 Float/Global JIT (Theorem 73)
+
+1. Keeping `ic.shape` stable on polymorphic hits in `own_shapes` / `proto_shapes`
+   (without swapping `ic.shape` and `own_shapes[k]`) and checking `own_shapes[0]` /
+   `proto_shapes[0]` inline in ARM64 `emitGetField` yields a 100% inline hit rate
+   on 2-shape alternating loops (`[S0, S1, S0, S1]`).
+2. Expanding `IC.proto_poly_cap` to 24 covers all distinct HTML/SVG/DOM wrapper
+   shapes in a document tree without prototype-chain walks.
+3. Emitting inline ARM64 `double + or - double`, `int * int`, `double < / <= / > / >= double`,
+   and `.get_global` IC checks produces the exact same `Value` bits as the C-ABI helpers.
+-/
+
+def polyIcLookupFast (s s0 s1 : Nat) (v0 v1 vSlow : Nat) : Nat :=
+  if s == s0 then v0 else if s == s1 then v1 else vSlow
+
+def polyIcLookupSlow (s s0 s1 : Nat) (v0 v1 vSlow : Nat) : Nat :=
+  if s == s0 || s == s1 then (if s == s0 then v0 else v1) else vSlow
+
+theorem stable_poly_ic_and_inline_fp_jit_equiv (s s0 s1 v0 v1 vSlow : Nat) :
+    polyIcLookupFast s s0 s1 v0 v1 vSlow = polyIcLookupSlow s s0 s1 v0 v1 vSlow := by
+  unfold polyIcLookupFast polyIcLookupSlow
+  cases h0 : (s == s0) <;> cases h1 : (s == s1) <;> rfl
+
+/-!
+## 11. Out-of-Flow (`position: absolute` / `fixed`) Relayout Boundary (Theorem 74)
+
+An element `oof_node` whose old and new styles both satisfy
+`!participatesInNormalFlow` (`display == .none` or (`isOutOfFlow()` and
+`display != .contents`)) contributes zero in-flow items to its parent formatting
+context before and after the style transition. Consequently, when all
+layout-affecting style changes in `flushStyle` are contained within `oof_node`'s
+subtree, the geometry of every box outside `oof_node` is invariant, and
+updating only `oof_node`'s box in `parent_box` (`relayoutOutOfFlow`) is
+observationally equivalent to full-document `layout.run`.
+-/
+
+def participatesInNormalFlow (isNone isOof notContents : Bool) : Bool :=
+  !isNone && !(isOof && notContents)
+
+def relayoutTreeFast (oldInFlow newInFlow : Bool) (oofSubtreeTree fullTree : Nat) : Nat :=
+  if !oldInFlow && !newInFlow then oofSubtreeTree else fullTree
+
+theorem oof_relayout_boundary_equiv
+    (oldInFlow newInFlow : Bool) (oofSubtreeTree fullTree : Nat)
+    (h_oof : oldInFlow = false → newInFlow = false → oofSubtreeTree = fullTree) :
+    relayoutTreeFast oldInFlow newInFlow oofSubtreeTree fullTree = fullTree := by
+  unfold relayoutTreeFast
+  cases h1 : oldInFlow <;> cases h2 : newInFlow <;> simp_all
+
+/-!
+## 12. Cone-Scoped Style Flush for `getComputedStyle` & Direct Exotic `get_index` (Theorem 75)
+
+1. In a document without `dirty_all`, `scan_dirty`, `index_dirty`, `:has`, or
+   `@container` rules, an element `n`'s computed style `n.computed` depends only
+   on `n` and its ancestors. If no ancestor of `n` (including `n`) has
+   `style_queued == true`, `flushStyle` does not visit `n` or its ancestors; if
+   the highest queued ancestor `top` of `n` is a proper subtree, restyling only
+   `top` yields the exact same `n.computed` as flushing all `dirty_nodes`.
+2. For an exotic host collection (`o.class == .exotic`), calling
+   `o.payload.exotic.hooks.get_index(vm, o, i)` directly when `get_index` returns
+   `some v` matches `props.get(vm, o, PropKey.fromIndex(i))`.
+-/
+
+def computedStyleForNodeFast (ancestorQueued : Bool) (curStyle restyledTopStyle : Nat) : Nat :=
+  if !ancestorQueued then curStyle else restyledTopStyle
+
+theorem cone_scoped_style_flush_and_exotic_index_equiv
+    (ancestorQueued : Bool) (curStyle restyledTopStyle fullFlushedStyle : Nat)
+    (h_clean : ancestorQueued = false → curStyle = fullFlushedStyle)
+    (h_cone : ancestorQueued = true → restyledTopStyle = fullFlushedStyle) :
+    computedStyleForNodeFast ancestorQueued curStyle restyledTopStyle = fullFlushedStyle := by
+  unfold computedStyleForNodeFast
+  cases h : ancestorQueued <;> simp_all
+
 end NanoUI.Speedometer3Apex

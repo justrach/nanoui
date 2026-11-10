@@ -6,9 +6,58 @@ const Allocator = std.mem.Allocator;
 const dom = @import("../dom.zig");
 const selectors = @import("selectors.zig");
 const match = @import("selector_match.zig");
+const perf = @import("../perf_rules.zig");
 
 const Node = dom.Node;
 pub const Error = Allocator.Error || error{InvalidSelector};
+
+fn inLightDocument(root: *const Node) bool {
+    var at: ?*const Node = root;
+    while (at) |x| : (at = x.parent) {
+        if (x.is_shadow) return false;
+        if (x == root.doc.node) return true;
+    }
+    return false;
+}
+
+const SubjectFilter = struct {
+    active: bool = false,
+    req_tag: ?[]const u8 = null,
+    class_bits: u64 = 0,
+    attr_bits: u64 = 0,
+
+    fn fromList(root: *const Node, list: []const selectors.Selector) SubjectFilter {
+        var sf: SubjectFilter = .{};
+        if (list.len != 1 or root.doc.quirks) return sf;
+        const s = &list[0];
+        if (s.pseudo != .none or s.compounds.len == 0) return sf;
+        const subj = &s.compounds[s.compounds.len - 1];
+        for (subj.simples) |*sim| switch (sim.*) {
+            .tag => |t| {
+                sf.req_tag = t;
+                sf.active = true;
+            },
+            .class => |c| {
+                sf.class_bits |= perf.classBit(c);
+                sf.active = true;
+            },
+            .attr => |a| {
+                sf.attr_bits |= perf.attrBit(a.lower);
+                sf.active = true;
+            },
+            else => {},
+        };
+        return sf;
+    }
+
+    inline fn allows(sf: SubjectFilter, n: *const Node) bool {
+        if (!sf.active) return true;
+        if ((n.class_filter & sf.class_bits) != sf.class_bits) return false;
+        if ((n.attr_filter & sf.attr_bits) != sf.attr_bits) return false;
+        if (sf.req_tag) |t| if (!fastTagMatches(t, n)) return false;
+        return true;
+    }
+};
 
 fn parse(doc: *dom.Document, arena: Allocator, trimmed: []const u8) Error![]const selectors.Selector {
     if (trimmed.len > 0 and trimmed.len <= 256) {
@@ -83,32 +132,39 @@ const Anchor = union(enum) {
 };
 
 /// Theorem 19 (`id_anchored_query_selector_sound`): prunes `root`'s search space
-/// when a single selector is anchored on a `#id` in its leftmost compound.
+/// when a single selector is anchored on a `#id` in its subject or ancestor compound.
 fn resolveIdAnchor(root: *Node, list: []const selectors.Selector) Anchor {
     if (list.len != 1 or root.doc.quirks) return .{ .full = root };
     const s = &list[0];
     if (s.pseudo != .none or s.compounds.len == 0) return .{ .full = root };
+    if (!inLightDocument(root)) return .{ .full = root };
     var want_id: ?[]const u8 = null;
-    for (s.compounds[0].simples) |*sim| switch (sim.*) {
-        .id => |id| {
-            want_id = id;
-            break;
-        },
-        .host, .host_context => return .{ .full = root },
-        else => {},
-    };
-    const id = want_id orelse return .{ .full = root };
-    for (s.compounds[1..]) |*c| {
-        if (c.combinator != .descendant and c.combinator != .child) return .{ .full = root };
+    var id_compound: usize = 0;
+    var k: usize = s.compounds.len;
+    while (k > 0) {
+        k -= 1;
+        for (s.compounds[k].simples) |*sim| switch (sim.*) {
+            .id => |id| {
+                if (want_id == null) {
+                    want_id = id;
+                    id_compound = k;
+                }
+            },
+            .host, .host_context => return .{ .full = root },
+            else => {},
+        };
+        if (want_id != null) break;
+        const comb = s.compounds[k].combinator;
+        if (comb != .descendant and comb != .child) break;
     }
-    if (!root.doc.node.contains(root)) return .{ .full = root };
+    const id = want_id orelse return .{ .full = root };
     const first = root.doc.getElementById(id) orelse return .none;
     if (root.doc.id_map_gen != root.doc.id_generation) {
         @constCast(root.doc).id_last_key = "";
         _ = root.doc.getElementById(id);
     }
     if (root.doc.id_has_dups) return .{ .full = root };
-    if (s.compounds.len == 1) {
+    if (id_compound + 1 == s.compounds.len) {
         if (first != root and root.contains(first)) return .{ .single = first };
         return .none;
     }
@@ -125,13 +181,14 @@ pub fn querySelector(root: *Node, selector: []const u8, arena: Allocator) Error!
         if (trimmed[0] == '#' and isPlainIdent(trimmed[1..])) {
             const want = trimmed[1..];
             if (root == root.doc.node) return root.doc.getElementById(want);
-            if (root.doc.node.contains(root)) {
+            if (!root.has_id) return null;
+            if (inLightDocument(root)) {
                 const first = root.doc.getElementById(want) orelse return null;
                 if (first != root and root.contains(first)) return first;
             }
             var at = root.first_child;
-            while (at) |n| : (at = n.nextInTree(root)) {
-                if (n.kind == .element) if (n.attr("id")) |v| if (std.mem.eql(u8, v, want)) return n;
+            while (at) |n| : (at = if (n.has_id) n.nextInTree(root) else n.nextSkippingChildren(root)) {
+                if (n.kind == .element) if (n.id_attr) |v| if (std.mem.eql(u8, v, want)) return n;
             }
             return null;
         }
@@ -164,9 +221,10 @@ pub fn querySelector(root: *Node, selector: []const u8, arena: Allocator) Error!
         .none => return null,
         .single => |n| return if (n.kind == .element and hit(list, n, &ctx)) n else null,
         .full => |walk_root| {
+            const sf = SubjectFilter.fromList(root, list);
             var at = walk_root.first_child;
             while (at) |n| : (at = n.nextInTree(walk_root)) {
-                if (n.kind == .element and hit(list, n, &ctx)) return n;
+                if (n.kind == .element and sf.allows(n) and hit(list, n, &ctx)) return n;
             }
             return null;
         },
@@ -206,9 +264,10 @@ pub fn querySelectorAll(root: *Node, selector: []const u8, arena: Allocator, out
         .none => return,
         .single => |n| if (n.kind == .element and hit(list, n, &ctx)) try out.append(arena, n),
         .full => |walk_root| {
+            const sf = SubjectFilter.fromList(root, list);
             var at = walk_root.first_child;
             while (at) |n| : (at = n.nextInTree(walk_root)) {
-                if (n.kind == .element and hit(list, n, &ctx)) try out.append(arena, n);
+                if (n.kind == .element and sf.allows(n) and hit(list, n, &ctx)) try out.append(arena, n);
             }
         },
     }

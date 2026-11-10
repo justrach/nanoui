@@ -66,8 +66,6 @@ $.hook("makeRemote", (peer, id, callable, array) => {
   // An array must remain an array to Array.isArray and structuredClone.
   p = new Proxy(callable ? function () {} : array ? [] : {}, {
     get(_, k) {
-      const left = orphan();
-      if (left) return left[k];
       const s = state();
       if (s === cross) return far()[k];
       if (isWindow) {
@@ -77,6 +75,10 @@ $.hook("makeRemote", (peer, id, callable, array) => {
       if (k === Symbol.iterator) return call(9, "iterator");
       if (typeof k === "symbol") return k === Symbol.toStringTag ? call(0, "constructor")?.name : undefined;
       const v = call(0, k);
+      if (v === undefined && callable) {
+        const left = orphan();
+        if (left) return left[k];
+      }
       if (isWindow && typeof v === "function" && typeof g[k] === "function") localOf.set(v, g[k]);
       return v;
     },

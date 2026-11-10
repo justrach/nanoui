@@ -380,8 +380,9 @@ pub fn adoptWritten(w: *World, fragment: *Node) Error!void {
 
 /// Scripts in parsed fragments (`innerHTML`) never run.
 pub fn markStarted(w: *World, fragment: *Node) Error!void {
+    if (!fragment.has_insertion_work) return;
     var at = fragment.first_child;
-    while (at) |n| : (at = n.nextInTree(fragment)) {
+    while (at) |n| : (at = if (n.has_insertion_work) n.nextInTree(fragment) else n.nextSkippingChildren(fragment)) {
         if (n.isTag("script")) try w.runner.started.put(w.gpa, n, {});
     }
 }

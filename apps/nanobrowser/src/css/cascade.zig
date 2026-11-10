@@ -109,6 +109,11 @@ pub const Engine = struct {
     /// `@property`'s, and the scope above the root holding what each starts as.
     registered: vars.Registered = .empty,
     registered_scope: ?*const vars.Scope = null,
+    style_share: @import("../perf_rules.zig").StyleShareCache = .{},
+    last_scope_root: ?*const dom.Node = null,
+    last_scope_ix: ?*rule_index.Index = null,
+    layout_change_node: ?*dom.Node = null,
+    layout_change_many: bool = false,
 
     pub fn init(gpa: Allocator, doc: *dom.Document) Engine {
         return .{
@@ -301,6 +306,8 @@ pub const Engine = struct {
         e.root_font = 16;
         e.match_ctx = .{ .doc = e.doc };
         e.viewport_read = false;
+        e.layout_change_node = null;
+        e.layout_change_many = true;
 
         const doc_node = e.doc.node;
         var at = doc_node.first_child;
@@ -406,7 +413,27 @@ pub const Engine = struct {
         } else if (parent) |p| {
             n.tree_scope = p.tree_scope;
         }
-        @import("../perf_rules.zig").updateAncestorBloom(n, root);
+        const perf = @import("../perf_rules.zig");
+        perf.updateAncestorBloom(n, root);
+        n.style_shared = false;
+        n.style_canon = null;
+        const canon_parent: *const Style = if (parent_is_element and parent.?.style_shared and parent.?.style_canon != null) @ptrCast(@alignCast(parent.?.style_canon.?)) else parent_style;
+        const share_cand: ?perf.ShareCand = null;
+        if (share_cand) |sc| if (e.style_share.lookup(e.generation, n, canon_parent, parent_scope, sc)) |hit| {
+            const copy = try e.genArena().create(Style);
+            copy.* = hit.computed.*;
+            n.computed = copy;
+            n.style_generation = e.generation;
+            n.css_vars = hit.scope;
+            n.before = hit.before;
+            n.after = hit.after;
+            n.marker = null;
+            n.backdrop = null;
+            n.style_shared = true;
+            n.style_canon = hit.computed;
+            if (change) |c| { c.* = c.max(.layout); scopes.noteLayoutChange(e, n, null, copy); }
+            return n.nextDeep(root);
+        };
         const fresh_ptr: *Style = if (old == null) try e.genArena().create(Style) else &e.scratch_fresh;
         const r = if (n.is_shadow) compute.shadowRoot(parent_style, parent_scope, fresh_ptr) else try compute.element(e, n, parent_style, parent_scope, fresh_ptr);
         if (fresh_ptr.container_type != .normal) try e.containers.put(e.gpa, n, {});
@@ -415,16 +442,19 @@ pub const Engine = struct {
         var compared: Change = .layout;
         if (old) |o| {
             compared = diff.compare(o, fresh_ptr);
-            if (change) |c| c.* = c.max(if (in_svg and compared == .layout) .paint else compared);
-        } else if (change) |c| c.* = c.max(if (in_svg) .paint else .layout);
+            const ch: Change = if (in_svg and compared == .layout) .paint else compared;
+            if (change) |c| c.* = c.max(ch);
+            if (ch == .layout) scopes.noteLayoutChange(e, n, o, fresh_ptr);
+        } else if (change) |c| {
+            const ch: Change = if (in_svg) .paint else .layout;
+            c.* = c.max(ch);
+            if (ch == .layout) scopes.noteLayoutChange(e, n, null, fresh_ptr);
+        }
         const stored: *const Style = blk: {
             if (old) |o| {
                 if (compared == .none) break :blk o;
                 // Boxes hold this one: only paint read it, and it stays theirs.
-                if (compared == .paint) {
-                    @constCast(o).* = e.scratch_fresh;
-                    break :blk o;
-                }
+                if (compared == .paint) { @constCast(o).* = e.scratch_fresh; break :blk o; }
                 const s = try e.genArena().create(Style);
                 s.* = e.scratch_fresh;
                 break :blk s;
@@ -438,9 +468,7 @@ pub const Engine = struct {
         if (stored.display == .none) {
             n.before = null;
             n.after = null;
-            if (change) |c| if (old_before != null or old_after != null) {
-                c.* = c.max(.layout);
-            };
+            if (change) |c| if (old_before != null or old_after != null) { c.* = c.max(.layout); scopes.noteLayoutChange(e, n, old, stored); };
             var k = n.first_child;
             while (k) |x| : (k = x.next) e.clearSubtree(x, change, false);
             if (n.shadow_root) |x| e.clearSubtree(x, change, false);
@@ -450,6 +478,7 @@ pub const Engine = struct {
         n.after = try e.pseudoStyle(n, .after, e.pseudo_after.items, r.after, stored, r.scope, old_after, prev_after, change);
         n.marker = try e.pseudoStyle(n, .marker, e.pseudo_marker.items, r.marker, stored, r.scope, null, null, null);
         n.backdrop = try e.pseudoStyle(n, .backdrop, e.pseudo_backdrop.items, r.backdrop, stored, r.scope, null, null, null);
+        if (share_cand) |sc| e.style_share.record(e.generation, n, canon_parent, parent_scope, sc, stored, n.before, n.after, r.scope, r.marker or r.backdrop);
         return n.nextDeep(root);
     }
 
@@ -458,13 +487,7 @@ pub const Engine = struct {
     /// the pass is over; anything older isn't.
     fn previous(e: *const Engine, n: *const dom.Node, which: animate.Pseudo) ?*const Style {
         if (n.style_generation != e.generation and n.style_generation +% 1 != e.generation) return null;
-        return switch (which) {
-            .none => n.computed,
-            .before => n.before,
-            .after => n.after,
-            .marker => n.marker,
-            .backdrop => n.backdrop,
-        };
+        return switch (which) { .none => n.computed, .before => n.before, .after => n.after, .marker => n.marker, .backdrop => n.backdrop };
     }
 
     fn pseudoStyle(e: *Engine, n: *dom.Node, which: animate.Pseudo, list: []rule_index.Entry, wanted: bool, parent: *const Style, scope: ?*const vars.Scope, old: ?*const Style, prev: ?*const Style, change: ?*Change) Allocator.Error!?*const Style {
@@ -473,7 +496,6 @@ pub const Engine = struct {
             var fresh: Style = undefined;
             if (try compute.pseudo(e, n, list, parent, scope, &fresh)) {
                 try e.anim.styled(e, n, which, parent, scope, prev, &fresh);
-                // Boxes hold the one they have: only paint read it, and it stays theirs.
                 if (old) |o| {
                     const compared = diff.compare(o, &fresh);
                     if (compared != .layout) {
@@ -487,20 +509,19 @@ pub const Engine = struct {
                 made = s;
             }
         }
-        if (change) |c| {
-            if (old != null and made != null) {
-                c.* = c.max(.layout);
-            } else if ((old == null) != (made == null)) {
-                c.* = c.max(.layout);
-            }
-        }
+        if (change) |c| if ((old != null and made != null) or ((old == null) != (made == null))) {
+            c.* = c.max(.layout);
+            scopes.noteLayoutChange(e, n, parent, parent);
+        };
         return made;
     }
 
     /// No styles under `display: none`.
     fn clearSubtree(e: *Engine, top: *dom.Node, change: ?*Change, had_style: bool) void {
         if (change) |c| if (had_style) {
-            c.* = c.max(if (top.ns == .svg and !top.isTag("svg")) .paint else .layout);
+            const ch: Change = if (top.ns == .svg and !top.isTag("svg")) .paint else .layout;
+            c.* = c.max(ch);
+            if (ch == .layout) scopes.noteLayoutChange(e, top, top.computed, null);
         };
         var at: ?*dom.Node = top;
         while (at) |n| : (at = n.nextDeep(top)) {

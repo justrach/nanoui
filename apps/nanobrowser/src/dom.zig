@@ -87,6 +87,8 @@ pub const Node = struct {
     has_on_attr: bool = false,
     /// Queued in `Document.dirty_nodes` for the next `flushStyle` pass.
     style_queued: bool = false,
+    style_shared: bool = false,
+    style_canon: ?*const anyopaque = null,
     /// An inline split around blocks: its boxes, whose union its rect is.
     box_parts: []const *anyopaque = &.{},
 
@@ -256,6 +258,16 @@ pub const Node = struct {
     }
 
     pub fn appendChild(n: *Node, child: *Node) void { n.insertBefore(child, null); }
+
+    /// Links a freshly created node into `n` during parsing or cloning without `touchTree`.
+    pub fn parserInsert(n: *Node, child: *Node, ref: ?*Node) void {
+        child.parent = n;
+        child.next = ref;
+        child.prev = if (ref) |r| r.prev else n.last_child;
+        if (child.prev) |p| p.next = child else n.first_child = child;
+        if (ref) |r| r.prev = child else n.last_child = child;
+        n.propagateFlags(child.has_resource or n.isTag("style"), child.has_id, child.has_insertion_work);
+    }
 
     /// Takes the node out of its parent.
     pub fn remove(n: *Node) void {
@@ -427,6 +439,7 @@ pub const Document = struct {
     /// What a restyle has to look at: everything, or under just these.
     dirty_all: bool = true,
     dirty_nodes: std.ArrayList(*Node) = .empty,
+    oof_dirty_node: ?*Node = null,
     /// What `showModal()` and `showPopover()` have raised, the oldest first.
     top_layer: std.ArrayList(*Node) = .empty,
 
@@ -444,6 +457,7 @@ pub const Document = struct {
         d.svg_roots_generation +%= 1;
         d.style_dirty = true;
         d.layout_dirty = true;
+        d.oof_dirty_node = null;
         d.dirty_all = true;
     }
 
@@ -471,6 +485,7 @@ pub const Document = struct {
         const disp_contents = n.computed != null and n.computed.?.display == .contents;
         if (!perf.isSvgInterior(n.ns == .svg, false, disp_contents)) {
             d.layout_dirty = true;
+            d.oof_dirty_node = null;
             d.svg_roots_generation +%= 1;
         }
         d.touchUnder(n);
@@ -479,29 +494,19 @@ pub const Document = struct {
     /// The top modal dialog: what's outside it takes no input.
     pub fn modalDialog(d: *const Document) ?*Node {
         var i = d.top_layer.items.len;
-        while (i > 0) {
-            i -= 1;
-            if (d.top_layer.items[i].modal) return d.top_layer.items[i];
-        }
+        while (i > 0) { i -= 1; if (d.top_layer.items[i].modal) return d.top_layer.items[i]; }
         return null;
     }
 
     /// Raises `n`, or lowers it when `up` is false.
     pub fn setTopLayer(d: *Document, n: *Node, up: bool) void {
-        for (d.top_layer.items, 0..) |x, i| if (x == n) {
-            _ = d.top_layer.orderedRemove(i);
-            break;
-        };
+        for (d.top_layer.items, 0..) |x, i| if (x == n) { _ = d.top_layer.orderedRemove(i); break; };
         n.in_top_layer = up;
-        if (up) d.top_layer.append(d.arena, n) catch {
-            n.in_top_layer = false;
-        };
+        if (up) d.top_layer.append(d.arena, n) catch { n.in_top_layer = false; };
         d.touchStyle();
     }
 
-    pub fn touchLayout(d: *Document) void {
-        d.layout_dirty = true;
-    }
+    pub fn touchLayout(d: *Document) void { d.layout_dirty = true; d.oof_dirty_node = null; }
 
     pub fn createElement(d: *Document, tag: []const u8) Allocator.Error!*Node {
         return d.createElementNs(tag, .html);

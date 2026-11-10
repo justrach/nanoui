@@ -402,7 +402,7 @@ pub const Builder = struct {
         if (b.open.items.len >= max_depth) b.pop();
         const n = try b.newElement(name, ns, attrs);
         const at = b.placeFor(null);
-        at.parent.insertBefore(n, at.before);
+        at.parent.parserInsert(n, at.before);
         return n;
     }
 
@@ -443,14 +443,14 @@ pub const Builder = struct {
         if (at.parent.kind == .document) return;
         const n = try b.arena.create(dom.Node);
         n.* = .{ .kind = .text, .doc = b.doc, .data = s };
-        at.parent.insertBefore(n, at.before);
+        at.parent.parserInsert(n, at.before);
     }
 
     pub fn insertComment(b: *Builder, s: []const u8, into: ?*dom.Node) Error!void {
         const n = try b.arena.create(dom.Node);
         n.* = .{ .kind = .comment, .doc = b.doc, .data = s };
         const parent = into orelse contentOf(if (b.current()) |c| c.node else b.root);
-        parent.appendChild(n);
+        parent.parserInsert(n, null);
     }
 
     /// Gives `n` the attributes of `t` it does not have (`<html>`, `<body>`

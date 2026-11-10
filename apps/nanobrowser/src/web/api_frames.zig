@@ -167,6 +167,13 @@ fn runRemoteOp(me: *World, o: *World, op_num: i32, object: Value, args: []const 
                 }
             }
         },
+        1 => {
+            const key_arg = bind.arg(args, 3);
+            if (object.isObject() and key_arg.isString()) {
+                try object.asObject().set(o.vm, try me.vm.toStringSlice(key_arg), try carry(me, o, bind.arg(args, 4)));
+                return Value.true;
+            }
+        },
         6 => {
             if (object.isCallable()) {
                 const this_arg = try carry(me, o, bind.arg(args, 3));

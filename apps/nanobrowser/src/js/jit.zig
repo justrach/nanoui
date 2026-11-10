@@ -158,8 +158,7 @@ pub fn jitGetField(vm: *Vm, f: *Frame, sp: [*]Value, pc: [*]const u8) callconv(.
     const ic = &f.fp.ics[std.mem.readInt(u32, (pc + 1)[0..4], .little)];
     f.pc = pc;
     vm.sp = sp;
-    const r = icache.getField(vm, ic, (sp - 1)[0]) catch |e| return errRes(vm, sp, e);
-    return .{ .bits = r.bits, .err = 0 };
+    return .{ .bits = (icache.getField(vm, ic, (sp - 1)[0]) catch |e| return errRes(vm, sp, e)).bits, .err = 0 };
 }
 
 pub fn jitPutField(vm: *Vm, f: *Frame, sp: [*]Value, pc: [*]const u8) callconv(.c) JitResult {
@@ -186,8 +185,7 @@ pub fn jitGetGlobal(vm: *Vm, f: *Frame, sp: [*]Value, pc: [*]const u8) callconv(
     }
     f.pc = pc;
     vm.sp = sp;
-    const r = icache.getGlobal(vm, ic) catch |e| return errRes(vm, sp, e);
-    return .{ .bits = r.bits, .err = 0 };
+    return .{ .bits = (icache.getGlobal(vm, ic) catch |e| return errRes(vm, sp, e)).bits, .err = 0 };
 }
 
 pub fn jitPutGlobal(vm: *Vm, f: *Frame, sp: [*]Value, pc: [*]const u8) callconv(.c) JitResult {
@@ -210,12 +208,16 @@ pub fn jitGetLength(vm: *Vm, f: *Frame, sp: [*]Value, pc: [*]const u8) callconv(
         if (o.class == .array) return .{ .bits = Value.fromUsize(o.arr_len).bits, .err = 0 };
         if (o.class == .typedarray) return .{ .bits = Value.fromUsize(typed.length(o)).bits, .err = 0 };
         if (o.class == .arguments and (o.shape == vm.args_strict_shape or o.shape == vm.args_sloppy_shape)) return .{ .bits = o.slots[0].bits, .err = 0 };
+        if (o.class == .host_exotic and o.shape.count == 0 and o.payload.hooks.get_named == null) if (o.payload.hooks.length_index) |lf| {
+            f.pc = pc;
+            vm.sp = sp;
+            return .{ .bits = Value.fromUsize(lf(vm, o) catch |e| return errRes(vm, sp, e)).bits, .err = 0 };
+        };
     } else if (v.isString()) return .{ .bits = Value.fromUsize(v.asString().len16).bits, .err = 0 };
     f.pc = pc;
     vm.sp = sp;
     const ic = &f.fp.ics[std.mem.readInt(u32, (pc + 1)[0..4], .little)];
-    const r = icache.getField(vm, ic, v) catch |e| return errRes(vm, sp, e);
-    return .{ .bits = r.bits, .err = 0 };
+    return .{ .bits = (icache.getField(vm, ic, v) catch |e| return errRes(vm, sp, e)).bits, .err = 0 };
 }
 
 pub fn jitGetElem(vm: *Vm, f: *Frame, sp: [*]Value, pc: [*]const u8) callconv(.c) JitResult {
@@ -231,20 +233,20 @@ pub fn jitGetElem(vm: *Vm, f: *Frame, sp: [*]Value, pc: [*]const u8) callconv(.c
             } else if (o.class == .typedarray) {
                 f.pc = pc;
                 vm.sp = sp;
-                const r = typed.getIndex(vm, o, i) catch |e| return errRes(vm, sp, e);
-                return .{ .bits = r.bits, .err = 0 };
-            }
+                return .{ .bits = (typed.getIndex(vm, o, i) catch |e| return errRes(vm, sp, e)).bits, .err = 0 };
+            } else if (o.class == .host_exotic and o.shape.count == 0) if (o.payload.hooks.get_index) |gi| {
+                f.pc = pc;
+                vm.sp = sp;
+                return .{ .bits = ((gi(vm, o, i) catch |e| return errRes(vm, sp, e)) orelse Value.undefined).bits, .err = 0 };
+            };
         } else if (t.isString()) {
             const s = t.asString();
-            if (i < s.len16 and s.is_ascii and !s.is_rope) {
-                return .{ .bits = Value.fromString(vm.char_strs[s.ptr[i]]).bits, .err = 0 };
-            }
+            if (i < s.len16 and s.is_ascii and !s.is_rope) return .{ .bits = Value.fromString(vm.char_strs[s.ptr[i]]).bits, .err = 0 };
         }
     }
     f.pc = pc;
     vm.sp = sp;
-    const r = icache.getElem(vm, t, k) catch |e| return errRes(vm, sp, e);
-    return .{ .bits = r.bits, .err = 0 };
+    return .{ .bits = (icache.getElem(vm, t, k) catch |e| return errRes(vm, sp, e)).bits, .err = 0 };
 }
 
 pub fn jitPutElem(vm: *Vm, f: *Frame, sp: [*]Value, pc: [*]const u8) callconv(.c) JitResult {

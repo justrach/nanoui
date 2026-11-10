@@ -49,11 +49,10 @@ pub fn get(vm: *Vm, o: *Object, key: PropKey, receiver: Value) Error!?Value {
                 if (h.get_index) |f| {
                     if (try f(vm, o, key.index())) |v| return v;
                 }
-            } else if (try keyBytes(vm, key)) |name| {
-                // Real properties (methods on the prototype, own data) win over named items.
-                if (h.get_named) |f| {
+            } else {
+                if (h.get_named) |f| if (try keyBytes(vm, key)) |name| {
                     if (try f(vm, o, name)) |v| return v;
-                }
+                };
                 if (key.eql(vm.k.length)) {
                     if (h.length_index) |f| return Value.fromUsize(try f(vm, o));
                 }
