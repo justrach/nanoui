@@ -255,5 +255,5 @@
   });
   const globals = { GPUCommandEncoder, GPUCommandBuffer, GPUComputePassEncoder, GPURenderPassEncoder, GPURenderPipeline, GPUTexture, GPUTextureView, GPUCanvasContext,
     GPUColorWrite: Object.freeze({ RED: 1, GREEN: 2, BLUE: 4, ALPHA: 8, ALL: 15 }) };
-  for (const name of Object.keys(globals)) globalThis[name] = globals[name];
+  for (const name of Object.keys(globals)) $.def(globalThis, name, globals[name]);
 });

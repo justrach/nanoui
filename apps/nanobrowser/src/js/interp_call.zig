@@ -42,17 +42,15 @@ pub fn pushClosure(vm: *Vm, callee: *Object, args: [*]Value, argc: u32, ret_sp: 
     if (vm.frame_top >= vm_mod.max_frames) return vm.throwError(.RangeError, "Maximum call stack size exceeded");
     const nparams: u32 = fp.nparams;
     var bp = args;
-    if (argc > nparams) bp = args + argc;
+    var i: u32 = @min(argc, nparams);
+    if (argc > nparams and fp.needs_args) {
+        bp = args + argc;
+        @memcpy(bp[0..nparams], args[0..nparams]);
+    }
     const locals_end = bp + fp.nlocals;
     const limit = @intFromPtr(vm.stack.ptr) + vm.stack.len * @sizeOf(Value);
     if (@intFromPtr(locals_end) + (@as(usize, fp.max_stack) + 64) * @sizeOf(Value) > limit) {
         return vm.throwError(.RangeError, "Maximum call stack size exceeded");
-    }
-    var i: u32 = 0;
-    if (argc > nparams) {
-        while (i < nparams) : (i += 1) bp[i] = args[i];
-    } else {
-        i = argc;
     }
     while (i < fp.nlocals) : (i += 1) bp[i] = Value.undefined;
     var this = this_in;

@@ -38,6 +38,7 @@ pub fn getField(vm: *Vm, ic: *bc.IC, v: Value) Error!Value {
     const o = v.asObject();
     if (o.shape == ic.shape) {
         if (ic.fast_own_data) return o.slots[ic.slot];
+        if (ic.fast_proto_data and ic.epoch == vm.proto_epoch and ic.holder.?.shape == ic.holder_shape) return ic.holder.?.slots[ic.slot];
         if (ic.slot == bc.IC.missing_slot) {
             if (ic.epoch == vm.proto_epoch) return Value.undefined;
         } else if (if (ic.holder) |h| (h.shape == ic.holder_shape and ic.epoch == vm.proto_epoch) else true) {
@@ -59,6 +60,7 @@ pub fn getField(vm: *Vm, ic: *bc.IC, v: Value) Error!Value {
                 ic.is_accessor = acc;
                 ic.is_transition = false;
                 ic.fast_own_data = !acc;
+                ic.fast_proto_data = false;
             }
             if (acc) return props.callGetter(vm, o.slots[slot], v);
             return o.slots[slot];
@@ -85,6 +87,7 @@ pub fn getField(vm: *Vm, ic: *bc.IC, v: Value) Error!Value {
                         ic.is_accessor = acc;
                         ic.is_transition = false;
                         ic.fast_own_data = false;
+                        ic.fast_proto_data = !acc;
                     }
                     if (acc) return props.callGetter(vm, h.slots[slot], v);
                     return h.slots[slot];
@@ -98,6 +101,7 @@ pub fn getField(vm: *Vm, ic: *bc.IC, v: Value) Error!Value {
                 ic.is_accessor = false;
                 ic.is_transition = false;
                 ic.fast_own_data = false;
+                ic.fast_proto_data = false;
                 return Value.undefined;
             }
         }

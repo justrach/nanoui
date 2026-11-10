@@ -26,6 +26,7 @@ inline fn elemIf(vm: *Vm, o: *Object, i: usize) Error!?Value {
     if (i < o.elems_len and !o.flags.exotic) {
         const v = o.elems[i];
         if (!v.isHole()) return v;
+        if (arr.isPlain(o) and o.shape == vm.array_root and !vm.protos.array.flags.proto_dirty and !vm.protos.object.flags.proto_dirty) return null;
     }
     if (try props.has(vm, o, try key(vm, i))) return try props.get(vm, o, try key(vm, i));
     return null;
@@ -151,11 +152,15 @@ fn findImpl(vm: *Vm, this: Value, args: []const Value, backward: bool, mode: Fin
     const n = try conv.lengthOf(vm, o);
     const cb = u.arg(args, 0);
     try needCallback(vm, cb);
+    const this_arg = u.arg(args, 1);
     var step: usize = 0;
     while (step < n) : (step += 1) {
         const i = if (backward) n - 1 - step else step;
-        const v = try props.get(vm, o, try key(vm, i));
-        if (ops.truthy(try invoke(vm, cb, u.arg(args, 1), v, i, o))) {
+        const v = if (i < o.elems_len and !o.flags.exotic and !o.elems[i].isHole())
+            o.elems[i]
+        else
+            try props.get(vm, o, try key(vm, i));
+        if (ops.truthy(try invoke(vm, cb, this_arg, v, i, o))) {
             return if (mode == .value) v else Value.fromUsize(i);
         }
     }

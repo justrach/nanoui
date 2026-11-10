@@ -24,7 +24,7 @@ function pack(v, seen, ports) {
   try {
     if (Array.isArray(v)) return v.map((x) => pack(x, seen, ports));
     if (ports.includes(v)) return { $nb: "port", i: ports.indexOf(v) };
-    if (g.MessagePort && (v instanceof g.MessagePort || $.remotePort(v))) throw cloneError("A MessagePort not in the transfer list");
+    if (($.portOut && v instanceof g.MessagePort) || $.remotePort(v)) throw cloneError("A MessagePort not in the transfer list");
     if (v instanceof Date) return { $nb: "date", d: v.getTime() };
     if (v instanceof RegExp) return { $nb: "regexp", d: v.source, f: v.flags };
     if (v instanceof Map) return { $nb: "map", d: [...v].map(([a, b]) => [pack(a, seen, ports), pack(b, seen, ports)]) };
@@ -69,7 +69,9 @@ function unpack(v, ports) {
 }
 
 function transferred(transfer) {
-  const list = Array.isArray(transfer) ? transfer : transfer && transfer.transfer ? Array.from(transfer.transfer) : [];
+  if (!transfer) return [];
+  const list = Array.isArray(transfer) ? transfer : transfer.transfer ? Array.from(transfer.transfer) : [];
+  if (!list.length) return [];
   return list.filter((x) => g.MessagePort && (x instanceof g.MessagePort || $.remotePort(x)));
 }
 
@@ -82,7 +84,7 @@ $.wire = (data, transfer) => {
   const ports = transferred(transfer);
   // Read first: a message that can't be sent mustn't take its ports away.
   const v = pack(data, [], ports);
-  return JSON.stringify({ v, ports: ports.map($.portOut) });
+  return JSON.stringify({ v, ports: ports.length ? (void g.MessagePort, ports.map($.portOut)) : [] });
 };
 $.unwire = (text) => {
   const m = JSON.parse(text);

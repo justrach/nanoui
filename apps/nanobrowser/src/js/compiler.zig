@@ -323,6 +323,7 @@ pub fn finish(c: *C, name: *JSString, start: u32, end: u32, length: u32) Error!*
         .coerce_this = !f.strict and c.fi.uses_this and !f.is_arrow,
         .needs_home = c.fi.uses_super or c.fi.home_var != null,
         .is_method = f.is_method,
+        .needs_args = c.fi.arguments_var != null or (f.is_default_ctor and f.is_derived) or f.is_generator or f.is_async or (f.params.len > 0 and f.params[f.params.len - 1].data == .spread),
     };
     return p;
 }

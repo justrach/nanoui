@@ -194,6 +194,9 @@ pub const Object = struct {
     pub fn defineAccessor(o: *Object, vm: *Vm, name: []const u8, getter: ?NativeFn, setter: ?NativeFn) Error!void {
         return vm.defineAccessorOn(o, name, getter, setter);
     }
+    pub fn defineAccessorValue(o: *Object, vm: *Vm, name: []const u8, getter: Value, setter: Value, enumerable: bool) Error!void {
+        return vm.defineAccessorValueOn(o, name, getter, setter, enumerable);
+    }
     pub fn defineData(o: *Object, vm: *Vm, name: []const u8, v: Value, flags: shape_mod.PropFlags) Error!void {
         return vm.defineDataOn(o, name, v, flags);
     }

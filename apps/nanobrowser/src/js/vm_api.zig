@@ -292,6 +292,10 @@ pub fn defineAccessorOn(vm: *Vm, o: *Object, name: []const u8, getter: ?NativeFn
     try props.defineAccessor(vm, o, try str.keyFromBytes(vm, name), g, s, false);
 }
 
+pub fn defineAccessorValueOn(vm: *Vm, o: *Object, name: []const u8, getter: Value, setter: Value, enumerable: bool) Error!void {
+    try props.defineAccessor(vm, o, try str.keyFromBytes(vm, name), getter, setter, enumerable);
+}
+
 pub fn defineDataOn(vm: *Vm, o: *Object, name: []const u8, v: Value, flags: PropFlags) Error!void {
     try props.defineData(vm, o, try str.keyFromBytes(vm, name), v, flags);
 }

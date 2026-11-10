@@ -2,7 +2,10 @@
 // device. State is private; native IDs never serve as public object authority.
 (function ($, globalThis) {
   'use strict';
-  if (!$.gpuAvailable()) return;
+  if (!$.gpuAvailable()) {
+    for (const name of ['GPU', 'GPUAdapter', 'GPUDevice', 'GPUBuffer', 'GPUShaderModule', 'GPUComputePipeline', 'GPUBindGroup', 'GPUBindGroupLayout', 'GPUQueue', 'GPUValidationError', 'GPUOutOfMemoryError', 'GPUInternalError', 'GPUUncapturedErrorEvent', 'GPUBufferUsage', 'GPUMapMode', 'GPUShaderStage', 'GPUTextureUsage', 'GPUPipelineLayout', 'GPUCommandEncoder', 'GPUCommandBuffer', 'GPUComputePassEncoder', 'GPURenderPassEncoder', 'GPURenderPipeline', 'GPUTexture', 'GPUTextureView', 'GPUCanvasContext', 'GPUColorWrite']) delete globalThis[name];
+    return;
+  }
   const state = new WeakMap();
   class GPUValidationError extends Error { constructor(m) { super(m); this.name = 'GPUValidationError'; } }
   class GPUOutOfMemoryError extends Error { constructor(m) { super(m); this.name = 'GPUOutOfMemoryError'; } }
@@ -214,6 +217,6 @@
     GPUBufferUsage: Object.freeze({ MAP_READ: 1, MAP_WRITE: 2, COPY_SRC: 4, COPY_DST: 8, INDEX: 16, VERTEX: 32, UNIFORM: 64, STORAGE: 128, INDIRECT: 256, QUERY_RESOLVE: 512 }),
     GPUMapMode: Object.freeze({ READ: 1, WRITE: 2 }), GPUShaderStage: Object.freeze({ VERTEX: 1, FRAGMENT: 2, COMPUTE: 4 }),
     GPUTextureUsage: Object.freeze({ COPY_SRC: 1, COPY_DST: 2, TEXTURE_BINDING: 4, STORAGE_BINDING: 8, RENDER_ATTACHMENT: 16 }) };
-  for (const name of Object.keys(globals)) globalThis[name] = globals[name];
-  Object.defineProperty(navigator, 'gpu', { value: new GPU(), enumerable: true });
+  for (const name of Object.keys(globals)) $.def(globalThis, name, globals[name]);
+  Object.defineProperty(navigator, 'gpu', { value: new GPU(), enumerable: true, configurable: true });
 });

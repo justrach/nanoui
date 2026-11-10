@@ -79,11 +79,19 @@ pub fn fnApply(vm: *Vm, this: Value, args: []const Value) Error!Value {
 fn fnBind(vm: *Vm, this: Value, args: []const Value) Error!Value {
     if (!this.isCallable()) return vm.throwError(.TypeError, "Bind must be called on a function");
     const target = this.asObject();
-    const bound_args = try vm.gpa.dupe(Value, if (args.len > 1) args[1..] else args[0..0]);
-    errdefer vm.gpa.free(bound_args);
+    const bound_args: []Value = if (args.len > 1) try vm.gpa.dupe(Value, args[1..]) else &.{};
+    errdefer if (bound_args.len > 0) vm.gpa.free(bound_args);
     const data = try vm.gpa.create(objmod.BoundData);
     errdefer vm.gpa.destroy(data);
     data.* = .{ .target = target, .this = u.arg(args, 0), .args = bound_args };
+    if (target.flags.lazy_fn and target.shape == vm.fn_root) {
+        const o = try objmod.alloc(vm, vm.fn_root, .bound);
+        o.payload = .{ .bound = data };
+        o.flags.callable = true;
+        o.flags.constructor = target.flags.constructor;
+        o.flags.lazy_fn = true;
+        return o.value();
+    }
     const proto = try props.getProto(vm, target);
     const o = try objmod.create(vm, proto, .bound);
     o.payload = .{ .bound = data };

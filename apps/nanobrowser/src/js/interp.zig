@@ -205,6 +205,8 @@ pub fn run(vm: *Vm) Error!Value {
                     var r: Value = undefined;
                     if (v.isObject() and v.asObject().shape == ic.shape and ic.fast_own_data) {
                         r = v.asObject().slots[ic.slot];
+                    } else if (v.isObject() and v.asObject().shape == ic.shape and ic.fast_proto_data and ic.epoch == vm.proto_epoch and ic.holder.?.shape == ic.holder_shape) {
+                        r = ic.holder.?.slots[ic.slot];
                     } else {
                         sync(vm, f, pc, sp);
                         r = ok(Value, icache.getField(vm, ic, v), &err) orelse break :dispatch;
@@ -476,8 +478,7 @@ pub fn run(vm: *Vm) Error!Value {
                         pc = f.pc;
                         bp = f.bp;
                         sp = vm.sp;
-                        if (jit.getOrCompile(vm, f.fp) != null) continue :loop;
-                        continue :sw @fromBackingInt(@intCast(pc[0]));
+                        continue :loop;
                     }
                     const r = ok(Value, calls.callNonClosure(vm, callee, (sp - argc - 2)[0], (sp - argc)[0..argc]), &err) orelse break :dispatch;
                     sp -= argc + 1;
@@ -499,8 +500,7 @@ pub fn run(vm: *Vm) Error!Value {
                         pc = f.pc;
                         bp = f.bp;
                         sp = vm.sp;
-                        if (jit.getOrCompile(vm, f.fp) != null) continue :loop;
-                        continue :sw @fromBackingInt(@intCast(pc[0]));
+                        continue :loop;
                     }
                     const r = ok(Value, calls.construct(vm, callee, (sp - argc)[0..argc], callee), &err) orelse break :dispatch;
                     sp -= argc + 1;

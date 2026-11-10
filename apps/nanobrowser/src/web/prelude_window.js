@@ -230,7 +230,9 @@ const clipboard = {
   addEventListener() {}, removeEventListener() {},
 };
 def(g, "Navigator", Navigator);
-Object.defineProperty(g, "navigator", { value: new Navigator(), enumerable: true, configurable: true });
+const nav = new Navigator();
+if ($.platform === "MacIntel") Object.defineProperty(nav, "gpu", { get() { if (!$.gpuAvailable()) { delete nav.gpu; return undefined; } void g.GPU; return nav.gpu; }, enumerable: true, configurable: true });
+Object.defineProperty(g, "navigator", { value: nav, enumerable: true, configurable: true });
 g.clientInformation = g.navigator;
 const screenObject = {
   get width() { return g.innerWidth; }, get height() { return g.innerHeight; },

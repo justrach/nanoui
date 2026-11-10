@@ -32,39 +32,40 @@ fn needsPrepare(p: *const Page) bool {
 const Fonts = struct {
     p: *Page,
     c: *ui.Context,
+    space_key: u64 = 0,
+    space_w: f32 = 0,
+    metrics_key: u64 = 0,
+    metrics_val: box.Metrics = .{},
 
     fn width(ctx: *anyopaque, text: []const u8, font: box.Font) f32 {
         const f: *Fonts = @ptrCast(@alignCast(ctx));
-        // CoreText reads size 0 as its default: `font-size: 0` takes no room.
         if (font.size <= 0) return 0;
-        var h = fontHash(font);
-        h.update(text);
-        const k = h.final();
-        if (f.p.widths.get(k)) |w| return w;
+        const is_space = text.len == 1 and text[0] == ' ';
+        if (is_space and f.space_key == font.key()) return f.space_w;
+        const k = font.wordKey(text);
+        if (f.p.widths.get(k)) |w| {
+            if (is_space) { f.space_key = font.key(); f.space_w = w; }
+            return w;
+        }
         webfonts.need(f.p, f.c, font, text);
         const w = f.c.text.width(text, replay.textStyle(font));
-        // A font that came just now isn't in this measure.
-        if (!f.p.faces.changed) f.p.widths.put(f.p.gpa, k, w) catch {};
+        if (!f.p.faces.changed) {
+            f.p.widths.put(f.p.gpa, k, w) catch {};
+            if (is_space) { f.space_key = font.key(); f.space_w = w; }
+        }
         return w;
     }
 
     fn metrics(ctx: *anyopaque, font: box.Font) box.Metrics {
         const f: *Fonts = @ptrCast(@alignCast(ctx));
         if (font.size <= 0) return .{ .ascent = 0, .descent = 0, .gap = 0 };
-        var h = fontHash(font);
-        const k = h.final();
-        if (f.p.font_metrics.get(k)) |m| return m;
+        const k = font.key();
+        if (f.metrics_key == k) return f.metrics_val;
+        if (f.p.font_metrics.get(k)) |m| { f.metrics_key = k; f.metrics_val = m; return m; }
         webfonts.need(f.p, f.c, font, "");
         const m = lineMetrics(f.c, replay.textStyle(font));
-        if (!f.p.faces.changed) f.p.font_metrics.put(f.p.gpa, k, m) catch {};
+        if (!f.p.faces.changed) { f.p.font_metrics.put(f.p.gpa, k, m) catch {}; f.metrics_key = k; f.metrics_val = m; }
         return m;
-    }
-
-    fn fontHash(font: box.Font) std.hash.Wyhash {
-        var h = std.hash.Wyhash.init(@intFromBool(font.italic) + 2 * @as(u64, @intFromBool(font.mono)) + 4 * @as(u64, @intFromBool(font.serif)) + 8 * @as(u64, font.weight) + (@as(u64, font.stretch) << 16) + (@as(u64, @intFromBool(font.tabular)) << 32) + (@as(u64, @intFromBool(font.ligatures)) << 33));
-        h.update(std.mem.asBytes(&font.size));
-        h.update(font.family);
-        return h;
     }
 
     fn image(ctx: *anyopaque, node: *dom.Node) ?box.Size {

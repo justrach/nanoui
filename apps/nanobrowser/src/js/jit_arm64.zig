@@ -357,33 +357,7 @@ fn emitFunction(e: *Emitter, fp: *bc.FuncProto, pc_map: []u32, epilogue_idx: u32
                 e.subImm64(22, 22, 8);
             },
             .lt, .le, .gt, .ge, .seq, .sne, .eq, .ne => {
-                e.ldur64(0, 22, -16);
-                e.ldur64(1, 22, -8);
-                e.eorReg64(2, 0, 25);
-                e.eorReg64(3, 1, 25);
-                e.orrReg64(2, 2, 3);
-                e.lsrImm64(2, 2, 48);
-                const b_slow = e.len;
-                e.cbnz64(2, 0);
-                e.cmpReg32(0, 1);
-                const cond: Cond = switch (op) {
-                    .lt => .lt,
-                    .le => .le,
-                    .gt => .gt,
-                    .ge => .ge,
-                    .seq, .eq => .eq,
-                    else => .ne,
-                };
-                e.cset64(0, cond);
-                e.orrReg64(0, 0, 26);
-                const b_done = e.len;
-                e.bImm(0);
-                const slow_idx = e.len;
-                e.buf[b_slow] |= (@as(u32, @intCast(slow_idx - b_slow)) & 0x7FFFF) << 5;
-                e.callHelper5(@intFromPtr(&jit.jitCompareOp), pc_addr, @intFromEnum(op), epilogue_idx, pass);
-                e.buf[b_done] |= @as(u32, @intCast(e.len - b_done)) & 0x03FF_FFFF;
-                e.stur64(0, 22, -16);
-                e.subImm64(22, 22, 8);
+                e.emitCompareOp(op, pc_addr, epilogue_idx, pass);
             },
             .not => {
                 e.ldur64(0, 22, -8);

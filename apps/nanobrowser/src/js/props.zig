@@ -18,6 +18,7 @@ const str = @import("string.zig");
 const exotic = @import("props_exotic.zig");
 const define = @import("props_define.zig");
 const interp = @import("interp_call.zig");
+const conv = @import("conv.zig");
 
 pub const defineOwn = define.defineOwn;
 pub const Desc = define.Desc;
@@ -61,6 +62,37 @@ pub fn materialize(vm: *Vm, o: *Object) Error!void {
         .native => {
             name = o.payload.native.name;
             arity = o.payload.native.arity;
+        },
+        .bound => {
+            var cur = o.payload.bound.target;
+            var sub_args: i64 = @intCast(o.payload.bound.args.len);
+            var depth: usize = 1;
+            while (cur.class == .bound and cur.flags.lazy_fn and cur.shape == vm.fn_root) {
+                sub_args += @intCast(cur.payload.bound.args.len);
+                depth += 1;
+                cur = cur.payload.bound.target;
+            }
+            var base_len: i64 = 0;
+            var base_name: *str.JSString = vm.empty;
+            if (cur.flags.lazy_fn and cur.shape == vm.fn_root) {
+                switch (cur.class) {
+                    .closure => { base_len = cur.payload.fp.length; base_name = cur.payload.fp.name; },
+                    .native => { base_len = cur.payload.native.arity; base_name = cur.payload.native.name; },
+                    else => {},
+                }
+            } else {
+                if (try hasOwn(vm, cur, vm.k.length)) {
+                    const l = try get(vm, cur, vm.k.length);
+                    if (l.isNumber()) base_len = @intFromFloat(@max(0, try conv.toIntegerOrInf(vm, l)));
+                }
+                const nv = try get(vm, cur, vm.k.name);
+                if (nv.isString()) base_name = nv.asString();
+            }
+            arity = @intCast(@max(0, base_len - sub_args));
+            const prefix = try str.fromUtf8(vm, "bound ");
+            name = base_name;
+            var d: usize = 0;
+            while (d < depth) : (d += 1) name = try str.concat(vm, prefix, name);
         },
         else => {},
     }

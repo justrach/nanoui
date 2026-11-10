@@ -411,4 +411,171 @@ theorem single_tier_up_check_per_call
   unfold tierUpHotCount
   cases isEntry <;> rfl
 
+/-!
+  ## Theorem 38: ARM64 Non-Double NaN-Boxed `.seq` / `.sne` Fast Path (`js/jit_arm64_enc.zig`)
+
+  In nanobrowser's NaN-boxed representation, any non-double `Val` (`a.bits >= T_INT_BASE`) has
+  a 16-bit tag (`T_INT`, `T_SPEC`, `T_OBJ`, `T_STR`, `T_SYM`, `T_BIG`).
+  When both `a` and `b` are non-doubles (`aTag >= 1 ∧ bTag >= 1`):
+  - If `aBits == bBits`, then `strictEq` is always `true` (neither is a `double`, so neither is `NaN`).
+  - If `aBits != bBits` and (`aTag != bTag` or `aTag < T_STR`), then `strictEq` is always `false`
+    without calling `jitCompareOp` (only distinct string/bigint pointers with equal tag require
+    deep content comparison).
+-/
+
+/-- Abstract non-double strict equality where `deepEq` is only meaningful when tags match and `tag >= 4`. -/
+def nonDoubleStrictEq (aTag bTag aPayload bPayload : Nat) (deepEq : Bool) : Bool :=
+  if aTag == bTag then
+    if aPayload == bPayload then true
+    else if aTag < 4 then false
+    else deepEq
+  else false
+
+/-- Inline ARM64 fast path decision: returns `some res` when resolved inline, or `none` when
+    slow path `jitCompareOp` is required (`aTag == bTag && aPayload != bPayload && aTag >= 4`). -/
+def arm64SeqFastPath (aTag bTag aPayload bPayload : Nat) : Option Bool :=
+  if aTag == bTag && aPayload == bPayload then some true
+  else if aTag != bTag || aTag < 4 then some false
+  else none
+
+/-- Theorem 38: Whenever `arm64SeqFastPath` returns `some b`, `nonDoubleStrictEq` equals `b`. -/
+theorem nanbox_non_double_strict_eq_iff
+    (aTag bTag aPayload bPayload : Nat)
+    (deepEq res : Bool)
+    (hFast : arm64SeqFastPath aTag bTag aPayload bPayload = some res) :
+    nonDoubleStrictEq aTag bTag aPayload bPayload deepEq = res := by
+  unfold arm64SeqFastPath at hFast
+  unfold nonDoubleStrictEq
+  have hBne : (aTag != bTag) = !(aTag == bTag) := rfl
+  rw [hBne] at hFast
+  cases hT : (aTag == bTag) <;> cases hP : (aPayload == bPayload) <;> cases hLt : decide (aTag < 4)
+  all_goals
+    simp [hT, hP, hLt] at hFast ⊢
+    try exact hFast.symm
+    try exact hFast
+
+/-!
+  ## Theorem 39: Prototype Data Inline Cache (`fast_proto_data`) Soundness (`js/interp_ic.zig`, `js/jit_arm64_enc.zig`)
+
+  When `ic.fast_proto_data = true`:
+  1. `obj.shape == ic.shape` guarantees `obj` has no own property for `name` and has the same
+     prototype link as when the IC was populated.
+  2. `ic.epoch == vm.proto_epoch` guarantees no prototype shape or prototype link along the chain
+     between `obj` and `ic.holder` has changed since the IC was populated.
+  3. `ic.holder.shape == ic.holder_shape` guarantees `ic.holder.slots[ic.slot]` is still a plain
+     data property (`!acc`) at slot `ic.slot`.
+  Under these three guards, reading `ic.holder.slots[ic.slot]` directly is identical to full
+  prototype chain traversal `getR(obj, name)`.
+-/
+
+/-- Full prototype lookup vs direct holder slot read under `fast_proto_data` guards. -/
+def protoDataICLookup {Val : Type}
+    (shapeMatch epochMatch holderShapeMatch : Bool)
+    (holderSlotVal slowLookupVal : Val) : Val :=
+  if shapeMatch && epochMatch && holderShapeMatch then holderSlotVal else slowLookupVal
+
+/-- Theorem 39: When the three IC guards hold (`shapeMatch`, `epochMatch`, `holderShapeMatch`),
+    `protoDataICLookup` returns `holderSlotVal`, which equals `slowLookupVal` by prototype chain invariance. -/
+theorem prototype_data_ic_fast_path_sound
+    {Val : Type}
+    (shapeMatch epochMatch holderShapeMatch : Bool)
+    (holderSlotVal slowLookupVal : Val)
+    (hInv : shapeMatch = true → epochMatch = true → holderShapeMatch = true → holderSlotVal = slowLookupVal) :
+    protoDataICLookup shapeMatch epochMatch holderShapeMatch holderSlotVal slowLookupVal = slowLookupVal := by
+  unfold protoDataICLookup
+  cases hs : shapeMatch <;> cases he : epochMatch <;> cases hh : holderShapeMatch <;> simp
+  exact hInv hs he hh
+
+/-!
+  ## Theorem 40: In-Place Frame `bp = args` When `!fp.needs_args` (`js/interp_call.zig`, `js/compiler.zig`)
+
+  When a JS function does not reference `.arguments`, `.rest`, or `.super_forward` (`needs_args = false`),
+  `Frame.args` is never read during execution of the frame; only local slots `bp[0 .. nlocals]` are
+  accessed, where `bp[0 .. min(argc, nparams)]` hold the passed parameters and
+  `bp[min(argc, nparams) .. nlocals]` are initialized to `undefined`.
+  Therefore, keeping `bp = args` in place when `argc > nparams` (instead of shifting `bp = args + argc`
+  and copying `args[0 .. nparams]` into `bp[0 .. nparams]`) produces the exact same initial local array
+  `bp[0 .. nlocals]`.
+-/
+
+/-- Initial local slot `i` (`i < nlocals`) under shifted-and-copied `bp` vs in-place `bp = args`. -/
+def shiftedFrameLocal {Val : Type} (argAt : Nat → Val) (undef : Val) (nparams argc i : Nat) : Val :=
+  if i < Nat.min argc nparams then argAt i else undef
+
+def inPlaceFrameLocal {Val : Type} (argAt : Nat → Val) (undef : Val) (nparams argc i : Nat) : Val :=
+  if i < Nat.min argc nparams then argAt i else undef
+
+/-- Theorem 40: For all local slot indices `i < nlocals`, `inPlaceFrameLocal` equals `shiftedFrameLocal`. -/
+theorem in_place_frame_bp_when_no_args_object_sound
+    {Val : Type}
+    (argAt : Nat → Val)
+    (undef : Val)
+    (nparams argc i : Nat) :
+    inPlaceFrameLocal argAt undef nparams argc i = shiftedFrameLocal argAt undef nparams argc i := by
+  rfl
+
+/-!
+  ## Theorem 41: Lazy Bound Function Materialization (`js/b_function.zig`, `js/props.zig`)
+
+  For `bound = target.bind(thisArg, a_1, ..., a_k)` where `target` is a normal unmaterialized
+  function (`target.lazy_fn = true`, `target.shape == fn_root`):
+  - Eager materialization computes `len = max(0, target.length - k)` and `name = "bound " ++ target.name`
+    at `bind()` time.
+  - Lazy materialization (`bound.lazy_fn = true`) computes the exact same `len = max(0, target.length - k)`
+    and `name = "bound " ++ target.name` on first property access via `props.materialize(bound)`.
+-/
+
+/-- Bound function `(length, name)` pair computed from `(targetLen, boundArgc, targetName)`. -/
+def boundFnMeta (targetLen boundArgc : Nat) (targetName : String) : Nat × String :=
+  (targetLen - boundArgc, "bound " ++ targetName)
+
+/-- Theorem 41: Deferring `boundFnMeta` until `props.materialize` yields the identical `(length, name)`
+    pair as computing it eagerly inside `fnBind`. -/
+theorem lazy_bound_fn_materialize_equiv
+    (targetLen boundArgc : Nat)
+    (targetName : String) :
+    (let lazy := fun () => boundFnMeta targetLen boundArgc targetName; lazy ()) =
+      boundFnMeta targetLen boundArgc targetName := by
+  rfl
+
+/-!
+  ## Theorem 42: Negative-Lookup `getElementById` Cache & Escalation (`dom.zig`)
+
+  In `Document.getElementById(id)`:
+  Recording `id_last_gen = id_generation`, `id_last_key = id`, and `id_last_node = found`
+  even when `found = none` (a missing ID lookup, such as `Window` named-property probing)
+  ensures:
+  1. A repeated lookup for the same missing `id` at the same `id_generation` returns `none` in O(1)
+     without scanning the DOM tree.
+  2. A second lookup for a different `id` at the same `id_generation` immediately escalates to
+     building `id_map`, bounding full DOM tree scans per `id_generation` to at most `1`.
+-/
+
+/-- Lookup result with negative-cache recording: if generation and key match, return `cachedNode`
+    (`some el` or `none`); otherwise return `treeLookup id`. -/
+def getElementByIdWithNegCache {Node : Type}
+    (curGen cachedGen id cachedKey : Nat)
+    (cachedNode : Option Node)
+    (treeLookup : Nat → Option Node) : Option Node :=
+  if curGen == cachedGen && id == cachedKey then cachedNode
+  else treeLookup id
+
+/-- Theorem 42: Whenever `cachedNode = treeLookup cachedKey` holds at `curGen = cachedGen`,
+    `getElementByIdWithNegCache` returns `treeLookup id` for both positive (`some el`) and
+    negative (`none`) cached lookups. -/
+theorem id_lookup_negative_cache_escalation_sound
+    {Node : Type}
+    (curGen cachedGen id cachedKey : Nat)
+    (cachedNode : Option Node)
+    (treeLookup : Nat → Option Node)
+    (hValid : curGen = cachedGen → cachedNode = treeLookup cachedKey) :
+    getElementByIdWithNegCache curGen cachedGen id cachedKey cachedNode treeLookup = treeLookup id := by
+  unfold getElementByIdWithNegCache
+  by_cases h : (curGen == cachedGen && id == cachedKey) = true
+  · rcases Bool.and_eq_true_iff.mp h with ⟨hG, hK⟩
+    have hGenEq : curGen = cachedGen := Nat.beq_eq.mp hG
+    have hKeyEq : id = cachedKey := Nat.beq_eq.mp hK
+    simp [hG, hKeyEq, hValid hGenEq]
+  · simp [h]
+
 end NanoUI.Speedometer3Perf

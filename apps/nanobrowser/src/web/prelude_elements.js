@@ -435,12 +435,25 @@ const context2d = (canvas) => {
   return ctx;
 };
 const contexts = new WeakMap();
-def(CV, "getContext", function (kind) {
-  if (kind !== "2d") return null;
+const getContextBase = function (kind, ...args) {
+  const k = String(kind);
+  if (k === "webgl" || k === "webgl2" || k === "experimental-webgl") {
+    void g.WebGLRenderingContext;
+    if (CV.getContext !== getContextBase) return CV.getContext.call(this, kind, ...args);
+    return null;
+  }
+  if (k === "webgpu") {
+    void g.GPU;
+    if (CV.getContext !== getContextBase) return CV.getContext.call(this, kind, ...args);
+    return null;
+  }
+  if (this.__nbContextKind && this.__nbContextKind !== "2d") return null;
+  if (k !== "2d") return null;
   let c = contexts.get(this);
-  if (!c) { c = context2d(this); contexts.set(this, c); }
+  if (!c) { c = context2d(this); contexts.set(this, c); this.__nbContextKind = "2d"; }
   return c;
-});
+};
+def(CV, "getContext", getContextBase);
 def(CV, "toDataURL", function () { return "data:,"; });
 def(CV, "toBlob", function (f) { g.setTimeout(() => f(null), 0); });
 def(CV, "captureStream", function () { return null; });

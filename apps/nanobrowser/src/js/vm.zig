@@ -431,5 +431,6 @@ pub const Vm = struct {
     pub const setIndexed = api.setIndexed;
     pub const defineMethodOn = api.defineMethodOn;
     pub const defineAccessorOn = api.defineAccessorOn;
+    pub const defineAccessorValueOn = api.defineAccessorValueOn;
     pub const defineDataOn = api.defineDataOn;
 };

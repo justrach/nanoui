@@ -424,6 +424,9 @@ class Selection {
   toString() { return ""; }
 }
 def(g, "Selection", Selection);
+for (const c of [MutationObserver, MutationRecord, ResizeObserver, ResizeObserverEntry, IntersectionObserver, IntersectionObserverEntry]) {
+  Object.defineProperty(c.prototype, Symbol.toStringTag, { value: c.name, configurable: true });
+}
 const selection = new Selection();
-g.getSelection = function getSelection() { return selection; };
+def(g, "getSelection", function getSelection() { return selection; });
 })

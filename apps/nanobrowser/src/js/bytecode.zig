@@ -212,6 +212,7 @@ pub const IC = struct {
     is_accessor: bool = false,
     is_transition: bool = false,
     fast_own_data: bool = false,
+    fast_proto_data: bool = false,
 };
 
 pub const LineEntry = struct { pc: u32, pos: u32 };
@@ -285,6 +286,7 @@ pub const FuncProto = struct {
     coerce_this: bool,
     needs_home: bool,
     is_method: bool,
+    needs_args: bool = false,
     module: ?*module.Module = null,
     jit_fn: ?*const anyopaque = null,
     hot_count: u16 = 0,

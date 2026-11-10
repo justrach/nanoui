@@ -126,5 +126,5 @@
       return s.id;
     });
   };
-  globalThis.GPUPipelineLayout = GPUPipelineLayout;
+  $.def(globalThis, 'GPUPipelineLayout', GPUPipelineLayout);
 });

@@ -23,14 +23,15 @@ const eager = [_]Chunk{
     .{ .name = "prelude:events", .source = @embedFile("prelude_events.js") },
     .{ .name = "prelude:dom", .source = @embedFile("prelude_dom.js") },
     .{ .name = "prelude:elements", .source = @embedFile("prelude_elements.js") },
-    .{ .name = "prelude:webgl", .source = @embedFile("prelude_webgl.js") },
     .{ .name = "prelude:wire", .source = @embedFile("prelude_wire.js") },
     .{ .name = "prelude:window", .source = @embedFile("prelude_window.js") },
-    .{ .name = "prelude:webgpu", .source = @embedFile("prelude_webgpu.js") },
-    .{ .name = "prelude:webgpu_layouts", .source = @embedFile("prelude_webgpu_layouts.js") },
-    .{ .name = "prelude:webgpu_commands", .source = @embedFile("prelude_webgpu_commands.js") },
     .{ .name = "prelude:frames", .source = @embedFile("prelude_frames.js") },
     .{ .name = "prelude:gaps", .source = @embedFile("prelude_gaps.js") },
+};
+
+const webgpu_extra = [_]Chunk{
+    .{ .name = "prelude:webgpu_layouts", .source = @embedFile("prelude_webgpu_layouts.js") },
+    .{ .name = "prelude:webgpu_commands", .source = @embedFile("prelude_webgpu_commands.js") },
 };
 
 const lazy = [_]Chunk{
@@ -38,6 +39,8 @@ const lazy = [_]Chunk{
     .{ .name = "prelude:net", .source = @embedFile("prelude_net.js"), .globals = &.{ "fetch", "Headers", "Request", "Response", "XMLHttpRequest", "FormData", "Blob", "File", "FileReader", "ProgressEvent", "AbortController", "AbortSignal", "TextEncoder", "TextDecoder", "structuredClone", "ReadableStream", "XMLHttpRequestEventTarget", "XMLHttpRequestUpload" } },
     .{ .name = "prelude:observers", .source = @embedFile("prelude_observers.js"), .globals = &.{ "MutationObserver", "MutationRecord", "ResizeObserver", "ResizeObserverEntry", "IntersectionObserver", "IntersectionObserverEntry", "MessageChannel", "MessagePort", "BroadcastChannel", "DOMParser", "XMLSerializer", "Range", "Selection", "NodeFilter", "TreeWalker", "NodeIterator", "getSelection" } },
     .{ .name = "prelude:matrix", .source = @embedFile("prelude_matrix.js"), .globals = &.{ "DOMMatrix", "DOMMatrixReadOnly", "WebKitCSSMatrix" } },
+    .{ .name = "prelude:webgl", .source = @embedFile("prelude_webgl.js"), .globals = &.{ "WebGLRenderingContext", "WebGL2RenderingContext" } },
+    .{ .name = "prelude:webgpu", .source = @embedFile("prelude_webgpu.js"), .globals = &.{ "GPU", "GPUAdapter", "GPUDevice", "GPUBuffer", "GPUShaderModule", "GPUComputePipeline", "GPUBindGroup", "GPUBindGroupLayout", "GPUQueue", "GPUValidationError", "GPUOutOfMemoryError", "GPUInternalError", "GPUUncapturedErrorEvent", "GPUBufferUsage", "GPUMapMode", "GPUShaderStage", "GPUTextureUsage", "GPUPipelineLayout", "GPUCommandEncoder", "GPUCommandBuffer", "GPUComputePassEncoder", "GPURenderPassEncoder", "GPURenderPipeline", "GPUTexture", "GPUTextureView", "GPUCanvasContext", "GPUColorWrite" } },
     .{ .name = "prelude:worker", .source = @embedFile("prelude_worker.js"), .globals = &.{"Worker"} },
 };
 
@@ -61,13 +64,7 @@ fn lazySet(vm: *Vm, _: Value, args: []const Value) Error!Value {
     // Replacing a global before it was used: it's the script's from now on,
     // and what it replaced still comes if the chunk loads for another name.
     const name = try vm.toStringSlice(vm.capture(0));
-    const define = try (try vm.global().get(vm, "Object")).asObject().get(vm, "defineProperty");
-    const desc = try vm.newObject();
-    try desc.set(vm, "value", bind.arg(args, 0));
-    try desc.set(vm, "writable", Value.true);
-    try desc.set(vm, "configurable", Value.true);
-    try desc.set(vm, "enumerable", Value.false);
-    _ = try vm.call(define, Value.undefined, &.{ vm.global().value(), try vm.newString(name), desc.value() });
+    try vm.global().defineData(vm, name, bind.arg(args, 0), js.PropFlags.hidden);
     return Value.undefined;
 }
 
@@ -75,6 +72,9 @@ fn loadChunk(w: *World, i: usize) Error!void {
     if (w.chunks_loaded & (@as(u32, 1) << @intCast(i)) != 0) return;
     w.chunks_loaded |= @as(u32, 1) << @intCast(i);
     try runChunk(w, &lazy[i]);
+    if (std.mem.eql(u8, lazy[i].name, "prelude:webgpu")) {
+        for (&webgpu_extra) |*c| try runChunk(w, c);
+    }
 }
 
 /// What makes a worker's global a worker's: before its first script.
@@ -105,20 +105,6 @@ pub fn install(w: *World) Error!void {
     try w.internals.defineData(vm, "document", try bind.wrap(vm, w.page.doc.node), js.PropFlags.hidden);
     try w.internals.defineData(vm, "userAgent", try vm.newString(page_mod.user_agent), js.PropFlags.hidden);
     try w.internals.defineData(vm, "platform", try vm.newString(platformName()), js.PropFlags.hidden);
-    for (lazy, 0..) |c, i| {
-        for (c.globals) |name| {
-            const key = try vm.newString(name);
-            const getter = try vm.newNativeClosure(name, 0, lazyGet, &.{ Value.fromUsize(i), key });
-            const setter = try vm.newNativeClosure(name, 1, lazySet, &.{key});
-            const define = try (try g.get(vm, "Object")).asObject().get(vm, "defineProperty");
-            const desc = try vm.newObject();
-            try desc.set(vm, "get", getter);
-            try desc.set(vm, "set", setter);
-            try desc.set(vm, "configurable", Value.true);
-            try desc.set(vm, "enumerable", Value.false);
-            _ = try vm.call(define, Value.undefined, &.{ g.value(), key, desc.value() });
-        }
-    }
     for (&eager) |*c| {
         runChunk(w, c) catch |e| {
             if (e == error.Thrown) {
@@ -127,5 +113,14 @@ pub fn install(w: *World) Error!void {
             }
             return e;
         };
+    }
+    for (lazy, 0..) |c, i| {
+        if (builtin.os.tag != .macos and std.mem.eql(u8, c.name, "prelude:webgpu")) continue;
+        for (c.globals) |name| {
+            const key = try vm.newString(name);
+            const getter = try vm.newNativeClosure(name, 0, lazyGet, &.{ Value.fromUsize(i), key });
+            const setter = try vm.newNativeClosure(name, 1, lazySet, &.{key});
+            try g.defineAccessorValue(vm, name, getter, setter, false);
+        }
     }
 }

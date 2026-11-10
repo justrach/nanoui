@@ -492,8 +492,9 @@ for (const [k, v] of [["UNSENT", 0], ["OPENED", 1], ["HEADERS_RECEIVED", 2], ["L
 }
 
 for (const c of [AbortSignal, AbortController, TextEncoder, TextDecoder, Blob, File, FileReader, FormData, Headers, ReadableStream, Request, Response, ProgressEvent, XMLHttpRequest]) def(g, c.name, c);
+Object.defineProperty(ProgressEvent.prototype, Symbol.toStringTag, { value: "ProgressEvent", configurable: true });
 def(g, "XMLHttpRequestEventTarget", XMLHttpRequestEventTarget);
 def(g, "XMLHttpRequestUpload", XMLHttpRequestUpload);
 def(g, "structuredClone", structuredClone);
-g.fetch = fetch;
+def(g, "fetch", fetch);
 })

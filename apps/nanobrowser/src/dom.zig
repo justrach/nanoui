@@ -542,11 +542,11 @@ pub const Document = struct {
         while (at) |n| : (at = n.nextInTree(d.node)) {
             if (n.kind == .element) if (n.attr("id")) |v| if (std.mem.eql(u8, v, id)) {
                 found = n;
-                self.id_last_key = v;
                 break;
             };
         }
-        if (found != null) self.id_last_gen = d.id_generation;
+        self.id_last_gen = d.id_generation;
+        self.id_last_key = if (found) |f| f.id_attr.? else d.arena.dupe(u8, id) catch "";
         self.id_last_node = found;
         return found;
     }
