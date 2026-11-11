@@ -352,7 +352,8 @@ pub const Renderer = struct {
     pub fn setBackdrop(self: *Renderer, c: types.Color) void {
         if (self.backdrop) |b| if (b.r == c.r and b.g == c.g and b.b == c.b and b.a == c.a) return;
         self.backdrop = c;
-        const ns = objc.msg(objc.Object, objc.class("NSColor"), "colorWithSRGBRed:green:blue:alpha:", .{ @as(f64, c.r), @as(f64, c.g), @as(f64, c.b), @as(f64, c.a) });
+        const ios = @import("builtin").os.tag == .ios;
+        const ns = objc.msg(objc.Object, objc.class(if (ios) "UIColor" else "NSColor"), if (ios) "colorWithRed:green:blue:alpha:" else "colorWithSRGBRed:green:blue:alpha:", .{ @as(f64, c.r), @as(f64, c.g), @as(f64, c.b), @as(f64, c.a) });
         objc.msg(void, self.layer, "setBackgroundColor:", .{objc.msg(objc.Object, ns, "CGColor", .{})});
     }
 
