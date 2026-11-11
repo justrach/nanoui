@@ -48,6 +48,9 @@ pub const Access = struct {
     /// Increase Contrast (iOS "Darker system colors"): stronger borders
     /// and text are wanted.
     increase_contrast: bool = false,
+    /// Reduce Transparency: Liquid Glass and translucent surfaces fall back
+    /// to solid surfaces and borders.
+    reduce_transparency: bool = false,
     bold_text: bool = false,
     /// VoiceOver (or another screen reader) is running.
     screen_reader: bool = false,

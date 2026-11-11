@@ -109,6 +109,7 @@ pub fn beforeFrame(s: *Surface) void {
     c.reduced_motion = s.reduce_motion;
     const ws = objc.msg(objc.Object, objc.class("NSWorkspace"), "sharedWorkspace", .{});
     c.access.increase_contrast = objc.msg(objc.BOOL, ws, "accessibilityDisplayShouldIncreaseContrast", .{});
+    c.access.reduce_transparency = objc.msg(objc.BOOL, ws, "accessibilityDisplayShouldReduceTransparency", .{});
     c.access.screen_reader = objc.msg(objc.BOOL, ws, "isVoiceOverEnabled", .{});
 }
 

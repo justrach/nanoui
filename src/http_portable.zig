@@ -104,19 +104,7 @@ const Job = struct {
     }
 };
 
-/// Starts `req` on a thread of its own; `deliver(ctx)` runs on the main
-/// thread once `answer` is filled. Called on the main thread. An error
-/// here (out of memory) means nothing was started.
-pub fn fetch(gpa: std.mem.Allocator, req: http.Request, answer: *http.Answer, ctx: *anyopaque, deliver: *const fn (?*anyopaque) callconv(.c) void) !void {
-    if (std.ascii.startsWithIgnoreCase(req.url, "data:")) {
-        // No network: answered now, still by way of the main thread's queue.
-        if (decodeData(gpa, req.url)) |bytes| {
-            answer.status = 200;
-            answer.body = bytes;
-            answer.url = gpa.dupe(u8, req.url) catch "";
-        } else |_| answer.err = "not a URL";
-        return post(ctx, deliver);
-    }
+fn initJob(gpa: std.mem.Allocator, req: http.Request, answer: *http.Answer, ctx: *anyopaque, deliver: *const fn (?*anyopaque) callconv(.c) void) !*Job {
     const job = try gpa.create(Job);
     errdefer gpa.destroy(job);
     job.* = .{
@@ -139,10 +127,14 @@ pub fn fetch(gpa: std.mem.Allocator, req: http.Request, answer: *http.Answer, ct
     job.names = try gpa.alloc([]u8, req.headers.len);
     job.values = try gpa.alloc([]u8, req.headers.len);
     var copied: usize = 0;
-    errdefer for (job.names[0..copied], job.values[0..copied]) |n, v| {
-        gpa.free(n);
-        gpa.free(v);
-    };
+    errdefer {
+        for (job.names[0..copied], job.values[0..copied]) |n, v| {
+            gpa.free(n);
+            gpa.free(v);
+        }
+        gpa.free(job.names);
+        gpa.free(job.values);
+    }
     for (req.headers, 0..) |h, k| {
         // HTTP/2 wants header names in lower case.
         job.names[k] = try std.ascii.allocLowerString(gpa, h.name);
@@ -152,6 +144,48 @@ pub fn fetch(gpa: std.mem.Allocator, req: http.Request, answer: *http.Answer, ct
         };
         copied += 1;
     }
+    return job;
+}
+
+fn noopDeliver(_: ?*anyopaque) callconv(.c) void {}
+
+/// Runs `req` synchronously on the calling thread (safe on worker threads and
+/// headless processes with no UI main loop) and fills `answer`.
+pub fn sendSync(gpa: std.mem.Allocator, req: http.Request, answer: *http.Answer) void {
+    if (std.ascii.startsWithIgnoreCase(req.url, "data:")) {
+        if (decodeData(gpa, req.url)) |bytes| {
+            answer.status = 200;
+            answer.body = bytes;
+            answer.url = gpa.dupe(u8, req.url) catch "";
+        } else |_| answer.err = "not a URL";
+        return;
+    }
+    var dummy: u8 = 0;
+    const job = initJob(gpa, req, answer, &dummy, noopDeliver) catch {
+        answer.err = "out of memory";
+        return;
+    };
+    defer job.deinit();
+    var threaded: Io.Threaded = .init(gpa, .{});
+    defer threaded.deinit();
+    const io = if (builtin.abi.isAndroid()) @import("android/lookup.zig").io(&threaded) else threaded.io();
+    race(io, job);
+}
+
+/// Starts `req` on a thread of its own; `deliver(ctx)` runs on the main
+/// thread once `answer` is filled. Called on the main thread. An error
+/// here (out of memory) means nothing was started.
+pub fn fetch(gpa: std.mem.Allocator, req: http.Request, answer: *http.Answer, ctx: *anyopaque, deliver: *const fn (?*anyopaque) callconv(.c) void) !void {
+    if (std.ascii.startsWithIgnoreCase(req.url, "data:")) {
+        // No network: answered now, still by way of the main thread's queue.
+        if (decodeData(gpa, req.url)) |bytes| {
+            answer.status = 200;
+            answer.body = bytes;
+            answer.url = gpa.dupe(u8, req.url) catch "";
+        } else |_| answer.err = "not a URL";
+        return post(ctx, deliver);
+    }
+    const job = try initJob(gpa, req, answer, ctx, deliver);
     if (!canPost()) {
         job.deinit();
         answer.err = "nanoui.http: no main loop to answer on";
@@ -440,7 +474,7 @@ test "plain HTTP follows redirects and keeps the last answer's headers" {
     defer threaded.deinit();
     const io = threaded.io();
     const any = try Io.net.IpAddress.parse("127.0.0.1", 0);
-    var ts: TestServer = .{ .server = try any.listen(io, .{ .reuse_address = true }), .io = io, .requests = 2 + 2 + 2 + 21, .port = 0 };
+    var ts: TestServer = .{ .server = try any.listen(io, .{ .reuse_address = true }), .io = io, .requests = 2 + 2 + 2 + 21 + 2, .port = 0 };
     ts.port = ts.server.socket.address.getPort();
     defer ts.server.deinit(io);
     const thread = try std.Thread.spawn(.{}, TestServer.run, .{&ts});
@@ -497,4 +531,16 @@ test "plain HTTP follows redirects and keeps the last answer's headers" {
         d.freeHead(gpa);
     }
     try std.testing.expectError(error.TooManyRedirects, Try.go(io, gpa, ts.port, "/loop", "GET", "", &d));
+
+    const sync_url = try std.fmt.allocPrint(gpa, "http://127.0.0.1:{d}/start", .{ts.port});
+    defer gpa.free(sync_url);
+    var e: http.Answer = .{};
+    defer {
+        gpa.free(e.body);
+        e.freeHead(gpa);
+        if (e.err_owned) gpa.free(e.err);
+    }
+    sendSync(gpa, .{ .url = sync_url, .headers = &.{.{ .name = "Authorization", .value = "secret" }} }, &e);
+    try std.testing.expectEqual(@as(u16, 200), e.status);
+    try std.testing.expectEqualStrings("GET auth", e.body);
 }

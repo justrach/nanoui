@@ -217,3 +217,52 @@ test "toasts come and go; a collapsible opens to its content's height; a select 
     t.settle(1);
     try testing.expectEqual(@as(?usize, 1), a.choice);
 }
+
+test "glass pill buttons: circular SDF, press_scale, Reduce Motion and Reduce Transparency" {
+    const GlassApp = struct {
+        fn view(_: *@This(), c: *ui.Context) void {
+            const root = ui.div(c).row().sizeFull().p(16).gap(12).bg(c.theme.background);
+            defer root.end();
+            _ = kit.button(c, "GlassPill", .{ .glass = true, .pill = true, .press_scale = 0.94 });
+        }
+    };
+    var ga: GlassApp = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&ga, GlassApp.view), .{ .width = 400, .height = 120 });
+    defer t.deinit();
+    t.settle(0.5);
+
+    const findBtn = struct {
+        fn f(tester: *ui.Tester) @TypeOf(tester.ctx.nodes.items[0]) {
+            for (tester.ctx.nodes.items) |n| switch (n.content) {
+                .text => |tx| if (std.mem.eql(u8, tx.str, "GlassPill")) return tester.ctx.nodes.items[n.parent],
+                else => {},
+            };
+            unreachable;
+        }
+    }.f;
+
+    const initial = findBtn(&t);
+    try testing.expect(initial.style.corner_circular);
+    try testing.expect(initial.style.glass != null);
+    try testing.expect(initial.style.background == null);
+
+    // Press contracts toward press_scale = 0.94; Reduce Motion holds scale at 1.
+    const r = t.findText("GlassPill").?;
+    t.down(r.x + 2, r.y + 2);
+    t.settle(1.0);
+    try testing.expectApproxEqAbs(@as(f32, 0.94), findBtn(&t).style.scale, 0.02);
+
+    t.ctx.reduced_motion = true;
+    t.frame();
+    try testing.expectApproxEqAbs(@as(f32, 1.0), findBtn(&t).style.scale, 0.001);
+    t.up();
+
+    // Reduce Transparency replaces glass with a solid surface + border.
+    t.ctx.access.reduce_transparency = true;
+    t.frame();
+    const fallback = findBtn(&t);
+    try testing.expect(fallback.style.glass == null);
+    try testing.expect(fallback.style.background != null);
+    try testing.expect(fallback.style.border != null);
+}
