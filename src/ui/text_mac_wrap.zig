@@ -1,5 +1,6 @@
-//! Text on macOS: breaking a paragraph at shaped glyph positions, as GPUI
-//! does (`TextSystem.wrap_rule = .glyph_positions`).
+//! Text on macOS: wrapping (the per-rule cache in `wrapAttributed`) and
+//! breaking a paragraph at shaped glyph positions, as GPUI does
+//! (`TextSystem.wrap_rule = .glyph_positions`).
 const std = @import("std");
 const cf = @import("cf.zig");
 const types = @import("types.zig");
@@ -8,6 +9,23 @@ const text_mac = @import("text_mac.zig");
 const rich = text_mac.rich;
 const TextSystem = text_mac.TextSystem;
 const Line = text_mac.Line;
+
+/// `s` with its spans broken into lines no wider than `max_width`.
+pub fn wrapAttributed(self: *TextSystem, s: []const u8, style: types.TextStyle, spans: []const types.Span, max_width: f32) []const Line {
+    const styled = rich.styled(spans);
+    const k = TextSystem.key(s, style, (@as(u64, @intFromFloat(@max(0, @min(max_width, 1e6)))) + 2) ^ (if (styled) rich.spansHash(spans, 0, s.len) else 0) ^ (@as(u64, @backingInt(self.wrap_rule)) << 60));
+    if (self.wraps.get(self.gpa, k)) |lines| return lines;
+    if (self.oneLine(s, style, spans, max_width)) |line_| {
+        const one = self.gpa.alloc(Line, 1) catch return &.{};
+        one[0] = line_;
+        return self.wraps.put(self.gpa, k, one);
+    }
+    const lines = switch (self.wrap_rule) {
+        .typesetter => self.breakLines(s, style, spans, max_width),
+        .glyph_positions => self.breakAtGlyphs(s, style, spans, max_width),
+    };
+    return self.wraps.put(self.gpa, k, lines catch return &.{});
+}
 
 /// `s` broken as GPUI breaks it, each newline-delimited paragraph alone.
 pub fn breakAtGlyphs(self: *TextSystem, s: []const u8, style: types.TextStyle, spans: []const types.Span, max_width: f32) ![]Line {
