@@ -24,6 +24,7 @@ const d3d11 = @import("../ui/d3d11.zig");
 const gpu_side = @import("surface_gpu.zig");
 const ime = @import("ime.zig");
 const keys = @import("surface_win_keys.zig");
+const mouse = @import("surface_win_mouse.zig");
 const pace_side = @import("surface_pace.zig");
 const vblank = @import("vblank.zig");
 const frame_log = @import("../ui/frame_log.zig");
@@ -315,7 +316,7 @@ pub const Surface = struct {
     /// The window's client size and DPI, read into the surface (`client_size.zig`).
     pub const updateSize = @import("client_size.zig").updateSize;
 
-    fn setMouse(self: *Surface, lp: w.LPARAM) void {
+    pub fn setMouse(self: *Surface, lp: w.LPARAM) void {
         const x: i16 = @truncate(lp);
         const y: i16 = @truncate(lp >> 16);
         self.ctx.input.mouse = .{ .x = @as(f32, @floatFromInt(x)) / self.scale, .y = @as(f32, @floatFromInt(y)) / self.scale };
@@ -448,33 +449,8 @@ pub const Surface = struct {
                     self.frame();
                 }
             },
-            w.WM_LBUTTONDOWN, w.WM_LBUTTONDBLCLK => {
-                self.setMouse(lp);
-                self.ctx.input.click_count = if (msg == w.WM_LBUTTONDBLCLK) 2 else 1;
-                self.ctx.updateHot();
-                // A borderless window's drag handle (`window_drag`): the press
-                // belongs to the system's move loop, the way macOS hands the
-                // event to `performWindowDragWithEvent`. A double click zooms.
-                if (self.ctx.startsWindowDrag()) {
-                    if (msg == w.WM_LBUTTONDBLCLK) {
-                        self.window.zoom();
-                    } else {
-                        _ = w.ReleaseCapture();
-                        _ = w.SendMessageW(h, w.WM_NCLBUTTONDOWN, w.HTCAPTION, 0);
-                    }
-                    return 0;
-                }
-                _ = w.SetCapture(h);
-                self.ctx.pointerDown();
-                self.frame();
-            },
-            w.WM_LBUTTONUP => {
-                _ = w.ReleaseCapture();
-                self.setMouse(lp);
-                self.ctx.updateHot();
-                self.ctx.pointerUp();
-                self.frame();
-            },
+            // The buttons, and the capture lost mid-press: `surface_win_mouse.zig`.
+            w.WM_LBUTTONDOWN, w.WM_LBUTTONDBLCLK, w.WM_LBUTTONUP, w.WM_MBUTTONDOWN, w.WM_MBUTTONDBLCLK, w.WM_MBUTTONUP, w.WM_CAPTURECHANGED => return mouse.message(self, h, msg, wp, lp),
             w.WM_MOUSEWHEEL => {
                 var p: w.POINT = .{ .x = @as(i16, @truncate(lp)), .y = @as(i16, @truncate(lp >> 16)) };
                 _ = w.ScreenToClient(h, &p);
