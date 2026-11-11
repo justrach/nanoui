@@ -193,6 +193,8 @@ test {
     if (builtin.os.tag != .ios) _ = @import("update_portable.zig");
     // The Windows tray's menu model and callback decoding, platform-free.
     if (builtin.os.tag != .ios) _ = @import("windows/tray_model.zig");
+    // Windows' virtual keys as nanoui names them: key-ups, the repeat bit.
+    if (builtin.os.tag != .ios) _ = @import("windows/key_names.zig");
     if (is_android) {
         inline for (.{ plat.app, plat.window, plat.dialog, plat.desktop, plat.fdwatch, @import("android/surface.zig"), @import("android/keys.zig"), @import("android/touch.zig"), @import("android/activity.zig"), @import("android/bars.zig"), @import("android/egl.zig"), @import("android/jni.zig") }) |m| std.testing.refAllDecls(m);
         inline for (.{ plat.app.App, plat.window.Window, plat.desktop.clipboard, plat.desktop.shell, @import("android/surface.zig").Surface }) |T| std.testing.refAllDecls(T);
@@ -215,6 +217,8 @@ test {
         if (builtin.os.tag == .windows) {
             _ = @import("windows/d3d.zig");
             _ = @import("windows/tests_surface.zig");
+            // Key messages: key-ups, the repeat bit, Alt's system keys.
+            _ = @import("windows/tests_keys.zig");
             // The window's own: styles, sizes, the close veto, the timers.
             _ = @import("windows/tests_window.zig");
             // Frames on the display's beat, gathered input, the frame log.

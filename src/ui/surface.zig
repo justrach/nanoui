@@ -142,6 +142,8 @@ pub const Surface = struct {
         if (text.portable and !window.app.flags.hidden) self.text.enablePersistence(window.app.options.name);
         self.ctx = .init(gpa, &self.text);
         self.ctx.waker = .{ .ctx = self, .wake = thread_wake.fromContext };
+        // `keyUp:` reaches the view (surface_keys.zig).
+        self.ctx.key_up_supported = true;
         // Pictures go straight to the GPU before any view callback can run a frame.
         self.text.images.sink = .{ .ctx = &self.renderer, .upload = @import("metal.zig").Renderer.uploadImage };
         self.refreshAppearance();
@@ -158,6 +160,7 @@ pub const Surface = struct {
         objc.msg(void, window.nswindow, "setContentView:", .{nsview});
         objc.msg(void, window.nswindow, "setAcceptsMouseMovedEvents:", .{objc.YES});
         _ = objc.msg(objc.BOOL, window.nswindow, "makeFirstResponder:", .{nsview});
+        @import("surface_keys.zig").watch(nsview);
         {
             const pool = objc.Pool.push();
             defer pool.pop();
@@ -200,6 +203,7 @@ pub const Surface = struct {
             objc.setZig(self.nsview, null);
             const ws = objc.msg(objc.Object, objc.class("NSWorkspace"), "sharedWorkspace", .{});
             objc.msg(void, objc.msg(objc.Object, ws, "notificationCenter", .{}), "removeObserver:", .{self.nsview});
+            @import("surface_keys.zig").unwatch(self.nsview);
             if (self.display_link) |link| {
                 if (objc.msg(objc.BOOL, link, "respondsToSelector:", .{objc.sel("setDelegate:")}))
                     objc.msg(void, link, "setDelegate:", .{@as(?objc.Object, null)});

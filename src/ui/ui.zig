@@ -392,6 +392,7 @@ test {
     _ = @import("tests_textedit.zig");
     _ = @import("tests_field.zig");
     _ = @import("tests_input.zig");
+    _ = @import("tests_key_up.zig");
     _ = @import("tests_backtab.zig");
     _ = @import("retain.zig");
     if (@import("builtin").os.tag == .macos) {

@@ -180,6 +180,11 @@ pub const Context = struct {
     copy_done: bool = false,
     /// Set when the view took the offered shortcut: it goes no further.
     shortcut_taken: bool = false,
+    /// The host reports key-ups (`input.key_up`), and `input.keys_released`
+    /// when the keyboard goes elsewhere: macOS and Windows. False in the
+    /// `Tester` (a test that holds keys sets it) and on hosts that never
+    /// send them, where a key seen down can't be trusted to be held.
+    key_up_supported: bool = false,
     /// Set by the focused text field each frame, along with caret blink and selection state.
     focused_text: ?FocusedText = null,
     focused_multiline: bool = false,
@@ -352,6 +357,8 @@ pub const Context = struct {
     pub fn begin(c: *Context) void {
         c.noteModality();
         c.tooltip = .{};
+        c.input.keys_released = c.input.keys_released or c.input.keys_release_pending;
+        c.input.keys_release_pending = false;
         if (c.frame == 0 and c.nodes.capacity == 0) hooks.warmMaps(c);
         // Tab moves the focus on, unless a text field has it (it takes Tab).
         if (c.input.key == .tab and (c.focus == 0 or !c.focus_is_text) and c.last_focusable_ids.items.len > 0) {
