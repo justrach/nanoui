@@ -32,8 +32,15 @@ fn collOf(o: *js.Object) *Coll {
     return @ptrCast(@alignCast(o.host));
 }
 
+inline fn collGen(c: *const Coll) u32 {
+    return switch (c.kind) {
+        .child_nodes, .children => c.root.children_gen,
+        else => c.root.doc.generation,
+    };
+}
+
 fn fill(w: *World, c: *Coll) Error!void {
-    const gen = c.root.doc.generation;
+    const gen = collGen(c);
     if (c.filled and c.generation == gen and c.kind != .static) return;
     if (c.kind == .static) return;
     c.filled = true;
@@ -58,9 +65,22 @@ fn fill(w: *World, c: *Coll) Error!void {
             }
         },
         .by_class => {
+            var req_bits: u64 = 0;
+            var any = false;
+            var it = std.mem.tokenizeAny(u8, c.name, " \t\r\n\x0c");
+            while (it.next()) |tok| {
+                any = true;
+                req_bits |= @import("../perf_rules.zig").classBit(tok);
+            }
+            if (!any or (c.root.subtree_class_bloom & req_bits) != req_bits) return;
             var at = c.root.first_child;
-            while (at) |x| : (at = x.nextInTree(c.root)) {
+            while (at) |x| {
+                if ((x.subtree_class_bloom & req_bits) != req_bits) {
+                    at = x.nextSkippingChildren(c.root);
+                    continue;
+                }
                 if (x.kind == .element and hasAllClasses(x, c.name)) try c.items.append(a, x);
+                at = x.nextInTree(c.root);
             }
         },
         .static => {},
@@ -79,7 +99,7 @@ fn hasAllClasses(n: *const Node, names: []const u8) bool {
 
 fn collGetIndex(vm: *Vm, o: *js.Object, i: u32) Error!?Value {
     const c = collOf(o);
-    if (!c.filled or (c.kind != .static and c.generation != c.root.doc.generation)) {
+    if (!c.filled or (c.kind != .static and c.generation != collGen(c))) {
         try fill(bind.world(vm), c);
     }
     if (i >= c.items.items.len) return null;
@@ -90,7 +110,7 @@ fn collGetIndex(vm: *Vm, o: *js.Object, i: u32) Error!?Value {
 
 fn collLength(vm: *Vm, o: *js.Object) Error!u32 {
     const c = collOf(o);
-    if (!c.filled or (c.kind != .static and c.generation != c.root.doc.generation)) {
+    if (!c.filled or (c.kind != .static and c.generation != collGen(c))) {
         try fill(bind.world(vm), c);
     }
     return @intCast(c.items.items.len);

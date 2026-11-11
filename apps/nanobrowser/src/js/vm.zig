@@ -185,6 +185,17 @@ pub const Protos = struct {
 
 pub const max_frames = 12000;
 pub const stack_slots = 1024 * 1024;
+pub const mega_ic_size = 8192;
+
+pub const MegaICEntry = extern struct {
+    pub const acc_flag: u32 = 0x8000_0000;
+    shape: ?*Shape = null,
+    key_bits: u64 = 0,
+    holder: ?*Object = null,
+    holder_shape: ?*Shape = null,
+    slot: u32 = 0,
+    epoch: u32 = 0,
+};
 
 threadlocal var cached_stacks: [2]?[]Value = .{ null, null };
 threadlocal var cached_frames: [2]?[]frames.Frame = .{ null, null };
@@ -255,6 +266,8 @@ pub const Vm = struct {
     iter_result_shape: *Shape = undefined,
     args_strict_shape: *Shape = undefined,
     args_sloppy_shape: *Shape = undefined,
+    regexp_shape: *Shape = undefined,
+    regexp_match_shape: *Shape = undefined,
     function_has_instance: *Object = undefined,
     intl_protos: [6]*Object = undefined,
     regex_cache: std.StringHashMapUnmanaged(*regexp_compile.Program) = .empty,
@@ -271,6 +284,8 @@ pub const Vm = struct {
     frames: []frames.Frame = &.{},
     frame_top: u32 = 0,
     fast_call_stub: ?*const anyopaque = null,
+    fast_getter_stub: ?*const anyopaque = null,
+    fast_args_apply_stub: ?*const anyopaque = null,
     /// Native re-entry depth; the native stack limit is set when it is zero.
     depth: u32 = 0,
     stack_limit: usize = 0,
@@ -317,6 +332,7 @@ pub const Vm = struct {
     /// invalidating multi-hop prototype inline cache entries in O(1).
     proto_epoch: u32 = 1,
     jit_pool: jit.JitPool = .{},
+    mega_ic: *[mega_ic_size]MegaICEntry = undefined,
 
     pub const interrupt_interval = 16384;
 
@@ -325,14 +341,27 @@ pub const Vm = struct {
         if (vm.proto_epoch == 0) vm.proto_epoch = 1;
     }
 
+    pub inline fn clearMegaIC(vm: *Vm) void {
+        @memset(vm.mega_ic, .{});
+    }
+
+    pub inline fn megaSlot(vm: *Vm, sh: *const Shape, key_bits: u64) *MegaICEntry {
+        const h = ((@intFromPtr(sh) >> 4) ^ (key_bits >> 3) ^ (key_bits >> 19)) & (mega_ic_size - 1);
+        return &vm.mega_ic[h];
+    }
+
     pub fn create(gpa_in: Allocator) Error!*Vm {
         const vm = try gpa_in.create(Vm);
         errdefer gpa_in.destroy(vm);
+        const mega = try gpa_in.create([mega_ic_size]MegaICEntry);
+        errdefer gpa_in.destroy(mega);
+        @memset(mega, .{});
         vm.* = .{
             .gpa = undefined,
             .raw_gpa = gpa_in,
             .counting = .{ .gpa = gpa_in },
             .heap = undefined,
+            .mega_ic = mega,
         };
         vm.gpa = vm.counting.allocator();
         vm.heap = .{ .gpa = vm.gpa };
@@ -341,6 +370,8 @@ pub const Vm = struct {
         vm.sp = vm.stack.ptr;
         vm.frames = try allocFrames();
         vm.fast_call_stub = jit.getFastCallStub();
+        vm.fast_getter_stub = jit.getFastGetterStub();
+        vm.fast_args_apply_stub = jit.getFastArgsApplyStub();
         try vm.initStrings();
         try builtins.init(vm);
         vm.protos.object.flags.proto_dirty = false;
@@ -349,6 +380,9 @@ pub const Vm = struct {
         vm.protos.array_ctor.flags.proto_dirty = false;
         vm.protos.array_iter.flags.proto_dirty = false;
         vm.protos.regexp.flags.proto_dirty = false;
+        vm.protos.string.flags.is_proto = true;
+        vm.protos.number.flags.is_proto = true;
+        vm.protos.boolean.flags.is_proto = true;
         return vm;
     }
 
@@ -395,6 +429,7 @@ pub const Vm = struct {
         vm.jit_pool.deinit(raw);
         freeStack(vm.stack);
         freeFrames(vm.frames);
+        raw.destroy(vm.mega_ic);
         raw.destroy(vm);
     }
 
@@ -425,6 +460,8 @@ pub const Vm = struct {
         m.markCell(&vm.iter_result_shape.cell);
         m.markCell(&vm.args_strict_shape.cell);
         m.markCell(&vm.args_sloppy_shape.cell);
+        m.markCell(&vm.regexp_shape.cell);
+        m.markCell(&vm.regexp_match_shape.cell);
         var it = vm.symbol_registry.valueIterator();
         while (it.next()) |s| m.markCell(&s.*.cell);
         var pi = vm.protected.keyIterator();
@@ -467,6 +504,7 @@ pub const Vm = struct {
     pub const global = api.global;
     // Values.
     pub const newString = api.newString;
+    pub const internString = api.internString;
     pub const toStringSlice = api.toStringSlice;
     pub const toNumber = api.toNumber;
     pub const toBoolean = api.toBoolean;

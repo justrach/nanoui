@@ -84,3 +84,40 @@ pub fn isWordChar(c: u21) bool {
         else => false,
     };
 }
+
+/// `s` as one line, when it has no line breaks and fits.
+pub fn oneLine(self: *TextSystem, s: []const u8, style: types.TextStyle, spans: []const types.Span, max_width: f32) ?Line {
+    if (std.mem.indexOfAny(u8, s, "\n\r\x0b\x0c") != null) return null;
+    if (std.mem.indexOf(u8, s, "\u{85}") != null or std.mem.indexOf(u8, s, "\u{2028}") != null or std.mem.indexOf(u8, s, "\u{2029}") != null) return null;
+    const styled = rich.styled(spans);
+    const full = if (styled) rich.layout(self, s, style, spans, 0).width else self.width(s, style);
+    if (full > @max(1, max_width)) return null;
+    const trimmed = std.mem.trimEnd(u8, s, " \t");
+    const w = if (styled) rich.layout(self, trimmed, style, spans, 0).width else self.width(trimmed, style);
+    return .{ .start = 0, .end = trimmed.len, .width = w };
+}
+
+/// `s` broken where CoreText's typesetter suggests.
+pub fn breakLines(self: *TextSystem, s: []const u8, style: types.TextStyle, spans: []const types.Span, max_width: f32) ![]Line {
+    const styled = rich.styled(spans);
+    var lines: std.ArrayList(Line) = .empty;
+    defer lines.deinit(self.gpa);
+    const attr = if (styled) rich.attributed(self, s, style, spans, 0) else self.attributedOf(s, style);
+    defer cf.CFRelease(attr);
+    const ts = cf.CTTypesetterCreateWithAttributedString(attr).?;
+    defer cf.CFRelease(ts);
+    const total = @min(cf.utf16Offset(s, s.len), cf.CFAttributedStringGetLength(attr));
+    var start16: cf.CFIndex = 0;
+    while (start16 < total) {
+        var n = cf.CTTypesetterSuggestLineBreak(ts, start16, @max(1, max_width));
+        if (n <= 0) n = 1;
+        const a = cf.byteOffset(s, start16);
+        const b = cf.byteOffset(s, start16 + n);
+        const trimmed = std.mem.trimEnd(u8, s[a..b], " \n\r\t");
+        const w = if (styled) rich.layout(self, s[a .. a + trimmed.len], style, spans, a).width else self.width(trimmed, style);
+        lines.append(self.gpa, .{ .start = a, .end = a + trimmed.len, .width = w }) catch break;
+        start16 += n;
+    }
+    if (lines.items.len == 0) lines.append(self.gpa, .{ .start = 0, .end = 0, .width = 0 }) catch {};
+    return lines.toOwnedSlice(self.gpa);
+}

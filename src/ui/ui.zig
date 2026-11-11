@@ -181,6 +181,7 @@ pub const FontFaceOptions = @import("font_registry.zig").FaceOptions;
 pub const fillFontFace = @import("font_registry.zig").fillFace;
 /// Takes away the families `registerFontFace` added whose names start so.
 pub const unregisterFontFamilies = @import("font_registry.zig").unregisterFamilies;
+pub const unscopedFontGeneration = @import("font_registry.zig").unscopedGeneration;
 /// How far a face's description is from a style, as CSS's font matching ranks them.
 pub const fontFaceScore = @import("font_registry.zig").score;
 /// Text shaped by nanoui's own TrueType reader, not the system's.

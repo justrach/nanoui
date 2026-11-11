@@ -62,7 +62,7 @@ inline fn isInputChecked(n: *const dom.Node) bool {
 
 fn isStyleRelevantAttr(ns: dom.Ns, name: []const u8, ix: *const rule_index.Index) bool {
     if (ns == .svg) {
-        return perf.svg_pres_attrs.has(name) or std.mem.eql(u8, name, "lang") or ix.mentionsAttr(name);
+        return perf.svg_pres_attrs.has(name) or std.mem.eql(u8, name, "style") or std.mem.eql(u8, name, "lang") or ix.mentionsAttr(name);
     }
     var buf: [64]u8 = undefined;
     var low = name;
@@ -72,6 +72,7 @@ fn isStyleRelevantAttr(ns: dom.Ns, name: []const u8, ix: *const rule_index.Index
         break;
     };
     return perf.html_style_attrs.has(low) or
+        std.mem.eql(u8, low, "style") or
         std.mem.eql(u8, low, "slot") or
         std.mem.eql(u8, low, "part") or
         std.mem.eql(u8, low, "inert") or
@@ -112,6 +113,8 @@ pub const StyleShareEntry = struct {
     prev_tag: []const u8 = "",
     prev_class: ?[]const u8 = null,
     computed: *const style.Style = undefined,
+    before: ?*const style.Style = null,
+    after: ?*const style.Style = null,
     scope: ?*const vars.Scope = null,
 };
 
@@ -124,7 +127,7 @@ pub const ShadowShareEntry = struct {
 };
 
 pub const StyleShareCache = struct {
-    pub const num_sets = 256;
+    pub const num_sets = 1024;
     entries: [num_sets * 4]StyleShareEntry = @splat(.{}),
     ways: [num_sets]u2 = @splat(0),
     shadow_entries: [16]ShadowShareEntry = @splat(.{}),
@@ -136,9 +139,10 @@ pub const StyleShareCache = struct {
         return g;
     }
 
-    fn setOf(ix: *const rule_index.Index, parent_style: *const style.Style, tag: []const u8, class_attr: ?[]const u8, class_filter: u64, extra_hash: u64, host_hash: u64, pos_flags: u8) usize {
+    fn setOf(ix: *const rule_index.Index, parent_style: *const style.Style, parent_ptr: usize, tag: []const u8, class_attr: ?[]const u8, class_filter: u64, extra_hash: u64, host_hash: u64, pos_flags: u8) usize {
         var h: u64 = (@intFromPtr(parent_style) >> 4) *% 0x9E3779B97F4A7C15;
         h ^= (@intFromPtr(ix) >> 4) *% 0xD6E8FEB86659FD93;
+        h ^= (parent_ptr >> 4) *% 0x9E3779B97F4A7C15;
         h ^= class_filter *% 0x517CC1B727220A95;
         if (class_attr) |ca| h ^= (@as(u64, ca.len) *% 0x94D049BB133111EB) ^ (@as(u64, if (ca.len > 0) ca[ca.len - 1] else 0) << 16);
         h ^= extra_hash *% 0xBF58476D1CE4E5B9;
@@ -197,7 +201,6 @@ pub const StyleShareCache = struct {
                 if ((a.name.len == 5 and a.name[0] == 'c' and std.mem.eql(u8, a.name, "class")) or
                     (a.name.len == 2 and a.name[0] == 'i' and std.mem.eql(u8, a.name, "id"))) continue;
                 if ((perf.attrBit(a.name) & rel_mask) == 0) continue;
-                if (a.name.len == 5 and std.ascii.eqlIgnoreCase(a.name, "style")) { perf.prof_ss_rej_style += 1; return null; }
                 if (!isStyleRelevantAttr(n.ns, a.name, ix)) continue;
                 if (extra_len >= 4) return null;
                 extra[extra_len] = a;
@@ -259,12 +262,14 @@ pub const StyleShareCache = struct {
             };
             break :blk 0;
         } else 0;
+        const disallow_cousin = ix.uses_container or ix.anc_pos_subj.mayMatch(n) or (ix.uses_focus_within and doc.focus != null);
+        const parent_ptr: usize = if (disallow_cousin and n.parent != null) @intFromPtr(n.parent.?) else 0;
         perf.prof_ss_cand += 1;
         return .{
-            .set = setOf(ix, parent_style, n.tag, n.class_attr, n.class_filter, extra_hash, host_hash, pos_flags),
+            .set = setOf(ix, parent_style, parent_ptr, n.tag, n.class_attr, n.class_filter, extra_hash, host_hash, pos_flags),
             .pos_flags = pos_flags,
             .uses_next = check_next,
-            .disallow_cousin = ix.uses_ancestor_positional or ix.uses_container,
+            .disallow_cousin = disallow_cousin,
             .rule_ix = ix,
             .host_hash = host_hash,
             .extra = extra,
@@ -300,9 +305,16 @@ pub const StyleShareCache = struct {
         return null;
     }
 
+    fn pseudoShareable(ps_opt: ?*const style.Style) bool {
+        const ps = ps_opt orelse return true;
+        return ps.animations.len == 0 and ps.transitions.len == 0 and
+            ps.counter_reset.len == 0 and ps.counter_increment.len == 0 and
+            ps.counter_set.len == 0 and ps.content_parts.len == 0;
+    }
+
     pub fn record(self: *StyleShareCache, gen: u32, n: *dom.Node, parent_style: *const style.Style, parent_scope: ?*const vars.Scope, cand: ShareCand, stored: *const style.Style, before: ?*const style.Style, after: ?*const style.Style, scope: ?*const vars.Scope, has_extra_pseudo: bool) void {
-        if (has_extra_pseudo or before != null or after != null or stored.display == .none or stored.container_type != .normal) return;
-        if (stored.transitions.len != 0 or stored.animations.len != 0) return;
+        if (has_extra_pseudo or stored.container_type != .normal) return;
+        if (stored.animations.len != 0 or !pseudoShareable(before) or !pseudoShareable(after)) return;
         if (stored.counter_reset.len != 0 or stored.counter_increment.len != 0 or stored.counter_set.len != 0) return;
         perf.prof_ss_rec += 1;
         const grp = self.allocGroup();
@@ -343,6 +355,8 @@ pub const StyleShareCache = struct {
             .prev_tag = cand.prev_tag,
             .prev_class = cand.prev_class,
             .computed = stored,
+            .before = before,
+            .after = after,
             .scope = scope,
         };
     }

@@ -56,7 +56,7 @@ pub fn eval(p: *Page, source: []const u8) void {
     };
     std.debug.print("eval: {s}\n", .{w.vm.toStringSlice(v) catch "?"});
     const pr = @import("perf_rules.zig");
-    std.debug.print("prof(ms): jstask={d:.1} gc={d:.1} replay={d:.1} style={d:.1}(shared={d}/{d} cand={d} rec={d} has={d} unsh={d}/{d}) layout={d:.1}(runs={d} gen={d:.1} size={d:.1} fin={d:.1}) list={d:.1} svg={d:.1} html={d:.1} query={d:.1} compile={d:.1}({d}) js(calls={d} nat={d}/{d:.1}ms slow={d} ic={d} dis={d} iops={d})\n", .{
+    std.debug.print("prof(ms): jstask={d:.1} gc={d:.1} replay={d:.1} style={d:.1}(shared={d}/{d} cand={d} rec={d} has={d} unsh={d}/{d}) layout={d:.1}(runs={d} adopted={d} gen={d:.1} size={d:.1} fin={d:.1}) list={d:.1} svg={d:.1} html={d:.1} query={d:.1} compile={d:.1}({d}) js(calls={d} nat={d}/{d:.1}ms slow={d} ic={d} dis={d} iops={d})\n", .{
         @as(f64, @floatFromInt(pr.prof_js_task_ns)) / 1e6,
         @as(f64, @floatFromInt(pr.prof_gc_ns)) / 1e6,
         @as(f64, @floatFromInt(pr.prof_replay_ns)) / 1e6,
@@ -70,6 +70,7 @@ pub fn eval(p: *Page, source: []const u8) void {
         pr.prof_ss_univ,
         @as(f64, @floatFromInt(pr.prof_layout_ns)) / 1e6,
         pr.prof_layout_runs,
+        pr.prof_lay_adopted,
         @as(f64, @floatFromInt(pr.prof_lay_gen_ns)) / 1e6,
         @as(f64, @floatFromInt(pr.prof_lay_size_ns)) / 1e6,
         @as(f64, @floatFromInt(pr.prof_lay_fin_ns)) / 1e6,

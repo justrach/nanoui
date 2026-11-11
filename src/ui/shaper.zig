@@ -119,9 +119,9 @@ pub const Table = struct {
         const v = ps[idx];
         if (!std.math.isNan(v)) return if (std.math.isInf(v)) null else v;
         const ia = t.char(a) orelse return null;
-        _ = t.char(b) orelse return null;
+        const ib = t.char(b) orelse return null;
         const s = shapeShort(t.font, &.{ a, b });
-        if (s.n != 2) {
+        if (s.n != 2 or s.glyphs[0] != t.glyph[ia] or s.glyphs[1] != t.glyph[ib]) {
             ps[idx] = std.math.inf(f32);
             return null;
         }

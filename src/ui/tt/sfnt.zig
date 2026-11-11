@@ -281,6 +281,7 @@ pub fn hasUnshieldedMultiLigature(d: []const u8) bool {
                 if (eoff > sub.len) return true;
                 sub = sub[eoff..];
             }
+            if (stype == 5 or stype == 6 or stype == 8) return true;
             if (stype != 4) continue;
             if ((be16(sub, 0) orelse return true) != 1) return true;
             const set_count = be16(sub, 4) orelse return true;

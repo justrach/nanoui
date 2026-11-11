@@ -54,8 +54,8 @@ pub fn compileScript(vm: *Vm, source: []const u8, filename: []const u8, mode: sc
     defer pr.prof_compile_ns += pr.nowNs() -| t0;
     vm.enterFromHost();
     const sc = @import("script_cache.zig");
-    if (mode == .script) {
-        if (try sc.lookupAndInstantiateScript(vm, source, filename)) |f| return f;
+    if (mode == .script or mode == .eval) {
+        if (try sc.lookupAndInstantiateScript(vm, source, filename, mode == .eval)) |f| return f;
     }
     var arena = std.heap.ArenaAllocator.init(vm.gpa);
     defer arena.deinit();
@@ -64,7 +64,7 @@ pub fn compileScript(vm: *Vm, source: []const u8, filename: []const u8, mode: sc
     const r = try scope.analyze(vm, a, &prog, source, mode);
     const src = try newSource(vm, source, filename);
     const c = try compiler.compileProgram(vm, a, &prog, r, src);
-    if (mode == .script) sc.recordScript(vm, source, c.main);
+    if (mode == .script or mode == .eval) sc.recordScript(vm, source, c.main, mode == .eval);
     return interp_object.makeClosure(vm, c.main, null);
 }
 
@@ -166,6 +166,10 @@ pub fn global(vm: *Vm) *Object {
 
 pub fn newString(vm: *Vm, utf8: []const u8) Error!Value {
     return Value.fromString(try str.fromUtf8(vm, utf8));
+}
+
+pub fn internString(vm: *Vm, utf8: []const u8) Error!Value {
+    return Value.fromString(try str.intern(vm, utf8));
 }
 
 /// ToString as UTF-8. May call JS. The slice is valid until the next collection.

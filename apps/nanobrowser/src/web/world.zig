@@ -185,6 +185,9 @@ pub const World = struct {
     blur_request: bool = false,
     dispatch_paths: [8]DispatchPath = undefined,
     dispatch_depth: u8 = 0,
+    rect_shape: ?*js.Shape = null,
+    rect_epoch: u32 = 0,
+    query_arena: std.heap.ArenaAllocator,
 
     pub fn create(p: *Page) !*World {
         const gpa = p.gpa;
@@ -192,7 +195,7 @@ pub const World = struct {
         errdefer gpa.destroy(w);
         const vm = try js.Vm.create(gpa);
         errdefer vm.deinit();
-        w.* = .{ .page = p, .gpa = gpa, .vm = vm, .started_ns = monotonic() };
+        w.* = .{ .page = p, .gpa = gpa, .vm = vm, .started_ns = monotonic(), .query_arena = std.heap.ArenaAllocator.init(gpa) };
         vm.setRootsHook(w, markRoots);
         vm.setRejectionHook(w, rejected);
         vm.setDynamicImportHook(w, modules.dynamicImport);
@@ -226,6 +229,7 @@ pub const World = struct {
         w.export_ids.deinit(gpa);
         w.imports.deinit(gpa);
         w.import_by_remote.deinit(gpa);
+        w.query_arena.deinit();
         if (w.pending_nav) |n| {
             gpa.free(n.url);
             gpa.free(n.body);
@@ -260,6 +264,7 @@ pub const World = struct {
         w.timers.mark(m);
         w.mods.mark(m);
         w.custom.mark(m);
+        if (w.rect_shape) |rs| m.markCell(&rs.cell);
     }
 
     /// Enters JS from the host. Every `enter` is matched by `leave`, which

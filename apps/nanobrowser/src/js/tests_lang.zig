@@ -179,5 +179,9 @@ test "objects and properties" {
         .{ .src = "function gf(){}; typeof globalThis.gf", .want = "function" },
         .{ .src = "let gl=1; globalThis.gl", .want = "undefined" },
         .{ .src = "this===globalThis", .want = "true" },
+        .{ .src = "function tc(x){var s=0;for(var i=0;i<5;i++){try{if(x&&i===2)throw 10;s+=i}catch(e){s+=e}finally{s+=1}}return s} tc(false)+','+tc(true)", .want = "15,23" },
+        .{ .src = "function fwd(){return g.apply(this,arguments)} function g(a,b,c){return (this.k||0)+a+(b||0)+(c||0)} fwd.call({k:100},1,2,3)+','+fwd.call({k:5},7)", .want = "106,12" },
+        .{ .src = "function lenOf(x){return x.length} lenOf('hello')+','+lenOf([1,2])+','+lenOf({length:9})+','+lenOf(42)", .want = "5,2,9,undefined" },
+        .{ .src = "var ro={a:3,get b(){return this.a*2}}; Reflect.set(ro,'a',7); Reflect.get(ro,'b')+','+Reflect.get(ro,'b',{a:20})", .want = "14,40" },
     });
 }

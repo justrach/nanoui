@@ -25,6 +25,7 @@ pub fn register(bytes: []const u8) bool {
     if (!portable and !@import("fonts.zig").registerData(bytes)) return false;
     fonts[count] = bytes;
     count += 1;
+    unscoped_generation += 1;
     return true;
 }
 
@@ -100,11 +101,21 @@ var faces_gpa: ?std.mem.Allocator = null;
 var serial: u64 = 0;
 /// Bumped when faces come or go: text systems drop what they shaped.
 pub var generation: u64 = 0;
+/// Bumped when unscoped fonts (`register` or non-`@` `registerFace`) change.
+pub var unscoped_generation: u64 = 0;
+/// True while every registered `@font-face` family contains `'@'` (page-scoped web fonts).
+pub var only_scoped_at: bool = true;
+
+pub fn unscopedGeneration() u64 {
+    return unscoped_generation;
+}
 
 /// Adds a face (`FaceOptions`). The bytes need not outlive the call. `gpa` is
 /// used until the family is unregistered.
 pub fn registerFace(gpa: std.mem.Allocator, o: FaceOptions) RegisterError!void {
     if (o.family.len == 0) return error.NotAFont;
+    const is_unscoped = std.mem.indexOfScalar(u8, o.family, '@') == null;
+    if (is_unscoped) only_scoped_at = false;
     const f = try gpa.create(Face);
     errdefer gpa.destroy(f);
     const family = try gpa.dupe(u8, o.family);
@@ -141,6 +152,7 @@ pub fn registerFace(gpa: std.mem.Allocator, o: FaceOptions) RegisterError!void {
         return e;
     };
     generation += 1;
+    if (is_unscoped) unscoped_generation += 1;
 }
 
 /// Gives a pending face of `family`, the one registered with `order`, its file or
@@ -158,6 +170,7 @@ pub fn fillFace(family: []const u8, order: u32, bytes: []const u8, local: ?[]con
             f.complex_ascii = sfnt.hasUnshieldedMultiLigature(decoded);
         }
         generation += 1;
+        if (std.mem.indexOfScalar(u8, f.family, '@') == null) unscoped_generation += 1;
         return;
     }
     return error.NotAFont;
@@ -177,8 +190,10 @@ fn release(f: *Face) void {
 pub fn unregisterFamilies(prefix: []const u8) void {
     var kept: usize = 0;
     var gone = false;
+    var gone_unscoped = false;
     for (faces.items) |f| {
         if (std.ascii.startsWithIgnoreCase(f.family, prefix)) {
+            if (std.mem.indexOfScalar(u8, f.family, '@') == null) gone_unscoped = true;
             release(f);
             gone = true;
         } else {
@@ -188,6 +203,7 @@ pub fn unregisterFamilies(prefix: []const u8) void {
     }
     faces.items.len = kept;
     if (gone) generation += 1;
+    if (gone_unscoped) unscoped_generation += 1;
     if (kept == 0) if (faces_gpa) |g| {
         faces.deinit(g);
         faces = .empty;

@@ -66,6 +66,16 @@ pub fn isAnonymousFn(n: *const Node) bool {
     };
 }
 
+pub fn isSimpleIndex(n: *const Node) bool {
+    return switch (n.data) {
+        .num, .str, .true_lit, .false_lit, .null_lit => true,
+        .ident => |id| id.with_chain.len == 0 and (if (id.binding) |v| !v.needs_tdz else false),
+        .unary => |u| u.op != .delete and isSimpleIndex(u.arg),
+        .binary => |b| b.op != .in and b.op != .instanceof and isSimpleIndex(b.l) and isSimpleIndex(b.r),
+        else => false,
+    };
+}
+
 /// Compiles for effect only.
 pub fn exprVoid(c: *C, n: *Node) Error!void {
     switch (n.data) {
@@ -140,6 +150,13 @@ pub fn expr(c: *C, n: *Node) Error!void {
         .call => try ccall.call(c, n),
         .new => |x| try ccall.newExpr(c, n, x.callee, x.args, x.has_spread),
         .member => |m| {
+            if (!m.optional and m.name == c.vm.k.length.atom()) {
+                if (c.lazyArgsIdent(m.obj)) |v| {
+                    try c.mark(n.pos);
+                    try c.opU16(.args_len, v.index);
+                    return;
+                }
+            }
             try expr(c, m.obj);
             if (m.optional) try optCheck(c, 0);
             try c.mark(n.pos);
@@ -150,6 +167,14 @@ pub fn expr(c: *C, n: *Node) Error!void {
             }
         },
         .index => |m| {
+            if (!m.optional and isSimpleIndex(m.idx)) {
+                if (c.lazyArgsIdent(m.obj)) |v| {
+                    try expr(c, m.idx);
+                    try c.mark(n.pos);
+                    try c.opU16(.args_elem, v.index);
+                    return;
+                }
+            }
             try expr(c, m.obj);
             if (m.optional) try optCheck(c, 0);
             try expr(c, m.idx);

@@ -389,9 +389,29 @@ pub fn Matcher(comptime Unit: type) type {
     };
 }
 
+inline fn leadMatches(prog: *const Program, la: [2]u64, c: u32) bool {
+    return if (c < 128) ((la[c >> 6] >> @intCast(c & 63)) & 1 != 0) else prog.lead_non_ascii;
+}
+
 /// Finds a match at or after `start` (exactly at it when sticky). regs receives capture
 /// pairs and is reset for each attempt. Returns whether it matched.
 pub fn exec(comptime Unit: type, gpa: Allocator, prog: *const Program, text: []const Unit, start: usize, sticky: bool, regs: []i32, tick: Tick) Failure!bool {
+    var pos = start;
+    if (sticky) {
+        if (prog.anchored and !prog.flags.multiline and pos > 0) return false;
+        if (prog.must_consume and pos >= text.len) return false;
+        if (pos < text.len) {
+            if (prog.first_unit) |u| {
+                if ((Unit == u8 and u >= 0x80) or text[pos] != u) return false;
+            } else if (prog.first_pair) |pair| {
+                if (text[pos] != pair[0] and text[pos] != pair[1]) return false;
+            } else if (prog.first_class) |ci| {
+                if (!classHas(&prog.classes[ci], text[pos])) return false;
+            } else if (prog.lead_ascii) |la| {
+                if (!leadMatches(prog, la, text[pos])) return false;
+            }
+        }
+    }
     var inline_buf: [64]Entry = undefined;
     var m = Matcher(Unit){
         .prog = prog,
@@ -403,7 +423,7 @@ pub fn exec(comptime Unit: type, gpa: Allocator, prog: *const Program, text: []c
         .tick = tick,
     };
     defer if (m.heap) gpa.free(m.buf);
-    var pos = start;
+    var regs_ready = false;
     while (pos <= text.len) {
         if (!sticky) {
             if (prog.anchored and !prog.flags.multiline and pos > 0) return false;
@@ -416,16 +436,38 @@ pub fn exec(comptime Unit: type, gpa: Allocator, prog: *const Program, text: []c
                     const rel = std.mem.indexOfScalar(Unit, text[pos..], @intCast(u)) orelse return false;
                     pos += rel;
                 }
+            } else if (prog.first_pair) |pair| {
+                if (Unit == u8) {
+                    const p8 = [2]u8{ @intCast(pair[0]), @intCast(pair[1]) };
+                    const rel = std.mem.indexOfAny(u8, text[pos..], &p8) orelse return false;
+                    pos += rel;
+                } else {
+                    const rel = std.mem.indexOfAny(u16, text[pos..], &pair) orelse return false;
+                    pos += rel;
+                }
             } else if (prog.first_class) |ci| {
                 const cl = &prog.classes[ci];
                 while (pos < text.len and !classHas(cl, text[pos])) pos += 1;
                 if (pos >= text.len) return false;
+            } else if (prog.lead_ascii) |la| {
+                if (Unit == u8 and la[0] == 0 and la[1] == 0 and !prog.lead_non_ascii) return false;
+                while (pos < text.len and !leadMatches(prog, la, text[pos])) pos += 1;
+                if (pos >= text.len) return false;
+            } else if (prog.must_consume and pos >= text.len) {
+                return false;
             }
         }
-        @memset(regs, -1);
+        if (!regs_ready) {
+            if (regs.len > 2) @memset(regs[2..], -1);
+            regs_ready = true;
+        }
         m.sp = 0;
         var end: u32 = 0;
-        if (try m.run(0, @intCast(pos), false, &end)) return true;
+        if (try m.run(0, @intCast(pos), false, &end)) {
+            regs[0] = @intCast(pos);
+            regs[1] = @intCast(end);
+            return true;
+        }
         if (sticky) return false;
         if (prog.anchored and !prog.flags.multiline) return false;
         pos += 1;

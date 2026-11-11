@@ -261,6 +261,27 @@ fn newWithLength(vm: *Vm, n: usize) Error!*Object {
 }
 
 fn slice(vm: *Vm, this: Value, args: []const Value) Error!Value {
+    if (this.isObject() and !vm.protos.array.flags.proto_dirty and !vm.protos.object.flags.proto_dirty and
+        (args.len == 0 or args[0].isUndefined() or args[0].isInt()) and
+        (args.len < 2 or args[1].isUndefined() or args[1].isInt()))
+    {
+        const o = this.asObject();
+        const is_fast_arr = isPlain(o) and o.shape == vm.array_root and !vm.protos.array_ctor.flags.proto_dirty;
+        const is_fast_args = o.class == .arguments and (o.shape == vm.args_strict_shape or o.shape == vm.args_sloppy_shape) and !o.flags.exotic and !o.flags.has_sparse and o.slots[0].bits == Value.fromUsize(o.elems_len).bits;
+        if (is_fast_arr or is_fast_args) {
+            const n: usize = o.elems_len;
+            const start = if (args.len == 0 or args[0].isUndefined()) 0 else blk: {
+                const k = args[0].asInt();
+                break :blk if (k < 0) n -| @as(usize, @intCast(-@as(i64, k))) else @min(@as(usize, @intCast(k)), n);
+            };
+            const end = if (args.len < 2 or args[1].isUndefined()) n else blk: {
+                const k = args[1].asInt();
+                break :blk if (k < 0) n -| @as(usize, @intCast(-@as(i64, k))) else @min(@as(usize, @intCast(k)), n);
+            };
+            const count = if (end > start) end - start else 0;
+            return (try objmod.newArray(vm, o.elems[start..][0..count])).value();
+        }
+    }
     const o = try conv.toObject(vm, this);
     const n = try conv.lengthOf(vm, o);
     const start = try u.relativeIndex(vm, u.arg(args, 0), n, 0);
