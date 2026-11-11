@@ -136,7 +136,10 @@ pub const TextSystem = struct {
         while (fit.next()) |f| cf.CFRelease(f.ref);
         self.fonts.deinit(self.gpa);
         var tit = self.font_tables.valueIterator();
-        while (tit.next()) |t| { t.*.deinit(self.gpa); self.gpa.destroy(t.*); }
+        while (tit.next()) |t| {
+            t.*.deinit(self.gpa);
+            self.gpa.destroy(t.*);
+        }
         self.font_tables.deinit(self.gpa);
         self.tables.deinit(self.gpa);
         for (self.run_fonts.items) |f| cf.CFRelease(f);
@@ -183,7 +186,10 @@ pub const TextSystem = struct {
         while (fit.next()) |f| cf.CFRelease(f.ref);
         self.fonts.clearRetainingCapacity();
         var tit = self.font_tables.valueIterator();
-        while (tit.next()) |t| { t.*.deinit(self.gpa); self.gpa.destroy(t.*); }
+        while (tit.next()) |t| {
+            t.*.deinit(self.gpa);
+            self.gpa.destroy(t.*);
+        }
         self.font_tables.clearRetainingCapacity();
         self.tables.clearRetainingCapacity();
         for (self.run_fonts.items) |f| cf.CFRelease(f);
@@ -498,7 +504,10 @@ pub const TextSystem = struct {
         const fid = self.fontId(self.font(style).ref);
         const gop = self.font_tables.getOrPut(self.gpa, fid) catch return null;
         if (!gop.found_existing) {
-            const t = self.gpa.create(shaper.Table) catch { _ = self.font_tables.remove(fid); return null; };
+            const t = self.gpa.create(shaper.Table) catch {
+                _ = self.font_tables.remove(fid);
+                return null;
+            };
             t.* = .{ .font = self.run_fonts.items[fid] };
             gop.value_ptr.* = t;
         }
