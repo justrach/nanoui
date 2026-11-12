@@ -26,6 +26,7 @@ extern "c" const UIAccessibilityAnnouncementNotification: u32;
 extern "c" fn UIAccessibilityPostNotification(notification: u32, argument: ?objc.Object) void;
 extern "c" fn UIAccessibilityIsVoiceOverRunning() bool;
 extern "c" fn UIAccessibilityDarkerSystemColorsEnabled() bool;
+extern "c" fn UIAccessibilityIsReduceTransparencyEnabled() bool;
 extern "c" fn UIAccessibilityIsBoldTextEnabled() bool;
 
 const Payload = struct {
@@ -100,6 +101,7 @@ pub fn beforeFrame(s: *Surface) void {
     const a = &s.ctx.access;
     a.screen_reader = UIAccessibilityIsVoiceOverRunning();
     a.increase_contrast = UIAccessibilityDarkerSystemColorsEnabled();
+    a.reduce_transparency = UIAccessibilityIsReduceTransparencyEnabled();
     a.bold_text = UIAccessibilityIsBoldTextEnabled();
     const app = objc.msg(objc.Object, objc.class("UIApplication"), "sharedApplication", .{});
     const name = objc.fromNSString(objc.msg(?objc.Object, app, "preferredContentSizeCategory", .{}));
