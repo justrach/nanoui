@@ -33,7 +33,7 @@ const Host = struct {
     fn makePage(self: Host, docked: bool, parent: ?*anyopaque) !*Page {
         const p = try gpa.create(Page);
         errdefer gpa.destroy(p);
-        const data_dir = try gpa.dupeZ(u16, &.{});
+        const data_dir = try gpa.dupeSentinel(u16, &.{}, 0);
         errdefer gpa.free(data_dir);
         // These handles are inspected only, never passed to Win32.
         const handles = try target.Handles.init(@ptrFromInt(0x1000), parent);

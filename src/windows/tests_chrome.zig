@@ -274,8 +274,12 @@ const Hook = struct {
 
 test "after_frame runs after each frame with its layout; a dock without WebView2 says so" {
     const gpa = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
     const app = try makeApp(gpa);
     defer app.destroy();
+    var profile_buf: [256]u8 = undefined;
+    app.webview_profile = try std.fmt.bufPrint(&profile_buf, ".zig-cache\\tmp\\{s}\\WebView2", .{tmp.sub_path});
     var bar: Bar = .{};
     const win = try chromeless(app, &bar, .hidden);
     defer win.destroyNow();
