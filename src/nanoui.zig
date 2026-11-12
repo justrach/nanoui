@@ -229,6 +229,7 @@ test {
             _ = @import("windows/tests_chrome.zig");
             _ = @import("windows/cursor.zig");
             _ = @import("page_webview2_dock.zig");
+            _ = @import("windows/tests_webview2_lifetime.zig");
             _ = @import("windows/app.zig");
             // The notification area's icon: the shell calls and the popup.
             std.testing.refAllDecls(@import("windows/tray.zig").Tray);

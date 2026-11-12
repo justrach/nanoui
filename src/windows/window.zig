@@ -20,16 +20,15 @@ pub const WM_NANOUI_CONTROLLER: u32 = w.WM_APP + 0x4001;
 pub const WM_NANOUI_JOB: u32 = w.WM_APP + 0x4002;
 
 /// Asks the window to run `page`'s queued messages once the loop turns.
-/// The page rides in wParam: a window holds its own page and the ones
-/// docked in it, and the message must reach the one that asked (a page
-/// gone by then is not found, and the message is dropped).
-pub fn postFlush(hwnd: w.HWND, page: *Page) void {
-    _ = w.PostMessageW(hwnd, WM_NANOUI_FLUSH, @intFromPtr(page), 0);
+/// A non-reused id rides in wParam, not a pointer: late messages cannot
+/// reach a replacement page that happens to reuse the old allocation.
+pub fn postFlush(page: *Page) void {
+    @import("../page_webview2_target.zig").post(page, WM_NANOUI_FLUSH, w.PostMessageW);
 }
 
 /// Asks the window to make `page`'s controller on the loop's next turn.
-pub fn postController(hwnd: w.HWND, page: *Page) void {
-    _ = w.PostMessageW(hwnd, WM_NANOUI_CONTROLLER, @intFromPtr(page), 0);
+pub fn postController(page: *Page) void {
+    @import("../page_webview2_target.zig").post(page, WM_NANOUI_CONTROLLER, w.PostMessageW);
 }
 const ui = @import("../ui/ui.zig");
 
@@ -309,10 +308,10 @@ pub const Window = struct {
 
     /// The page a posted message names (`postFlush`): the window's own or
     /// a docked one, if it is still there.
-    fn pageFor(self: *Window, wp: w.WPARAM) ?*Page {
-        if (wp == 0) return self.page;
-        if (self.page) |p| if (@intFromPtr(p) == wp) return p;
-        for (self.docked.items) |p| if (@intFromPtr(p) == wp) return p;
+    pub fn pageFor(self: *Window, wp: w.WPARAM) ?*Page {
+        if (self.closed or wp == 0) return null;
+        if (self.page) |p| if (p.target.id == wp and !p.queue.dead) return p;
+        for (self.docked.items) |p| if (p.target.id == wp and !p.queue.dead) return p;
         return null;
     }
 

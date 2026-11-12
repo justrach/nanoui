@@ -56,7 +56,9 @@ pub fn ready(p: *Page, controller: *Com) void {
         const hr = setDefaultBackground(controller, .{ .a = 0, .r = 0, .g = 0, .b = 0 });
         if (hr < 0) std.log.warn("nanoui: put_DefaultBackgroundColor failed (0x{x}): the page is opaque", .{@as(u32, @bitCast(hr))});
     }
+    if (p.queue.dead) return;
     if (p.frame_px) |r| _ = wv.Controller.setBounds(controller, r);
+    if (p.queue.dead) return;
     _ = wv.Controller.setIsVisible(controller, if (p.shown) 1 else 0);
 }
 
