@@ -1,25 +1,23 @@
 //! Touches as the pointer: one finger presses, drags and releases, as a
 //! mouse button would, and leaves no hover behind. A finger that moves
-//! mostly up or down over something that scrolls scrolls it instead, and
-//! the press it began is canceled; let go moving, it keeps going and slows
-//! as iOS's scroll views do (a fling), until a touch stops it or it meets
-//! an end. Held past an end, it rubber-bands and springs back when let go.
-//! A second finger makes a pinch: the press is canceled, and the
-//! fingers' spread and movement come as `input.zoom` and `input.pan`.
+//! past `slop` over something that scrolls (vertically or horizontally)
+//! scrolls it instead, and the press it began is canceled; let go moving,
+//! it keeps going and slows as iOS's scroll views do (a fling), until a
+//! touch stops it or it meets an end. Held past an end, it rubber-bands
+//! and springs back when let go. A second finger makes a pinch: the press
+//! is canceled, and the fingers' spread and movement come as `input.zoom`
+//! and `input.pan`.
 const std = @import("std");
 const objc = @import("../objc.zig");
 const cf = @import("../ui/cf.zig");
 const types = @import("../ui/types.zig");
+const scroll_x = @import("../ui/scroll_x.zig");
 const Surface = @import("surface.zig").Surface;
 const keys = @import("keys.zig");
 const selecting = @import("selecting.zig");
 
-/// How far a finger moves before it scrolls rather than presses, points.
-const slop: f32 = 10;
-/// UIScrollView's normal deceleration: speed kept per millisecond.
-const deceleration: f64 = 0.998;
-/// Slower than this, points per second, a fling ends.
-const min_speed: f32 = 20;
+const Axis = scroll_x.Axis;
+const min_speed = scroll_x.min_fling_speed;
 
 /// Nowhere: the pointer between touches.
 const away: types.Point = .{ .x = -1e6, .y = -1e6 };
@@ -36,12 +34,14 @@ pub const State = struct {
     last: types.Point = .{},
     last_time: f64 = 0,
     scrolling: bool = false,
-    /// The finger's vertical speed, points per second, smoothed.
+    axis: Axis = .y,
+    /// The finger's speed along `axis`, points per second, smoothed.
     velocity: f32 = 0,
     /// The touch stopped a fling: it presses nothing.
     stopper: bool = false,
-    /// A fling: its speed, where it scrolls, and its last step.
+    /// A fling: its speed, axis, where it scrolls, and its last step.
     fling: f32 = 0,
+    fling_axis: Axis = .y,
     fling_at: types.Point = .{},
     fling_time: f64 = 0,
     fling_offset: ?f32 = null,
@@ -74,21 +74,9 @@ fn location(s: *Surface, t: objc.Object) types.Point {
     return .{ .x = @floatCast(p.x), .y = @floatCast(p.y) };
 }
 
-/// The scrolling box under `p`, from the last frame, if any.
-fn scrollerAt(s: *Surface, p: types.Point) ?u64 {
-    const hits = s.ctx.hits.items;
-    var i = hits.len;
-    while (i > 0) {
-        i -= 1;
-        if (hits[i].scroll and hits[i].rect.contains(p)) return if (hits[i].wheel) null else hits[i].id;
-    }
-    return null;
-}
-
-/// Scrolls the box under `at` by `dy` points, the finger's way.
-fn scrollBy(s: *Surface, at: types.Point, dy: f32) void {
-    s.ctx.input.mouse = at;
-    _ = s.ctx.applyScroll(dy);
+/// Scrolls the box under `at` along `axis` by `delta` points, the finger's way.
+fn scrollBy(s: *Surface, at: types.Point, axis: Axis, delta: f32) void {
+    scroll_x.applyTouchDelta(&s.ctx, at, axis, delta);
     s.ctx.input.mouse = away;
 }
 
@@ -207,29 +195,36 @@ fn moved(obj: objc.Object, _: objc.SEL, touches: objc.Object, event: ?objc.Objec
     const p = location(s, t);
     const now = cf.CACurrentMediaTime();
     const dt: f32 = @floatCast(now - st.last_time);
-    if (dt > 0) st.velocity = 0.8 * ((p.y - st.last.y) / dt) + 0.2 * st.velocity;
-    var dy = p.y - st.last.y;
+    const step_x = p.x - st.last.x;
+    const step_y = p.y - st.last.y;
     st.last = p;
     st.last_time = now;
     if (selecting.moved(s, p)) return;
+    var delta: f32 = if (st.axis == .x) step_x else step_y;
     if (!st.scrolling) {
         const ty = p.y - st.start.y;
         const tx = p.x - st.start.x;
-        if (@abs(ty) > slop and @abs(ty) > @abs(tx) and scrollerAt(s, st.start) != null) {
+        if (scroll_x.pickTouchAxis(&s.ctx, st.start, tx, ty)) |axis| {
             st.scrolling = true;
+            st.axis = axis;
+            st.velocity = 0;
             // The press becomes a scroll: released away from what it pressed.
             if (!st.stopper) {
                 s.ctx.input.mouse = away;
                 s.ctx.updateHot();
                 s.ctx.pointerUp();
             }
-            dy = ty;
+            delta = scroll_x.scrollStartDelta(if (axis == .x) tx else ty);
         }
     }
     if (st.scrolling) {
-        // Held: past an end the box rubber-bands (and can be pulled to refresh).
-        s.ctx.scroll_holding = true;
-        scrollBy(s, st.start, dy);
+        if (dt > 0) {
+            const step = if (st.axis == .x) step_x else step_y;
+            st.velocity = 0.8 * (step / dt) + 0.2 * st.velocity;
+        }
+        // Held: past an end a vertical box rubber-bands (and can be pulled to refresh).
+        s.ctx.scroll_holding = (st.axis == .y);
+        scrollBy(s, st.start, st.axis, delta);
         s.frame();
     } else if (!st.stopper) {
         // A drag: a slider's thumb, a selection.
@@ -273,6 +268,7 @@ fn ended(obj: objc.Object, _: objc.SEL, touches: objc.Object, event: ?objc.Objec
         const recent = cf.CACurrentMediaTime() - st.last_time < 0.08;
         if (recent and @abs(st.velocity) > 3 * min_speed) {
             st.fling = st.velocity;
+            st.fling_axis = st.axis;
             st.fling_at = st.start;
             st.fling_time = cf.CACurrentMediaTime();
             st.fling_offset = null;
@@ -318,11 +314,11 @@ pub fn fling(s: *Surface) void {
     const dt = @min(now - st.fling_time, 0.05);
     st.fling_time = now;
     // At an end, layout kept the offset where the last step left it.
-    const id = scrollerAt(s, st.fling_at) orelse return st.stop();
-    const offset = s.ctx.scroll.get(id) orelse 0;
+    const id = scroll_x.scrollerAtAxis(&s.ctx, st.fling_at, st.fling_axis) orelse return st.stop();
+    const offset = scroll_x.scrollOffset(&s.ctx, id, st.fling_axis);
     if (st.fling_offset) |prev| if (prev == offset) return st.stop();
     st.fling_offset = offset;
-    scrollBy(s, st.fling_at, st.fling * @as(f32, @floatCast(dt)));
-    st.fling *= @floatCast(std.math.pow(f64, deceleration, dt * 1000));
-    if (@abs(st.fling) < min_speed) st.stop();
+    scrollBy(s, st.fling_at, st.fling_axis, st.fling * @as(f32, @floatCast(dt)));
+    st.fling = scroll_x.stepFlingSpeed(st.fling, dt);
+    if (st.fling == 0) st.stop();
 }

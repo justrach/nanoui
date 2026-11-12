@@ -210,3 +210,37 @@ test "horizontal regions leave vertical scrolling to the vertical ancestor" {
     try testing.expectEqual(@as(f32, 0), t.ctx.scroll.get(s.horizontal) orelse 0);
     try testing.expectEqual(@as(f32, 0), t.ctx.scroll_x.get(s.vertical) orelse 0);
 }
+
+test "touch scroll: axis routing, slop-free start, and 120Hz/60Hz fling deceleration" {
+    const sx = @import("scroll_x.zig");
+    try testing.expectEqual(@as(f32, 0), sx.scrollStartDelta(10));
+    try testing.expectEqual(@as(f32, 0), sx.scrollStartDelta(-10));
+    try testing.expectApproxEqAbs(@as(f32, 4), sx.scrollStartDelta(14), 1e-5);
+    try testing.expectApproxEqAbs(@as(f32, -6), sx.scrollStartDelta(-16), 1e-5);
+
+    // Two 8ms 120Hz ProMotion fling steps equal one 16ms 60Hz step.
+    const v0: f32 = 1200;
+    const v_120 = sx.stepFlingSpeed(sx.stepFlingSpeed(v0, 0.008), 0.008);
+    const v_60 = sx.stepFlingSpeed(v0, 0.016);
+    try testing.expectApproxEqAbs(v_60, v_120, 1e-3);
+    try testing.expectEqual(@as(f32, 0), sx.stepFlingSpeed(19.9, 0.008));
+
+    var s: Axes = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&s, Axes.view), .{ .scale = 1 });
+    defer t.deinit();
+    const pt: ui.Point = .{ .x = 30, .y = 20 };
+    try testing.expectEqual(@as(?sx.Axis, .x), sx.pickTouchAxis(&t.ctx, pt, -28, -4));
+    try testing.expectEqual(@as(?sx.Axis, .y), sx.pickTouchAxis(&t.ctx, pt, -4, -28));
+    try testing.expectEqual(@as(?sx.Axis, null), sx.pickTouchAxis(&t.ctx, pt, -8, -8));
+
+    sx.applyTouchDelta(&t.ctx, pt, .x, sx.scrollStartDelta(-50));
+    t.frame();
+    try testing.expectEqual(@as(f32, 40), t.ctx.scroll_x.get(s.horizontal).?);
+    try testing.expectEqual(@as(f32, 0), t.ctx.scroll.get(s.vertical) orelse 0);
+
+    sx.applyTouchDelta(&t.ctx, pt, .y, sx.scrollStartDelta(-45));
+    t.frame();
+    try testing.expectEqual(@as(f32, 35), t.ctx.scroll.get(s.vertical).?);
+    try testing.expectEqual(@as(f32, 40), t.ctx.scroll_x.get(s.horizontal).?);
+}
