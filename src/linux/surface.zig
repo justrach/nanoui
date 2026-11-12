@@ -15,7 +15,7 @@ const glarea = @import("glarea.zig");
 const transparent = @import("transparent.zig");
 const opengl = @import("../ui/opengl.zig");
 const text = @import("../ui/text.zig");
-const frame_mod = @import("../ui/frame.zig");
+const theme_side = @import("surface_theme.zig");
 const ctx_mod = @import("../ui/context.zig");
 const clock = @import("../ui/clock.zig");
 const Theme = @import("../ui/theme.zig").Theme;
@@ -45,6 +45,8 @@ pub const Surface = struct {
     /// A frame asked for later (`frameIn`).
     later: c_uint = 0,
     theme_override: ?Theme = null,
+    /// The theme the view last picked (`c.theme_chosen`); null: the system's.
+    theme_chosen: ?Theme = null,
     /// Follows the system's appearance (`appearance.zig`).
     watches: appearance.Watch = .{},
     cursor: ctx_mod.Cursor = .arrow,
@@ -132,11 +134,6 @@ pub const Surface = struct {
         self.gpa.destroy(self);
     }
 
-    fn theme(self: *Surface) Theme {
-        if (self.theme_override) |t| return t;
-        return if (@import("desktop.zig").isDark()) Theme.dark_theme else Theme.light;
-    }
-
     /// Builds, lays out and paints a frame; what it changed is drawn when
     /// GTK draws.
     pub fn frame(self: *Surface) void {
@@ -155,7 +152,7 @@ pub const Surface = struct {
         const dt: f32 = if (self.last_frame_time > 0) @floatCast(@min(now - self.last_frame_time, 0.1)) else 1.0 / 60.0;
         self.last_frame_time = now;
         self.in_frame = true;
-        const r = frame_mod.run(c, self.view, &self.text, &self.instances, self.size, self.scale, self.theme(), dt, now - self.start_time);
+        const r = theme_side.build(self, dt, now - self.start_time);
         self.in_frame = false;
         if (self.gl) {
             glarea.api.gtk_gl_area_queue_render(self.area);

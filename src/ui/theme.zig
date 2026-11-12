@@ -1,4 +1,5 @@
 //! The colors of native UI, light and dark, following the system appearance.
+const std = @import("std");
 const types = @import("types.zig");
 const Color = types.Color;
 
@@ -59,3 +60,19 @@ pub const Theme = struct {
         .shadow = .{ .a = 0.4 },
     };
 };
+
+/// Whether two theme choices pick the same theme (both null: the system's).
+pub fn sameChoice(a: ?Theme, b: ?Theme) bool {
+    const an = a orelse return b == null;
+    const bn = b orelse return false;
+    return std.meta.eql(an, bn);
+}
+
+test "sameChoice sees null as the system's" {
+    const testing = std.testing;
+    try testing.expect(sameChoice(null, null));
+    try testing.expect(!sameChoice(Theme.light, null));
+    try testing.expect(!sameChoice(null, Theme.dark_theme));
+    try testing.expect(sameChoice(Theme.light, Theme.light));
+    try testing.expect(!sameChoice(Theme.light, Theme.dark_theme));
+}

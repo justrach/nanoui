@@ -9,3 +9,4 @@ import NanoUI.Speedometer3Perf
 import NanoUI.Speedometer3Climb
 import NanoUI.Speedometer3Apex
 import NanoUI.Speedometer3Model
+import NanoUI.IosTouchScroll

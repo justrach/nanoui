@@ -54,3 +54,33 @@ test "decorations, skip_taskbar and opacity reach the GtkWindow" {
     const m = bare.monitorSize();
     try testing.expect(m[0] > 0 and m[1] > 0);
 }
+
+const Themed = struct {
+    chosen: ?ui.Theme = null,
+    seen: ?ui.Theme = null,
+    fn view(self: *Themed, c: *ui.Context) void {
+        c.theme_chosen = self.chosen;
+        self.seen = c.theme;
+        ui.text(c, "themed", .{});
+    }
+};
+
+test "the view's theme choice draws that theme" {
+    const app = try makeApp(testing.allocator);
+    defer app.destroy();
+    var p: Themed = .{ .chosen = ui.Theme.dark_theme };
+    const w = try app.newWindow(.{ .title = "themed", .width = 200, .height = 120, .visible = false, .content = .{ .view = .init(&p, Themed.view) } });
+    const s = w.surface.?;
+    // A hidden GtkWindow is never allocated: give the frame a size.
+    s.size = .{ .w = 200, .h = 120 };
+    s.frame();
+    try testing.expect(p.seen.?.dark);
+
+    p.chosen = ui.Theme.light;
+    s.frame();
+    try testing.expect(!p.seen.?.dark);
+
+    p.chosen = null;
+    s.frame();
+    try testing.expect(p.seen != null);
+}

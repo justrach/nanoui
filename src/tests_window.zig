@@ -326,3 +326,72 @@ test "a window redrawn from another thread draws on the main thread" {
     // Hidden, the frame waits until it shows; either way it was asked for.
     try testing.expect(k.frames > before or w.surface.?.pending or w.surface.?.full_pending);
 }
+
+const Themed = struct {
+    chosen: ?ui.Theme = null,
+    seen: ?ui.Theme = null,
+    fn view(self: *Themed, c: *ui.Context) void {
+        c.theme_chosen = self.chosen;
+        self.seen = c.theme;
+        ui.text(c, "themed", .{});
+    }
+};
+
+fn appearanceName(w: *Window) []const u8 {
+    const a = objc.msg(objc.Object, w.nswindow, "effectiveAppearance", .{});
+    return objc.fromNSString(objc.msg(?objc.Object, a, "name", .{}));
+}
+
+test "the view's theme choice draws that theme and sets the window's appearance" {
+    const app = try makeApp(testing.allocator);
+    defer freeApp(app);
+    var p: Themed = .{ .chosen = ui.Theme.dark_theme };
+    const w = try app.newWindow(.{ .title = "themed", .width = 200, .height = 120, .visible = false, .content = .{ .view = .init(&p, Themed.view) } });
+
+    // The frame that made the window built the view again with the choice.
+    try testing.expect(p.seen.?.dark);
+    try testing.expectEqualStrings("NSAppearanceNameDarkAqua", appearanceName(w));
+
+    p.chosen = ui.Theme.light;
+    w.surface.?.frame();
+    try testing.expect(!p.seen.?.dark);
+    try testing.expectEqualStrings("NSAppearanceNameAqua", appearanceName(w));
+
+    // Auto hands the window back to the system's appearance.
+    p.chosen = null;
+    w.surface.?.frame();
+    try testing.expect(objc.msg(?objc.Object, w.nswindow, "appearance", .{}) == null);
+}
+
+test "closing during a theme change stops the frame" {
+    const Closing = struct {
+        window: ?*Window = null,
+        closing: bool = false,
+        closed: bool = false,
+        rebuilt_after_close: bool = false,
+
+        fn view(self: *@This(), c: *ui.Context) void {
+            if (self.closed) self.rebuilt_after_close = true;
+            c.theme_chosen = if (self.closing) ui.Theme.dark_theme else null;
+            if (self.closing) if (self.window) |w| {
+                self.window = null;
+                self.closed = true;
+                w.close();
+            };
+            ui.text(c, "closing", .{});
+        }
+    };
+    const app = try makeApp(testing.allocator);
+    defer freeApp(app);
+    var p: Closing = .{};
+    p.window = try app.newWindow(.{ .title = "closing", .width = 200, .height = 120, .visible = false, .content = .{ .view = .init(&p, Closing.view) } });
+    const surface = p.window.?.surface.?;
+    const token = surface.token();
+    p.closing = true;
+    surface.frame();
+
+    try testing.expect(p.closed);
+    try testing.expect(!p.rebuilt_after_close);
+    try testing.expectEqual(@as(usize, 0), app.windows.items.len);
+    try testing.expect(wake.find(token) == null);
+}
