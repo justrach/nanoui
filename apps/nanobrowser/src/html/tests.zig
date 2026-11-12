@@ -270,6 +270,22 @@ test "fragments" {
     try expect(empty.first_child == null);
 }
 
+test "fast fragments decode text and both attribute forms with document-owned strings" {
+    const f = try Fix.parse("<div id=d></div>");
+    defer f.done();
+    const context = f.doc.getElementById("d").?;
+    const fast = @import("fast_fragment.zig");
+    var source = "<span title='repeat-value' data-code=repeat-value>repeat-value</span><b>repeat-value</b><i title='A&amp;B' data-code=A&amp;B>A&amp;B</i>".*;
+    const fragment = (try fast.tryParseFragment(f.doc, context, &source)) orelse return error.FastPathBailed;
+    // Neither mutation of the input nor a later parse may invalidate strings
+    // saved in the first fragment, including hits in the shared intern table.
+    @memset(source[0..], 'x');
+    const second = (try fast.tryParseFragment(f.doc, context, "<span title=other-value>other-value</span>")) orelse return error.FastPathBailed;
+    const arena = f.arena.allocator();
+    try eq("<span title=\"repeat-value\" data-code=\"repeat-value\">repeat-value</span><b>repeat-value</b><i title=\"A&amp;B\" data-code=\"A&amp;B\">A&amp;B</i>", try html.serialize(arena, fragment, false));
+    try eq("<span title=\"other-value\">other-value</span>", try html.serialize(arena, second, false));
+}
+
 test "serialization escapes and void elements" {
     const f = try Fix.parse("<!--c--><div a='&quot;&lt;'>&lt;&amp;<br><img src=x></div><style>a>b</style>");
     defer f.done();
