@@ -29,6 +29,7 @@ pub const Ctx = struct {
     arena: Allocator,
     /// Set by `content` when it gives a pseudo-element something to be.
     has_content: bool = false,
+    used_attr: bool = false,
     font_size_set: bool = false,
     /// It was set by a keyword (`small`), which the bare `monospace` has its own sizes of.
     font_size_keyword: bool = false,

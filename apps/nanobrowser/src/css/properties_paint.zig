@@ -504,6 +504,7 @@ fn content(ctx: *Ctx, t: []const Token) bool {
                 const name = k.text;
                 var a = Cur.of(c.body());
                 if (std.ascii.eqlIgnoreCase(name, "attr")) {
+                    ctx.used_attr = true;
                     const n = a.next() orelse return false;
                     if (ctx.node) |node| if (node.attr(n.text)) |v| {
                         out.appendSlice(ctx.arena, v) catch return false;

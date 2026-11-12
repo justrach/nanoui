@@ -6,6 +6,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const style = @import("css/style.zig");
 const perf = @import("perf_rules.zig");
+const dom_flags = @import("dom_flags.zig");
 
 pub const Kind = enum { document, fragment, element, text, comment, doctype };
 pub const Ns = enum { html, svg, mathml };
@@ -23,6 +24,7 @@ pub const Node = struct {
     /// An element's name, lowercase ("div"); "" otherwise.
     tag: []const u8 = "",
     ns: Ns = .html,
+    html_tag: perf.HtmlTag = .other,
     attrs: std.ArrayList(Attr) = .empty,
     /// A text's or comment's characters, a doctype's name.
     data: []const u8 = "",
@@ -48,11 +50,14 @@ pub const Node = struct {
     class_attr: ?[]const u8 = null,
     class_filter: u64 = 0,
     attr_filter: u64 = 0,
+    subtree_class_bloom: u64 = 0,
+    subtree_attr_bloom: u64 = 0,
     ancestor_bloom: u64 = 0,
     ancestor_hash: u64 = 0,
     class_src: [*]const u8 = "".ptr,
     class_src_len: usize = 0,
     class_single: bool = false,
+    subtree_layout_dirty: bool = true,
 
     /// A shadow root's stand-in: an element whose parent is its host, though it
     /// is none of the host's children, so walks of the host's tree stay out of it.
@@ -89,7 +94,9 @@ pub const Node = struct {
     /// Queued in `Document.dirty_nodes` for the next `flushStyle` pass.
     style_queued: bool = false,
     has_js_listeners: bool = false,
+    children_gen: u32 = 0,
     style_shared_gen: u32 = 0,
+    box_gen: u32 = 0,
     style_canon: ?*const style.Style = null,
     /// An inline split around blocks: its boxes, whose union its rect is.
     box_parts: []const *anyopaque = &.{},
@@ -113,6 +120,9 @@ pub const Node = struct {
     image_density: f32 = 1,
 
     pub fn isElement(n: *const Node) bool { return n.kind == .element; }
+    pub inline fn liveBox(n: *const Node) ?*anyopaque { return if (n.box_gen == n.doc.box_generation) n.box else null; }
+    pub inline fn liveBoxParts(n: *const Node) []const *anyopaque { return if (n.box_gen == n.doc.box_generation) n.box_parts else &.{}; }
+    pub inline fn setBox(n: *Node, b: ?*anyopaque) void { n.box = b; n.box_parts = &.{}; n.box_gen = n.doc.box_generation; }
 
     pub inline fn isTag(n: *const Node, tag: []const u8) bool {
         return n.kind == .element and n.tag.len == tag.len and (n.tag.len == 0 or (n.tag[0] == tag[0] and std.mem.eql(u8, n.tag, tag)));
@@ -135,24 +145,27 @@ pub const Node = struct {
             if (std.mem.eql(u8, a.value, value)) return;
             a.value = try gpa.dupe(u8, value);
             perf.syncNodeAttr(n, name, a.value);
+            dom_flags.markSubtreeLayoutDirty(n);
             n.doc.touchAttr(n, name);
-            if (changesBoxes(n, name)) n.doc.touchLayout();
+            if (changesBoxes(n, name)) n.doc.touchNodeLayout(n);
             return;
         };
         const v = try gpa.dupe(u8, value);
         try n.attrs.append(gpa, .{ .name = try gpa.dupe(u8, name), .value = v });
         if (name.len > 2 and name[0] == 'o' and name[1] == 'n') n.has_on_attr = true;
         perf.syncNodeAttr(n, name, v);
+        dom_flags.markSubtreeLayoutDirty(n);
         n.doc.touchAttr(n, name);
-        if (changesBoxes(n, name)) n.doc.touchLayout();
+        if (changesBoxes(n, name)) n.doc.touchNodeLayout(n);
     }
 
     pub fn removeAttr(n: *Node, name: []const u8) void {
         for (n.attrs.items, 0..) |a, i| if (std.mem.eql(u8, a.name, name)) {
             _ = n.attrs.orderedRemove(i);
             perf.syncNodeAttr(n, name, null);
+            dom_flags.markSubtreeLayoutDirty(n);
             n.doc.touchAttr(n, name);
-            if (changesBoxes(n, name)) n.doc.touchLayout();
+            if (changesBoxes(n, name)) n.doc.touchNodeLayout(n);
             return;
         };
     }
@@ -199,28 +212,6 @@ pub const Node = struct {
         return false;
     }
 
-    fn propagateFlags(n: *Node, has_res: bool, has_id: bool, has_work: bool) void {
-        if (has_res) {
-            var at: ?*Node = n;
-            while (at) |x| : (at = x.parent) x.has_resource = true;
-            n.doc.scan_dirty = true;
-        }
-        if (has_id and !n.has_id) {
-            var at: ?*Node = n;
-            while (at) |x| : (at = x.parent) {
-                if (x.has_id) break;
-                x.has_id = true;
-            }
-        }
-        if (has_work and !n.has_insertion_work) {
-            var at: ?*Node = n;
-            while (at) |x| : (at = x.parent) {
-                if (x.has_insertion_work) break;
-                x.has_insertion_work = true;
-            }
-        }
-    }
-
     /// Takes `child` from where it is and puts it before `ref` (at the end
     /// when null). A fragment gives its children. `child` must not contain `n`.
     pub fn insertBefore(n: *Node, child: *Node, ref: ?*Node) void {
@@ -229,23 +220,29 @@ pub const Node = struct {
             const last = child.last_child.?;
             child.first_child = null;
             child.last_child = null;
+            child.children_gen +%= 1;
+            n.children_gen +%= 1;
             var has_res = n.isTag("style");
             var has_id = false;
             var has_work = false;
+            var sub_cls: u64 = 0;
+            var sub_att: u64 = 0;
             var k: ?*Node = first;
             while (k) |x| : (k = x.next) {
                 x.parent = n;
                 if (x.has_resource) has_res = true;
                 if (x.has_id) has_id = true;
                 if (x.has_insertion_work) has_work = true;
+                sub_cls |= x.subtree_class_bloom;
+                sub_att |= x.subtree_attr_bloom;
             }
             const prev = if (ref) |r| r.prev else n.last_child;
             first.prev = prev;
             last.next = ref;
             if (prev) |p| p.next = first else n.first_child = first;
             if (ref) |r| r.prev = last else n.last_child = last;
-            n.propagateFlags(has_res, has_id, has_work);
-            n.doc.touchTree(n, has_id);
+            dom_flags.propagateInsert(n, has_res, has_id, has_work, sub_cls, sub_att);
+            dom_flags.touchTreeInsert(n.doc, n, first, last, has_id);
             return;
         }
         child.remove();
@@ -254,8 +251,9 @@ pub const Node = struct {
         child.prev = if (ref) |r| r.prev else n.last_child;
         if (child.prev) |p| p.next = child else n.first_child = child;
         if (ref) |r| r.prev = child else n.last_child = child;
-        n.propagateFlags(child.has_resource or n.isTag("style"), child.has_id, child.has_insertion_work);
-        n.doc.touchTree(n, child.has_id);
+        n.children_gen +%= 1;
+        dom_flags.propagateInsert(n, child.has_resource or n.isTag("style"), child.has_id, child.has_insertion_work, child.subtree_class_bloom, child.subtree_attr_bloom);
+        dom_flags.touchTreeInsert(n.doc, n, child, child, child.has_id);
     }
 
     pub fn appendChild(n: *Node, child: *Node) void { n.insertBefore(child, null); }
@@ -267,25 +265,33 @@ pub const Node = struct {
         child.prev = if (ref) |r| r.prev else n.last_child;
         if (child.prev) |p| p.next = child else n.first_child = child;
         if (ref) |r| r.prev = child else n.last_child = child;
-        n.propagateFlags(child.has_resource or n.isTag("style"), child.has_id, child.has_insertion_work);
+        n.children_gen +%= 1;
+        dom_flags.propagateInsert(n, child.has_resource or n.isTag("style"), child.has_id, child.has_insertion_work, child.subtree_class_bloom, child.subtree_attr_bloom);
     }
 
     /// Takes the node out of its parent.
     pub fn remove(n: *Node) void {
         const p = n.parent orelse return;
+        const prev_el = if (n.kind == .element) n.prevElement() else null;
+        const next_el = if (n.kind == .element) n.nextElement() else null;
         if (n.prev) |a| a.next = n.next else p.first_child = n.next;
         if (n.next) |b| b.prev = n.prev else p.last_child = n.prev;
         n.parent = null;
         n.prev = null;
         n.next = null;
+        n.subtree_layout_dirty = true;
+        p.children_gen +%= 1;
+        dom_flags.markSubtreeLayoutDirty(p);
         if (n.has_resource or p.isTag("style")) n.doc.scan_dirty = true;
-        n.doc.touchTree(p, n.has_id);
+        dom_flags.touchTreeRemove(n.doc, p, n.kind == .element, prev_el, next_el, n.has_id);
     }
 
     pub fn removeChildren(n: *Node) void {
         var c = n.first_child orelse return;
         n.first_child = null;
         n.last_child = null;
+        n.children_gen +%= 1;
+        dom_flags.markSubtreeLayoutDirty(n);
         var scan = n.isTag("style");
         var had_id = false;
         while (true) {
@@ -295,10 +301,11 @@ pub const Node = struct {
             c.parent = null;
             c.prev = null;
             c.next = null;
+            c.subtree_layout_dirty = true;
             c = next orelse break;
         }
         if (scan) n.doc.scan_dirty = true;
-        n.doc.touchTree(n, had_id);
+        dom_flags.touchTreeClear(n.doc, n, had_id);
     }
 
     /// The next node in document order; stays inside `root`.
@@ -350,6 +357,7 @@ pub const Node = struct {
         root.shadow_declarative = declarative;
         root.parent = n;
         n.shadow_root = root;
+        dom_flags.markSubtreeLayoutDirty(n);
         n.doc.touchTree(n, false);
         return root;
     }
@@ -395,7 +403,7 @@ pub const Node = struct {
                 return;
             }
         }
-        n.doc.touchLayout();
+        n.doc.touchNodeLayout(n);
     }
 };
 
@@ -419,6 +427,8 @@ pub const Document = struct {
     generation: u32 = 0,
     /// Goes up when non-SVG-interior tree structure changes (outermost `<svg>` roots).
     svg_roots_generation: u32 = 0,
+    box_generation: u32 = 1,
+    layout_cache_gen: u32 = 1,
     /// Goes up when tree structure or an `id` attribute changes (Theorem 16).
     id_generation: u32 = 1,
     id_map_gen: u32 = 0,
@@ -427,15 +437,15 @@ pub const Document = struct {
     id_last_key: []const u8 = "",
     id_last_node: ?*Node = null,
     id_map: std.StringHashMapUnmanaged(*Node) = .empty,
-    /// Per-document 32-slot parsed selector cache (Theorem 70).
-    sel_cache_keys: [32][]const u8 = @splat(""),
-    sel_cache_ptrs: [32]?*const anyopaque = @splat(null),
-    sel_cache_lens: [32]u32 = @splat(0),
+    /// Per-document 128-slot parsed selector cache (Theorem 70).
+    sel_cache_keys: [128][]const u8 = @splat(""),
+    sel_cache_ptrs: [128]?*const anyopaque = @splat(null),
+    sel_cache_lens: [128]u32 = @splat(0),
     svg_version: u32 = 0,
     svg_style_version: u32 = 0,
     font_epoch: u32 = 0,
     svg_dirty: bool = false,
-    rule_flags: u8 = 7,
+    rule_flags: u8 = 0x7f,
     rule_attr_filter: u64 = std.math.maxInt(u64),
     rule_id_bloom: u64 = std.math.maxInt(u64),
     /// What a restyle has to look at: everything, or under just these.
@@ -453,6 +463,11 @@ pub const Document = struct {
         return d;
     }
 
+    pub inline fn invalidateLayoutCache(d: *Document) void {
+        d.layout_cache_gen +%= 1;
+        if (d.layout_cache_gen == 0) d.layout_cache_gen = 1;
+    }
+
     /// Everything's style may have changed.
     pub fn touchStyle(d: *Document) void {
         d.generation +%= 1;
@@ -461,6 +476,7 @@ pub const Document = struct {
         d.layout_dirty = true;
         d.oof_dirty_node = null;
         d.dirty_all = true;
+        d.invalidateLayoutCache();
     }
 
     pub fn inDocument(d: *const Document, n: *const Node) bool {
@@ -508,18 +524,26 @@ pub const Document = struct {
         d.touchStyle();
     }
 
-    pub fn touchLayout(d: *Document) void { d.layout_dirty = true; d.oof_dirty_node = null; }
-
-    pub fn createElement(d: *Document, tag: []const u8) Allocator.Error!*Node {
-        return d.createElementNs(tag, .html);
+    pub fn touchLayout(d: *Document) void {
+        d.layout_dirty = true;
+        d.oof_dirty_node = null;
+        d.invalidateLayoutCache();
     }
+
+    pub fn touchNodeLayout(d: *Document, n: *Node) void {
+        d.layout_dirty = true;
+        d.oof_dirty_node = null;
+        dom_flags.markSubtreeLayoutDirty(n);
+    }
+
+    pub fn createElement(d: *Document, tag: []const u8) Allocator.Error!*Node { return d.createElementNs(tag, .html); }
 
     /// `tag` is copied, lowercased unless the namespace keeps case (SVG).
     pub fn createElementNs(d: *Document, tag: []const u8, ns: Ns) Allocator.Error!*Node {
         const n = try d.arena.create(Node);
         const name = try d.arena.dupe(u8, tag);
         if (ns == .html) _ = std.ascii.lowerString(name, name);
-        n.* = .{ .kind = .element, .doc = d, .tag = name, .ns = ns, .has_resource = perf.isResourceTag(name), .has_insertion_work = perf.isInsertionWorkTag(name) };
+        n.* = .{ .kind = .element, .doc = d, .tag = name, .ns = ns, .html_tag = if (ns == .html) perf.classifyHtmlTag(name) else .other, .has_resource = perf.isResourceTag(name), .has_insertion_work = perf.isInsertionWorkTag(name) };
         return n;
     }
 
@@ -541,9 +565,7 @@ pub const Document = struct {
         return n;
     }
 
-    pub fn documentElement(d: *const Document) ?*Node {
-        return d.node.firstElementChild();
-    }
+    pub fn documentElement(d: *const Document) ?*Node { return d.node.firstElementChild(); }
 
     fn childOfRoot(d: *const Document, tag: []const u8) ?*Node {
         const root = d.documentElement() orelse return null;
@@ -552,17 +574,9 @@ pub const Document = struct {
         return null;
     }
 
-    pub fn head(d: *const Document) ?*Node {
-        return d.childOfRoot("head");
-    }
-
-    pub fn body(d: *const Document) ?*Node {
-        return d.childOfRoot("body") orelse d.childOfRoot("frameset");
-    }
-
-    pub fn getElementById(d: *const Document, id: []const u8) ?*Node {
-        return perf.getElementById(d, id);
-    }
+    pub fn head(d: *const Document) ?*Node { return d.childOfRoot("head"); }
+    pub fn body(d: *const Document) ?*Node { return d.childOfRoot("body") orelse d.childOfRoot("frameset"); }
+    pub fn getElementById(d: *const Document, id: []const u8) ?*Node { return perf.getElementById(d, id); }
 
     /// The first `<title>`'s text, whitespace collapsed by the caller.
     pub fn title(d: *const Document, gpa: Allocator) Allocator.Error![]const u8 {
@@ -574,24 +588,6 @@ pub const Document = struct {
     }
 };
 
-test "tree edits keep their links" {
-    var a = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer a.deinit();
-    const d = try Document.create(a.allocator());
-    const p = try d.createElement("DIV");
-    try std.testing.expectEqualStrings("div", p.tag);
-    d.node.appendChild(p);
-    const x = try d.createText("x");
-    const y = try d.createText("y");
-    p.appendChild(y);
-    p.insertBefore(x, y);
-    try std.testing.expectEqualStrings("xy", try p.textContent(a.allocator()));
-    x.remove();
-    try std.testing.expect(p.first_child == y and y.prev == null);
-    const f = try d.createFragment();
-    f.appendChild(x);
-    p.appendChild(f);
-    try std.testing.expect(p.last_child == x and f.first_child == null);
-    try p.setAttr("id", "me");
-    try std.testing.expect(d.getElementById("me") == p);
+test {
+    _ = dom_flags;
 }

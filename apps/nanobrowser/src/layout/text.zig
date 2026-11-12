@@ -70,6 +70,7 @@ pub fn build(c: *Ctx, root: *Box) Error!void {
         const e = entries[0];
         if (e.text.len == 0) return;
         const s = e.style orelse root.style;
+        if ((s.white_space == .normal or s.white_space == .nowrap) and allCollapsibleSpace(e.text)) return;
         if (e.node) |n| if (s.text_transform == .none) if (n.text_cache) |raw_tc| {
             const tc: *const TextPieceCache = @ptrCast(@alignCast(raw_tc));
             if (matchTextCache(tc, e.text, n, s, c, root.lay.nowrap, true)) {
@@ -127,8 +128,34 @@ fn isSpace(ch: u8) bool {
     return ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r' or ch == 0x0c;
 }
 
+inline fn allCollapsibleSpace(s: []const u8) bool {
+    for (s) |ch| if (!isSpace(ch)) return false;
+    return true;
+}
+
 fn addText(b: *Builder, raw: []const u8, node: ?*dom.Node, s: *const css.Style, owner: *Box) Error!void {
     if (raw.len == 0) return;
+    if (s.text_transform == .none and (s.white_space == .normal or s.white_space == .nowrap) and allCollapsibleSpace(raw)) {
+        if (!b.after_space) {
+            const font = box.fontOf(s);
+            const single = raw.len == 1 and raw[0] == ' ';
+            try b.out.append(b.c.arena, .{
+                .tag = .space,
+                .text = if (single) raw[0..1] else " ",
+                .w = b.c.width(" ", font) + ctx.clean(s.word_spacing) + ctx.clean(s.letter_spacing),
+                .box = owner,
+                .node = node,
+                .style = s,
+                .font = font,
+                .start = 0,
+                .plain = node != null and single,
+                .wraps = s.white_space == .normal and !b.root.lay.nowrap,
+                .sliced = single,
+            });
+            b.after_space = true;
+        }
+        return;
+    }
     const c = b.c;
     const nowrap_hint = b.root.lay.nowrap;
     const can_cache = node != null and s.text_transform == .none and (b.out.items.len == 0 or b.out.items[b.out.items.len - 1].tag != .space);

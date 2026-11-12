@@ -13,6 +13,12 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const portable = b.option(bool, "portable", "Use portable text and CPU rendering instead of native rasterization (for tests)") orelse false;
+    // `-Dllvm=false -Dnew-linker=false`: built as zorg builds apps (the
+    // self-hosted backend, the old MachO linker). The runtime library takes
+    // them as well as the tests: under `-fincremental` an artifact left to
+    // the default gets the new MachO linker, which cannot load objects yet.
+    const use_llvm = b.option(bool, "llvm", "Build the tests and the runtime library with the LLVM backend (false = self-hosted)");
+    const new_linker = b.option(bool, "new-linker", "Link the tests and the runtime library with Zig's new linker");
     const options = b.addOptions();
     options.addOption(bool, "portable", portable);
     options.addOption(bool, "in_rt", false);
@@ -45,7 +51,8 @@ pub fn build(b: *std.Build) void {
                 rt_mod.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ sdk, "usr/lib" }) });
             }
         }
-        const rt_lib = b.addLibrary(.{ .linkage = .static, .name = "nanoui-rt", .root_module = rt_mod });
+        const rt_lib = b.addLibrary(.{ .linkage = .static, .name = "nanoui-rt", .root_module = rt_mod, .use_llvm = use_llvm });
+        rt_lib.use_new_linker = new_linker;
         nanoui.linkLibrary(rt_lib);
     }
     if (os == .macos) {
@@ -193,10 +200,6 @@ pub fn build(b: *std.Build) void {
     });
     b.step("ruler-replay", "Build the offscreen ruler replay").dependOn(&b.addInstallArtifact(ruler_replay, .{}).step);
 
-    // `-Dllvm=false -Dnew-linker=false`: the tests built as zorg builds apps
-    // (the self-hosted backend, the old MachO linker).
-    const use_llvm = b.option(bool, "llvm", "Build the tests with the LLVM backend (false = self-hosted)");
-    const new_linker = b.option(bool, "new-linker", "Link the tests with Zig's new linker");
     const filters = b.option([]const []const u8, "test-filter", "Run only the tests whose names contain this") orelse &.{};
     const tests = b.addTest(.{ .root_module = nanoui, .use_llvm = use_llvm, .filters = filters });
     tests.use_new_linker = new_linker;

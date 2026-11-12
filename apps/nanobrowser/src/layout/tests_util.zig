@@ -90,7 +90,7 @@ pub const T = struct {
 
     pub fn boxOf(t: *T, n: *Node) *Box {
         _ = t;
-        return @ptrCast(@alignCast(n.box.?));
+        return @ptrCast(@alignCast(n.liveBox().?));
     }
 
     /// Expects `n`'s border box.

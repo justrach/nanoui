@@ -26,22 +26,23 @@ fn nodeType(vm: *Vm, this: Value, _: []const Value) Error!Value {
 }
 
 fn upperName(vm: *Vm, n: *const Node) Error!Value {
-    if (n.ns != .html) return vm.newString(n.tag);
+    if (n.ns != .html) return if (n.tag.len <= 32) vm.internString(n.tag) else vm.newString(n.tag);
     var buf: [128]u8 = undefined;
+    if (n.tag.len <= 32) return vm.internString(std.ascii.upperString(&buf, n.tag));
     if (n.tag.len <= buf.len) return vm.newString(std.ascii.upperString(&buf, n.tag));
     return vm.newString(n.tag);
 }
 
 fn nodeName(vm: *Vm, this: Value, _: []const Value) Error!Value {
     const n = try nodeOf(vm, this);
-    if (bind.isShadow(n)) return vm.newString("#document-fragment");
+    if (bind.isShadow(n)) return vm.internString("#document-fragment");
     return switch (n.kind) {
         .element => upperName(vm, n),
-        .text => vm.newString("#text"),
-        .comment => vm.newString("#comment"),
-        .document => vm.newString("#document"),
+        .text => vm.internString("#text"),
+        .comment => vm.internString("#comment"),
+        .document => vm.internString("#document"),
         .doctype => vm.newString(n.data),
-        .fragment => vm.newString("#document-fragment"),
+        .fragment => vm.internString("#document-fragment"),
     };
 }
 
@@ -197,6 +198,7 @@ pub fn clone(w: *bind.World, n: *Node, deep: bool, doc: *dom.Document) Error!*No
         .kind = n.kind,
         .doc = doc,
         .tag = n.tag,
+        .html_tag = n.html_tag,
         .ns = n.ns,
         .data = n.data,
         .has_resource = @import("../perf_rules.zig").isResourceTag(n.tag),
@@ -207,6 +209,8 @@ pub fn clone(w: *bind.World, n: *Node, deep: bool, doc: *dom.Document) Error!*No
         .class_attr = n.class_attr,
         .class_filter = n.class_filter,
         .attr_filter = n.attr_filter,
+        .subtree_class_bloom = n.class_filter,
+        .subtree_attr_bloom = n.attr_filter,
         .class_src = n.class_src,
         .class_src_len = n.class_src_len,
         .class_single = n.class_single,
@@ -237,6 +241,7 @@ pub fn clone(w: *bind.World, n: *Node, deep: bool, doc: *dom.Document) Error!*No
                     .kind = child.kind,
                     .doc = doc,
                     .tag = child.tag,
+                    .html_tag = child.html_tag,
                     .ns = child.ns,
                     .data = child.data,
                     .has_resource = @import("../perf_rules.zig").isResourceTag(child.tag),
@@ -247,6 +252,8 @@ pub fn clone(w: *bind.World, n: *Node, deep: bool, doc: *dom.Document) Error!*No
                     .class_attr = child.class_attr,
                     .class_filter = child.class_filter,
                     .attr_filter = child.attr_filter,
+                    .subtree_class_bloom = child.class_filter,
+                    .subtree_attr_bloom = child.attr_filter,
                     .class_src = child.class_src,
                     .class_src_len = child.class_src_len,
                     .class_single = child.class_single,

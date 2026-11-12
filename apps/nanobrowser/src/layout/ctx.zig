@@ -5,6 +5,7 @@ const std = @import("std");
 const box = @import("box.zig");
 const css = @import("../css/style.zig");
 const intrinsic = @import("intrinsic.zig");
+const font_cache = @import("../font_cache.zig");
 
 pub const Allocator = std.mem.Allocator;
 pub const Error = Allocator.Error;
@@ -21,6 +22,8 @@ pub const Ctx = struct {
     vw: f32,
     vh: f32,
     quirks: bool = false,
+    doc: ?*@import("../dom.zig").Document = null,
+    prev_gen: u32 = 0,
     /// The anonymous block style last made, and what it was made from.
     anon_from: ?*const Style = null,
     anon_block: ?*const Style = null,
@@ -49,16 +52,22 @@ pub const Ctx = struct {
         const k = font.wordKey(text);
         const slot: usize = @as(usize, @truncate(k)) & 255;
         if (k != 0 and c.l1_keys[slot] == k) return c.l1_vals[slot];
-        if (k != 0) if (c.m.widths) |wm| if (wm.get(k)) |cw| {
-            const w = clean(cw);
-            c.l1_keys[slot] = k;
-            c.l1_vals[slot] = w;
-            if (is_space) {
-                c.space_font_key = font.key();
-                c.space_w = w;
-            }
-            return w;
-        };
+        if (k != 0) {
+            if (c.m.shared_ok and !font.isScoped()) {
+                if (font_cache.getWidth(k)) |cw| {
+                    c.l1_keys[slot] = k;
+                    c.l1_vals[slot] = cw;
+                    if (is_space) { c.space_font_key = font.key(); c.space_w = cw; }
+                    return cw;
+                }
+            } else if (c.m.widths) |wm| if (wm.get(k)) |cw| {
+                const w = clean(cw);
+                c.l1_keys[slot] = k;
+                c.l1_vals[slot] = w;
+                if (is_space) { c.space_font_key = font.key(); c.space_w = w; }
+                return w;
+            };
+        }
         const w = clean(c.m.width(c.m.ctx, text, font));
         if (k != 0) {
             c.l1_keys[slot] = k;
@@ -72,7 +81,7 @@ pub const Ctx = struct {
     }
 
     /// Theorem 59 (`NanoUI.Speedometer3Climb.ascii_word_scan_and_persistent_kern_cache_equiv`):
-    /// Caches space-kerning deltas in both `c.kern_keys` and the page-persistent `widths` map.
+    /// Caches space-kerning deltas in `c.kern_keys` and browser/page persistent width caches.
     pub fn kernSpaceDelta(c: *Ctx, tail: []const u8, head: []const u8, font: box.Font) f32 {
         if (font.mono or font.tabular or font.size <= 0) return 0;
         if (tail.len + head.len + 1 > 10) return 0;
@@ -90,7 +99,14 @@ pub const Ctx = struct {
         if (k == 0) k = 1;
         const slot: usize = @as(usize, @truncate(k)) & 255;
         if (c.kern_keys[slot] == k) return c.kern_vals[slot];
-        if (c.m.widths) |wm| if (wm.get(k)) |cached_d| {
+        const use_shared = c.m.shared_ok and !font.isScoped();
+        if (use_shared) {
+            if (font_cache.getWidth(k)) |cached_d| {
+                c.kern_keys[slot] = k;
+                c.kern_vals[slot] = cached_d;
+                return cached_d;
+            }
+        } else if (c.m.widths) |wm| if (wm.get(k)) |cached_d| {
             c.kern_keys[slot] = k;
             c.kern_vals[slot] = cached_d;
             return cached_d;
@@ -103,7 +119,9 @@ pub const Ctx = struct {
         const d = c.width(slice, font) - (c.width(tail, font) + c.width(head, font) + c.width(" ", font));
         c.kern_keys[slot] = k;
         c.kern_vals[slot] = d;
-        if (c.m.widths) |wm| if (c.m.widths_gpa) |gpa| {
+        if (use_shared) {
+            font_cache.putWidth(k, d);
+        } else if (c.m.widths) |wm| if (c.m.widths_gpa) |gpa| {
             if (wm.contains(font.wordKey(slice))) wm.put(gpa, k, d) catch {};
         };
         return d;

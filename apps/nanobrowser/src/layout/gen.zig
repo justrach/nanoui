@@ -14,6 +14,8 @@ const text = @import("text.zig");
 const replaced = @import("replaced.zig");
 const gen_table = @import("gen_table.zig");
 const counters = @import("counters.zig");
+const cache = @import("cache.zig");
+const perf = @import("../perf_rules.zig");
 const Box = box.Box;
 const Entry = box.Entry;
 const Ctx = ctx.Ctx;
@@ -109,51 +111,7 @@ fn kindFor(s: *const Style) box.Kind {
     };
 }
 
-pub const HtmlTag = enum {
-    other,
-    br,
-    wbr,
-    input,
-    button,
-    control,
-    img,
-    replaced,
-    list,
-    table,
-    tr,
-    cell,
-    center,
-    details,
-    slot,
-};
-
-const html_tags = std.StaticStringMap(HtmlTag).initComptime(.{
-    .{ "br", .br },
-    .{ "wbr", .wbr },
-    .{ "input", .input },
-    .{ "button", .button },
-    .{ "select", .control },
-    .{ "textarea", .control },
-    .{ "progress", .control },
-    .{ "meter", .control },
-    .{ "img", .img },
-    .{ "canvas", .replaced },
-    .{ "video", .replaced },
-    .{ "iframe", .replaced },
-    .{ "object", .replaced },
-    .{ "embed", .replaced },
-    .{ "ol", .list },
-    .{ "ul", .list },
-    .{ "menu", .list },
-    .{ "dir", .list },
-    .{ "table", .table },
-    .{ "tr", .tr },
-    .{ "td", .cell },
-    .{ "th", .cell },
-    .{ "center", .center },
-    .{ "details", .details },
-    .{ "slot", .slot },
-});
+pub const HtmlTag = perf.HtmlTag;
 
 fn inputType(n: *const dom.Node) []const u8 {
     return n.attr("type") orelse "text";
@@ -185,8 +143,10 @@ pub fn element(g: *Gen, n: *dom.Node) Error!void {
     if (n.in_top_layer) {
         if (g.in_top != n) return;
         s0 = g.top_style.?;
+    } else if (try cache.tryAdopt(g, n)) {
+        return;
     }
-    const htag: HtmlTag = if (n.ns == .html) (html_tags.get(n.tag) orelse .other) else .other;
+    const htag: HtmlTag = n.html_tag;
     var is_btn_input = false;
     if (htag == .br) return push(g, .{ .tag = .br, .style = s0 });
     if (htag == .wbr) return push(g, .{ .tag = .wbr });
@@ -228,18 +188,27 @@ pub fn element(g: *Gen, n: *dom.Node) Error!void {
     if (is_replaced) {
         if (htag == .img) if (brokenAlt(g.c, n)) |alt| return altBox(g, n, s, alt);
         const b = try newBox(g.c, .replaced, n, try atomStyle(g.c, s));
-        n.box = b;
+        b.lay.in_text_align = saved_align;
+        b.lay.in_nowrap = saved_nowrap;
+        b.lay.cached_style = s_in;
+        n.setBox(b);
         return push(g, .{ .tag = .box, .box = b, .style = b.style });
     }
     if (htag == .control or (htag == .input and !is_btn_input)) {
         const b = try newBox(g.c, .control, n, try atomStyle(g.c, s));
-        n.box = b;
+        b.lay.in_text_align = saved_align;
+        b.lay.in_nowrap = saved_nowrap;
+        b.lay.cached_style = s_in;
+        n.setBox(b);
         return push(g, .{ .tag = .box, .box = b, .style = b.style });
     }
     const is_button = (htag == .button or is_btn_input);
     const st = if (is_button) try atomStyle(g.c, s) else s;
     const b = try newBox(g.c, kindFor(st), n, st);
-    n.box = b;
+    b.lay.in_text_align = saved_align;
+    b.lay.in_nowrap = saved_nowrap;
+    b.lay.cached_style = s_in;
+    n.setBox(b);
     if (hints.isContentHidden(n, st)) {
         // `content-visibility: hidden`, `hidden=until-found`: a box with nothing shown.
         try finish(g, b, g.stack.items.len);
@@ -287,24 +256,25 @@ fn isLazy(n: *const dom.Node) bool {
 
 fn altBox(g: *Gen, n: *dom.Node, s: *const Style, alt: []const u8) Error!void {
     const b = try newBox(g.c, kindFor(s), n, s);
-    n.box = b;
+    n.setBox(b);
     const base = g.stack.items.len;
     try push(g, .{ .tag = .generated, .text = alt, .style = s });
     try finish(g, b, base);
 }
 
 fn marker(g: *Gen, b: *Box, n: *dom.Node, s: *const Style) Error!void {
-    if (n.ns == .html and n.attr("value") != null) {
-        const v = std.mem.trim(u8, n.attr("value").?, " \t\r\n");
+    if (n.ns == .html) if (n.attr("value")) |raw_v| {
+        const v = std.mem.trim(u8, raw_v, " \t\r\n");
         g.counter = std.fmt.parseInt(i64, v, 10) catch g.counter;
-    }
+    };
     const value = g.counter;
     const a = g.c.arena;
     // `counter(list-item)` reads what the item's number is.
     try g.counters.set(a, "list-item", @intCast(std.math.clamp(value, -1000000000, 1000000000)), g.depth);
+    g.counter += g.counter_step;
+    if (s.list_style == .none and s.list_style_text == null and n.marker == null) return;
     // The list's counter is what the item changes: it survives the item.
     var text_str = try list.counterText(a, s.list_style, value);
-    g.counter += g.counter_step;
     const ms = n.marker;
     if (ms) |m| {
         if (m.marker_hidden) return;
@@ -477,7 +447,7 @@ fn inlineBox(g: *Gen, b: *Box, entries: []const Entry) Error!void {
     }
     _ = try flush.run(g, part, entries[from..]);
     if (b.node) |n| if (!b.pseudo) {
-        n.box = first_of_node;
+        n.setBox(first_of_node);
         try partsOf(g, n, entries);
     };
 }
@@ -557,4 +527,28 @@ fn itemRun(g: *Gen, b: *Box, run: []const Entry) Error!void {
     const anon = try newBox(g.c, .block, null, try g.c.anonStyle(b.style, .block));
     b.append(anon);
     try inlineRoot(g, anon, run);
+}
+
+/// Rebuilds the children and inline pieces of an adopted box `b` when its size changes.
+pub fn rebuildAdoptedContents(c: *Ctx, b: *Box) Error!void {
+    const n = b.node orelse return;
+    if (b.kind == .control or b.kind == .replaced) return;
+    var g: Gen = .{ .c = c, .text_align = b.lay.in_text_align, .nowrap = b.lay.in_nowrap };
+    const htag: HtmlTag = n.html_tag;
+    hints.descend(&g, n, htag);
+    const st = b.style;
+    if (hints.isContentHidden(n, st)) {
+        try finish(&g, b, 0);
+        return;
+    }
+    const is_btn_input = (htag == .input and isButtonInputType(inputType(n)));
+    const is_button = (htag == .button or is_btn_input);
+    if (is_button and st.text_align == .start) g.text_align = .center;
+    try pseudo(&g, n, n.before);
+    if (is_btn_input) {
+        const v = n.value orelse n.attr("value") orelse buttonDefault(n);
+        if (v.len > 0) try push(&g, .{ .tag = .generated, .text = v, .style = st });
+    } else try children(&g, n, st, htag);
+    try pseudo(&g, n, n.after);
+    try finish(&g, b, 0);
 }

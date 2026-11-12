@@ -326,18 +326,67 @@ fn target(vm: *Vm, args: []const Value) Error!*Object {
     return t.asObject();
 }
 
+inline fn fastPropKey(vm: *Vm, v: Value) Error!PropKey {
+    if (v.isString()) {
+        const s = v.asString();
+        if (s.key.bits != 0) return s.key;
+    } else if (v.isSymbol()) {
+        return PropKey.fromSymbol(v.asSymbol());
+    } else if (v.isInt() and v.asInt() >= 0) {
+        return PropKey.fromIndex(@intCast(v.asInt()));
+    }
+    return conv.toPropKey(vm, v);
+}
+
 fn rGet(vm: *Vm, _: Value, args: []const Value) Error!Value {
     const t = try target(vm, args);
-    const key = try conv.toPropKey(vm, u.arg(args, 1));
-    return props.getR(vm, t, key, if (args.len > 2) args[2] else t.value());
+    const key = try fastPropKey(vm, u.arg(args, 1));
+    const recv = if (args.len > 2) args[2] else t.value();
+    if (!key.isIndex() and !t.flags.exotic and !t.flags.lazy_fn and !(t.class == .array and key.eql(vm.k.length))) {
+        const sh = t.shape;
+        const me = vm.megaSlot(sh, key.bits);
+        if (me.shape == sh and me.key_bits == key.bits) {
+            if (me.holder) |mh| {
+                if (me.epoch == vm.proto_epoch and mh.shape == me.holder_shape) {
+                    const sv = mh.slots[me.slot & ~vm_mod.MegaICEntry.acc_flag];
+                    return if ((me.slot & vm_mod.MegaICEntry.acc_flag) != 0) props.callGetter(vm, sv, recv) else sv;
+                }
+            } else if (me.slot == @import("bytecode.zig").IC.missing_slot) {
+                if (me.epoch == vm.proto_epoch) return Value.undefined;
+            } else {
+                return t.slots[me.slot];
+            }
+        }
+        if (!sh.is_dict) {
+            if (sh.find(key)) |slot| {
+                if (!sh.flagsAt(slot).accessor) {
+                    me.* = .{ .shape = sh, .key_bits = key.bits, .holder = null, .holder_shape = null, .slot = slot, .epoch = 0 };
+                    return t.slots[slot];
+                }
+                return props.callGetter(vm, t.slots[slot], recv);
+            }
+        }
+    }
+    return props.getR(vm, t, key, recv);
 }
 fn rSet(vm: *Vm, _: Value, args: []const Value) Error!Value {
     const t = try target(vm, args);
-    const key = try conv.toPropKey(vm, u.arg(args, 1));
-    return Value.fromBool(try props.setR(vm, t, key, u.arg(args, 2), if (args.len > 3) args[3] else t.value()));
+    const key = try fastPropKey(vm, u.arg(args, 1));
+    const val = u.arg(args, 2);
+    const recv = if (args.len > 3) args[3] else t.value();
+    if (recv.bits == t.value().bits and !key.isIndex() and !t.flags.exotic and !t.flags.lazy_fn and !t.flags.is_proto) {
+        if (t.shape.find(key)) |slot| {
+            const fl = t.shape.flagsAt(slot);
+            if (fl.writable and !fl.accessor) {
+                t.slots[slot] = val;
+                return Value.true;
+            }
+        }
+    }
+    return Value.fromBool(try props.setR(vm, t, key, val, recv));
 }
 fn rHas(vm: *Vm, _: Value, args: []const Value) Error!Value {
-    return Value.fromBool(try props.has(vm, try target(vm, args), try conv.toPropKey(vm, u.arg(args, 1))));
+    return Value.fromBool(try props.has(vm, try target(vm, args), try fastPropKey(vm, u.arg(args, 1))));
 }
 fn rDelete(vm: *Vm, _: Value, args: []const Value) Error!Value {
     return Value.fromBool(try props.delete(vm, try target(vm, args), try conv.toPropKey(vm, u.arg(args, 1))));

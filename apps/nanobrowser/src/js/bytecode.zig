@@ -28,6 +28,10 @@ pub const Op = enum(u8) {
     new_target,
     home,
     arguments,
+    args_get, // u16 slot
+    args_len, // u16 slot
+    args_elem, // u16 slot (idx -> val)
+    args_apply, // u16 slot (recv fn thisArg -> ret)
     rest, // u16 first index
     // stack shuffles
     pop,
@@ -230,6 +234,11 @@ pub const IC = struct {
 };
 
 pub const LineEntry = struct { pc: u32, pos: u32 };
+pub const CatchEntry = struct { bc_pc: u32, word_off: u32 };
+pub const JitCacheSlot = struct {
+    jit_fn: ?*const anyopaque = null,
+    catch_map: []CatchEntry = &.{},
+};
 
 pub const Source = struct {
     cell: heap.Cell,
@@ -308,15 +317,23 @@ pub const FuncProto = struct {
     module: ?*module.Module = null,
     jit_fn: ?*const anyopaque = null,
     jit_fast_fn: ?*const anyopaque = null,
-    jit_cache_slot: ?*?*const anyopaque = null,
+    catch_map: []CatchEntry = &.{},
+    jit_cache_slot: ?*JitCacheSlot = null,
     hot_count: u16 = 0,
     jit_disabled: bool = false,
 
     pub const fast_entry_words = 24;
 
+    pub inline fn findCatchWord(p: *const FuncProto, bc_pc: u32) ?u32 {
+        for (p.catch_map) |ce| {
+            if (ce.bc_pc == bc_pc) return ce.word_off;
+        }
+        return null;
+    }
+
     pub inline fn setJitFn(p: *FuncProto, jfn: ?*const anyopaque) void {
         p.jit_fn = jfn;
-        p.jit_fast_fn = if (jfn != null and !p.is_class_ctor and !p.needs_args and p.nlocals <= 256)
+        p.jit_fast_fn = if (jfn != null and !p.is_class_ctor and p.nlocals <= 256)
             @ptrFromInt(@intFromPtr(jfn.?) + fast_entry_words * @sizeOf(u32))
         else
             null;
@@ -369,6 +386,7 @@ pub const FuncProto = struct {
         if (!p.borrowed_code) {
             gpa.free(p.code);
             gpa.free(p.lines);
+            if (p.catch_map.len > 0) gpa.free(p.catch_map);
         }
         gpa.free(p.constants);
         gpa.free(p.protos);
@@ -390,7 +408,8 @@ pub const FuncProto = struct {
 /// The net stack effect of opcodes with a fixed one.
 pub fn effect(op: Op) i32 {
     return switch (op) {
-        .undef, .null_, .true_, .false_, .hole, .int8, .int32, .constant, .this, .callee, .new_target, .home, .arguments, .rest => 1,
+        .undef, .null_, .true_, .false_, .hole, .int8, .int32, .constant, .this, .callee, .new_target, .home, .arguments, .args_get, .args_len, .rest => 1,
+        .args_elem => 0,
         .pop => -1,
         .dup => 1,
         .dup2 => 2,
@@ -424,7 +443,7 @@ pub fn effect(op: Op) i32 {
         .neg, .plus, .not, .bit_not, .inc, .dec, .typeof_, .to_numeric, .to_propkey, .to_str => 0,
         .jump, .loop, .opt_chain => 0,
         .jump_false, .jump_true, .jump_false_keep, .jump_true_keep, .jump_notnull_keep, .jump_not_undef => -1,
-        .apply, .apply_new, .super_apply => -2,
+        .apply, .apply_new, .super_apply, .args_apply => -2,
         .get_super_ctor, .check_coercible, .nop => 0,
         .super_forward => 1,
         .check_super_once => -1,

@@ -494,3 +494,26 @@ test "a form has a bottom margin in quirks mode only" {
     defer std_mode.done();
     try near(std_mode.s("f").margin_bottom.px, 0);
 }
+
+test "inline style sharing and subtree bloom selector pruning" {
+    const p = try Page.make(
+        "<!doctype html><body><div id=wrap>" ++
+            "<div class='bar' style='width:42px;color:rgb(10,20,30)'><span>a</span></div>" ++
+            "<div class='bar' style='width:42px;color:rgb(10,20,30)'><span class='needle' data-k='v'>b</span></div>" ++
+            "<div class='bar' style='width:99px;color:rgb(10,20,30)'><span>c</span></div>" ++
+            "</div>",
+        ".bar { height: 12px; }",
+        vp,
+    );
+    defer p.done();
+    const wrap = p.el("wrap");
+    const b1 = wrap.firstElementChild().?;
+    const b2 = b1.nextElement().?;
+    const b3 = b2.nextElement().?;
+    try expect(b1.computed == b2.computed);
+    try expect(b1.computed != b3.computed);
+    const found_cls = (try css.querySelector(wrap, ".needle", p.arena.allocator())).?;
+    const found_attr = (try css.querySelector(wrap, "[data-k='v']", p.arena.allocator())).?;
+    try expect(found_cls == found_attr);
+    try expect((try css.querySelector(wrap, ".nonexistent", p.arena.allocator())) == null);
+}

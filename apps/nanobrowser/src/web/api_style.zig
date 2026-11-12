@@ -187,11 +187,13 @@ fn known(buf: []u8, name: []const u8) ?[]const u8 {
 fn styleGet(vm: *Vm, o: *js.Object, name: []const u8) Error!?Value {
     var buf: [128]u8 = undefined;
     const prop = known(&buf, name) orelse return null;
+    const cur = hostNode(o).attr("style") orelse "";
+    if (cur.len == 0) return Value.fromString(vm.empty);
     const w = bind.world(vm);
     var list: std.ArrayList(Decl) = .empty;
     defer list.deinit(w.gpa);
-    try parse(w.gpa, hostNode(o).attr("style") orelse "", &list);
-    const d = find(list.items, prop) orelse return try vm.newString("");
+    try parse(w.gpa, cur, &list);
+    const d = find(list.items, prop) orelse return Value.fromString(vm.empty);
     return try vm.newString(d.value);
 }
 
@@ -214,14 +216,22 @@ fn styleIndex(vm: *Vm, o: *js.Object, i: u32) Error!?Value {
 }
 
 fn styleLength(vm: *Vm, o: *js.Object) Error!u32 {
+    const cur = hostNode(o).attr("style") orelse "";
+    if (cur.len == 0) return 0;
     const w = bind.world(vm);
     var list: std.ArrayList(Decl) = .empty;
     defer list.deinit(w.gpa);
-    try parse(w.gpa, hostNode(o).attr("style") orelse "", &list);
+    try parse(w.gpa, cur, &list);
     return @intCast(list.items.len);
 }
 
-const style_hooks = js.HostHooks{ .get_named = styleGet, .set_named = styleSet, .get_index = styleIndex, .length_index = styleLength };
+const style_hooks = js.HostHooks{
+    .get_named = styleGet,
+    .set_named = styleSet,
+    .get_index = styleIndex,
+    .length_index = styleLength,
+    .named_null_deterministic = true,
+};
 
 pub fn inlineStyle(w: *World, n: *Node) Error!Value {
     if (n.js_style) |p| {
@@ -241,11 +251,14 @@ pub fn inlineStyle(w: *World, n: *Node) Error!Value {
 
 fn getPropertyValue(vm: *Vm, this: Value, args: []const Value) Error!Value {
     const n = try thisStyle(vm, this);
+    const prop = try bind.str(vm, args, 0);
+    const cur = n.attr("style") orelse "";
+    if (cur.len == 0) return Value.fromString(vm.empty);
     const w = bind.world(vm);
     var list: std.ArrayList(Decl) = .empty;
     defer list.deinit(w.gpa);
-    try parse(w.gpa, n.attr("style") orelse "", &list);
-    const d = find(list.items, try bind.str(vm, args, 0)) orelse return vm.newString("");
+    try parse(w.gpa, cur, &list);
+    const d = find(list.items, prop) orelse return Value.fromString(vm.empty);
     return vm.newString(d.value);
 }
 
@@ -347,7 +360,12 @@ fn computedIndex(vm: *Vm, _: *js.Object, i: u32) Error!?Value {
     return try vm.newString(names.all[i]);
 }
 
-const computed_hooks = js.HostHooks{ .get_named = computedGet, .get_index = computedIndex, .length_index = computedLength };
+const computed_hooks = js.HostHooks{
+    .get_named = computedGet,
+    .get_index = computedIndex,
+    .length_index = computedLength,
+    .named_null_deterministic = true,
+};
 
 fn getComputedStyle(vm: *Vm, _: Value, args: []const Value) Error!Value {
     const n = try bind.nodeArg(vm, args, 0, "getComputedStyle");

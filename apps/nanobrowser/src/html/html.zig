@@ -85,6 +85,8 @@ pub fn parseFragmentWith(doc: *dom.Document, context: *dom.Node, source: []const
     fragment.has_resource = root.has_resource;
     fragment.has_id = root.has_id;
     fragment.has_insertion_work = root.has_insertion_work;
+    fragment.subtree_class_bloom = root.subtree_class_bloom;
+    fragment.subtree_attr_bloom = root.subtree_attr_bloom;
     return fragment;
 }
 
