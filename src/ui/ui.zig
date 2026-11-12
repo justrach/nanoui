@@ -282,6 +282,8 @@ pub const View = struct {
 
 test {
     _ = @import("tests_ruler.zig");
+    // The one press in flight: a second button ignored, a stale press replaced.
+    _ = @import("pointer_press.zig");
     _ = @import("tests_caret_activity.zig");
     _ = @import("tests_motion.zig");
     _ = @import("motion/tests_catalog.zig");
