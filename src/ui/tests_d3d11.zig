@@ -37,7 +37,7 @@ const Limits = struct { mean: f64, worst: u8, off_in: usize };
 /// must fail the test. Sharing one error name between the two is what let a
 /// broken shader look like a machine without a GPU.
 pub fn renderer() !?d3d11.Renderer {
-    return d3d11.Renderer.init() catch |e| {
+    return d3d11.Renderer.init(null) catch |e| {
         if (e == error.NoDevice or e == error.ShaderCompilerMissing or e == error.ShaderCompilerUnavailable) {
             std.debug.print("no Direct3D 11 renderer here: {t} ", .{e});
             return null;

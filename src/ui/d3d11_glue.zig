@@ -2,6 +2,7 @@
 //! and the descriptors, each laid out as `d3d11.h` declares it, with the
 //! sizes checked at compile time. `d3d11.zig` draws the frame with them.
 const std = @import("std");
+const cache = @import("d3d11_shader_cache.zig");
 
 pub const HRESULT = i32;
 pub const Guid = extern struct { a: u32, b: u16, c: u16, d: [8]u8 };
@@ -118,10 +119,20 @@ pub fn underWine() bool {
 }
 
 /// A shader of `source`, entry point `entry`, as `create` (one of
-/// ID3D11Device's slots) makes it. `error.ShaderCompilerMissing` without a
+/// ID3D11Device's slots) makes it; `cache_root` is the app's cache folder,
+/// or null for none. `error.ShaderCompilerMissing` without a
 /// compiler, `error.ShaderCompilerUnavailable` when Wine's cannot compile
 /// it (`underWine`), `error.ShaderCompile` for a shader that is wrong.
-pub fn shaderFrom(device: *Com, source: []const u8, comptime name: [:0]const u8, comptime entry: [:0]const u8, comptime target: [:0]const u8, comptime create: usize) !*Com {
+pub fn shaderFrom(device: *Com, source: []const u8, comptime name: [:0]const u8, comptime entry: [:0]const u8, comptime target: [:0]const u8, comptime create: usize, cache_root: ?[]const u8) !*Com {
+    const key: cache.Key = .{ .source = source, .entry = entry };
+    // What a previous run compiled: making a shader of the bytecode is a
+    // millisecond, and `D3DCompile` is a hundred (`quad_ps`). A device that
+    // will not take the bytecode is left to the compiler below, as though
+    // there were no cache.
+    if (cache.load(key, cache_root)) |cached| {
+        defer cached.deinit();
+        if (makeShader(device, cached.code(), create)) |made| return made;
+    }
     var blob: ?*Blob = null;
     var errors: ?*Blob = null;
     const compile = d3dCompile() orelse return error.ShaderCompilerMissing;
@@ -137,9 +148,18 @@ pub fn shaderFrom(device: *Com, source: []const u8, comptime name: [:0]const u8,
     if (hr < 0) return if (wine) error.ShaderCompilerUnavailable else error.ShaderCompile;
     const b = blob orelse return error.ShaderCompile;
     defer b.release();
+    const bytes = b.bytes()[0..b.size()];
+    const made = makeShader(device, bytes, create) orelse return error.ShaderCompile;
+    cache.store(key, cache_root, bytes);
+    return made;
+}
+
+/// The shader `bytes` make on `device` (one of ID3D11Device's `create` slots),
+/// or null when the device will not take them.
+fn makeShader(device: *Com, bytes: []const u8, comptime create: usize) ?*Com {
     var out: ?*Com = null;
-    try check(device.slot(*const fn (*Com, [*]const u8, usize, ?*anyopaque, *?*Com) callconv(.winapi) HRESULT, create)(device, b.bytes(), b.size(), null, &out));
-    return out orelse error.ShaderCompile;
+    if (device.slot(*const fn (*Com, [*]const u8, usize, ?*anyopaque, *?*Com) callconv(.winapi) HRESULT, create)(device, bytes.ptr, bytes.len, null, &out) < 0) return null;
+    return out;
 }
 
 pub fn d3dCompile() ?CompileFn {

@@ -183,9 +183,11 @@ pub const Post = struct {
     next_lut: usize = 0,
 
     pub fn init(device: *Com) !Post {
-        const vs = try api.shaderFrom(device, source, "texture_post.hlsl", "alc_post_vs", "vs_5_0", api.CreateVertexShader);
+        // Not cached: the colour stage is made once per process, and only when
+        // an app hands nanoui a texture the GPU has to convert.
+        const vs = try api.shaderFrom(device, source, "texture_post.hlsl", "alc_post_vs", "vs_5_0", api.CreateVertexShader, null);
         errdefer vs.release();
-        const ps = try api.shaderFrom(device, source, "texture_post.hlsl", "alc_post_ps", "ps_5_0", api.CreatePixelShader);
+        const ps = try api.shaderFrom(device, source, "texture_post.hlsl", "alc_post_ps", "ps_5_0", api.CreatePixelShader, null);
         errdefer ps.release();
         var cb: ?*Com = null;
         const bd: api.BufferDesc = .{ .byte_width = @sizeOf(color.Uniforms), .bind = api.bind_constant };
