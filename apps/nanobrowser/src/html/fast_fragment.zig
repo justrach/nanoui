@@ -27,22 +27,23 @@ const TagKind = enum(u8) {
 const TagSpec = struct {
     name: []const u8,
     kind: TagKind,
+    html_tag: perf.HtmlTag = .other,
 };
 
 const tag_map = std.StaticStringMap(TagSpec).initComptime(.{
     .{ "div", TagSpec{ .name = "div", .kind = .block_tag } },
     .{ "span", TagSpec{ .name = "span", .kind = .inline_fmt } },
     .{ "li", TagSpec{ .name = "li", .kind = .li_tag } },
-    .{ "ul", TagSpec{ .name = "ul", .kind = .list_tag } },
-    .{ "ol", TagSpec{ .name = "ol", .kind = .list_tag } },
-    .{ "input", TagSpec{ .name = "input", .kind = .void_tag } },
+    .{ "ul", TagSpec{ .name = "ul", .kind = .list_tag, .html_tag = .list } },
+    .{ "ol", TagSpec{ .name = "ol", .kind = .list_tag, .html_tag = .list } },
+    .{ "input", TagSpec{ .name = "input", .kind = .void_tag, .html_tag = .input } },
     .{ "label", TagSpec{ .name = "label", .kind = .inline_fmt } },
-    .{ "button", TagSpec{ .name = "button", .kind = .button_tag } },
+    .{ "button", TagSpec{ .name = "button", .kind = .button_tag, .html_tag = .button } },
     .{ "a", TagSpec{ .name = "a", .kind = .a_tag } },
     .{ "p", TagSpec{ .name = "p", .kind = .p_tag } },
-    .{ "br", TagSpec{ .name = "br", .kind = .void_tag } },
+    .{ "br", TagSpec{ .name = "br", .kind = .void_tag, .html_tag = .br } },
     .{ "hr", TagSpec{ .name = "hr", .kind = .void_tag } },
-    .{ "img", TagSpec{ .name = "img", .kind = .void_tag } },
+    .{ "img", TagSpec{ .name = "img", .kind = .void_tag, .html_tag = .img } },
     .{ "h1", TagSpec{ .name = "h1", .kind = .heading_tag } },
     .{ "h2", TagSpec{ .name = "h2", .kind = .heading_tag } },
     .{ "h3", TagSpec{ .name = "h3", .kind = .heading_tag } },
@@ -74,7 +75,7 @@ const tag_map = std.StaticStringMap(TagSpec).initComptime(.{
     .{ "mark", TagSpec{ .name = "mark", .kind = .inline_fmt } },
     .{ "sub", TagSpec{ .name = "sub", .kind = .inline_fmt } },
     .{ "sup", TagSpec{ .name = "sup", .kind = .inline_fmt } },
-    .{ "slot", TagSpec{ .name = "slot", .kind = .inline_fmt } },
+    .{ "slot", TagSpec{ .name = "slot", .kind = .inline_fmt, .html_tag = .slot } },
 });
 
 const reserved_hyphen_tags = std.StaticStringMap(void).initComptime(.{
@@ -82,6 +83,45 @@ const reserved_hyphen_tags = std.StaticStringMap(void).initComptime(.{
     .{"font-face-src"},  .{"font-face-uri"},   .{"font-face-format"},
     .{"font-face-name"}, .{"missing-glyph"},
 });
+
+const attr_name_map = std.StaticStringMap([]const u8).initComptime(.{
+    .{ "class", "class" },                 .{ "id", "id" },                       .{ "type", "type" },
+    .{ "value", "value" },                 .{ "data-id", "data-id" },             .{ "href", "href" },
+    .{ "src", "src" },                     .{ "alt", "alt" },                     .{ "title", "title" },
+    .{ "name", "name" },                   .{ "for", "for" },                     .{ "placeholder", "placeholder" },
+    .{ "role", "role" },                   .{ "style", "style" },                 .{ "checked", "checked" },
+    .{ "disabled", "disabled" },           .{ "selected", "selected" },           .{ "readonly", "readonly" },
+    .{ "required", "required" },           .{ "hidden", "hidden" },               .{ "tabindex", "tabindex" },
+    .{ "target", "target" },               .{ "rel", "rel" },                     .{ "width", "width" },
+    .{ "height", "height" },               .{ "loading", "loading" },             .{ "aria-label", "aria-label" },
+    .{ "aria-hidden", "aria-hidden" },     .{ "aria-expanded", "aria-expanded" }, .{ "aria-selected", "aria-selected" },
+    .{ "aria-controls", "aria-controls" }, .{ "data-testid", "data-testid" },     .{ "data-action", "data-action" },
+    .{ "data-index", "data-index" },       .{ "data-key", "data-key" },           .{ "data-type", "data-type" },
+});
+
+const attr_val_map = std.StaticStringMap([]const u8).initComptime(.{
+    .{ "", "" },                         .{ "checkbox", "checkbox" },         .{ "text", "text" },
+    .{ "button", "button" },             .{ "submit", "submit" },             .{ "toggle", "toggle" },
+    .{ "destroy", "destroy" },           .{ "edit", "edit" },                 .{ "view", "view" },
+    .{ "completed", "completed" },       .{ "selected", "selected" },         .{ "active", "active" },
+    .{ "new-todo", "new-todo" },         .{ "todo-list", "todo-list" },       .{ "todo-count", "todo-count" },
+    .{ "clear-completed", "clear-completed" }, .{ "true", "true" },           .{ "false", "false" },
+    .{ "#", "#" },                       .{ "0", "0" },                       .{ "1", "1" },
+});
+
+const nl_spaces = "\n                                ";
+const nl_tabs = "\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t";
+
+fn staticWsSlice(raw: []const u8) ?[]const u8 {
+    if (raw.len == 0) return "";
+    if (raw[0] == '\n') {
+        if (raw.len <= nl_spaces.len and std.mem.allEqual(u8, raw[1..], ' ')) return nl_spaces[0..raw.len];
+        if (raw.len <= nl_tabs.len and std.mem.allEqual(u8, raw[1..], '\t')) return nl_tabs[0..raw.len];
+    } else if (raw[0] == ' ' and raw.len <= nl_spaces.len - 1 and std.mem.allEqual(u8, raw, ' ')) {
+        return nl_spaces[1 .. 1 + raw.len];
+    }
+    return null;
+}
 
 fn isCustomTagName(tname: []const u8) bool {
     if (tname.len < 2 or tname.len > 48) return false;
@@ -153,9 +193,25 @@ const DecodeResult = union(enum) {
     oom,
 };
 
-fn decodeText(arena: Allocator, raw: []const u8) DecodeResult {
+fn decodeText(arena: Allocator, raw: []const u8, is_attr: bool) DecodeResult {
+    if (!is_attr) {
+        if (staticWsSlice(raw)) |ws| return .{ .ok = ws };
+    } else if (raw.len <= 16) {
+        if (attr_val_map.get(raw)) |v| return .{ .ok = v };
+    }
     var has_amp = false;
-    for (raw) |c| {
+    var si: usize = 0;
+    while (si + 8 <= raw.len) : (si += 8) {
+        const w = std.mem.readInt(u64, raw[si..][0..8], .little);
+        const z0 = (w -% 0x0101_0101_0101_0101) & ~w & 0x8080_8080_8080_8080;
+        const wr = w ^ 0x0d0d_0d0d_0d0d_0d0d;
+        const zr = (wr -% 0x0101_0101_0101_0101) & ~wr & 0x8080_8080_8080_8080;
+        if ((z0 | zr) != 0) return .bail;
+        const wa = w ^ 0x2626_2626_2626_2626;
+        if (((wa -% 0x0101_0101_0101_0101) & ~wa & 0x8080_8080_8080_8080) != 0) has_amp = true;
+    }
+    while (si < raw.len) : (si += 1) {
+        const c = raw[si];
         if (c == 0 or c == '\r') return .bail;
         if (c == '&') has_amp = true;
     }
@@ -228,7 +284,7 @@ pub fn tryParseFragment(doc: *dom.Document, context: *dom.Node, source: []const 
         const lt_rel = std.mem.indexOfScalarPos(u8, source, i, '<');
         const text_end = lt_rel orelse source.len;
         if (text_end > i) {
-            const decoded = switch (decodeText(arena, source[i..text_end])) {
+            const decoded = switch (decodeText(arena, source[i..text_end], false)) {
                 .ok => |s| s,
                 .bail => return null,
                 .oom => return error.OutOfMemory,
@@ -340,9 +396,12 @@ pub fn tryParseFragment(doc: *dom.Document, context: *dom.Node, source: []const 
             }
             if (i == a_start) return null;
             const raw_aname = source[a_start..i];
-            const aname = try arena.dupe(u8, raw_aname);
-            if (a_upper) _ = std.ascii.lowerString(aname, aname);
-            if (std.mem.eql(u8, aname, "is")) return null;
+            const aname: []const u8 = if (!a_upper) (attr_name_map.get(raw_aname) orelse try arena.dupe(u8, raw_aname)) else blk: {
+                const d = try arena.dupe(u8, raw_aname);
+                _ = std.ascii.lowerString(d, d);
+                break :blk d;
+            };
+            if (aname.len == 2 and aname[0] == 'i' and aname[1] == 's') return null;
 
             while (i < source.len and isHtmlWs(source[i])) : (i += 1) {}
             var aval: []const u8 = "";
@@ -354,7 +413,7 @@ pub fn tryParseFragment(doc: *dom.Document, context: *dom.Node, source: []const 
                 if (q == '"' or q == '\'') {
                     i += 1;
                     const q_end = std.mem.indexOfScalarPos(u8, source, i, q) orelse return null;
-                    aval = switch (decodeText(arena, source[i..q_end])) {
+                    aval = switch (decodeText(arena, source[i..q_end], true)) {
                         .ok => |s| s,
                         .bail => return null,
                         .oom => return error.OutOfMemory,
@@ -368,7 +427,7 @@ pub fn tryParseFragment(doc: *dom.Document, context: *dom.Node, source: []const 
                         if (c <= 0x1f or c == '"' or c == '\'' or c == '=' or c == '<' or c == '`' or c == '/') return null;
                     }
                     if (i == v_start) return null;
-                    aval = switch (decodeText(arena, source[v_start..i])) {
+                    aval = switch (decodeText(arena, source[v_start..i], true)) {
                         .ok => |s| s,
                         .bail => return null,
                         .oom => return error.OutOfMemory,
@@ -403,6 +462,7 @@ pub fn tryParseFragment(doc: *dom.Document, context: *dom.Node, source: []const 
             .doc = doc,
             .tag = spec.name,
             .ns = .html,
+            .html_tag = spec.html_tag,
             .has_resource = perf.isResourceTag(spec.name),
             .has_insertion_work = perf.isInsertionWorkTag(spec.name),
         };

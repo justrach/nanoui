@@ -54,82 +54,8 @@ fn makeKey(ua: bool, layer: u16, specificity: u32, order: u32) u64 {
     return (@as(u64, @intFromBool(!ua)) << 63) | (@as(u64, layer) << 51) | (spec << 27) | @min(order, (1 << 27) - 1);
 }
 
-pub const RuleReq = struct {
-    id_bit: u64 = 0,
-    class_mask: u64 = 0,
-    tag_bit: u64 = 0,
-    attr_mask: u64 = 0,
-    anc_mask: u64 = 0,
-};
-
-pub const SubjectMask = struct {
-    pub const max_reqs = 24;
-    reqs: [max_reqs]RuleReq = @splat(.{}),
-    len: u8 = 0,
-    any_id: u64 = 0,
-    any_class: u64 = 0,
-    any_tag: u64 = 0,
-    any_attr: u64 = 0,
-    any_anc: u64 = 0,
-    ov_id: u64 = 0,
-    ov_class: u64 = 0,
-    ov_tag: u64 = 0,
-    ov_attr: u64 = 0,
-    ov_anc: u64 = 0,
-    universal: bool = false,
-
-    pub fn record(self: *SubjectMask, subject: []const sel.Simple, ancestor_bloom: u64) void {
-        var r: RuleReq = .{ .anc_mask = ancestor_bloom };
-        for (subject) |s| switch (s) {
-            .id => |id| r.id_bit |= perf.attrBit(id),
-            .class => |c| r.class_mask |= perf.classBit(c),
-            .tag => |t| r.tag_bit |= perf.attrBit(t),
-            .attr => |a| r.attr_mask |= perf.attrBit(a.lower),
-            else => {},
-        };
-        if (r.id_bit == 0 and r.class_mask == 0 and r.tag_bit == 0 and r.attr_mask == 0 and r.anc_mask == 0) {
-            self.universal = true;
-            return;
-        }
-        for (self.reqs[0..self.len]) |ex| {
-            if (std.meta.eql(ex, r)) return;
-        }
-        if (self.len < max_reqs) {
-            self.reqs[self.len] = r;
-            self.len += 1;
-            self.any_id |= r.id_bit;
-            self.any_class |= r.class_mask;
-            self.any_tag |= r.tag_bit;
-            self.any_attr |= r.attr_mask;
-            self.any_anc |= r.anc_mask;
-            return;
-        }
-        if (r.id_bit != 0) self.ov_id |= r.id_bit else if (r.class_mask != 0) self.ov_class |= r.class_mask else if (r.tag_bit != 0) self.ov_tag |= r.tag_bit else if (r.attr_mask != 0) self.ov_attr |= r.attr_mask else self.ov_anc |= r.anc_mask;
-    }
-
-    pub inline fn mayMatch(self: *const SubjectMask, n: *const dom.Node) bool {
-        if (self.universal) return true;
-        var low_buf: [64]u8 = undefined;
-        const need_tag = (self.any_tag | self.ov_tag) != 0;
-        const tag_b: u64 = if (!need_tag) 0 else if (n.ns == .html or n.tag.len > low_buf.len) perf.attrBit(n.tag) else perf.attrBit(std.ascii.lowerString(&low_buf, n.tag));
-        if ((self.ov_id | self.ov_class | self.ov_tag | self.ov_attr | self.ov_anc) != 0) {
-            if (self.ov_id != 0) if (n.id_attr) |id| if ((self.ov_id & perf.attrBit(id)) != 0) return true;
-            if ((self.ov_class & n.class_filter) != 0 or (self.ov_tag & tag_b) != 0 or (self.ov_attr & n.attr_filter) != 0 or (self.ov_anc & n.ancestor_bloom) != 0) return true;
-        }
-        if (self.len == 0) return false;
-        const id_b: u64 = if (self.any_id != 0 and n.id_attr != null) perf.attrBit(n.id_attr.?) else 0;
-        if (((id_b & self.any_id) | (n.class_filter & self.any_class) | (tag_b & self.any_tag) | (n.attr_filter & self.any_attr) | (n.ancestor_bloom & self.any_anc)) == 0) return false;
-        for (self.reqs[0..self.len]) |r| {
-            if ((n.ancestor_bloom & r.anc_mask) != r.anc_mask) continue;
-            if ((tag_b & r.tag_bit) != r.tag_bit) continue;
-            if ((n.class_filter & r.class_mask) != r.class_mask) continue;
-            if ((n.attr_filter & r.attr_mask) != r.attr_mask) continue;
-            if ((id_b & r.id_bit) != r.id_bit) continue;
-            return true;
-        }
-        return false;
-    }
-};
+pub const RuleReq = @import("subject_mask.zig").RuleReq;
+pub const SubjectMask = @import("subject_mask.zig").SubjectMask;
 
 fn compoundHasPositional(c: *const sel.Compound) bool {
     for (c.simples) |x| switch (x) {
@@ -172,11 +98,16 @@ pub const Index = struct {
     uses_ancestor_positional: bool = false,
     uses_attr_before_next: bool = false,
     uses_focus_within: bool = false,
+    uses_nth_or_type: bool = false,
+    any_first: bool = false,
+    any_last: bool = false,
+    any_empty: bool = false,
     unshareable_subj: SubjectMask = .{},
     first_subj: SubjectMask = .{},
     last_subj: SubjectMask = .{},
     empty_subj: SubjectMask = .{},
     next_subj: SubjectMask = .{},
+    anc_pos_subj: SubjectMask = .{},
     /// 64-bit Bloom filter of attribute names in `[attr]` selectors.
     attr_filter: u64 = 0,
     referenced_ids_bloom: u64 = 0,
@@ -200,7 +131,11 @@ pub const Index = struct {
     pub fn ruleFlags(ix: *const Index) u8 {
         return @as(u8, @intFromBool(ix.uses_has)) |
             (@as(u8, @intFromBool(ix.uses_next_sibling)) << 1) |
-            (@as(u8, @intFromBool(ix.uses_later_sibling)) << 2);
+            (@as(u8, @intFromBool(ix.uses_later_sibling)) << 2) |
+            (@as(u8, @intFromBool(ix.uses_nth_or_type)) << 3) |
+            (@as(u8, @intFromBool(ix.any_first)) << 4) |
+            (@as(u8, @intFromBool(ix.any_last)) << 5) |
+            (@as(u8, @intFromBool(ix.any_empty)) << 6);
     }
 
     fn scanAttrAndHas(ix: *Index, selector: *const sel.Selector, ua: bool, before_next_outer: bool) void {
@@ -208,7 +143,10 @@ pub const Index = struct {
             const is_subject = idx + 1 == selector.compounds.len;
             const before_next = before_next_outer or (!is_subject and selector.compounds[idx + 1].combinator == .next);
             if (!ua and idx > 0) switch (c.combinator) {
-                .next => ix.uses_next_sibling = true,
+                .next => {
+                    ix.uses_next_sibling = true;
+                    if (before_next) ix.uses_nth_or_type = true;
+                },
                 .later => ix.uses_later_sibling = true,
                 else => {},
             };
@@ -222,12 +160,23 @@ pub const Index = struct {
                     ix.referenced_attrs.put(ix.arena.allocator(), a.lower, {}) catch {};
                     if (!ua and before_next) ix.uses_attr_before_next = true;
                 },
-                .pseudo => |p| if (!ua and p == .focus_within) {
-                    ix.uses_focus_within = true;
+                .pseudo => |p| if (!ua) switch (p) {
+                    .focus_within => ix.uses_focus_within = true,
+                    .first_child => ix.any_first = true,
+                    .last_child => ix.any_last = true,
+                    .only_child => { ix.any_first = true; ix.any_last = true; },
+                    .empty => ix.any_empty = true,
+                    .first_of_type, .last_of_type, .only_of_type => ix.uses_nth_or_type = true,
+                    else => {},
                 },
-                .nth => |n| if (n.of.len > 0) {
-                    ix.uses_later_sibling = true;
-                    for (n.of) |*sub| ix.scanAttrAndHas(sub, ua, before_next);
+                .nth => |n| {
+                    if (!ua) {
+                        if (n.a != 0 or n.b != 1 or n.of_type or n.of.len > 0) ix.uses_nth_or_type = true else if (n.from_end) ix.any_last = true else ix.any_first = true;
+                    }
+                    if (n.of.len > 0) {
+                        ix.uses_later_sibling = true;
+                        for (n.of) |*sub| ix.scanAttrAndHas(sub, ua, before_next);
+                    }
                 },
                 .not, .is, .host, .host_context => |l| for (l) |*sub| ix.scanAttrAndHas(sub, ua, before_next),
                 .has => |l| {
@@ -254,6 +203,8 @@ pub const Index = struct {
         for (selector.compounds[0..subj_chain_start], 0..) |*c, idx| {
             if ((idx > 0 and (c.combinator == .next or c.combinator == .later)) or compoundHasPositional(c)) {
                 ix.uses_ancestor_positional = true;
+                ix.anc_pos_subj.record(subj_simples, anc_bloom);
+                break;
             }
         }
         for (selector.compounds[subj_chain_start..], subj_chain_start..) |*c, idx| {

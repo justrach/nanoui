@@ -136,7 +136,8 @@ pub const Animator = struct {
     }
 
     pub inline fn hasNode(a: *const Animator, n: *const dom.Node) bool {
-        return a.states.count() > 0 and a.states.contains(.{ .node = @constCast(n), .pseudo = .none });
+        const m = @constCast(n);
+        return a.states.count() > 0 and (a.states.contains(.{ .node = m, .pseudo = .none }) or a.states.contains(.{ .node = m, .pseudo = .before }) or a.states.contains(.{ .node = m, .pseudo = .after }));
     }
 
     /// The cascade has `fresh` for an element or pseudo-element: what starts,

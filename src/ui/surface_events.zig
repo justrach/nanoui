@@ -12,6 +12,7 @@ const Surface = @import("surface.zig").Surface;
 const drop = @import("surface_drop.zig");
 const link_pace = @import("surface_pacing.zig");
 const keys = @import("surface_keys.zig");
+const pointer_press = @import("pointer_press.zig");
 
 pub const methods = [_]objc.Method{
     .{ .name = "isFlipped", .imp = &yes, .types = "c@:" },
@@ -89,11 +90,30 @@ fn hitTest(obj: objc.Object, _: objc.SEL, point: objc.CGPoint) callconv(.c) ?obj
     const local = objc.msg(objc.CGPoint, obj, "convertPoint:fromView:", .{ point, super });
     const p: types.Point = .{ .x = @floatCast(local.x), .y = @floatCast(local.y) };
     if (p.x < 0 or p.y < 0 or p.x >= s.size.w or p.y >= s.size.h) return null;
+    // A page docked in this view (`Window.dockPage` with this view as its
+    // parent) takes the pointer over its frame: its subview's own hit test,
+    // front to back, before the surface claims the point.
+    if (dockedHit(obj, local)) |hit| return hit;
     if (s.transparent and s.ctx.inStageHoleAt(p)) {
         s.cursor_dirty = true;
         return null;
     }
     return obj;
+}
+
+/// The visible subview under `local` (this view's coordinates), deepest
+/// first, as NSView's own `hitTest:` would find it; null when none is.
+fn dockedHit(obj: objc.Object, local: objc.CGPoint) ?objc.Object {
+    const subviews = objc.msg(?objc.Object, obj, "subviews", .{}) orelse return null;
+    var i = objc.msg(objc.NSUInteger, subviews, "count", .{});
+    while (i > 0) {
+        i -= 1;
+        const sub = objc.msg(objc.Object, subviews, "objectAtIndex:", .{i});
+        if (objc.msg(objc.BOOL, sub, "isHidden", .{}) != objc.NO) continue;
+        // A subview's `hitTest:` takes the point in its superview's space.
+        if (objc.msg(?objc.Object, sub, "hitTest:", .{local})) |hit| return hit;
+    }
+    return null;
 }
 
 /// The view gives up the keyboard (a page took it): no box has the focus.
@@ -107,10 +127,54 @@ fn resignFirstResponder(obj: objc.Object, _: objc.SEL) callconv(.c) objc.BOOL {
     return objc.YES;
 }
 
+/// The buttons held, for the press guard; tests set it, since a made-up
+/// event leaves `+[NSEvent pressedMouseButtons]` as the real mouse has it.
+pub var held_override: ?pointer_press.Held = null;
+
+/// The buttons held as a press arrives. `+[NSEvent pressedMouseButtons]`
+/// is the mouse as it is now, not when the event was made: a button let
+/// go after this press, its release still queued behind it (a slow
+/// frame), already reads as up. So the press in flight counts as held
+/// while its release waits in the queue, and is stale only when that
+/// release went elsewhere (a drag session's, a menu's or a modal's loop
+/// took it).
+fn heldButtons(in: *const input.Input) pointer_press.Held {
+    var h = held_override orelse live: {
+        // Bit 0 the left button, 1 the right, 2 the middle.
+        const bits = objc.msg(objc.NSUInteger, objc.class("NSEvent"), "pressedMouseButtons", .{});
+        break :live pointer_press.Held{ .left = bits & 1 != 0, .right = bits & 2 != 0, .middle = bits & 4 != 0 };
+    };
+    if (in.down and !h.has(in.button) and releaseQueued(in.button)) h.set(in.button);
+    return h;
+}
+
+/// The run loop mode the queue is peeked in: no source or timer is
+/// registered in it, so the peek runs nothing.
+pub const peek_mode = "NanoUIPressPeek";
+
+/// Whether a release of `button` waits in the app's event queue, peeked
+/// without taking it.
+fn releaseQueued(button: input.Button) bool {
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    // NSEventMaskLeftMouseUp, RightMouseUp, OtherMouseUp.
+    const mask: objc.NSUInteger = switch (button) {
+        .left => 1 << 2,
+        .right => 1 << 4,
+        .middle => 1 << 26,
+    };
+    const nsapp = objc.msg(objc.Object, objc.class("NSApplication"), "sharedApplication", .{});
+    const past = objc.msg(objc.Object, objc.class("NSDate"), "distantPast", .{});
+    const ev = objc.msg(?objc.Object, nsapp, "nextEventMatchingMask:untilDate:inMode:dequeue:", .{ mask, past, objc.nsString(peek_mode), objc.NO });
+    return ev != null;
+}
+
 /// A press of `button`: the view takes the keyboard, the box under the
-/// pointer the press.
+/// pointer the press. Another button's press while one is in flight is
+/// ignored (`pointer_press.starts`).
 fn press(obj: objc.Object, event: objc.Object, button: input.Button) void {
     const s = surfaceOf(obj) orelse return;
+    if (!pointer_press.starts(&s.ctx.input, button, heldButtons(&s.ctx.input))) return;
     _ = objc.msg(objc.BOOL, s.window.nswindow, "makeFirstResponder:", .{obj});
     setMouse(s, event);
     s.ctx.updateHot();
@@ -146,7 +210,7 @@ fn press(obj: objc.Object, event: objc.Object, button: input.Button) void {
 fn release(obj: objc.Object, event: objc.Object, button: input.Button) void {
     const s = surfaceOf(obj) orelse return;
     // Another button's release, or one whose press went elsewhere.
-    if (s.ctx.input.button != button or !s.ctx.input.down) return;
+    if (!pointer_press.ends(&s.ctx.input, button)) return;
     setMouse(s, event);
     s.ctx.updateHot();
     s.ctx.pointerUp();

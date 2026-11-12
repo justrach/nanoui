@@ -40,7 +40,7 @@ const Page = struct {
 
     fn b(p: *Page, id: []const u8) *box.Box {
         const n = p.doc.getElementById(id) orelse @panic("no such id");
-        return @ptrCast(@alignCast(n.box orelse @panic("no box")));
+        return @ptrCast(@alignCast(n.liveBox() orelse @panic("no box")));
     }
 };
 
@@ -121,7 +121,7 @@ test "Hacker News: the header row and story rows take the right shape" {
     try close(title.x, sub.x, "subtext under the title");
     try std.testing.expect(sub.y >= title.y + title.h);
     try close(5, p.b("spacer").h, "the spacer row");
-    const row: *box.Box = @ptrCast(@alignCast(p.doc.getElementById("pagespace").?.box.?));
+    const row: *box.Box = @ptrCast(@alignCast(p.doc.getElementById("pagespace").?.liveBox().?));
     try close(10, row.h, "the spacer row above the stories");
 }
 

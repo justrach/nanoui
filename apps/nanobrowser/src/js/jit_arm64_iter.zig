@@ -446,3 +446,91 @@ pub fn emitBranchSlow(e: *Emitter, op: Op, dst_idx: u32, pc_addr: usize, next_pc
     const rel: i32 = if (pass == 1) @as(i32, @intCast(dst_idx)) - @as(i32, @intCast(e.len)) else 0;
     e.cbnz64(0, rel);
 }
+
+pub fn emitArgsGet(e: *Emitter, slot: u32, pc_addr: usize, epilogue_idx: u32, pass: u1) void {
+    if (slot < 4096) e.ldrImm64(0, 21, @intCast(slot)) else { e.movz(2, @intCast(slot), 0); e.ldrRegScaled64(0, 21, 2); }
+    e.addImm64(2, 26, 2);
+    e.cmpReg64(0, 2);
+    const b_ready = e.len;
+    e.bCond(.ne, 0);
+    e.callHelper5(@intFromPtr(&jit.jitArgsGet), pc_addr, slot, epilogue_idx, pass);
+    e.buf[b_ready] |= (@as(u32, @intCast(e.len - b_ready)) & 0x7FFFF) << 5;
+    e.strImm64(0, 22, 0);
+    e.addImm64(22, 22, 8);
+}
+
+pub fn emitArgsLen(e: *Emitter, slot: u32, pc_addr: usize, epilogue_idx: u32, pass: u1) void {
+    if (slot < 4096) e.ldrImm64(0, 21, @intCast(slot)) else { e.movz(2, @intCast(slot), 0); e.ldrRegScaled64(0, 21, 2); }
+    e.addImm64(2, 26, 2);
+    e.cmpReg64(0, 2);
+    const b_slow = e.len;
+    e.bCond(.ne, 0);
+    e.ldrImm32(0, 20, @intCast(@offsetOf(Frame, "argc") / 4));
+    e.orrReg64(0, 0, 25);
+    const b_done = e.len;
+    e.bImm(0);
+    e.buf[b_slow] |= (@as(u32, @intCast(e.len - b_slow)) & 0x7FFFF) << 5;
+    e.callHelper5(@intFromPtr(&jit.jitArgsLen), pc_addr, slot, epilogue_idx, pass);
+    e.buf[b_done] |= @as(u32, @intCast(e.len - b_done)) & 0x03FF_FFFF;
+    e.strImm64(0, 22, 0);
+    e.addImm64(22, 22, 8);
+}
+
+pub fn emitArgsElem(e: *Emitter, slot: u32, pc_addr: usize, epilogue_idx: u32, pass: u1) void {
+    e.ldur64(1, 22, -8);
+    if (slot < 4096) e.ldrImm64(0, 21, @intCast(slot)) else { e.movz(2, @intCast(slot), 0); e.ldrRegScaled64(0, 21, 2); }
+    e.addImm64(2, 26, 2);
+    e.cmpReg64(0, 2);
+    const b_s1 = e.len;
+    e.bCond(.ne, 0);
+    e.eorReg64(2, 1, 25);
+    e.lsrImm64(2, 2, 48);
+    const b_s2 = e.len;
+    e.cbnz64(2, 0);
+    e.ldrImm32(2, 20, @intCast(@offsetOf(Frame, "argc") / 4));
+    e.cmpReg32(1, 2);
+    const b_s3 = e.len;
+    e.bCond(.hs, 0);
+    e.ldrImm64(3, 20, @intCast(@offsetOf(Frame, "args") / 8));
+    e.mov32(4, 1);
+    e.ldrRegScaled64(0, 3, 4);
+    const b_done = e.len;
+    e.bImm(0);
+    const slow_idx = e.len;
+    e.buf[b_s1] |= (@as(u32, @intCast(slow_idx - b_s1)) & 0x7FFFF) << 5;
+    e.buf[b_s2] |= (@as(u32, @intCast(slow_idx - b_s2)) & 0x7FFFF) << 5;
+    e.buf[b_s3] |= (@as(u32, @intCast(slow_idx - b_s3)) & 0x7FFFF) << 5;
+    e.callHelper5(@intFromPtr(&jit.jitArgsElem), pc_addr, slot, epilogue_idx, pass);
+    e.buf[b_done] |= @as(u32, @intCast(e.len - b_done)) & 0x03FF_FFFF;
+    e.stur64(0, 22, -8);
+}
+
+pub fn emitPushTry(e: *Emitter, dst_bc: u32) void {
+    e.ldrImm64(2, 20, @intCast(@offsetOf(Frame, "env") / 8));
+    e.subImm64(0, 26, 2);
+    const b_no_env = e.len;
+    e.cbz64(2, 0);
+    if (@offsetOf(@import("heap.zig").Env, "cell") != 0) e.addImm64(2, 2, @intCast(@offsetOf(@import("heap.zig").Env, "cell")));
+    e.movz(3, 0xFFF8, 3);
+    e.orrReg64(0, 2, 3);
+    e.buf[b_no_env] |= (@as(u32, @intCast(e.len - b_no_env)) & 0x7FFFF) << 5;
+    e.strImm64(0, 22, 0);
+    e.movImm64(0, @import("frame.zig").catchMarker(dst_bc).bits);
+    e.strImm64(0, 22, 1);
+    e.addImm64(22, 22, 16);
+}
+
+pub fn emitOptChain(e: *Emitter, dst_idx: u32, extra: u12, pass: u1) void {
+    e.ldur64(0, 22, -8);
+    e.eorReg64(2, 0, 26);
+    e.lsrImm64(2, 2, 1);
+    e.cmpImm64(2, 1);
+    const b_not_nullish = e.len;
+    e.bCond(.ne, 0);
+    if (extra != 0) e.subImm64(22, 22, extra);
+    e.subImm64(0, 26, 2);
+    e.stur64(0, 22, -8);
+    const rel: i32 = if (pass == 1) @as(i32, @intCast(dst_idx)) - @as(i32, @intCast(e.len)) else 0;
+    e.bImm(rel);
+    e.buf[b_not_nullish] |= (@as(u32, @intCast(e.len - b_not_nullish)) & 0x7FFFF) << 5;
+}

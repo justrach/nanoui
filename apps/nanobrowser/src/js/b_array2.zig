@@ -27,22 +27,85 @@ const CbRunner = struct {
     vm: *Vm,
     cb: Value,
     closure: ?*Object,
-    this_arg: Value,
+    native_fn: ?*Object = null,
+    fast_jfn: ?jit.JitFn = null,
+    fast_frame: ?*@import("frame.zig").Frame = null,
+    fast_fp: ?*@import("bytecode.zig").FuncProto = null,
+    fast_frame_idx: u32 = 0,
+    coerced_this: Value,
+    eff_this: Value,
     o_val: Value,
     saved_sp: [*]Value,
 
-    inline fn init(vm: *Vm, cb: Value, this_arg: Value, o: *Object) Error!CbRunner {
+    inline fn init(vm: *Vm, cb_in: Value, this_arg: Value, o: *Object) Error!CbRunner {
+        var cb = cb_in;
+        var eff_this = this_arg;
+        if (cb.isObject()) {
+            var cur_o = cb.asObject();
+            var d: u32 = 0;
+            while (cur_o.class == .bound and cur_o.payload.bound.args.len == 0 and d < 8) : (d += 1) {
+                eff_this = cur_o.payload.bound.this;
+                cur_o = cur_o.payload.bound.target;
+                cb = cur_o.value();
+            }
+        }
         const cl: ?*Object = if (cb.isObject() and cb.asObject().class == .closure) cb.asObject() else null;
-        if (cl != null) {
+        const nat: ?*Object = if (cb.isObject() and cb.asObject().class == .native and !cb.asObject().flags.host_class) cb.asObject() else null;
+        var fast_jfn: ?jit.JitFn = null;
+        var fast_frame: ?*@import("frame.zig").Frame = null;
+        var fast_fp: ?*@import("bytecode.zig").FuncProto = null;
+        var fast_idx: u32 = 0;
+        var coerced_this = eff_this;
+        if (cl) |callee| {
             vm.enterFromHost();
             try vm.checkNativeStack();
+            const fp = callee.payload.fp;
             const limit = @intFromPtr(vm.stack.ptr) + vm.stack.len * @sizeOf(Value);
-            if (@intFromPtr(vm.sp) + 12 * @sizeOf(Value) > limit) {
+            const need_words = @as(usize, 12) + fp.nlocals + fp.max_stack + 64;
+            if (@intFromPtr(vm.sp) + need_words * @sizeOf(Value) > limit or vm.frame_top >= vm_mod.max_frames) {
                 return vm.throwError(.RangeError, "Maximum call stack size exceeded");
             }
             vm.depth += 1;
+            if (!fp.is_class_ctor and (!fp.coerce_this or eff_this.isObject() or eff_this.isNullish())) {
+                if (fp.coerce_this and !eff_this.isObject()) coerced_this = vm.global_obj.value();
+                fast_jfn = if (comptime jit.enabled) (if (fp.jit_fn) |p| @ptrCast(@alignCast(p)) else jit.getOrCompile(vm, fp)) else null;
+                if (fast_jfn != null) {
+                    fast_idx = vm.frame_top;
+                    const f = &vm.frames[fast_idx];
+                    f.* = .{
+                        .fp = fp,
+                        .pc = fp.code.ptr,
+                        .bp = vm.sp + 2,
+                        .ret_sp = vm.sp,
+                        .env = callee.env,
+                        .func = callee,
+                        .this = coerced_this,
+                        .new_target = Value.undefined,
+                        .args = vm.sp + 2,
+                        .argc = 3,
+                        .is_entry = false,
+                        .is_construct = false,
+                        .co = null,
+                    };
+                    fast_frame = f;
+                    fast_fp = fp;
+                }
+            }
         }
-        return .{ .vm = vm, .cb = cb, .closure = cl, .this_arg = this_arg, .o_val = o.value(), .saved_sp = vm.sp };
+        return .{
+            .vm = vm,
+            .cb = cb,
+            .closure = cl,
+            .native_fn = nat,
+            .fast_jfn = fast_jfn,
+            .fast_frame = fast_frame,
+            .fast_fp = fast_fp,
+            .fast_frame_idx = fast_idx,
+            .coerced_this = coerced_this,
+            .eff_this = eff_this,
+            .o_val = o.value(),
+            .saved_sp = vm.sp,
+        };
     }
 
     inline fn deinit(r: *CbRunner) void {
@@ -53,40 +116,111 @@ const CbRunner = struct {
     }
 
     inline fn call3(r: *CbRunner, v: Value, i: usize) Error!Value {
+        if (r.fast_jfn) |jfn| {
+            const fp = r.fast_fp.?;
+            const f = r.fast_frame.?;
+            const base = r.saved_sp;
+            const args_p = base + 2;
+            base[0] = r.coerced_this;
+            base[1] = r.cb;
+            args_p[0] = v;
+            args_p[1] = Value.fromUsize(i);
+            args_p[2] = r.o_val;
+            const bp = if (fp.needs_args) base + 5 else args_p;
+            const filled: u32 = @min(@as(u32, 3), fp.nparams);
+            if (fp.needs_args and filled > 0) @memcpy(bp[0..filled], args_p[0..filled]);
+            if (filled < fp.nlocals) @memset(bp[filled..fp.nlocals], Value.undefined);
+            r.vm.budget -= 1;
+            if (r.vm.budget <= 0) try calls.interrupt(r.vm);
+            f.pc = fp.code.ptr;
+            f.bp = bp;
+            f.env = r.closure.?.env;
+            f.argc = 3;
+            const sp_in = bp + fp.nlocals;
+            r.vm.frame_top = r.fast_frame_idx + 1;
+            r.vm.sp = sp_in;
+            const res = jfn(r.vm, f, bp, sp_in);
+            if (res.err != 0) {
+                const handled = jit_calls.handleChildErr(r.vm, base, f, res.err);
+                r.vm.sp = base;
+                if (handled.err != 0) return jit.decodeErr(handled.err);
+                return base[0];
+            }
+            r.vm.frame_top = r.fast_frame_idx;
+            r.vm.sp = base;
+            return .{ .bits = res.bits };
+        }
+        if (r.native_fn) |nat| return calls.callNative(r.vm, nat, r.eff_this, &.{ v, Value.fromUsize(i), r.o_val });
         if (r.closure) |cl| {
             const base = r.saved_sp;
-            base[0] = r.this_arg;
+            base[0] = r.eff_this;
             base[1] = r.cb;
             base[2] = v;
             base[3] = Value.fromUsize(i);
             base[4] = r.o_val;
             r.vm.sp = base + 5;
-            const child_f = try calls.pushClosure(r.vm, cl, base + 2, 3, base, Value.undefined, r.this_arg, false);
+            const child_f = try calls.pushClosure(r.vm, cl, base + 2, 3, base, Value.undefined, r.eff_this, false);
             const res = jit_calls.invokeChildFrame(r.vm, base, child_f);
             r.vm.sp = base;
             if (res.err != 0) return jit.decodeErr(res.err);
             return base[0];
         }
-        return calls.call(r.vm, r.cb, r.this_arg, &.{ v, Value.fromUsize(i), r.o_val });
+        return calls.call(r.vm, r.cb, r.eff_this, &.{ v, Value.fromUsize(i), r.o_val });
     }
 
     inline fn call4(r: *CbRunner, a: Value, v: Value, i: usize) Error!Value {
+        if (r.fast_jfn) |jfn| {
+            const fp = r.fast_fp.?;
+            const f = r.fast_frame.?;
+            const base = r.saved_sp;
+            const args_p = base + 2;
+            base[0] = r.coerced_this;
+            base[1] = r.cb;
+            args_p[0] = a;
+            args_p[1] = v;
+            args_p[2] = Value.fromUsize(i);
+            args_p[3] = r.o_val;
+            const bp = if (fp.needs_args) base + 6 else args_p;
+            const filled: u32 = @min(@as(u32, 4), fp.nparams);
+            if (fp.needs_args and filled > 0) @memcpy(bp[0..filled], args_p[0..filled]);
+            if (filled < fp.nlocals) @memset(bp[filled..fp.nlocals], Value.undefined);
+            r.vm.budget -= 1;
+            if (r.vm.budget <= 0) try calls.interrupt(r.vm);
+            f.pc = fp.code.ptr;
+            f.bp = bp;
+            f.env = r.closure.?.env;
+            f.argc = 4;
+            const sp_in = bp + fp.nlocals;
+            r.vm.frame_top = r.fast_frame_idx + 1;
+            r.vm.sp = sp_in;
+            const res = jfn(r.vm, f, bp, sp_in);
+            if (res.err != 0) {
+                const handled = jit_calls.handleChildErr(r.vm, base, f, res.err);
+                r.vm.sp = base;
+                if (handled.err != 0) return jit.decodeErr(handled.err);
+                return base[0];
+            }
+            r.vm.frame_top = r.fast_frame_idx;
+            r.vm.sp = base;
+            return .{ .bits = res.bits };
+        }
+        if (r.native_fn) |nat| return calls.callNative(r.vm, nat, r.eff_this, &.{ a, v, Value.fromUsize(i), r.o_val });
         if (r.closure) |cl| {
             const base = r.saved_sp;
-            base[0] = Value.undefined;
+            base[0] = r.eff_this;
             base[1] = r.cb;
             base[2] = a;
             base[3] = v;
             base[4] = Value.fromUsize(i);
             base[5] = r.o_val;
             r.vm.sp = base + 6;
-            const child_f = try calls.pushClosure(r.vm, cl, base + 2, 4, base, Value.undefined, Value.undefined, false);
+            const child_f = try calls.pushClosure(r.vm, cl, base + 2, 4, base, Value.undefined, r.eff_this, false);
             const res = jit_calls.invokeChildFrame(r.vm, base, child_f);
             r.vm.sp = base;
             if (res.err != 0) return jit.decodeErr(res.err);
             return base[0];
         }
-        return calls.call(r.vm, r.cb, Value.undefined, &.{ a, v, Value.fromUsize(i), r.o_val });
+        return calls.call(r.vm, r.cb, r.eff_this, &.{ a, v, Value.fromUsize(i), r.o_val });
     }
 };
 

@@ -215,6 +215,8 @@ test {
         if (builtin.os.tag == .windows) {
             _ = @import("windows/d3d.zig");
             _ = @import("windows/tests_surface.zig");
+            // Mouse buttons: the middle one, one press at a time, capture lost.
+            _ = @import("windows/tests_mouse.zig");
             // The window's own: styles, sizes, the close veto, the timers.
             _ = @import("windows/tests_window.zig");
             // Frames on the display's beat, gathered input, the frame log.
@@ -263,4 +265,6 @@ test {
     _ = @import("app_extras.zig");
     // Windows opened while running and closed by the app, keys.
     _ = @import("tests_window_more.zig");
+    // The mouse buttons: the middle one, one press at a time.
+    _ = @import("tests_window_mouse.zig");
 }

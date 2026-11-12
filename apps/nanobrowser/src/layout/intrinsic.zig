@@ -20,6 +20,7 @@ pub const Sizes = struct { min: f32 = 0, max: f32 = 0 };
 pub fn of(c: *Ctx, b: *Box) Error!Sizes {
     const n = &b.lay;
     if (n.intrinsic_known) return .{ .min = n.min_w, .max = n.max_w };
+    if (n.adopted) try @import("cache.zig").unadopt(c, b);
     const s = b.style;
     const e = ctx.edgesOf(s, 0);
     const bp = e.border.horizontal() + e.padding.horizontal();

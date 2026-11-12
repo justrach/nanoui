@@ -28,6 +28,14 @@ c.text.baseline_rule = .glyph_box;
 - `glyph_snap = .half_toward_zero` selects matching device-space baseline and
   glyph phase quantization. `.nearest` retains nanoui's normal placement.
 
+## Theme
+
+Set `c.theme_chosen` to `ui.Theme.light`, `ui.Theme.dark_theme`, or `null`
+(the system) in the view; a change resolves in the same frame. A window's
+`theme` option takes precedence. The title bar follows on macOS and Windows;
+on Linux it belongs to the desktop's decoration theme, which no app can set
+per window.
+
 ## Text styles
 
 `TextStyle.system_font` bypasses a proportional theme font for a system-style

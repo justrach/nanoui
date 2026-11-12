@@ -80,7 +80,7 @@ const ProtoTemplate = struct {
     is_method: bool,
     needs_args: bool,
     has_loop: bool,
-    jit_fn: ?*const anyopaque = null,
+    jit_cache: bc.JitCacheSlot = .{},
 };
 
 const ScriptEntry = struct {
@@ -122,7 +122,12 @@ const max_cache_entries = 1024;
 
 var cache_arena: ?std.heap.ArenaAllocator = null;
 var script_map: std.StringHashMapUnmanaged(*ScriptEntry) = .empty;
+var eval_map: std.StringHashMapUnmanaged(*ScriptEntry) = .empty;
 var module_map: std.StringHashMapUnmanaged(*ModuleEntry) = .empty;
+
+pub fn permanentAlloc() Allocator {
+    return cacheAlloc();
+}
 
 fn cacheAlloc() Allocator {
     if (cache_arena == null) {
@@ -202,11 +207,14 @@ fn buildProtoTemplate(vm: *Vm, a: Allocator, p: *bc.FuncProto, out_t: *ProtoTemp
         try buildProtoTemplate(vm, a, child, child_out);
     }
 
+    const catch_copy: []bc.CatchEntry = if (p.catch_map.len > 0) try a.dupe(bc.CatchEntry, p.catch_map) else &.{};
     if (!p.borrowed_code) {
         vm.gpa.free(p.code);
         vm.gpa.free(p.lines);
+        if (p.catch_map.len > 0) vm.gpa.free(p.catch_map);
         p.code = code;
         p.lines = lines;
+        p.catch_map = catch_copy;
         p.borrowed_code = true;
     }
 
@@ -236,9 +244,9 @@ fn buildProtoTemplate(vm: *Vm, a: Allocator, p: *bc.FuncProto, out_t: *ProtoTemp
         .is_method = p.is_method,
         .needs_args = p.needs_args,
         .has_loop = p.has_loop,
-        .jit_fn = p.jit_fn,
+        .jit_cache = .{ .jit_fn = p.jit_fn, .catch_map = catch_copy },
     };
-    p.jit_cache_slot = &out_t.jit_fn;
+    p.jit_cache_slot = &out_t.jit_cache;
 }
 
 fn instantiateProto(vm: *Vm, t: *ProtoTemplate, src: *bc.Source) Error!*bc.FuncProto {
@@ -323,21 +331,24 @@ fn instantiateProto(vm: *Vm, t: *ProtoTemplate, src: *bc.Source) Error!*bc.FuncP
         .needs_args = t.needs_args,
         .has_loop = t.has_loop,
         .borrowed_code = true,
-        .jit_cache_slot = &t.jit_fn,
+        .catch_map = t.jit_cache.catch_map,
+        .jit_cache_slot = &t.jit_cache,
     };
-    p.setJitFn(t.jit_fn);
+    p.setJitFn(t.jit_cache.jit_fn);
     return p;
 }
 
-pub fn lookupAndInstantiateScript(vm: *Vm, source: []const u8, filename: []const u8) Error!?*Object {
-    const entry = script_map.get(source) orelse return null;
+pub fn lookupAndInstantiateScript(vm: *Vm, source: []const u8, filename: []const u8, is_eval: bool) Error!?*Object {
+    const map = if (is_eval) &eval_map else &script_map;
+    const entry = map.get(source) orelse return null;
     const src = try newBorrowedSource(vm, entry.source, filename);
     const main = try instantiateProto(vm, &entry.main, src);
     return try interp_object.makeClosure(vm, main, null);
 }
 
-pub fn recordScript(vm: *Vm, source: []const u8, main: *bc.FuncProto) void {
-    if (script_map.count() >= max_cache_entries) return;
+pub fn recordScript(vm: *Vm, source: []const u8, main: *bc.FuncProto, is_eval: bool) void {
+    const map = if (is_eval) &eval_map else &script_map;
+    if (map.count() >= max_cache_entries) return;
     const a = cacheAlloc();
     const src_copy = a.dupe(u8, source) catch return;
     const entry = a.create(ScriptEntry) catch return;
@@ -348,7 +359,7 @@ pub fn recordScript(vm: *Vm, source: []const u8, main: *bc.FuncProto) void {
         main.source.text = src_copy;
         main.source.borrowed_text = true;
     }
-    script_map.put(a, src_copy, entry) catch {};
+    map.put(a, src_copy, entry) catch {};
 }
 
 fn setModuleOnProtos(p: *bc.FuncProto, m: *Module) void {

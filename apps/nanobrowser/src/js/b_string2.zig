@@ -184,10 +184,13 @@ fn checkThis(vm: *Vm, this: Value) Error!void {
 
 fn matchFn(vm: *Vm, this: Value, args: []const Value) Error!Value {
     try checkThis(vm, this);
-    if (try dispatch(vm, this, u.arg(args, 0), vm.sym.match, null)) |r| return r;
+    const a0 = u.arg(args, 0);
+    if (a0.isObject() and re.isFastRegExp(vm, a0.asObject())) return resym.matchFn(vm, a0, &.{this});
+    if (try dispatch(vm, this, a0, vm.sym.match, null)) |r| return r;
     const s = try thisStr(vm, this);
-    const pat = if (u.arg(args, 0).isUndefined()) vm.empty else try conv.toStr(vm, args[0]);
+    const pat = if (a0.isUndefined()) vm.empty else try conv.toStr(vm, a0);
     const rx = try re.create(vm, pat, vm.empty, vm.protos.regexp);
+    if (!vm.protos.regexp.flags.proto_dirty) return resym.matchFn(vm, rx, &.{Value.fromString(s)});
     const m = try props.get(vm, rx.asObject(), PropKey.fromSymbol(vm.sym.match));
     return calls.call(vm, m, rx, &.{Value.fromString(s)});
 }
@@ -210,10 +213,13 @@ fn matchAllFn(vm: *Vm, this: Value, args: []const Value) Error!Value {
 
 fn searchFn(vm: *Vm, this: Value, args: []const Value) Error!Value {
     try checkThis(vm, this);
-    if (try dispatch(vm, this, u.arg(args, 0), vm.sym.search, null)) |r| return r;
+    const a0 = u.arg(args, 0);
+    if (a0.isObject() and re.isFastRegExp(vm, a0.asObject())) return resym.searchFn(vm, a0, &.{this});
+    if (try dispatch(vm, this, a0, vm.sym.search, null)) |r| return r;
     const s = try thisStr(vm, this);
-    const pat = if (u.arg(args, 0).isUndefined()) vm.empty else try conv.toStr(vm, args[0]);
+    const pat = if (a0.isUndefined()) vm.empty else try conv.toStr(vm, a0);
     const rx = try re.create(vm, pat, vm.empty, vm.protos.regexp);
+    if (!vm.protos.regexp.flags.proto_dirty) return resym.searchFn(vm, rx, &.{Value.fromString(s)});
     const m = try props.get(vm, rx.asObject(), PropKey.fromSymbol(vm.sym.search));
     return calls.call(vm, m, rx, &.{Value.fromString(s)});
 }
@@ -221,6 +227,7 @@ fn searchFn(vm: *Vm, this: Value, args: []const Value) Error!Value {
 fn replaceOnce(vm: *Vm, s: *JSString, pat: *JSString, rv: Value, all: bool) Error!Value {
     const functional = rv.isCallable();
     const template = if (functional) vm.empty else try conv.toStr(vm, rv);
+    const has_dollar = if (functional) false else std.mem.indexOfScalar(u8, try template.flat(vm), '$') != null;
     var b = str.Builder.init(vm);
     defer b.deinit();
     var next: usize = 0;
@@ -232,6 +239,8 @@ fn replaceOnce(vm: *Vm, s: *JSString, pat: *JSString, rv: Value, all: bool) Erro
         if (functional) {
             const r = try calls.call(vm, rv, Value.undefined, &.{ Value.fromString(pat), Value.fromUsize(pos), Value.fromString(s) });
             try b.str(try conv.toStr(vm, r));
+        } else if (!has_dollar) {
+            try b.str(template);
         } else {
             try resym.getSubstitution(vm, &b, pat, s, pos, &.{}, Value.undefined, template);
         }
@@ -246,25 +255,36 @@ fn replaceOnce(vm: *Vm, s: *JSString, pat: *JSString, rv: Value, all: bool) Erro
 
 fn replaceFn(vm: *Vm, this: Value, args: []const Value) Error!Value {
     try checkThis(vm, this);
-    if (try dispatch(vm, this, u.arg(args, 0), vm.sym.replace, u.arg(args, 1))) |r| return r;
-    return replaceOnce(vm, try thisStr(vm, this), try conv.toStr(vm, u.arg(args, 0)), u.arg(args, 1), false);
+    const a0 = u.arg(args, 0);
+    const a1 = u.arg(args, 1);
+    if (a0.isObject() and re.isFastRegExp(vm, a0.asObject())) return resym.replaceFn(vm, a0, &.{ this, a1 });
+    if (try dispatch(vm, this, a0, vm.sym.replace, a1)) |r| return r;
+    return replaceOnce(vm, try thisStr(vm, this), try conv.toStr(vm, a0), a1, false);
 }
 
 fn replaceAll(vm: *Vm, this: Value, args: []const Value) Error!Value {
     try checkThis(vm, this);
     const a0 = u.arg(args, 0);
+    const a1 = u.arg(args, 1);
     if (a0.isObject() and a0.asObject().class == .regexp) {
         const ro = a0.asObject();
-        const is_g = if (re.isFastRegExp(vm, ro)) ro.payload.regexp.prog.flags.global else std.mem.indexOfScalar(u8, try (try conv.toStr(vm, try props.get(vm, ro, vm.k.flags))).flat(vm), 'g') != null;
+        if (re.isFastRegExp(vm, ro)) {
+            if (!ro.payload.regexp.prog.flags.global) return vm.throwError(.TypeError, "replaceAll must be called with a global RegExp");
+            return resym.replaceFn(vm, a0, &.{ this, a1 });
+        }
+        const is_g = std.mem.indexOfScalar(u8, try (try conv.toStr(vm, try props.get(vm, ro, vm.k.flags))).flat(vm), 'g') != null;
         if (!is_g) return vm.throwError(.TypeError, "replaceAll must be called with a global RegExp");
     }
-    if (try dispatch(vm, this, a0, vm.sym.replace, u.arg(args, 1))) |r| return r;
-    return replaceOnce(vm, try thisStr(vm, this), try conv.toStr(vm, a0), u.arg(args, 1), true);
+    if (try dispatch(vm, this, a0, vm.sym.replace, a1)) |r| return r;
+    return replaceOnce(vm, try thisStr(vm, this), try conv.toStr(vm, a0), a1, true);
 }
 
 fn splitFn(vm: *Vm, this: Value, args: []const Value) Error!Value {
     try checkThis(vm, this);
-    if (try dispatch(vm, this, u.arg(args, 0), vm.sym.split, u.arg(args, 1))) |r| return r;
+    const a0 = u.arg(args, 0);
+    const a1 = u.arg(args, 1);
+    if (a0.isObject() and re.isFastRegExp(vm, a0.asObject())) return resym.splitFn(vm, a0, &.{ this, a1 });
+    if (try dispatch(vm, this, a0, vm.sym.split, a1)) |r| return r;
     const s = try thisStr(vm, this);
     const lim: u32 = if (u.arg(args, 1).isUndefined()) 0xFFFF_FFFF else try conv.toUint32(vm, args[1]);
     const sep_v = u.arg(args, 0);

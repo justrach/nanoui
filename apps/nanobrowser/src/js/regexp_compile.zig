@@ -57,8 +57,15 @@ pub const Program = struct {
     flags: rp.Flags,
     /// When every match must start with this unit: a fast scan for the first position.
     first_unit: ?u16,
+    /// When every match must start with one of these two units (e.g. `/x/i`, `a|b`).
+    first_pair: ?[2]u16 = null,
     /// When every match must start with a unit in `classes[first_class]`.
     first_class: ?u32 = null,
+    /// Conservative ASCII lead bitmap (with `lead_non_ascii` for units >= 128).
+    lead_ascii: ?[2]u64 = null,
+    lead_non_ascii: bool = false,
+    /// True when no empty match is possible at `pos == text.len`.
+    must_consume: bool = false,
     /// When every match must begin at `.line_start` (`^`).
     anchored: bool = false,
     arena: std.heap.ArenaAllocator,
@@ -295,12 +302,100 @@ const C = struct {
     }
 };
 
+const LeadSet = struct {
+    ascii: [2]u64 = .{ 0, 0 },
+    non_ascii: bool = false,
+
+    fn addCp(s: *LeadSet, cp: u32) void {
+        if (cp < 128) {
+            s.ascii[cp >> 6] |= @as(u64, 1) << @intCast(cp & 63);
+        } else {
+            s.non_ascii = true;
+        }
+    }
+
+    fn addClass(s: *LeadSet, cl: *const Class) void {
+        s.ascii[0] |= cl.ascii[0];
+        s.ascii[1] |= cl.ascii[1];
+        if (cl.negate or (cl.ranges.len > 0 and cl.ranges[cl.ranges.len - 1].hi >= 128)) {
+            s.non_ascii = true;
+        }
+    }
+
+    fn merge(s: *LeadSet, o: LeadSet) void {
+        s.ascii[0] |= o.ascii[0];
+        s.ascii[1] |= o.ascii[1];
+        s.non_ascii = s.non_ascii or o.non_ascii;
+    }
+};
+
+fn singleInstLead(inst: Inst, classes: []const Class, out: *LeadSet) bool {
+    switch (inst) {
+        .char => |cp| out.addCp(cp),
+        .char2 => |c| {
+            out.addCp(c.a);
+            out.addCp(c.b);
+        },
+        .class => |ci| out.addClass(&classes[ci]),
+        .any => {
+            out.ascii[0] |= ~((@as(u64, 1) << '\n') | (@as(u64, 1) << '\r'));
+            out.ascii[1] = ~@as(u64, 0);
+            out.non_ascii = true;
+        },
+        else => return false,
+    }
+    return true;
+}
+
+/// Computes a conservative over-approximation of the first consumed code unit.
+/// Returns `false` if an empty match (`pos == text.len`) is possible or analysis bails out.
+fn instLeadSet(insts: []const Inst, classes: []const Class, pc: u32, depth: u8, out: *LeadSet) bool {
+    if (depth > 10) return false;
+    var i: usize = pc;
+    var jumps: u8 = 0;
+    while (i < insts.len) {
+        switch (insts[i]) {
+            .save, .empty_mark, .empty_check, .counter_init, .reset_caps, .line_start, .line_end, .word_boundary => i += 1,
+            .jmp => |t| {
+                jumps += 1;
+                if (jumps > 16) return false;
+                i = t;
+            },
+            .look => |l| i = l.end,
+            .char, .char2, .class, .any => return singleInstLead(insts[i], classes, out),
+            .single_loop => |l| {
+                if (i + 1 >= insts.len) return false;
+                if (l.min >= 1) return singleInstLead(insts[i + 1], classes, out);
+                var sub = LeadSet{};
+                if (l.max > 0 and !singleInstLead(insts[i + 1], classes, &sub)) return false;
+                var next = LeadSet{};
+                if (!instLeadSet(insts, classes, @intCast(i + 2), depth + 1, &next)) return false;
+                out.merge(sub);
+                out.merge(next);
+                return true;
+            },
+            .split => |s| {
+                var a = LeadSet{};
+                if (!instLeadSet(insts, classes, s.first, depth + 1, &a)) return false;
+                var b = LeadSet{};
+                if (!instLeadSet(insts, classes, s.second, depth + 1, &b)) return false;
+                out.merge(a);
+                out.merge(b);
+                return true;
+            },
+            else => return false,
+        }
+    }
+    return false;
+}
+
 fn instFirstUnit(insts: []const Inst, pc: u32, depth: u8) ?u16 {
     if (depth > 8) return null;
     var i: usize = pc;
     while (i < insts.len) : (i += 1) {
         switch (insts[i]) {
-            .save => continue,
+            .save, .line_start, .word_boundary => continue,
+            .look => |l| i = l.end - 1,
             .char => |cp| return if (cp < 0x10000 and !(cp >= 0xD800 and cp < 0xE000)) @intCast(cp) else null,
             .single_loop => |l| {
                 if (l.min >= 1 and i + 1 < insts.len) return instFirstUnit(insts, @intCast(i + 1), depth + 1);
@@ -322,7 +417,8 @@ fn instFirstClass(insts: []const Inst, unicode_mode: bool) ?u32 {
     var i: usize = 0;
     while (i < insts.len) : (i += 1) {
         switch (insts[i]) {
-            .save => continue,
+            .save, .line_start, .word_boundary => continue,
+            .look => |l| i = l.end - 1,
             .class => |ci| return ci,
             .single_loop => |l| {
                 if (l.min >= 1 and i + 1 < insts.len and insts[i + 1] == .class) return insts[i + 1].class;
@@ -374,9 +470,7 @@ pub fn compile(gpa: Allocator, pattern: []const u32, flags: rp.Flags) Allocator.
     };
     const ncaps = p.next_group;
     (blk: {
-        _ = c.emit(.{ .save = 0 }) catch |e| break :blk e;
         c.gen(root) catch |e| break :blk e;
-        _ = c.emit(.{ .save = 1 }) catch |e| break :blk e;
         _ = c.emit(.match) catch |e| break :blk e;
         break :blk @as(rp.ParseError!void, {});
     }) catch |e| switch (e) {
@@ -386,6 +480,31 @@ pub fn compile(gpa: Allocator, pattern: []const u32, flags: rp.Flags) Allocator.
         },
         error.OutOfMemory => return error.OutOfMemory,
     };
+    var lead = LeadSet{};
+    const has_lead = instLeadSet(c.insts.items, c.classes.items, 0, 0, &lead);
+    var first_unit = instFirstUnit(c.insts.items, 0, 0);
+    var first_pair: ?[2]u16 = null;
+    const first_class = if (first_unit == null) instFirstClass(c.insts.items, umode) else null;
+    var lead_ascii: ?[2]u64 = null;
+    if (has_lead) {
+        const pop: u32 = @as(u32, @popCount(lead.ascii[0])) + @as(u32, @popCount(lead.ascii[1]));
+        if (!lead.non_ascii and pop == 1 and first_unit == null) {
+            first_unit = if (lead.ascii[0] != 0) @ctz(lead.ascii[0]) else 64 + @as(u16, @ctz(lead.ascii[1]));
+        } else if (!lead.non_ascii and pop == 2 and first_unit == null) {
+            var pair: [2]u16 = undefined;
+            var pi: usize = 0;
+            inline for (0..2) |w| {
+                var bits = lead.ascii[w];
+                while (bits != 0) : (bits &= bits - 1) {
+                    pair[pi] = @intCast(w * 64 + @ctz(bits));
+                    pi += 1;
+                }
+            }
+            first_pair = pair;
+        } else if (first_unit == null and first_class == null and !(lead.non_ascii and pop >= 120)) {
+            lead_ascii = lead.ascii;
+        }
+    }
     const prog = try gpa.create(Program);
     prog.* = .{
         .insts = c.insts.items,
@@ -394,8 +513,12 @@ pub fn compile(gpa: Allocator, pattern: []const u32, flags: rp.Flags) Allocator.
         .nregs = c.nregs,
         .names = p.names.items,
         .flags = flags,
-        .first_unit = instFirstUnit(c.insts.items, 0, 0),
-        .first_class = instFirstClass(c.insts.items, umode),
+        .first_unit = first_unit,
+        .first_pair = first_pair,
+        .first_class = first_class,
+        .lead_ascii = lead_ascii,
+        .lead_non_ascii = lead.non_ascii,
+        .must_consume = has_lead,
         .anchored = instAnchored(c.insts.items, 0, 0),
         .arena = arena,
     };

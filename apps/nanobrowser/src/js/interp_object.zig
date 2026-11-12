@@ -111,7 +111,7 @@ fn setHome(vm: *Vm, fnv: Value, home: *Object) Error!void {
     }
 }
 
-fn defineMethod(vm: *Vm, target: *Object, key: PropKey, fnv: Value, flags: u8) Error!void {
+pub fn defineMethod(vm: *Vm, target: *Object, key: PropKey, fnv: Value, flags: u8) Error!void {
     const kind = flags & 3;
     const enumerable = flags & 4 != 0;
     try setHome(vm, fnv, target);
@@ -212,7 +212,7 @@ fn makeClass(vm: *Vm, f: *Frame, fp: *bc.FuncProto, has_parent: bool, parent: Va
     ctor.flags.class_ctor = true;
     ctor.flags.derived_ctor = fp.is_derived;
     const x = try vm.gpa.create(objmod.FnExtra);
-    x.* = .{ .home = proto };
+    x.* = .{ .home = proto, .inst_shape = try shape.rootFor(vm, proto) };
     ctor.host = x;
     try props.addProp(vm, ctor, vm.k.length, Value.fromUsize(fp.length), PropFlags.config_only);
     try props.addProp(vm, ctor, vm.k.name, Value.fromString(fp.name), PropFlags.config_only);

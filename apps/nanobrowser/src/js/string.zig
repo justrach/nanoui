@@ -60,6 +60,14 @@ pub const JSString = struct {
         var n: usize = 0;
         var i: usize = 0;
         while (i < b.len) {
+            while (i + 8 <= b.len) {
+                const w = @as(*align(1) const u64, @ptrCast(b.ptr + i)).*;
+                if ((w & 0x8080808080808080) != 0) break;
+                inline for (0..8) |k| out[n + k] = b[i + k];
+                i += 8;
+                n += 8;
+            }
+            if (i >= b.len) break;
             const d = decode(b, i);
             i += d.len;
             if (d.cp >= 0x10000) {
@@ -230,10 +238,35 @@ pub fn fromUtf8(vm: *Vm, bytes: []const u8) Error!*JSString {
     return adopt(vm, try out.toOwnedSlice(vm.gpa));
 }
 
+fn isAscii16(u: []const u16) bool {
+    var i: usize = 0;
+    while (i + 4 <= u.len) : (i += 4) {
+        const w = @as(*align(1) const u64, @ptrCast(u.ptr + i)).*;
+        if ((w & 0xFF80_FF80_FF80_FF80) != 0) return false;
+    }
+    while (i < u.len) : (i += 1) {
+        if (u[i] >= 0x80) return false;
+    }
+    return true;
+}
+
 /// A string from UTF-16 code units; surrogate pairs merge, lone ones stay as WTF-8.
 pub fn fromUtf16(vm: *Vm, u: []const u16) Error!*JSString {
     if (u.len == 0) return vm.empty;
     if (u.len == 1 and u[0] < 0x80) return vm.char_strs[u[0]];
+    if (isAscii16(u)) {
+        if (u.len <= inline_bytes) {
+            const s = try alloc(vm, true, undefined, u.len, u.len);
+            for (u, 0..) |c, k| s.inline_buf[k] = @intCast(c);
+            s.ptr = &s.inline_buf;
+            return s;
+        }
+        const buf = try vm.gpa.alloc(u8, u.len);
+        for (u, buf) |c, *dst| dst.* = @intCast(c);
+        const s = try alloc(vm, true, buf.ptr, u.len, u.len);
+        s.owns = true;
+        return s;
+    }
     var size: usize = 0;
     var i: usize = 0;
     var lone = false;
@@ -323,6 +356,23 @@ pub fn internString(vm: *Vm, s: *JSString) Error!*JSString {
     s.key = if (parseIndex(b)) |idx| PropKey.fromIndex(idx) else PropKey.fromAtom(s);
     try vm.atoms.put(vm.gpa, b, s);
     return s;
+}
+
+/// Returns an existing canonical index or interned atom key without interning `s` on a miss.
+pub fn findExistingKey(vm: *Vm, s: *JSString) Error!?PropKey {
+    if (s.key.bits != 0) return s.key;
+    const b = try s.flat(vm);
+    if (b.len == 0) return vm.empty.key;
+    if (b.len == 1 and b[0] < 0x80) return vm.char_strs[b[0]].key;
+    if (parseIndex(b)) |i| {
+        s.key = PropKey.fromIndex(i);
+        return s.key;
+    }
+    if (vm.atoms.get(b)) |a| {
+        s.key = PropKey.fromAtom(a);
+        return s.key;
+    }
+    return null;
 }
 
 /// The property key for a string: a canonical array index, or its atom.

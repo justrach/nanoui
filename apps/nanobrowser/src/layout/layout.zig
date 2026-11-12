@@ -10,6 +10,7 @@ const gen = @import("gen.zig");
 const sizing = @import("sizing.zig");
 const finish = @import("finish.zig");
 const cascade = @import("../css/cascade.zig");
+const dom_flags = @import("../dom_flags.zig");
 const Allocator = std.mem.Allocator;
 
 pub const Viewport = struct { width: f32, height: f32 };
@@ -17,16 +18,29 @@ pub const Viewport = struct { width: f32, height: f32 };
 /// Builds and lays out the box tree of `doc` (node.computed filled by the
 /// cascade). Everything is in `arena`. Marks the document's layout clean.
 pub fn run(arena: Allocator, doc: *dom.Document, viewport: Viewport, m: box.Measurer) !box.Tree {
+    return runCached(arena, doc, viewport, m, false);
+}
+
+/// As `run`, adopting clean subtrees from the previous layout arena when `allow_cache` is true.
+pub fn runCached(arena: Allocator, doc: *dom.Document, viewport: Viewport, m: box.Measurer, allow_cache: bool) !box.Tree {
     const perf = @import("../perf_rules.zig");
     perf.prof_layout_runs += 1;
     const t0 = perf.nowNs();
-    clearBoxes(doc);
+    var prev_gen: u32 = if (allow_cache) doc.box_generation else 0;
+    doc.box_generation +%= 1;
+    if (doc.box_generation == 0) {
+        clearBoxes(doc);
+        doc.box_generation = 1;
+        prev_gen = 0;
+    }
     var c: ctx.Ctx = .{
         .arena = arena,
         .m = m,
         .vw = @max(0, ctx.clean(viewport.width)),
         .vh = @max(0, ctx.clean(viewport.height)),
         .quirks = doc.quirks,
+        .doc = doc,
+        .prev_gen = prev_gen,
     };
     const root = try gen.build(&c, doc);
     const t1 = perf.nowNs();
@@ -37,6 +51,7 @@ pub fn run(arena: Allocator, doc: *dom.Document, viewport: Viewport, m: box.Meas
     perf.prof_lay_size_ns += t2 -| t1;
     try finish.run(&c, root);
     perf.prof_lay_fin_ns += perf.nowNs() -| t2;
+    dom_flags.clearSubtreeLayoutDirty(doc.node);
     doc.layout_dirty = false;
     doc.oof_dirty_node = null;
     return .{
@@ -55,8 +70,8 @@ pub fn relayoutOutOfFlow(arena: Allocator, doc: *dom.Document, tree: *box.Tree, 
     if (doc.layout_dirty or !isConnected(oof_node) or oof_node.kind != .element or oof_node.in_top_layer) return false;
     if (oof_node.ns != .html or oof_node.shadow_root != null or oof_node.isTag("slot") or oof_node.isTag("details")) return false;
     const parent_node = oof_node.parent orelse return false;
-    if (parent_node.kind != .element or parent_node.ns != .html or parent_node.shadow_root != null or parent_node.isTag("slot") or parent_node.isTag("details") or parent_node.box_parts.len != 0) return false;
-    const parent_box: *box.Box = if (parent_node.box) |raw| @ptrCast(@alignCast(raw)) else return false;
+    if (parent_node.kind != .element or parent_node.ns != .html or parent_node.shadow_root != null or parent_node.isTag("slot") or parent_node.isTag("details") or parent_node.liveBoxParts().len != 0) return false;
+    const parent_box: *box.Box = if (parent_node.liveBox()) |raw| @ptrCast(@alignCast(raw)) else return false;
     if (parent_box.lay.center_v or parent_box.lay.inline_root) return false;
     if (oof_node.computed) |st| {
         if (st.display != .none) {
@@ -89,8 +104,7 @@ pub fn relayoutOutOfFlow(arena: Allocator, doc: *dom.Document, tree: *box.Tree, 
     }
     var at: ?*dom.Node = oof_node;
     while (at) |n| : (at = n.nextDeep(oof_node)) {
-        n.box = null;
-        n.box_parts = &.{};
+        n.setBox(null);
     }
     if (oof_node.computed == null or oof_node.computed.?.display == .none) return true;
 
@@ -213,7 +227,7 @@ fn isConnected(node: *const dom.Node) bool {
 
 fn boxOf(node: *const dom.Node) ?*box.Box {
     if (node.doc.layout_dirty or !isConnected(node)) return null;
-    const p = node.box orelse return null;
+    const p = node.liveBox() orelse return null;
     return @ptrCast(@alignCast(p));
 }
 
@@ -221,20 +235,21 @@ fn boxOf(node: *const dom.Node) ?*box.Box {
 /// none, or the tree changed since the last `run` (its pointer may be stale).
 pub fn rectOf(node: *dom.Node) ?box.Rect {
     const b = boxOf(node) orelse return null;
-    if (node.box_parts.len == 0) return b.borderRect();
+    if (node.liveBoxParts().len == 0) return b.borderRect();
     return splitRect(node, b);
 }
 
 /// An inline split around blocks: the union of its lines and the lines the blocks
 /// stand on, which are as wide as the block they sit in.
 fn splitRect(node: *const dom.Node, first: *const box.Box) box.Rect {
+    const parts = node.liveBoxParts();
     var x0 = first.x;
     var y0 = first.y;
     var x1 = first.x + first.w;
     var y1 = first.y + first.h;
     var inline_part = false;
     if (first.kind == .inline_box) inline_part = true;
-    for (node.box_parts) |raw| {
+    for (parts) |raw| {
         const p: *const box.Box = @ptrCast(@alignCast(raw));
         y0 = @min(y0, p.y - p.margin.top);
         y1 = @max(y1, p.y + p.h + p.margin.bottom);
@@ -243,8 +258,8 @@ fn splitRect(node: *const dom.Node, first: *const box.Box) box.Rect {
         x1 = @max(x1, within.x + within.w);
     }
     // The block alone says where the box starts when no line came before it.
-    if (!inline_part) if (node.box_parts.len > 0) {
-        const p: *const box.Box = @ptrCast(@alignCast(node.box_parts[0]));
+    if (!inline_part) if (parts.len > 0) {
+        const p: *const box.Box = @ptrCast(@alignCast(parts[0]));
         y0 = p.y;
         y1 = @max(y0, y1 - p.margin.bottom);
     };

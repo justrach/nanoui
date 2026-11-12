@@ -335,6 +335,7 @@ pub fn syncNodeAttr(n: *dom.Node, name: []const u8, val: ?[]const u8) void {
             n.class_src_len = 0;
         }
     }
+    @import("dom_flags.zig").propagateSelfAttrs(n);
 }
 
 /// O(1) Bloom-filtered and single-class fast-pathed `Node.hasClass` (Theorem 35).
@@ -494,6 +495,57 @@ pub var prof_ss_miss_gen: u64 = 0;
 pub var prof_ss_miss_pstyle: u64 = 0;
 pub var prof_ss_miss_cousin: u64 = 0;
 pub var prof_ss_miss_key: u64 = 0;
+pub var prof_lay_adopted: u64 = 0;
+pub const HtmlTag = enum(u8) {
+    other,
+    br,
+    wbr,
+    input,
+    button,
+    control,
+    img,
+    replaced,
+    list,
+    table,
+    tr,
+    cell,
+    center,
+    details,
+    slot,
+};
+
+const html_tag_map = std.StaticStringMap(HtmlTag).initComptime(.{
+    .{ "br", .br },
+    .{ "wbr", .wbr },
+    .{ "input", .input },
+    .{ "button", .button },
+    .{ "select", .control },
+    .{ "textarea", .control },
+    .{ "progress", .control },
+    .{ "meter", .control },
+    .{ "img", .img },
+    .{ "canvas", .replaced },
+    .{ "video", .replaced },
+    .{ "iframe", .replaced },
+    .{ "object", .replaced },
+    .{ "embed", .replaced },
+    .{ "ol", .list },
+    .{ "ul", .list },
+    .{ "menu", .list },
+    .{ "dir", .list },
+    .{ "table", .table },
+    .{ "tr", .tr },
+    .{ "td", .cell },
+    .{ "th", .cell },
+    .{ "center", .center },
+    .{ "details", .details },
+    .{ "slot", .slot },
+});
+
+pub inline fn classifyHtmlTag(name: []const u8) HtmlTag {
+    return html_tag_map.get(name) orelse .other;
+}
+
 pub fn nowNs() u64 {
     return @import("js/conv.zig").monotonicNs();
 }
