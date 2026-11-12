@@ -60,7 +60,7 @@ pub fn run(c: *Context, view: View, ts: *text.TextSystem, instances: *std.ArrayL
         @import("tooltip.zig").flush(c);
         if (c.stack.items.len != 1)
             std.debug.panic("nanoui: {d} box(es) left open: every column, row, card, scroll and pressable needs an end", .{c.stack.items.len - 1});
-        if (!c.changed or passes >= 3) break;
+        if ((!c.changed and !c.input.pendingKeys()) or passes >= 3) break;
         c.rebuild();
     }
 
@@ -107,6 +107,8 @@ pub fn run(c: *Context, view: View, ts: *text.TextSystem, instances: *std.ArrayL
     const hot_before = c.hot;
     c.commitHits();
     c.finish();
+    // A nested burst may outlive the build-pass budget: wake another frame.
+    if (c.input.pendingKeys()) c.animating = true;
     c.stats.retained = false;
     retain.store(c, instances);
     return .{ .hot_changed = c.hot != hot_before };

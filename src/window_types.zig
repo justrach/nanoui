@@ -27,6 +27,11 @@ pub const PageOptions = struct {
     /// instead of filling the window's content; the app places it with
     /// `Page.setFrame`. For `Window.dockPage` in a native-UI window.
     parent: ?*anyopaque = null,
+    /// No background of its own: what is under the page (a docked page's
+    /// native UI) shows where the page draws nothing. WebView2's default
+    /// background alpha 0 (Windows); on macOS the app turns WKWebView's
+    /// `drawsBackground` off itself.
+    transparent: bool = false,
     /// Called with the platform's webview configuration (macOS: the
     /// WKWebViewConfiguration) before the webview is made: preferences,
     /// process pool, data store, extra script handlers.

@@ -1,8 +1,9 @@
 //! More of the Mac window, never shown: windows opened while the app runs
 //! (a second window from a menu) and closed by the app with `on_close`
 //! told; the frame; keys as the view gets them (Shift+1 as '1' with
-//! Shift, a bare letter), the menu's key equivalents held back for a view
-//! that captures chords.
+//! Shift, a bare letter), keys let go (Command's too, which AppKit drops),
+//! all of them when the window stops being key, and auto-repeat; the
+//! menu's key equivalents held back for a view that captures chords.
 const std = @import("std");
 const testing = std.testing;
 const objc = @import("objc.zig");
@@ -12,14 +13,22 @@ const Window = @import("window.zig").Window;
 
 const Keys = struct {
     got: ?ui.Shortcut = null,
+    up: ?ui.Shortcut = null,
+    repeated: bool = false,
+    supported: bool = false,
+    released: u32 = 0,
     take: bool = true,
     closed: u32 = 0,
     frames: u32 = 0,
 
     fn view(k: *Keys, c: *ui.Context) void {
         k.frames += 1;
+        k.supported = c.key_up_supported;
+        if (c.input.key_up) |u| k.up = u;
+        if (c.input.keys_released) k.released += 1;
         if (c.input.shortcut) |s| {
             k.got = s;
+            k.repeated = c.input.repeat;
             if (k.take) _ = c.shortcut(s);
         }
         ui.text(c, "keys", .{});
@@ -54,8 +63,13 @@ fn freeApp(app: *App) void {
 
 /// A key press as AppKit makes it: `chars` typed, `ign` without modifiers.
 fn keyEvent(code: u16, flags: objc.NSUInteger, chars: []const u8, ign: []const u8) objc.Object {
+    return keyEventOf(10, code, flags, chars, ign, objc.NO);
+}
+
+/// NSEventTypeKeyDown (10) or NSEventTypeKeyUp (11), repeated or not.
+fn keyEventOf(kind: objc.NSUInteger, code: u16, flags: objc.NSUInteger, chars: []const u8, ign: []const u8, repeat: objc.BOOL) objc.Object {
     return objc.msg(objc.Object, objc.class("NSEvent"), "keyEventWithType:location:modifierFlags:timestamp:windowNumber:context:characters:charactersIgnoringModifiers:isARepeat:keyCode:", .{
-        @as(objc.NSUInteger, 10), objc.CGPoint{}, flags, @as(f64, 0), @as(objc.NSInteger, 0), @as(?objc.Object, null), objc.nsString(chars), objc.nsString(ign), objc.NO, code,
+        kind, objc.CGPoint{}, flags, @as(f64, 0), @as(objc.NSInteger, 0), @as(?objc.Object, null), objc.nsString(chars), objc.nsString(ign), repeat, code,
     });
 }
 
@@ -100,6 +114,65 @@ test "Shift+1 reaches the view as '1' with Shift, a bare letter as itself" {
     k.got = null;
     objc.msg(void, view, "keyDown:", .{keyEvent(115, 0, "\u{F729}", "\u{F729}")});
     try testing.expectEqual(ui.Shortcut.home, k.got.?.key);
+}
+
+test "keyUp: the view sees the key let go, with its modifiers" {
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    const app = try makeApp(testing.allocator);
+    defer freeApp(app);
+    var k: Keys = .{};
+    const w = try app.newWindow(.{ .title = "up", .width = 200, .height = 120, .visible = false, .content = .{ .view = .init(&k, Keys.view) } });
+    const view = w.surface.?.nsview;
+    try testing.expect(k.supported);
+    // K, with Shift held: named as the shortcut names it, 'k' with Shift.
+    objc.msg(void, view, "keyUp:", .{keyEventOf(11, 40, shift, "K", "K", objc.NO)});
+    const u = k.up orelse return error.NoKeyUp;
+    try testing.expectEqual(@as(u21, 'k'), u.key);
+    try testing.expect(u.shift and !u.cmd and !u.alt);
+    try testing.expect(w.surface.?.ctx.input.key_up == null);
+    // An arrow: AppKit's code point.
+    k.up = null;
+    objc.msg(void, view, "keyUp:", .{keyEventOf(11, 123, 0, "\u{F702}", "\u{F702}", objc.NO)});
+    try testing.expectEqual(ui.Shortcut.left, k.up.?.key);
+}
+
+test "a key let go with Command held reaches the view; resigning key lets every key go" {
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    const app = try makeApp(testing.allocator);
+    defer freeApp(app);
+    var k: Keys = .{};
+    const w = try app.newWindow(.{ .title = "cmd-up", .width = 200, .height = 120, .visible = false, .content = .{ .view = .init(&k, Keys.view) } });
+    const surface_keys = @import("ui/surface_keys.zig");
+    // L held, then ⌘ pressed, then L let go: the key-up carries Command.
+    try testing.expect(surface_keys.sendCommandKeyUp(w.nswindow, keyEventOf(11, 37, cmd, "l", "l", objc.NO)));
+    const u = k.up orelse return error.NoKeyUp;
+    try testing.expectEqual(@as(u21, 'l'), u.key);
+    try testing.expect(u.cmd);
+    // One without Command goes AppKit's own way.
+    try testing.expect(!surface_keys.sendCommandKeyUp(w.nswindow, keyEventOf(11, 37, 0, "l", "l", objc.NO)));
+    const s = w.surface.?;
+    s.ctx.input.shift = true;
+    surface_keys.keyWindowChanged(s, false);
+    try testing.expectEqual(@as(u32, 1), k.released);
+    try testing.expect(!s.ctx.input.shift and !s.ctx.input.keys_released);
+}
+
+test "a repeated keyDown: sets input.repeat" {
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    const app = try makeApp(testing.allocator);
+    defer freeApp(app);
+    var k: Keys = .{};
+    const w = try app.newWindow(.{ .title = "repeat", .width = 200, .height = 120, .visible = false, .content = .{ .view = .init(&k, Keys.view) } });
+    const view = w.surface.?.nsview;
+    objc.msg(void, view, "keyDown:", .{keyEventOf(10, 38, 0, "j", "j", objc.NO)});
+    try testing.expectEqual(@as(u21, 'j'), k.got.?.key);
+    try testing.expect(!k.repeated);
+    objc.msg(void, view, "keyDown:", .{keyEventOf(10, 38, 0, "j", "j", objc.YES)});
+    try testing.expect(k.repeated);
+    try testing.expect(!w.surface.?.ctx.input.repeat);
 }
 
 test "with menu key equivalents held back, a chord goes to the focused view" {
@@ -167,4 +240,63 @@ test "a view that closes its window inside an event frame does not touch the fre
         objc.msg(void, nsview, "doCommandBySelector:", .{objc.sel("insertNewline:")});
         try testing.expect(cl.w == null);
     }
+}
+
+test "native key-ups pumped during a Mac view build are delivered in order" {
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    const app = try makeApp(testing.allocator);
+    defer freeApp(app);
+    const Nested = struct {
+        nsview: ?objc.Object = null,
+        send: bool = false,
+        count: usize = 0,
+        seen: [2]u21 = @splat(0),
+        fn view(n: *@This(), c: *ui.Context) void {
+            if (c.input.key_up) |up| {
+                n.seen[n.count] = up.key;
+                n.count += 1;
+            }
+            if (n.send) {
+                n.send = false;
+                objc.msg(void, n.nsview.?, "keyUp:", .{keyEventOf(11, 40, 0, "k", "k", objc.NO)});
+                objc.msg(void, n.nsview.?, "keyUp:", .{keyEventOf(11, 37, 0, "l", "l", objc.NO)});
+            }
+            ui.text(c, "nested", .{});
+        }
+    };
+    var nested: Nested = .{};
+    const win = try app.newWindow(.{ .title = "nested keys", .width = 200, .height = 120, .visible = false, .content = .{ .view = .init(&nested, Nested.view) } });
+    const s = win.surface.?;
+    nested.nsview = s.nsview;
+    nested.send = true;
+    s.frame();
+    try testing.expectEqual(@as(usize, 2), nested.count);
+    try testing.expectEqualSlices(u21, &.{ 'k', 'l' }, &nested.seen);
+    s.frame();
+    try testing.expectEqual(@as(usize, 2), nested.count);
+}
+
+test "same-window responder transfer releases native held keys without resigning key window" {
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    const app = try makeApp(testing.allocator);
+    defer freeApp(app);
+    var keys: Keys = .{};
+    const win = try app.newWindow(.{ .title = "responder", .width = 200, .height = 120, .visible = false, .content = .{ .view = .init(&keys, Keys.view) } });
+    const s = win.surface.?;
+    try testing.expect(objc.msg(objc.BOOL, win.nswindow, "makeFirstResponder:", .{s.nsview}));
+    objc.msg(void, s.nsview, "keyDown:", .{keyEvent(40, shift, "K", "K")});
+    const before = keys.released;
+    const was_key = objc.msg(objc.BOOL, win.nswindow, "isKeyWindow", .{});
+    // A native text responder exercises the same NSWindow transition as a
+    // docked WKWebView, with no web process, network, profile, or visible UI.
+    const other = objc.msg(objc.Object, objc.class("NSTextView"), "new", .{});
+    defer objc.release(other);
+    objc.msg(void, s.nsview, "addSubview:", .{other});
+    try testing.expect(objc.msg(objc.BOOL, win.nswindow, "makeFirstResponder:", .{other}));
+    try testing.expectEqual(was_key, objc.msg(objc.BOOL, win.nswindow, "isKeyWindow", .{}));
+    try testing.expectEqual(before + 1, keys.released);
+    try testing.expect(!s.ctx.input.shift and !s.ctx.input.keys_release_pending);
+    try testing.expectEqual(@as(u64, 0), s.ctx.focus);
 }

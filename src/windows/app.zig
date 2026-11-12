@@ -214,7 +214,7 @@ pub const App = struct {
         try self.windows.append(self.gpa, win);
         // A window made while the loop runs starts its page's WebView2 here:
         // `run` only started the windows that existed before it.
-        if (self.running) if (win.page) |p| p.start();
+        if (self.running) win.startPages();
         return win;
     }
 
@@ -307,7 +307,7 @@ pub const App = struct {
         self.deliverLaunchUrls();
         var msg: w.MSG = undefined;
         // A page's WebView2 is asked for now, with a loop to hear its answer.
-        for (self.windows.items) |win| if (win.page) |p| p.start();
+        for (self.windows.items) |win| win.startPages();
         // A modal dialog (a message box, a file dialog) pumps its own loop
         // while it is up: a quit asked for inside one is consumed there, and
         // this loop hears of it when the dialog is gone — the usual Windows
@@ -326,7 +326,7 @@ pub const App = struct {
     pub fn runSeconds(self: *App, seconds: f64) !void {
         self.running = true;
         self.deliverLaunchUrls();
-        for (self.windows.items) |win| if (win.page) |p| p.start();
+        for (self.windows.items) |win| win.startPages();
         const clock = @import("../ui/clock.zig");
         const start = clock.now();
         var msg: w.MSG = undefined;

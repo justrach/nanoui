@@ -535,7 +535,11 @@ fn keyChanged(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) v
     }
     if (w.on_key) |cb| cb.func(cb.ctx, w);
     const w2 = objc.getZig(Window, self_obj) orelse return;
-    if (w2.surface) |s| if (s.visible()) s.requestFrame() else s.frame();
+    const s = w2.surface orelse return;
+    const tok = s.token();
+    @import("ui/surface_keys.zig").keyWindowChanged(s, w2.isFocused());
+    if (!Surface.alive(tok)) return;
+    if (s.visible()) s.requestFrame() else s.frame();
 }
 
 fn shouldClose(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) objc.BOOL {

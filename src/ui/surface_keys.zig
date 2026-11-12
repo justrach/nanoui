@@ -1,8 +1,10 @@
 //! NanoUIView's keys: key combinations offered to the view first (as
 //! `input.shortcut`), Tab's focus traversal, the focused text field's
-//! input system, then plain keys and typed text; the modifier keys alone;
-//! Paste; and the menu bar's key equivalents held back while a view
-//! captures chords (`keys.suspendMenuKeyEquivalents`).
+//! input system, then plain keys and typed text; keys let go
+//! (`input.key_up`), Command's included, and all of them when the
+//! keyboard goes elsewhere (`input.keys_released`); the modifier keys
+//! alone; Paste; and the menu bar's key equivalents held back while a
+//! view captures chords (`keys.suspendMenuKeyEquivalents`).
 const std = @import("std");
 const objc = @import("../objc.zig");
 const cf = @import("cf.zig");
@@ -14,10 +16,82 @@ const setMods = @import("surface_events.zig").setMods;
 
 pub const methods = [_]objc.Method{
     .{ .name = "keyDown:", .imp = &keyDown, .types = "v@:@" },
+    .{ .name = "keyUp:", .imp = &keyUp, .types = "v@:@" },
     .{ .name = "flagsChanged:", .imp = &flagsChanged, .types = "v@:@" },
     .{ .name = "paste:", .imp = &paste, .types = "v@:@" },
     .{ .name = "performKeyEquivalent:", .imp = &performKeyEquivalent, .types = "c@:@" },
+    .{ .name = "menuBeganTracking:", .imp = &menuBeganTracking, .types = "v@:@" },
 };
+
+const command_flag: objc.NSUInteger = 1 << 20;
+
+/// The app's one monitor of key-ups (`watch`), kept while it runs.
+var command_key_ups: ?objc.Object = null;
+var monitor_ctx: u8 = 0;
+
+/// A new view: the Command key-ups AppKit drops, and menus that take the
+/// keys while they track (the menu bar, a context menu).
+pub fn watch(nsview: objc.Object) void {
+    const center = objc.msg(objc.Object, objc.class("NSNotificationCenter"), "defaultCenter", .{});
+    objc.msg(void, center, "addObserver:selector:name:object:", .{ nsview, objc.sel("menuBeganTracking:"), objc.nsString("NSMenuDidBeginTrackingNotification"), @as(?objc.Object, null) });
+    if (command_key_ups != null) return;
+    var block = objc.BlockRet(u8, &.{objc.Object}, ?objc.Object).init(&monitor_ctx, commandKeyUp);
+    const mask: u64 = 1 << 11; // NSEventMaskKeyUp
+    const m = objc.msg(?objc.Object, objc.class("NSEvent"), "addLocalMonitorForEventsMatchingMask:handler:", .{ mask, &block });
+    if (m) |o| command_key_ups = objc.retain(o);
+}
+
+/// A view going away stops watching the menus.
+pub fn unwatch(nsview: objc.Object) void {
+    const center = objc.msg(objc.Object, objc.class("NSNotificationCenter"), "defaultCenter", .{});
+    objc.msg(void, center, "removeObserver:name:object:", .{ nsview, objc.nsString("NSMenuDidBeginTrackingNotification"), @as(?objc.Object, null) });
+}
+
+/// -[NSApplication sendEvent:] drops a key-up whose modifier flags hold
+/// Command: the modifiers at the moment the key is let go, whatever was
+/// held when it went down (hold L, press ⌘, let L go). GLFW's, SDL's
+/// and winit's `sendEvent:` hand those to the key window; this monitor
+/// hands them to the window's NanoUIView when it is the first responder,
+/// and keeps them (nil) so none comes twice. Any other key-up goes on.
+fn commandKeyUp(_: *u8, event: objc.Object) ?objc.Object {
+    const win = objc.msg(?objc.Object, event, "window", .{}) orelse return event;
+    return if (sendCommandKeyUp(win, event)) null else event;
+}
+
+/// True if `event` was a Command key-up for `win`'s NanoUIView, now sent.
+pub fn sendCommandKeyUp(win: objc.Object, event: objc.Object) bool {
+    if (objc.msg(objc.NSUInteger, event, "modifierFlags", .{}) & command_flag == 0) return false;
+    const first = objc.msg(?objc.Object, win, "firstResponder", .{}) orelse return false;
+    if (!objc.msg(objc.BOOL, first, "isKindOfClass:", .{objc.class("NanoUIView")})) return false;
+    objc.msg(void, first, "keyUp:", .{event});
+    return true;
+}
+
+/// Every key held goes elsewhere (`input.keys_released`); a frame being
+/// built is built again with it, one in progress asks for the next.
+pub fn releaseKeys(s: *Surface) void {
+    s.ctx.input.releaseKeys();
+    if (s.ctx.building) {
+        s.ctx.changed = true;
+    } else if (s.in_frame) {
+        s.requestFrame();
+    } else s.frame();
+}
+
+/// The window became key (the modifiers are read: they may have changed
+/// while it wasn't), or stopped being key: its keys go to another
+/// window, app, sheet or modal panel, and the view lets them go.
+pub fn keyWindowChanged(s: *Surface, key: bool) void {
+    if (!key) return releaseKeys(s);
+    setMods(&s.ctx.input, objc.msg(objc.NSUInteger, objc.class("NSEvent"), "modifierFlags", .{}));
+}
+
+/// A menu tracks (the menu bar, a context menu): its loop takes the keys
+/// while the window stays key.
+fn menuBeganTracking(obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
+    const s = surfaceOf(obj) orelse return;
+    if (s.window.isFocused()) releaseKeys(s);
+}
 
 fn surfaceOf(obj: objc.Object) ?*Surface {
     return objc.getZig(Surface, obj);
@@ -26,6 +100,22 @@ fn surfaceOf(obj: objc.Object) ?*Surface {
 fn keyDown(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) void {
     const s = surfaceOf(obj) orelse return;
     deliver(s, event);
+}
+
+/// A key let go: a frame with `input.key_up`. One let go with Command
+/// held comes by way of `commandKeyUp`, which NSApplication would have
+/// dropped; the modifiers alone come to `flagsChanged:`.
+fn keyUp(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) void {
+    const s = surfaceOf(obj) orelse return;
+    const code = objc.msg(u16, event, "keyCode", .{});
+    const in = &s.ctx.input;
+    setMods(in, objc.msg(objc.NSUInteger, event, "modifierFlags", .{}));
+    const ign = objc.fromNSString(objc.msg(?objc.Object, event, "charactersIgnoringModifiers", .{}));
+    if (ign.len == 0) return;
+    const cp = std.unicode.utf8Decode(ign[0..@min(ign.len, cf.seqLen(ign[0]))]) catch return;
+    const key = shortcutKey(event, code, cp, in.shift);
+    in.queueKeyUp(s.gpa, .{ .key = key, .cmd = in.cmd, .ctrl = in.ctrl, .alt = in.alt, .shift = in.shift });
+    if (s.in_frame) s.requestFrame() else s.frame();
 }
 
 /// While the menu's key equivalents are held back, a ⌘ chord meant for
@@ -65,6 +155,12 @@ pub fn deliver(s: *Surface, event: objc.Object) void {
     const flags = objc.msg(objc.NSUInteger, event, "modifierFlags", .{});
     const in = &s.ctx.input;
     setMods(in, flags);
+    // Every frame this press runs says so (each frame clears its edges).
+    const repeat = objc.msg(objc.BOOL, event, "isARepeat", .{}) != objc.NO;
+    in.repeat = repeat;
+    defer if (Surface.alive(tok)) {
+        in.repeat = false;
+    };
     // Key combinations go to the view first, which may take them; while an
     // input method composes, only ⌘'s do (↓, Space, Esc, Tab are its).
     // With no text field focused every key is offered, with its modifiers
@@ -83,6 +179,7 @@ pub fn deliver(s: *Surface, event: objc.Object) void {
             s.frame();
             if (!Surface.alive(tok)) return;
             in.shortcut = null;
+            in.repeat = repeat;
             if (s.ctx.shortcut_taken) return;
             if (in.cmd and !in.ctrl and !in.alt and !in.shift) switch (key) {
                 'c' => return textinput.copy(s),
@@ -121,6 +218,7 @@ pub fn deliver(s: *Surface, event: objc.Object) void {
     }
     in.chars = buf[0..n];
     if (in.key == null and n == 0) return;
+    in.repeat = repeat;
     s.frame();
 }
 

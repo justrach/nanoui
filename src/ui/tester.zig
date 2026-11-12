@@ -266,6 +266,20 @@ pub const Tester = struct {
         t.frame();
     }
 
+    /// A key let go, as a window's `keyUp:` or WM_KEYUP. A view that holds
+    /// keys reads them only where `ctx.key_up_supported`, which a test sets.
+    pub fn keyUp(t: *Tester, s: ctx_mod.Shortcut) void {
+        t.ctx.input.queueKeyUp(t.gpa, s);
+        t.frame();
+    }
+
+    /// The keyboard goes elsewhere, as when a window loses focus: a frame
+    /// with `input.keys_released`, the modifiers up.
+    pub fn releaseKeys(t: *Tester) void {
+        t.ctx.input.releaseKeys();
+        t.frame();
+    }
+
     pub fn scroll(t: *Tester, x: f32, y: f32, dy: f32) void {
         t.ctx.input.mouse = .{ .x = x, .y = y };
         if (t.ctx.applyScroll(dy)) {

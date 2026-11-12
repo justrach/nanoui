@@ -312,11 +312,18 @@ pub const SWP_NOACTIVATE: u32 = 0x0010;
 /// how a client area that no longer belongs to the window is made to fit it.
 pub const SWP_FRAMECHANGED: u32 = 0x0020;
 pub const WM_KEYDOWN = 0x0100;
+pub const WM_KEYUP = 0x0101;
 pub const WM_CHAR = 0x0102;
 pub const WM_SYSKEYDOWN = 0x0104;
+pub const WM_SYSKEYUP = 0x0105;
+pub const WM_SYSCHAR = 0x0106;
 pub const WM_TIMER = 0x0113;
 /// The window became, or stopped being, the active application.
 pub const WM_ACTIVATEAPP = 0x001C;
+/// A modal loop takes over (a message box, a dialog): capture and keys go.
+pub const WM_CANCELMODE = 0x001F;
+/// A menu's modal loop begins (the window menu, F10, TrackPopupMenu).
+pub const WM_ENTERMENULOOP = 0x0211;
 pub const WM_SHOWWINDOW = 0x0018;
 /// The display's resolution or color depth changed.
 pub const WM_DISPLAYCHANGE = 0x007E;

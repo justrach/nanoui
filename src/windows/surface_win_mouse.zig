@@ -41,6 +41,7 @@ pub fn message(self: *Surface, h: w.HWND, msg: u32, wp: w.WPARAM, lp: w.LPARAM) 
 fn press(self: *Surface, h: w.HWND, button: input.Button, double: bool, wp: w.WPARAM, lp: w.LPARAM) void {
     if (!pointer_press.starts(&self.ctx.input, button, held(wp))) return;
     self.setMouse(lp);
+    if (self.ctx.input.alt) self.alt_used = true;
     self.ctx.input.click_count = if (double) 2 else 1;
     // Set on every press, so a left press after a middle drag is the left's.
     self.ctx.input.button = button;
