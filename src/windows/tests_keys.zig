@@ -88,3 +88,44 @@ test "key messages: a key let go, the repeat bit, modifiers alone, Alt's system 
     try testing.expectEqual(@as(?w.LRESULT, null), s.handle(h, w.WM_CANCELMODE, 0, 0));
     try testing.expectEqual(@as(u32, 3), seen.released);
 }
+
+test "native key-ups pumped during a Windows view build are delivered in order" {
+    const Nested = struct {
+        surface: ?*@import("surface.zig").Surface = null,
+        send: bool = false,
+        count: usize = 0,
+        seen: [2]u21 = @splat(0),
+        fn view(n: *@This(), c: *ui.Context) void {
+            if (c.input.key_up) |up| {
+                n.seen[n.count] = up.key;
+                n.count += 1;
+            }
+            if (n.send) {
+                n.send = false;
+                const s = n.surface.?;
+                const h = s.window.hwnd.?;
+                _ = s.handle(h, w.WM_KEYUP, 'K', 0xC0250001);
+                _ = s.handle(h, w.WM_KEYUP, 'L', 0xC0260001);
+            }
+            ui.text(c, "nested", .{});
+        }
+    };
+    const app = try testing.allocator.create(App);
+    app.* = .{
+        .gpa = testing.allocator,
+        .io = std.Io.Threaded.global_single_threaded.io(),
+        .options = .{ .quit_on_last_window_closed = false },
+        .flags = .{ .hidden = true },
+        .gui = true,
+    };
+    defer app.destroy();
+    var nested: Nested = .{};
+    const win = try app.newWindow(.{ .title = "nested keys", .width = 200, .height = 120, .visible = false, .content = .{ .view = .init(&nested, Nested.view) } });
+    nested.surface = win.surface.?;
+    nested.send = true;
+    nested.surface.?.frame();
+    try testing.expectEqual(@as(usize, 2), nested.count);
+    try testing.expectEqualSlices(u21, &.{ 'k', 'l' }, &nested.seen);
+    nested.surface.?.frame();
+    try testing.expectEqual(@as(usize, 2), nested.count);
+}

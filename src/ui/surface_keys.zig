@@ -107,7 +107,6 @@ fn keyDown(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) void 
 /// dropped; the modifiers alone come to `flagsChanged:`.
 fn keyUp(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) void {
     const s = surfaceOf(obj) orelse return;
-    const tok = s.token();
     const code = objc.msg(u16, event, "keyCode", .{});
     const in = &s.ctx.input;
     setMods(in, objc.msg(objc.NSUInteger, event, "modifierFlags", .{}));
@@ -115,10 +114,8 @@ fn keyUp(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) void {
     if (ign.len == 0) return;
     const cp = std.unicode.utf8Decode(ign[0..@min(ign.len, cf.seqLen(ign[0]))]) catch return;
     const key = shortcutKey(event, code, cp, in.shift);
-    in.key_up = .{ .key = key, .cmd = in.cmd, .ctrl = in.ctrl, .alt = in.alt, .shift = in.shift };
-    s.frame();
-    if (!Surface.alive(tok)) return;
-    in.key_up = null;
+    in.queueKeyUp(s.gpa, .{ .key = key, .cmd = in.cmd, .ctrl = in.ctrl, .alt = in.alt, .shift = in.shift });
+    if (s.in_frame) s.requestFrame() else s.frame();
 }
 
 /// While the menu's key equivalents are held back, a ⌘ chord meant for

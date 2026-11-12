@@ -286,6 +286,7 @@ pub const Context = struct {
     }
 
     pub fn deinit(c: *Context) void {
+        c.input.pending_key_ups.deinit(c.gpa);
         c.arena.deinit();
         c.textures.deinit(c.gpa);
         c.gradients.deinit(c.gpa);
@@ -357,8 +358,7 @@ pub const Context = struct {
     pub fn begin(c: *Context) void {
         c.noteModality();
         c.tooltip = .{};
-        c.input.keys_released = c.input.keys_released or c.input.keys_release_pending;
-        c.input.keys_release_pending = false;
+        c.input.beginKeys();
         if (c.frame == 0 and c.nodes.capacity == 0) hooks.warmMaps(c);
         // Tab moves the focus on, unless a text field has it (it takes Tab).
         if (c.input.key == .tab and (c.focus == 0 or !c.focus_is_text) and c.last_focusable_ids.items.len > 0) {

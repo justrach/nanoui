@@ -241,3 +241,62 @@ test "a view that closes its window inside an event frame does not touch the fre
         try testing.expect(cl.w == null);
     }
 }
+
+test "native key-ups pumped during a Mac view build are delivered in order" {
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    const app = try makeApp(testing.allocator);
+    defer freeApp(app);
+    const Nested = struct {
+        nsview: ?objc.Object = null,
+        send: bool = false,
+        count: usize = 0,
+        seen: [2]u21 = @splat(0),
+        fn view(n: *@This(), c: *ui.Context) void {
+            if (c.input.key_up) |up| {
+                n.seen[n.count] = up.key;
+                n.count += 1;
+            }
+            if (n.send) {
+                n.send = false;
+                objc.msg(void, n.nsview.?, "keyUp:", .{keyEventOf(11, 40, 0, "k", "k", objc.NO)});
+                objc.msg(void, n.nsview.?, "keyUp:", .{keyEventOf(11, 37, 0, "l", "l", objc.NO)});
+            }
+            ui.text(c, "nested", .{});
+        }
+    };
+    var nested: Nested = .{};
+    const win = try app.newWindow(.{ .title = "nested keys", .width = 200, .height = 120, .visible = false, .content = .{ .view = .init(&nested, Nested.view) } });
+    const s = win.surface.?;
+    nested.nsview = s.nsview;
+    nested.send = true;
+    s.frame();
+    try testing.expectEqual(@as(usize, 2), nested.count);
+    try testing.expectEqualSlices(u21, &.{ 'k', 'l' }, &nested.seen);
+    s.frame();
+    try testing.expectEqual(@as(usize, 2), nested.count);
+}
+
+test "same-window responder transfer releases native held keys without resigning key window" {
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    const app = try makeApp(testing.allocator);
+    defer freeApp(app);
+    var keys: Keys = .{};
+    const win = try app.newWindow(.{ .title = "responder", .width = 200, .height = 120, .visible = false, .content = .{ .view = .init(&keys, Keys.view) } });
+    const s = win.surface.?;
+    try testing.expect(objc.msg(objc.BOOL, win.nswindow, "makeFirstResponder:", .{s.nsview}));
+    objc.msg(void, s.nsview, "keyDown:", .{keyEvent(40, shift, "K", "K")});
+    const before = keys.released;
+    const was_key = objc.msg(objc.BOOL, win.nswindow, "isKeyWindow", .{});
+    // A native text responder exercises the same NSWindow transition as a
+    // docked WKWebView, with no web process, network, profile, or visible UI.
+    const other = objc.msg(objc.Object, objc.class("NSTextView"), "new", .{});
+    defer objc.release(other);
+    objc.msg(void, s.nsview, "addSubview:", .{other});
+    try testing.expect(objc.msg(objc.BOOL, win.nswindow, "makeFirstResponder:", .{other}));
+    try testing.expectEqual(was_key, objc.msg(objc.BOOL, win.nswindow, "isKeyWindow", .{}));
+    try testing.expectEqual(before + 1, keys.released);
+    try testing.expect(!s.ctx.input.shift and !s.ctx.input.keys_release_pending);
+    try testing.expectEqual(@as(u64, 0), s.ctx.focus);
+}

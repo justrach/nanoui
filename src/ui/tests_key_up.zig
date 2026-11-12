@@ -110,3 +110,44 @@ test "releaseKeys: one frame lets every key go, the modifiers up; asked mid-buil
     try testing.expectEqual(@as(u32, 2), h.released);
     try testing.expect(!t.ctx.input.keys_released and !t.ctx.input.keys_release_pending);
 }
+
+test "queued key releases survive spent edges and the frame build-pass budget" {
+    const Burst = struct {
+        sent: bool = false,
+        count: usize = 0,
+        seen: [10]u21 = @splat(0),
+        fn view(b: *@This(), c: *ui.Context) void {
+            if (c.input.key_up) |up| {
+                b.seen[b.count] = up.key;
+                b.count += 1;
+            }
+            if (b.sent) {
+                b.sent = false;
+                for (0..10) |k| c.input.queueKeyUp(c.gpa, .{ .key = @intCast('a' + k) });
+            }
+            ui.text(c, "burst", .{});
+        }
+    };
+    var b: Burst = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&b, Burst.view), .{ .width = 200, .height = 100 });
+    defer t.deinit();
+    b.sent = true;
+    t.frame();
+    try testing.expect(b.count > 0 and b.count < 10);
+    try testing.expect(t.ctx.animating and t.ctx.input.pendingKeys());
+    t.frame();
+    t.frame();
+    try testing.expectEqual(@as(usize, 10), b.count);
+    for (b.seen, 0..) |key, k| try testing.expectEqual(@as(u21, @intCast('a' + k)), key);
+    try testing.expect(!t.ctx.input.pendingKeys() and !t.ctx.animating);
+    t.frame();
+    try testing.expectEqual(@as(usize, 10), b.count);
+
+    // Losing the keyboard supersedes pending individual releases.
+    t.ctx.input.queueKeyUp(testing.allocator, .{ .key = 'z' });
+    t.ctx.input.releaseKeys();
+    try testing.expectEqual(@as(usize, 0), t.ctx.input.pending_key_ups.items.len);
+    t.frame();
+    try testing.expectEqual(@as(usize, 10), b.count);
+}

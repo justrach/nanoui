@@ -268,6 +268,9 @@ pub const Input = struct {
     /// come as `mods_changed`. A key let go while the window doesn't have
     /// the keyboard is not seen: `keys_released` says so instead.
     key_up: ?Shortcut = null,
+    /// Native releases wait here until a real view build consumes them.
+    /// A nested message loop must not overwrite the current frame's edge.
+    pending_key_ups: std.ArrayList(Shortcut) = .empty,
     /// Every key held has gone somewhere else: the window lost the
     /// keyboard (another window or app became key, a menu or a modal
     /// loop took the keys), so their key-ups will not come here. A view
@@ -294,11 +297,28 @@ pub const Input = struct {
 
     /// The host lost the keyboard: the next frame's `keys_released`.
     pub fn releaseKeys(i: *Input) void {
+        i.pending_key_ups.clearRetainingCapacity();
         i.shift = false;
         i.cmd = false;
         i.ctrl = false;
         i.alt = false;
         i.keys_release_pending = true;
+    }
+
+    pub fn queueKeyUp(i: *Input, gpa: std.mem.Allocator, key_up: Shortcut) void {
+        // If an edge cannot be kept, reset held keys rather than latch one.
+        i.pending_key_ups.append(gpa, key_up) catch i.releaseKeys();
+    }
+
+    pub fn pendingKeys(i: *const Input) bool {
+        return i.pending_key_ups.items.len > 0 or i.keys_release_pending;
+    }
+
+    /// Only a build, not the native callback, spends a queued release.
+    pub fn beginKeys(i: *Input) void {
+        i.keys_released = i.keys_released or i.keys_release_pending;
+        i.keys_release_pending = false;
+        if (i.pending_key_ups.items.len > 0) i.key_up = i.pending_key_ups.orderedRemove(0);
     }
 
     /// Keyboard activity, including IME text operations and offered shortcuts.

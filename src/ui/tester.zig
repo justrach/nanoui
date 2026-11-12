@@ -269,9 +269,8 @@ pub const Tester = struct {
     /// A key let go, as a window's `keyUp:` or WM_KEYUP. A view that holds
     /// keys reads them only where `ctx.key_up_supported`, which a test sets.
     pub fn keyUp(t: *Tester, s: ctx_mod.Shortcut) void {
-        t.ctx.input.key_up = s;
+        t.ctx.input.queueKeyUp(t.gpa, s);
         t.frame();
-        t.ctx.input.key_up = null;
     }
 
     /// The keyboard goes elsewhere, as when a window loses focus: a frame

@@ -103,13 +103,8 @@ pub fn keyUp(self: *Surface, vk: u32) void {
     const code = names.upKey(vk);
     if (code == 0) return;
     const in = &self.ctx.input;
-    in.key_up = .{ .key = code, .ctrl = in.ctrl, .alt = in.alt, .shift = in.shift };
-    // Restored, not cleared, as in `keyDown`: a message pumped during the
-    // frame may set ops of its own.
-    const prev_ops = in.ops;
+    in.queueKeyUp(self.gpa, .{ .key = code, .ctrl = in.ctrl, .alt = in.alt, .shift = in.shift });
     self.frame();
-    in.ops = prev_ops;
-    in.key_up = null;
 }
 
 /// Keys that are not text, and key combinations; true if taken. `repeat`:

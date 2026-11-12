@@ -76,7 +76,7 @@ pub fn shift(c: *Context, instances: *std.ArrayList(gpu.Instance), size: types.S
     if (!rs.scroll_delta or !rs.scroll_scene_ok or rs.scroll_scene.items.len == 0) return false;
     if (c.size.w != size.w or c.size.h != size.h or c.scale != scale) return false;
     const quiet = c.input.pressed or c.input.released or c.input.secondary or c.input.key != null or c.input.chars.len != 0 or c.input.ops.len != 0 or c.input.shortcut != null or c.input.zoom != 1 or c.input.pan.x != 0 or c.input.pan.y != 0;
-    if (quiet) return false;
+    if (quiet or c.input.key_up != null or c.input.keys_released or c.input.pendingKeys() or c.input.mods_changed) return false;
     const moved = changedOffset(c) orelse return false;
     // Past the end, or past the pre-shaped skirt, build a fresh frame.
     if (@abs(moved.next - moved.base) > skirt) return false;

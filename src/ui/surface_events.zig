@@ -120,10 +120,8 @@ fn dockedHit(obj: objc.Object, local: objc.CGPoint) ?objc.Object {
 fn resignFirstResponder(obj: objc.Object, _: objc.SEL) callconv(.c) objc.BOOL {
     const s = surfaceOf(obj) orelse return objc.YES;
     s.last_focus = 0;
-    if (s.ctx.focus != 0) {
-        s.ctx.focus = 0;
-        s.requestFrame();
-    }
+    s.ctx.focus = 0;
+    @import("surface_keys.zig").releaseKeys(s);
     return objc.YES;
 }
 
