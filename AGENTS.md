@@ -141,7 +141,8 @@ src/windows/          Win32 backend: app, window, surface (events, frames) +
                       ime (IMM32), win32 (the extern layer), desktop, dialog,
                       vblank (the display's beat: WaitForVBlank on a thread),
                       surface_pace (frames on it, gathered moves, the frame log),
-                      surface_win_keys, chrome (app-drawn title bars:
+                      surface_win_keys, surface_win_mouse (the left and
+                      middle buttons, capture lost), chrome (app-drawn title bars:
                       NCCALCSIZE, NCHITTEST, snap layouts), window_place
                       (geometry, frame_autosave), cursor (makeCursor),
                       fdwatch, loop, tests_*

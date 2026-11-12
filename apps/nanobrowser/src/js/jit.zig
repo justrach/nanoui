@@ -18,16 +18,20 @@ const Frame = fr.Frame;
 const objmod = @import("object.zig");
 const Object = objmod.Object;
 const ops = @import("ops.zig");
+const str = @import("string.zig");
 const icache = @import("interp_ic.zig");
 const calls = @import("interp_call.zig");
 const slow = @import("interp_slow.zig");
 const typed = @import("b_typed.zig");
 const arm64 = @import("jit_arm64.zig");
 const arm64_stub = @import("jit_arm64_stub.zig");
+const arm64_resume = @import("jit_arm64_resume.zig");
 const jit_calls = @import("jit_calls.zig");
 
 pub const enabled = builtin.cpu.arch == .aarch64 and builtin.os.tag == .macos;
 pub const getFastCallStub = arm64_stub.getOrBuildStub;
+pub const getFastGetterStub = arm64_resume.getFastGetterStub;
+pub const getFastArgsApplyStub = arm64_resume.getFastArgsApplyStub;
 
 pub const JitResult = extern struct { bits: u64, err: u64 };
 pub const JitFn = *const fn (vm: *Vm, f: *Frame, bp: [*]Value, sp: [*]Value) callconv(.c) JitResult;
@@ -42,6 +46,17 @@ pub const jitClosure = jit_calls.jitClosure;
 pub const jitPushEnv = jit_calls.jitPushEnv;
 pub const jitArrayFrom = jit_calls.jitArrayFrom;
 pub const jitArguments = jit_calls.jitArguments;
+pub const jitArgsGet = jit_calls.jitArgsGet;
+pub const jitArgsLen = jit_calls.jitArgsLen;
+pub const jitArgsElem = jit_calls.jitArgsElem;
+pub const jitArgsApply = jit_calls.jitArgsApply;
+pub const jitRest = jit_calls.jitRest;
+pub const jitNewRegExp = jit_calls.jitNewRegExp;
+pub const jitIn = jit_calls.jitIn;
+pub const jitInstanceOf = jit_calls.jitInstanceOf;
+pub const jitSuperCall = jit_calls.jitSuperCall;
+pub const jitSuperGet = jit_calls.jitSuperGet;
+pub const jitDefineMethod = jit_calls.jitDefineMethod;
 pub const jitSlowOp = jit_calls.jitSlowOp;
 pub const jitBranchSlowOp = jit_calls.jitBranchSlowOp;
 
@@ -125,7 +140,10 @@ pub var global_jit_pool: JitPool = .{};
 noinline fn compileSlow(vm: *Vm, fp: *bc.FuncProto) ?JitFn {
     if (arm64.compile(vm, fp)) |jfn| {
         fp.setJitFn(@ptrCast(jfn));
-        if (fp.jit_cache_slot) |slot| slot.* = @ptrCast(jfn);
+        if (fp.jit_cache_slot) |slot| {
+            slot.catch_map = fp.catch_map;
+            slot.jit_fn = @ptrCast(jfn);
+        }
         return jfn;
     }
     @import("../perf_rules.zig").prof_jit_disabled += 1;
@@ -134,13 +152,17 @@ noinline fn compileSlow(vm: *Vm, fp: *bc.FuncProto) ?JitFn {
 }
 
 /// Theorem 58 (`NanoUI.Speedometer3Climb.loop_aware_jit_threshold_and_stack_pool_equiv`):
-/// Compiles loop-containing functions on their first call (`threshold = 1`) and
-/// loop-free functions on call 2, skipping one-shot module factory closures.
+/// Compiles non-top-level functions (`<= 32 KiB`) and loop-containing functions on call 1,
+/// deferring only loop-free top-level script/module initializers to call 2.
 pub inline fn getOrCompile(vm: *Vm, fp: *bc.FuncProto) ?JitFn {
     if (comptime !enabled) return null;
     if (fp.jit_fn) |p| return @ptrCast(@alignCast(p));
     if (fp.jit_disabled) return null;
-    if (fp.jit_cache_slot) |slot| if (slot.*) |p| { fp.setJitFn(p); return @ptrCast(@alignCast(p)); };
+    if (fp.jit_cache_slot) |slot| if (slot.jit_fn) |p| {
+        fp.catch_map = slot.catch_map;
+        fp.setJitFn(p);
+        return @ptrCast(@alignCast(p));
+    };
     fp.hot_count +|= 1;
     const threshold: u16 = if (fp.has_loop) 1 else 2;
     return if (fp.hot_count < threshold) null else compileSlow(vm, fp);
@@ -262,11 +284,61 @@ pub fn jitGetElem(vm: *Vm, f: *Frame, sp: [*]Value, pc: [*]const u8) callconv(.c
     } else if (k.isString() and t.isObject()) {
         const s = k.asString();
         const o = t.asObject();
-        if (s.key.bits != 0 and !s.key.isIndex() and !o.flags.exotic and !o.flags.lazy_fn) {
-            if (o.shape.find(s.key)) |slot| {
-                if (!o.shape.flagsAt(slot).accessor) return .{ .bits = o.slots[slot].bits, .err = 0 };
-            } else if (o.class == .object and (o.shape.proto == null or (o.shape.proto == vm.protos.object and !vm.protos.object.flags.proto_dirty and vm.protos.object.shape.find(s.key) == null))) {
-                return .{ .bits = Value.undefined.bits, .err = 0 };
+        const pk = if (s.key.bits != 0) s.key else blk: {
+            f.pc = pc;
+            vm.sp = sp;
+            if (str.findExistingKey(vm, s) catch |e| return errRes(vm, sp, e)) |ek| break :blk ek;
+            if (s.byte_len <= 64) break :blk str.toKey(vm, s) catch |e| return errRes(vm, sp, e);
+            if (icache.noExoticOnChain(o)) return .{ .bits = Value.undefined.bits, .err = 0 };
+            return .{ .bits = (icache.getElem(vm, t, k) catch |e| return errRes(vm, sp, e)).bits, .err = 0 };
+        };
+        if (!pk.isIndex() and !o.flags.exotic and !o.flags.lazy_fn) {
+            if (o.class == .array and pk.eql(vm.k.length)) return .{ .bits = Value.fromUsize(o.arr_len).bits, .err = 0 };
+            const me = vm.megaSlot(o.shape, pk.bits);
+            if (me.shape == o.shape and me.key_bits == pk.bits) {
+                if (me.holder) |mh| {
+                    if (me.epoch == vm.proto_epoch and mh.shape == me.holder_shape) {
+                        const sv = mh.slots[me.slot & ~vm_mod.MegaICEntry.acc_flag];
+                        if ((me.slot & vm_mod.MegaICEntry.acc_flag) == 0) return .{ .bits = sv.bits, .err = 0 };
+                        f.pc = pc;
+                        vm.sp = sp;
+                        return .{ .bits = (@import("props.zig").callGetter(vm, sv, t) catch |e| return errRes(vm, sp, e)).bits, .err = 0 };
+                    }
+                } else if (me.slot == bc.IC.missing_slot) {
+                    if (me.epoch == vm.proto_epoch) return .{ .bits = Value.undefined.bits, .err = 0 };
+                } else {
+                    return .{ .bits = o.slots[me.slot].bits, .err = 0 };
+                }
+            }
+            if (o.shape.find(pk)) |slot| {
+                if (!o.shape.flagsAt(slot).accessor) {
+                    if (!o.shape.is_dict) me.* = .{ .shape = o.shape, .key_bits = pk.bits, .holder = null, .holder_shape = null, .slot = slot, .epoch = 0 };
+                    return .{ .bits = o.slots[slot].bits, .err = 0 };
+                }
+            } else {
+                const is_lazy_key = pk.eql(vm.k.name) or pk.eql(vm.k.length) or pk.eql(vm.k.prototype);
+                const recv_lazy = is_lazy_key and (o.class == .closure or o.class == .native or o.shape == vm.fn_root);
+                if (!o.shape.is_dict and !recv_lazy) {
+                    var cur = o.shape.proto;
+                    while (cur) |h| : (cur = h.shape.proto) {
+                        if (h.flags.exotic or h.flags.lazy_fn) break;
+                        if (h.class == .array and pk.eql(vm.k.length)) break;
+                        if (is_lazy_key and (h.class == .closure or h.class == .native or h.shape == vm.fn_root)) break;
+                        if (h.shape.find(pk)) |pslot| {
+                            if (!h.shape.flagsAt(pslot).accessor) {
+                                if (!h.shape.is_dict) me.* = .{ .shape = o.shape, .key_bits = pk.bits, .holder = h, .holder_shape = h.shape, .slot = pslot, .epoch = vm.proto_epoch };
+                                return .{ .bits = h.slots[pslot].bits, .err = 0 };
+                            }
+                            if (!h.shape.is_dict) me.* = .{ .shape = o.shape, .key_bits = pk.bits, .holder = h, .holder_shape = h.shape, .slot = pslot | vm_mod.MegaICEntry.acc_flag, .epoch = vm.proto_epoch };
+                            f.pc = pc;
+                            vm.sp = sp;
+                            return .{ .bits = (@import("props.zig").callGetter(vm, h.slots[pslot], t) catch |e| return errRes(vm, sp, e)).bits, .err = 0 };
+                        }
+                    } else {
+                        me.* = .{ .shape = o.shape, .key_bits = pk.bits, .holder = null, .holder_shape = null, .slot = bc.IC.missing_slot, .epoch = vm.proto_epoch };
+                        return .{ .bits = Value.undefined.bits, .err = 0 };
+                    }
+                }
             }
         }
     } else if (k.isSymbol() and t.isObject()) {
@@ -312,22 +384,32 @@ pub fn jitPutElem(vm: *Vm, f: *Frame, sp: [*]Value, pc: [*]const u8) callconv(.c
     } else if (k.isString() and t.isObject()) {
         const s = k.asString();
         const o = t.asObject();
-        if (s.key.bits != 0 and !s.key.isIndex() and !o.flags.exotic and !o.flags.lazy_fn) {
-            if (o.shape.find(s.key)) |slot| {
+        const pk = if (s.key.bits != 0) s.key else blk: {
+            f.pc = pc;
+            vm.sp = sp;
+            break :blk str.toKey(vm, s) catch |e| return errRes(vm, sp, e);
+        };
+        if (!pk.isIndex() and !o.flags.exotic and !o.flags.lazy_fn) {
+            if (o.shape.find(pk)) |slot| {
                 const fl = o.shape.flagsAt(slot);
                 if (fl.writable and !fl.accessor) {
                     o.slots[slot] = v;
                     return .{ .bits = 0, .err = 0 };
                 }
-            } else if (o.shape.single) |next| {
-                if (next.key.bits == s.key.bits and @as(u8, @bitCast(next.flags)) == @as(u8, @bitCast(@import("shape.zig").PropFlags.all)) and
-                    next.count - 1 < o.slot_cap and o.flags.extensible and !o.flags.is_proto and o.class == .object and
-                    (o.shape.proto == null or (o.shape.proto == vm.protos.object and !vm.protos.object.flags.proto_dirty and vm.protos.object.shape.find(s.key) == null)))
-                {
-                    o.shape = next;
-                    o.slots[next.count - 1] = v;
-                    return .{ .bits = 0, .err = 0 };
+            } else if (o.flags.extensible and !o.flags.is_proto and o.class == .object and
+                (o.shape.proto == null or (o.shape.proto == vm.protos.object and !vm.protos.object.flags.proto_dirty and vm.protos.object.shape.find(pk) == null)))
+            {
+                if (o.shape.single) |next| {
+                    if (next.key.bits == pk.bits and @as(u8, @bitCast(next.flags)) == @as(u8, @bitCast(@import("shape.zig").PropFlags.all)) and next.count - 1 < o.slot_cap) {
+                        o.shape = next;
+                        o.slots[next.count - 1] = v;
+                        return .{ .bits = 0, .err = 0 };
+                    }
                 }
+                f.pc = pc;
+                vm.sp = sp;
+                @import("props.zig").addProp(vm, o, pk, v, .all) catch |e| return errRes(vm, sp, e);
+                return .{ .bits = 0, .err = 0 };
             }
         }
     }
@@ -434,7 +516,10 @@ pub fn jitUnaryOp(vm: *Vm, f: *Frame, sp: [*]Value, pc: [*]const u8, op_raw: u32
     const op: Op = @enumFromInt(@as(u8, @intCast(op_raw)));
     f.pc = pc;
     vm.sp = sp;
-    const r = ops.incDec(vm, a, op == .inc) catch |e| return errRes(vm, sp, e);
+    const r = (if (op == .plus)
+        if (@import("conv.zig").toNumber(vm, a)) |n| Value.fromNumber(n) else |e| e
+    else
+        ops.incDec(vm, a, op == .inc)) catch |e| return errRes(vm, sp, e);
     return .{ .bits = r.bits, .err = 0 };
 }
 

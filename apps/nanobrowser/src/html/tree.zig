@@ -347,7 +347,7 @@ pub const Builder = struct {
     pub fn newElement(b: *Builder, name: []const u8, ns: dom.Ns, attrs: []dom.Attr) Error!*dom.Node {
         const n = try b.arena.create(dom.Node);
         const perf = @import("../perf_rules.zig");
-        n.* = .{ .kind = .element, .doc = b.doc, .tag = name, .ns = ns, .has_resource = perf.isResourceTag(name), .has_insertion_work = perf.isInsertionWorkTag(name) };
+        n.* = .{ .kind = .element, .doc = b.doc, .tag = name, .ns = ns, .html_tag = if (ns == .html) perf.classifyHtmlTag(name) else .other, .has_resource = perf.isResourceTag(name), .has_insertion_work = perf.isInsertionWorkTag(name) };
         if (attrs.len > 0) {
             n.attrs = .fromOwnedSlice(attrs);
             for (attrs) |a| {

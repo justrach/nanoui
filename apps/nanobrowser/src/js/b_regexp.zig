@@ -13,6 +13,7 @@ const PropKey = u.PropKey;
 const Object = u.Object;
 const PropFlags = u.PropFlags;
 const objmod = @import("object.zig");
+const shape = @import("shape.zig");
 const props = @import("props.zig");
 const conv = @import("conv.zig");
 const ops = @import("ops.zig");
@@ -45,16 +46,22 @@ const cache_max = 512;
 fn programFor(vm: *Vm, pattern: *JSString, flags: *JSString) Error!*rc.Program {
     const pb = try pattern.flat(vm);
     const fb = try flags.flat(vm);
-    const key_bytes = try vm.gpa.alloc(u8, pb.len + fb.len + 1);
-    @memcpy(key_bytes[0..fb.len], fb);
-    key_bytes[fb.len] = '/';
-    @memcpy(key_bytes[fb.len + 1 ..], pb);
-    if (vm.regex_cache.get(key_bytes)) |p| {
-        vm.gpa.free(key_bytes);
+    const key_len = pb.len + fb.len + 1;
+    var stack_key: [256]u8 = undefined;
+    var heap_key: ?[]u8 = null;
+    defer if (heap_key) |hk| vm.gpa.free(hk);
+    const lookup_key: []u8 = if (key_len <= stack_key.len) stack_key[0..key_len] else blk: {
+        const hk = try vm.gpa.alloc(u8, key_len);
+        heap_key = hk;
+        break :blk hk;
+    };
+    @memcpy(lookup_key[0..fb.len], fb);
+    lookup_key[fb.len] = '/';
+    @memcpy(lookup_key[fb.len + 1 .. key_len], pb);
+    if (vm.regex_cache.get(lookup_key)) |p| {
         p.refs += 1;
         return p;
     }
-    errdefer vm.gpa.free(key_bytes);
     const f = rp.Flags.parse(fb) orelse return vm.throwError(.SyntaxError, "Invalid flags supplied to RegExp constructor");
     var cps: std.ArrayList(u32) = .empty;
     defer cps.deinit(vm.gpa);
@@ -73,9 +80,15 @@ fn programFor(vm: *Vm, pattern: *JSString, flags: *JSString) Error!*rc.Program {
             return vm.throwError(.SyntaxError, m);
         },
     };
+    errdefer prog.release(vm.gpa);
     if (vm.regex_cache.count() >= cache_max) clearCache(vm);
+    const owned_key = if (heap_key) |hk| blk: {
+        heap_key = null;
+        break :blk hk;
+    } else try vm.gpa.dupe(u8, lookup_key);
+    errdefer vm.gpa.free(owned_key);
+    try vm.regex_cache.put(vm.gpa, owned_key, prog);
     prog.refs += 1;
-    try vm.regex_cache.put(vm.gpa, key_bytes, prog);
     return prog;
 }
 
@@ -95,9 +108,13 @@ pub fn create(vm: *Vm, pattern: *JSString, flags: *JSString, proto: *Object) Err
     const d = try vm.gpa.create(RegExpData);
     errdefer vm.gpa.destroy(d);
     d.* = .{ .source = pattern, .flags = flags, .prog = prog };
-    const o = try objmod.create(vm, proto, .regexp);
+    const sh = if (proto == vm.protos.regexp)
+        vm.regexp_shape
+    else
+        try shape.transition(vm, try shape.rootFor(vm, proto), vm.k.lastIndex, .{ .enumerable = false, .configurable = false });
+    const o = try objmod.alloc(vm, sh, .regexp);
     o.payload = .{ .regexp = d };
-    try props.addProp(vm, o, vm.k.lastIndex, Value.fromInt(0), .{ .enumerable = false, .configurable = false });
+    o.slots[0] = Value.fromInt(0);
     return o.value();
 }
 
@@ -238,20 +255,27 @@ pub fn builtinExec(vm: *Vm, o: *Object, s: *JSString) Error!Value {
         return Value.null;
     }
     if (uses_last) try setLastIndex(vm, o, @intCast(regs[1]));
-    const arr = try objmod.newArray(vm, &.{});
-    try objmod.growElems(vm, arr, prog.ncaps);
+    const arr = try objmod.alloc(vm, vm.regexp_match_shape, .array);
+    if (!f.has_indices and prog.ncaps <= objmod.inline_slots - 3) {
+        arr.slot_cap = 3;
+        arr.elems = @as([*]Value, &arr.inline_store) + 3;
+        arr.elems_cap = objmod.inline_slots - 3;
+    } else {
+        try objmod.growElems(vm, arr, prog.ncaps);
+    }
     var i: u32 = 0;
     while (i < prog.ncaps) : (i += 1) {
         const a = regs[i * 2];
         const b = regs[i * 2 + 1];
-        if (a < 0 or b < 0) {
-            try objmod.arrayPush(vm, arr, Value.undefined);
-        } else {
-            try objmod.arrayPush(vm, arr, Value.fromString(try str.substring(vm, s, @intCast(a), @intCast(b))));
-        }
+        arr.elems[i] = if (a < 0 or b < 0)
+            Value.undefined
+        else
+            Value.fromString(try str.substring(vm, s, @intCast(a), @intCast(b)));
     }
-    try props.addProp(vm, arr, vm.k.index, Value.fromInt(regs[0]), PropFlags.all);
-    try props.addProp(vm, arr, vm.k.input, Value.fromString(s), PropFlags.all);
+    arr.elems_len = prog.ncaps;
+    arr.arr_len = prog.ncaps;
+    arr.slots[0] = Value.fromInt(regs[0]);
+    arr.slots[1] = Value.fromString(s);
     var groups = Value.undefined;
     if (prog.names.len != 0) {
         const g = try objmod.create(vm, null, .object);
@@ -261,7 +285,7 @@ pub fn builtinExec(vm: *Vm, o: *Object, s: *JSString) Error!Value {
         }
         groups = g.value();
     }
-    try props.addProp(vm, arr, vm.k.groups, groups, PropFlags.all);
+    arr.slots[2] = groups;
     if (f.has_indices) {
         try props.addProp(vm, arr, vm.k.indices, try matchIndicesArray(vm, regs, prog.ncaps, prog.names), PropFlags.all);
     }
@@ -450,6 +474,12 @@ fn compileFn(vm: *Vm, this: Value, args: []const Value) Error!Value {
 pub fn init(vm: *Vm) Error!void {
     const p = try u.newProto(vm, vm.protos.object);
     vm.protos.regexp = p;
+    vm.regexp_shape = try shape.transition(vm, try shape.rootFor(vm, p), vm.k.lastIndex, .{ .enumerable = false, .configurable = false });
+    var ms = vm.array_root;
+    ms = try shape.transition(vm, ms, vm.k.index, PropFlags.all);
+    ms = try shape.transition(vm, ms, vm.k.input, PropFlags.all);
+    ms = try shape.transition(vm, ms, vm.k.groups, PropFlags.all);
+    vm.regexp_match_shape = ms;
     const c = try u.ctor(vm, "RegExp", 2, regexpCtor, p);
     vm.protos.regexp_ctor = c;
     try u.symGetter(vm, c, vm.sym.species, "get [Symbol.species]", u.returnThis);

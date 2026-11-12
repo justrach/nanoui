@@ -90,6 +90,18 @@ fn argsArray(c: *C, args: []const *Node) Error!void {
 
 pub fn call(c: *C, n: *Node) Error!void {
     const x = n.data.call;
+    if (!x.optional and !x.has_spread and x.args.len == 2 and x.callee.data == .member and !x.callee.data.member.optional) {
+        if (c.lazyArgsIdent(x.args[1])) |v| {
+            const m = x.callee.data.member;
+            if (m.name.is_ascii and !m.name.is_rope and std.mem.eql(u8, m.name.ptr[0..m.name.byte_len], "apply")) {
+                try calleeWithThis(c, x.callee);
+                try expr(c, x.args[0]);
+                try c.mark(n.pos);
+                try c.opU16(.args_apply, v.index);
+                return;
+            }
+        }
+    }
     try calleeWithThis(c, x.callee);
     if (x.optional) try optCheck(c, 1);
     if (x.has_spread) {

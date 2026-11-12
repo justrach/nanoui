@@ -100,8 +100,8 @@ pub const BoundData = struct { target: *Object, this: Value, args: []Value };
 pub const ProxyData = struct { target: ?*Object, handler: ?*Object };
 /// A built-in iterator's state: what it walks, where it is, what it yields.
 pub const IterData = struct { target: Value, aux: Value = Value.undefined, index: usize = 0, kind: u8 = 0, done: bool = false };
-/// Extra state of closures that need it: methods with `super`, class constructors.
-pub const FnExtra = struct { home: ?*Object = null, fields: Value = Value.undefined };
+/// Extra state of closures that need it: methods with `super`, class and ES5 constructors.
+pub const FnExtra = struct { home: ?*Object = null, fields: Value = Value.undefined, inst_shape: ?*Shape = null, proto_shape: ?*Shape = null, proto_slot: u32 = 0 };
 
 /// What a host exotic object answers. A null hook falls back to ordinary behaviour.
 /// get_named returning null means "not one of mine": the ordinary lookup continues.
@@ -112,6 +112,9 @@ pub const HostHooks = struct {
     get_index: ?*const fn (vm: *Vm, obj: *Object, index: u32) Error!?Value = null,
     set_index: ?*const fn (vm: *Vm, obj: *Object, index: u32, value: Value) Error!bool = null,
     length_index: ?*const fn (vm: *Vm, obj: *Object) Error!u32 = null,
+    /// True when `get_named == null` (i.e. returning null for `name`) is a pure function of `name`,
+    /// independent of instance state, allowing prototype properties to cache in `IC` / `mega_ic`.
+    named_null_deterministic: bool = false,
     /// Appends the names own-key enumeration should show (strings the host owns).
     own_names: ?*const fn (vm: *Vm, obj: *Object, out: *std.ArrayList(Value)) Error!void = null,
     /// Marks whatever this object's host data keeps alive in JS.
@@ -309,6 +312,8 @@ pub fn trace(m: *heap.Marker, o: *Object) void {
             if (o.extra()) |x| {
                 m.markObj(x.home);
                 m.mark(x.fields);
+                if (x.inst_shape) |is| m.markCell(&is.cell);
+                if (x.proto_shape) |ps| m.markCell(&ps.cell);
             }
         },
         .native => {

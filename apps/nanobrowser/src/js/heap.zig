@@ -347,6 +347,7 @@ pub fn collect(vm: *Vm) void {
     }
     for (m.weak.items) |o| objmod.sweepWeak(vm, o);
     for (m.protos.items) |p| p.sweepICs();
+    vm.clearMegaIC();
     sweep(vm, false);
     vm.counting.limit = vm.heap_limit;
 }

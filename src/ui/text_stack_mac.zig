@@ -403,8 +403,16 @@ pub fn build(gpa: std.mem.Allocator, list: []const u8, style: types.TextStyle, z
         break;
     };
     const p = owned[st.primary];
-    st.fast = !p.brought and p.stroke == 0 and st.primary == 0 and registry.rangesCoverPrintableAscii(p.ranges);
+    st.fast = !p.brought and p.stroke == 0 and !earlierTouchesAscii(owned[0..st.primary]) and registry.rangesCoverPrintableAscii(p.ranges);
     return st;
+}
+
+fn earlierTouchesAscii(slice: []const Entry) bool {
+    for (slice) |e| {
+        if (e.ranges.len == 0) return true;
+        for (e.ranges) |r| if (r[0] <= 0x7e and r[1] >= 0x20) return true;
+    }
+    return false;
 }
 
 fn brought(gpa: std.mem.Allocator, face: *const registry.Face, style: types.TextStyle, size: f64, weight: u16) ?Entry {

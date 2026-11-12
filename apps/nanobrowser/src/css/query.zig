@@ -57,11 +57,18 @@ const SubjectFilter = struct {
         if (sf.req_tag) |t| if (!fastTagMatches(t, n)) return false;
         return true;
     }
+
+    inline fn allowsSubtree(sf: SubjectFilter, n: *const Node) bool {
+        if (!sf.active) return true;
+        if ((n.subtree_class_bloom & sf.class_bits) != sf.class_bits) return false;
+        if ((n.subtree_attr_bloom & sf.attr_bits) != sf.attr_bits) return false;
+        return true;
+    }
 };
 
 fn parse(doc: *dom.Document, arena: Allocator, trimmed: []const u8) Error![]const selectors.Selector {
     if (trimmed.len > 0 and trimmed.len <= 256) {
-        const idx = std.hash.Fnv1a_32.hash(trimmed) & 31;
+        const idx = std.hash.Fnv1a_32.hash(trimmed) & 127;
         if (doc.sel_cache_ptrs[idx]) |ptr| {
             if (std.mem.eql(u8, doc.sel_cache_keys[idx], trimmed)) {
                 const p: [*]const selectors.Selector = @ptrCast(@alignCast(ptr));
@@ -80,6 +87,7 @@ fn parse(doc: *dom.Document, arena: Allocator, trimmed: []const u8) Error![]cons
 }
 
 const TagClass = struct { tag: []const u8, cls: []const u8 };
+const AttrFast = struct { tag: ?[]const u8, attr: []const u8, val: ?[]const u8, attr_bit: u64, ci_html: bool };
 
 fn parseTagClass(trimmed: []const u8) ?TagClass {
     const dot = std.mem.indexOfScalar(u8, trimmed, '.') orelse return null;
@@ -88,6 +96,46 @@ fn parseTagClass(trimmed: []const u8) ?TagClass {
     const cls = trimmed[dot + 1 ..];
     if (!isPlainLowerIdent(tag) or !isPlainIdent(cls)) return null;
     return .{ .tag = tag, .cls = cls };
+}
+
+fn parseAttrFast(trimmed: []const u8) ?AttrFast {
+    if (trimmed.len < 3 or trimmed[trimmed.len - 1] != ']') return null;
+    const lb = std.mem.indexOfScalar(u8, trimmed, '[') orelse return null;
+    const tag: ?[]const u8 = if (lb == 0) null else blk: {
+        if (!isPlainLowerIdent(trimmed[0..lb])) return null;
+        break :blk trimmed[0..lb];
+    };
+    const inner = std.mem.trim(u8, trimmed[lb + 1 .. trimmed.len - 1], " \t\r\n\x0c");
+    if (inner.len == 0) return null;
+    const eq = std.mem.indexOfScalar(u8, inner, '=');
+    if (eq == null) {
+        if (!isPlainLowerIdent(inner)) return null;
+        return .{ .tag = tag, .attr = inner, .val = null, .attr_bit = perf.attrBit(inner), .ci_html = false };
+    }
+    const eq_i = eq.?;
+    const aname = std.mem.trimEnd(u8, inner[0..eq_i], " \t\r\n\x0c");
+    if (!isPlainLowerIdent(aname)) return null;
+    const rhs = std.mem.trimStart(u8, inner[eq_i + 1 ..], " \t\r\n\x0c");
+    if (rhs.len == 0) return null;
+    var val: []const u8 = undefined;
+    if (rhs[0] == '"' or rhs[0] == '\'') {
+        const q = rhs[0];
+        if (rhs.len < 2 or rhs[rhs.len - 1] != q) return null;
+        val = rhs[1 .. rhs.len - 1];
+        for (val) |c| if (c == q or c == '\\' or c == 0) return null;
+    } else {
+        if (!isPlainIdent(rhs)) return null;
+        val = rhs;
+    }
+    return .{ .tag = tag, .attr = aname, .val = val, .attr_bit = perf.attrBit(aname), .ci_html = match.isCiHtmlAttr(aname) };
+}
+
+inline fn fastAttrMatches(af: AttrFast, el: *const Node) bool {
+    if ((el.attr_filter & af.attr_bit) == 0) return false;
+    if (af.tag) |t| if (!fastTagMatches(t, el)) return false;
+    const v = el.attr(af.attr) orelse return false;
+    const want = af.val orelse return true;
+    return if (af.ci_html and el.ns == .html) std.ascii.eqlIgnoreCase(v, want) else std.mem.eql(u8, v, want);
 }
 
 fn hit(list: []const selectors.Selector, n: *Node, ctx: *match.Ctx) bool {
@@ -196,16 +244,43 @@ pub fn querySelector(root: *Node, selector: []const u8, arena: Allocator) Error!
         }
         if (trimmed[0] == '.' and isPlainIdent(trimmed[1..])) {
             const want = trimmed[1..];
+            const bit = perf.classBit(want);
+            if ((root.subtree_class_bloom & bit) == 0) return null;
             var at = root.first_child;
-            while (at) |n| : (at = n.nextInTree(root)) {
+            while (at) |n| {
+                if ((n.subtree_class_bloom & bit) == 0) {
+                    at = n.nextSkippingChildren(root);
+                    continue;
+                }
                 if (n.kind == .element and n.hasClass(want)) return n;
+                at = n.nextInTree(root);
             }
             return null;
         }
         if (parseTagClass(trimmed)) |tc| {
+            const bit = perf.classBit(tc.cls);
+            if ((root.subtree_class_bloom & bit) == 0) return null;
             var at = root.first_child;
-            while (at) |n| : (at = n.nextInTree(root)) {
+            while (at) |n| {
+                if ((n.subtree_class_bloom & bit) == 0) {
+                    at = n.nextSkippingChildren(root);
+                    continue;
+                }
                 if (n.kind == .element and fastTagMatches(tc.tag, n) and n.hasClass(tc.cls)) return n;
+                at = n.nextInTree(root);
+            }
+            return null;
+        }
+        if (parseAttrFast(trimmed)) |af| {
+            if ((root.subtree_attr_bloom & af.attr_bit) == 0) return null;
+            var at = root.first_child;
+            while (at) |n| {
+                if ((n.subtree_attr_bloom & af.attr_bit) == 0) {
+                    at = n.nextSkippingChildren(root);
+                    continue;
+                }
+                if (n.kind == .element and fastAttrMatches(af, n)) return n;
+                at = n.nextInTree(root);
             }
             return null;
         }
@@ -224,9 +299,15 @@ pub fn querySelector(root: *Node, selector: []const u8, arena: Allocator) Error!
         .single => |n| return if (n.kind == .element and hit(list, n, &ctx)) n else null,
         .full => |walk_root| {
             const sf = SubjectFilter.fromList(root, list);
+            if (!sf.allowsSubtree(walk_root)) return null;
             var at = walk_root.first_child;
-            while (at) |n| : (at = n.nextInTree(walk_root)) {
+            while (at) |n| {
+                if (!sf.allowsSubtree(n)) {
+                    at = n.nextSkippingChildren(walk_root);
+                    continue;
+                }
                 if (n.kind == .element and sf.allows(n) and hit(list, n, &ctx)) return n;
+                at = n.nextInTree(walk_root);
             }
             return null;
         },
@@ -241,16 +322,43 @@ pub fn querySelectorAll(root: *Node, selector: []const u8, arena: Allocator, out
     if (!root.doc.quirks and trimmed.len > 1) {
         if (trimmed[0] == '.' and isPlainIdent(trimmed[1..])) {
             const want = trimmed[1..];
+            const bit = perf.classBit(want);
+            if ((root.subtree_class_bloom & bit) == 0) return;
             var at = root.first_child;
-            while (at) |n| : (at = n.nextInTree(root)) {
+            while (at) |n| {
+                if ((n.subtree_class_bloom & bit) == 0) {
+                    at = n.nextSkippingChildren(root);
+                    continue;
+                }
                 if (n.kind == .element and n.hasClass(want)) try out.append(arena, n);
+                at = n.nextInTree(root);
             }
             return;
         }
         if (parseTagClass(trimmed)) |tc| {
+            const bit = perf.classBit(tc.cls);
+            if ((root.subtree_class_bloom & bit) == 0) return;
             var at = root.first_child;
-            while (at) |n| : (at = n.nextInTree(root)) {
+            while (at) |n| {
+                if ((n.subtree_class_bloom & bit) == 0) {
+                    at = n.nextSkippingChildren(root);
+                    continue;
+                }
                 if (n.kind == .element and fastTagMatches(tc.tag, n) and n.hasClass(tc.cls)) try out.append(arena, n);
+                at = n.nextInTree(root);
+            }
+            return;
+        }
+        if (parseAttrFast(trimmed)) |af| {
+            if ((root.subtree_attr_bloom & af.attr_bit) == 0) return;
+            var at = root.first_child;
+            while (at) |n| {
+                if ((n.subtree_attr_bloom & af.attr_bit) == 0) {
+                    at = n.nextSkippingChildren(root);
+                    continue;
+                }
+                if (n.kind == .element and fastAttrMatches(af, n)) try out.append(arena, n);
+                at = n.nextInTree(root);
             }
             return;
         }
@@ -269,9 +377,15 @@ pub fn querySelectorAll(root: *Node, selector: []const u8, arena: Allocator, out
         .single => |n| if (n.kind == .element and hit(list, n, &ctx)) try out.append(arena, n),
         .full => |walk_root| {
             const sf = SubjectFilter.fromList(root, list);
+            if (!sf.allowsSubtree(walk_root)) return;
             var at = walk_root.first_child;
-            while (at) |n| : (at = n.nextInTree(walk_root)) {
+            while (at) |n| {
+                if (!sf.allowsSubtree(n)) {
+                    at = n.nextSkippingChildren(walk_root);
+                    continue;
+                }
                 if (n.kind == .element and sf.allows(n) and hit(list, n, &ctx)) try out.append(arena, n);
+                at = n.nextInTree(walk_root);
             }
         },
     }
@@ -285,6 +399,9 @@ pub fn matchesSelector(node: *Node, selector: []const u8, arena: Allocator) Erro
         }
         if (parseTagClass(trimmed)) |tc| {
             return node.kind == .element and fastTagMatches(tc.tag, node) and node.hasClass(tc.cls);
+        }
+        if (parseAttrFast(trimmed)) |af| {
+            return node.kind == .element and fastAttrMatches(af, node);
         }
     }
     if (isPlainLowerIdent(trimmed)) {
@@ -314,6 +431,14 @@ pub fn closest(node: *Node, selector: []const u8, arena: Allocator) Error!?*Node
             while (at) |n| : (at = n.parentElement()) {
                 if (n.is_shadow) return null;
                 if (fastTagMatches(tc.tag, n) and n.hasClass(tc.cls)) return n;
+            }
+            return null;
+        }
+        if (parseAttrFast(trimmed)) |af| {
+            var at: ?*Node = if (node.kind == .element) node else node.parentElement();
+            while (at) |n| : (at = n.parentElement()) {
+                if (n.is_shadow) return null;
+                if (fastAttrMatches(af, n)) return n;
             }
             return null;
         }

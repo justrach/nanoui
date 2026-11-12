@@ -38,7 +38,7 @@ fn hasFlag(f: []const u8, c: u8) bool {
     return std.mem.indexOfScalar(u8, f, c) != null;
 }
 
-fn matchFn(vm: *Vm, this: Value, args: []const Value) Error!Value {
+pub fn matchFn(vm: *Vm, this: Value, args: []const Value) Error!Value {
     const o = try thisObj(vm, this);
     const s = try conv.toStr(vm, u.arg(args, 0));
     if (re.hasBuiltinExec(vm, o)) {
@@ -201,7 +201,7 @@ pub fn getSubstitution(vm: *Vm, b: *str.Builder, matched: *JSString, s: *JSStrin
     }
 }
 
-fn replaceFn(vm: *Vm, this: Value, args: []const Value) Error!Value {
+pub fn replaceFn(vm: *Vm, this: Value, args: []const Value) Error!Value {
     const o = try thisObj(vm, this);
     const s = try conv.toStr(vm, u.arg(args, 0));
     const rv = u.arg(args, 1);
@@ -323,7 +323,7 @@ fn replaceFn(vm: *Vm, this: Value, args: []const Value) Error!Value {
     return Value.fromString(try b.finish());
 }
 
-fn searchFn(vm: *Vm, this: Value, args: []const Value) Error!Value {
+pub fn searchFn(vm: *Vm, this: Value, args: []const Value) Error!Value {
     const o = try thisObj(vm, this);
     const s = try conv.toStr(vm, u.arg(args, 0));
     if (re.hasBuiltinExec(vm, o) and o.slots[0].isInt()) {
@@ -344,7 +344,7 @@ fn searchFn(vm: *Vm, this: Value, args: []const Value) Error!Value {
     return props.get(vm, r.asObject(), vm.k.index);
 }
 
-fn splitFn(vm: *Vm, this: Value, args: []const Value) Error!Value {
+pub fn splitFn(vm: *Vm, this: Value, args: []const Value) Error!Value {
     const o = try thisObj(vm, this);
     const s = try conv.toStr(vm, u.arg(args, 0));
     const c = try u.speciesConstructor(vm, o, vm.protos.regexp_ctor);
