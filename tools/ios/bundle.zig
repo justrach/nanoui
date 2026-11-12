@@ -102,6 +102,11 @@ fn finished(b: *std.Build, made: std.Build.LazyPath, target: std.Target, opts: O
 /// libraries, and where to find them.
 pub fn executable(b: *std.Build, exe: *std.Build.Step.Compile) std.Build.LazyPath {
     const target = exe.root_module.resolved_target.?.result;
+    if (std.zig.system.darwin.getSdk(b.allocator, b.graph.io, &target)) |sdk| {
+        exe.root_module.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ sdk, "System/Library/Frameworks" }) });
+        exe.root_module.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ sdk, "usr/lib" }) });
+        exe.root_module.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ sdk, "usr/include" }) });
+    }
     if (target.abi == .simulator) return stamped(b, exe, stripped(b, exe, exe.getEmittedBin()));
     const obj = b.addObject(.{ .name = exe.name, .root_module = exe.root_module, .use_llvm = exe.use_llvm, .zig_lib_dir = exe.zig_lib_dir });
     obj.bundle_compiler_rt = true;

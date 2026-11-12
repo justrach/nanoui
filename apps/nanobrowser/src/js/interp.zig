@@ -77,6 +77,7 @@ pub fn run(vm: *Vm) Error!Value {
             }
             sw: switch (@as(Op, @fromBackingInt(@intCast(pc[0])))) {
                 .undef, .null_, .true_, .false_, .hole => |o| {
+                    @import("../perf_rules.zig").prof_interp_ops += 1;
                     sp[0] = literals[@backingInt(o) - @backingInt(Op.undef)];
                     sp += 1;
                     pc += 1;

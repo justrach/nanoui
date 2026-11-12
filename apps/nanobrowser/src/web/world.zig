@@ -90,6 +90,12 @@ pub const Deferred = union(enum) {
     submit: struct { form: *dom.Node, submitter: ?*dom.Node },
 };
 
+pub const DispatchPath = struct {
+    nodes: [128]*dom.Node = undefined,
+    len: u8 = 0,
+    has_win: bool = false,
+};
+
 pub const max_console = 1000;
 /// How long one task may run. A test may shorten it.
 pub var task_deadline_ns: u64 = 5 * std.time.ns_per_s;
@@ -112,6 +118,7 @@ pub const World = struct {
 
     /// JS calls under way that came from the host.
     depth: u32 = 0,
+    task_t0: u64 = 0,
     /// Collect when the VM has passed this many bytes.
     gc_next: usize = first_collection,
     /// `location` asked to go here; done when the task ends.
@@ -176,6 +183,11 @@ pub const World = struct {
     /// A control should take the keyboard, or none, at the next frame.
     focus_request: ?*dom.Node = null,
     blur_request: bool = false,
+    dispatch_paths: [8]DispatchPath = undefined,
+    dispatch_depth: u8 = 0,
+    rect_shape: ?*js.Shape = null,
+    rect_epoch: u32 = 0,
+    query_arena: std.heap.ArenaAllocator,
 
     pub fn create(p: *Page) !*World {
         const gpa = p.gpa;
@@ -183,7 +195,7 @@ pub const World = struct {
         errdefer gpa.destroy(w);
         const vm = try js.Vm.create(gpa);
         errdefer vm.deinit();
-        w.* = .{ .page = p, .gpa = gpa, .vm = vm, .started_ns = monotonic() };
+        w.* = .{ .page = p, .gpa = gpa, .vm = vm, .started_ns = monotonic(), .query_arena = std.heap.ArenaAllocator.init(gpa) };
         vm.setRootsHook(w, markRoots);
         vm.setRejectionHook(w, rejected);
         vm.setDynamicImportHook(w, modules.dynamicImport);
@@ -217,6 +229,7 @@ pub const World = struct {
         w.export_ids.deinit(gpa);
         w.imports.deinit(gpa);
         w.import_by_remote.deinit(gpa);
+        w.query_arena.deinit();
         if (w.pending_nav) |n| {
             gpa.free(n.url);
             gpa.free(n.body);
@@ -251,6 +264,7 @@ pub const World = struct {
         w.timers.mark(m);
         w.mods.mark(m);
         w.custom.mark(m);
+        if (w.rect_shape) |rs| m.markCell(&rs.cell);
     }
 
     /// Enters JS from the host. Every `enter` is matched by `leave`, which
@@ -259,6 +273,7 @@ pub const World = struct {
         if (w.depth == 0) {
             w.page.busy += 1;
             w.vm.setDeadline(task_deadline_ns);
+            if (w.caller == null) w.task_t0 = @import("../perf_rules.zig").nowNs();
         }
         w.depth += 1;
     }
@@ -282,9 +297,15 @@ pub const World = struct {
         }
         w.depth -= 1;
         if (w.depth != 0) return;
+        if (!has_caller and w.task_t0 != 0) {
+            @import("../perf_rules.zig").prof_js_task_ns += @import("../perf_rules.zig").nowNs() -| w.task_t0;
+            w.task_t0 = 0;
+        }
         vm.setDeadline(0);
         if (!has_caller and vm.bytesAllocated() > w.gc_next) {
+            const t0 = @import("../perf_rules.zig").nowNs();
             vm.collect();
+            @import("../perf_rules.zig").prof_gc_ns += @import("../perf_rules.zig").nowNs() -| t0;
             w.gc_next = @max(first_collection, vm.bytesAllocated() * 2);
         }
         const p = w.page;

@@ -16,6 +16,7 @@ extern "c" fn CTRunGetGlyphs(run: *anyopaque, range: cf.CFRange, out: [*]u16) vo
 extern "c" fn CTRunGetPositions(run: *anyopaque, range: cf.CFRange, out: [*]objc.CGPoint) void;
 extern "c" fn CTRunGetAttributes(run: *anyopaque) *anyopaque;
 extern "c" fn CFDictionaryGetValue(dict: *anyopaque, key: *const anyopaque) ?*anyopaque;
+extern "c" fn CTFontGetGlyphsForCharacters(font: cf.CTFontRef, chars: [*]const u16, glyphs: [*]u16, count: cf.CFIndex) bool;
 
 const first: u8 = 0x20;
 const count = 0x7f - 0x20;
@@ -63,13 +64,6 @@ fn shapeShort(font: cf.CTFontRef, s: []const u8) Shaped {
     return out;
 }
 
-const Pair = struct {
-    /// The second glyph's x minus the first's advance.
-    kern: f32,
-    /// CoreText does not shape this pair as two glyphs.
-    complex: bool,
-};
-
 /// The cached shaping of one font's printable ASCII.
 pub const Table = struct {
     font: cf.CTFontRef,
@@ -79,19 +73,34 @@ pub const Table = struct {
     glyph: [count]u16 = @splat(0),
     advance: [count]f32 = @splat(0),
     known: [count]bool = @splat(false),
-    pairs: std.AutoHashMapUnmanaged(u16, Pair) = .empty,
+    missing: [count]bool = @splat(false),
+    /// Flat 95×95 kerning table (`nan` = unshaped, `inf` = complex/ligature).
+    pairs: ?*[count * count]f32 = null,
 
     pub fn deinit(t: *Table, gpa: std.mem.Allocator) void {
-        t.pairs.deinit(gpa);
+        if (t.pairs) |p| gpa.destroy(p);
     }
 
     fn char(t: *Table, c: u8) ?usize {
         const i = c - first;
         if (!t.known[i]) {
+            if (t.missing[i]) return null;
+            const u: [1]u16 = .{c};
+            var g: [1]u16 = .{0};
+            if (!CTFontGetGlyphsForCharacters(t.font, &u, &g, 1) or g[0] == 0) {
+                t.missing[i] = true;
+                return null;
+            }
             const s = shapeShort(t.font, &.{c});
-            if (s.n != 1) return null;
+            if (s.n != 1) {
+                t.missing[i] = true;
+                return null;
+            }
             if (t.run_font == null) t.run_font = s.font;
-            if (s.font != t.run_font) return null;
+            if (s.font != t.run_font) {
+                t.missing[i] = true;
+                return null;
+            }
             t.glyph[i] = s.glyphs[0];
             t.advance[i] = s.width;
             t.known[i] = true;
@@ -99,15 +108,39 @@ pub const Table = struct {
         return i;
     }
 
-    fn pair(t: *Table, gpa: std.mem.Allocator, a: u8, b: u8) ?Pair {
-        const key = @as(u16, a) << 8 | b;
-        if (t.pairs.get(key)) |p| return p;
+    fn pair(t: *Table, gpa: std.mem.Allocator, a: u8, b: u8) ?f32 {
+        const ps = t.pairs orelse blk: {
+            const p = gpa.create([count * count]f32) catch return null;
+            p.* = @splat(std.math.nan(f32));
+            t.pairs = p;
+            break :blk p;
+        };
+        const idx = @as(usize, a - first) * count + (b - first);
+        const v = ps[idx];
+        if (!std.math.isNan(v)) return if (std.math.isInf(v)) null else v;
         const ia = t.char(a) orelse return null;
-        _ = t.char(b) orelse return null;
+        const ib = t.char(b) orelse return null;
         const s = shapeShort(t.font, &.{ a, b });
-        const p: Pair = if (s.n == 2) .{ .kern = s.x[1] - t.advance[ia], .complex = false } else .{ .kern = 0, .complex = true };
-        t.pairs.put(gpa, key, p) catch {};
-        return p;
+        if (s.n != 2 or s.glyphs[0] != t.glyph[ia] or s.glyphs[1] != t.glyph[ib]) {
+            ps[idx] = std.math.inf(f32);
+            return null;
+        }
+        const k = s.x[1] - t.advance[ia];
+        ps[idx] = k;
+        return k;
+    }
+
+    /// Measures `s` through the cached ASCII tables without building a glyph slice.
+    pub fn width(t: *Table, gpa: std.mem.Allocator, s: []const u8, out: *f32) bool {
+        var x: f32 = 0;
+        for (s, 0..) |c, i| {
+            if (c < first or c >= 0x7f) return false;
+            const ci = t.char(c) orelse return false;
+            if (i > 0) x += t.pair(gpa, s[i - 1], c) orelse return false;
+            x += t.advance[ci];
+        }
+        out.* = x;
+        return true;
     }
 
     /// Lays out `s` as CoreText would, writing its glyphs, pen positions
@@ -115,21 +148,17 @@ pub const Table = struct {
     // Not `?f32`: zorg's self-hosted aarch64 backend read that answer's null
     // flag in `TextSystem.shapeFast` from a stack slot it never wrote, so
     // every declined run (any non-ASCII text) drew as nothing.
-    pub fn layout(t: *Table, gpa: std.mem.Allocator, s: []const u8, glyphs: []u16, xs: []f32, width: *f32) bool {
+    pub fn layout(t: *Table, gpa: std.mem.Allocator, s: []const u8, glyphs: []u16, xs: []f32, out_width: *f32) bool {
         var x: f32 = 0;
         for (s, 0..) |c, i| {
             if (c < first or c >= 0x7f) return false;
             const ci = t.char(c) orelse return false;
-            if (i > 0) {
-                const p = t.pair(gpa, s[i - 1], c) orelse return false;
-                if (p.complex) return false;
-                x += p.kern;
-            }
+            if (i > 0) x += t.pair(gpa, s[i - 1], c) orelse return false;
             glyphs[i] = t.glyph[ci];
             xs[i] = x;
             x += t.advance[ci];
         }
-        width.* = x;
+        out_width.* = x;
         return true;
     }
 };
@@ -147,6 +176,9 @@ test "the fast path places glyphs as CoreText does" {
         var xs: [64]f32 = undefined;
         var w: f32 = 0;
         if (!t.layout(gpa, s, &g, &xs, &w)) continue; // a ligature: CoreText's own
+        var w_only: f32 = 0;
+        try std.testing.expect(t.width(gpa, s, &w_only));
+        try std.testing.expectEqual(w, w_only);
         compared += 1;
         const attr = cf.attributed(s, @ptrCast(nsfont));
         defer cf.CFRelease(attr);

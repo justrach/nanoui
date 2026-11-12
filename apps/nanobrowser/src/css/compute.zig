@@ -155,7 +155,7 @@ fn hasContent(list: []const Entry) bool {
 }
 
 /// Computes a pseudo-element's style; null if it comes to nothing to show.
-pub fn pseudo(e: *Engine, n: *dom.Node, list: []Entry, parent: *const Style, parent_scope: ?*const vars.Scope, out: *Style) Allocator.Error!bool {
+pub fn pseudo(e: *Engine, n: *dom.Node, list: []Entry, parent: *const Style, parent_scope: ?*const vars.Scope, out: *Style, used_attr: ?*bool) Allocator.Error!bool {
     std.mem.sort(Entry, list, {}, entryLess);
     const scope = try customProperties(e, list, null, parent_scope);
     var run: Run = .{
@@ -168,6 +168,7 @@ pub fn pseudo(e: *Engine, n: *dom.Node, list: []Entry, parent: *const Style, par
         .is_element = false,
     };
     const shows = try run.compute(out);
+    if (used_attr) |ua| ua.* = ua.* or run.ctx.used_attr;
     // `::marker` is there whatever its rules say; `content` only changes its words.
     const always = list.len > 0 and (list[0].sel.pseudo == .marker or list[0].sel.pseudo == .backdrop);
     return (shows or always) and out.display != .none;

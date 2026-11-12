@@ -291,7 +291,7 @@ fn nowMs() i64 {
 /// Asks for the faces `text` in `font` needs, and the one its line's metrics come
 /// from (whichever holds the space, as CSS's first available font).
 pub fn need(p: *Page, c: *ui.Context, font: box.Font, text: []const u8) void {
-    if (p.faces.list.items.len == 0) return;
+    if (p.faces.list.items.len == 0 or !font.isScoped()) return;
     needOne(p, c, font, ' ');
     var i: usize = 0;
     while (i < text.len) {
@@ -390,6 +390,7 @@ pub fn catchUp(p: *Page, c: *ui.Context) void {
     p.faces.changed = false;
     p.widths.clearRetainingCapacity();
     p.font_metrics.clearRetainingCapacity();
+    p.doc.font_epoch +%= 1;
     p.doc.touchStyle();
 }
 

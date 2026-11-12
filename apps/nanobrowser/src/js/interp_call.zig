@@ -44,12 +44,15 @@ pub inline fn pushClosure(vm: *Vm, callee: *Object, args: [*]Value, argc: u32, r
     const nparams: u32 = fp.nparams;
     var bp = args;
     const i: u32 = @min(argc, nparams);
-    if (argc > nparams and fp.needs_args) {
+    const limit = @intFromPtr(vm.stack.ptr) + vm.stack.len * @sizeOf(Value);
+    if (argc != 0 and fp.needs_args) {
+        if (@intFromPtr(args + argc) + (@as(usize, fp.nlocals) + fp.max_stack + 64) * @sizeOf(Value) > limit) {
+            return vm.throwError(.RangeError, "Maximum call stack size exceeded");
+        }
         bp = args + argc;
-        @memcpy(bp[0..nparams], args[0..nparams]);
+        if (i != 0) @memcpy(bp[0..i], args[0..i]);
     }
     const locals_end = bp + fp.nlocals;
-    const limit = @intFromPtr(vm.stack.ptr) + vm.stack.len * @sizeOf(Value);
     if (@intFromPtr(locals_end) + (@as(usize, fp.max_stack) + 64) * @sizeOf(Value) > limit) {
         return vm.throwError(.RangeError, "Maximum call stack size exceeded");
     }
@@ -92,7 +95,8 @@ pub inline fn callNative(vm: *Vm, o: *Object, this: Value, args: []const Value) 
         vm.callee = saved_callee;
         vm.depth -= 1;
     }
-    try vm.checkNativeStack();
+    if ((vm.depth & 7) == 0) try vm.checkNativeStack();
+    @import("../perf_rules.zig").prof_nat_calls += 1;
     return o.payload.native.func(vm, this, args);
 }
 
@@ -194,6 +198,40 @@ pub fn call(vm: *Vm, callee: Value, this: Value, args: []const Value) Error!Valu
 
 /// The object `new` makes: ordinary, with new_target's prototype.
 pub fn allocThis(vm: *Vm, _: *Object, new_target: Value) Error!*Object {
+    if (new_target.isObject()) {
+        const nt = new_target.asObject();
+        if (nt.class == .closure) {
+            if (nt.extra()) |x| if (x.inst_shape) |is| {
+                if (nt.flags.class_ctor) return objmod.alloc(vm, is, .object);
+                if (nt.shape == x.proto_shape and !nt.shape.is_dict) {
+                    if (is.proto) |ip| if (nt.slots[x.proto_slot].bits == ip.value().bits) {
+                        return objmod.alloc(vm, is, .object);
+                    };
+                }
+            };
+            if (!nt.flags.exotic) {
+                if (nt.flags.lazy_fn) try props.touchLazy(vm, nt, vm.k.prototype);
+                if (!nt.shape.is_dict) if (nt.shape.find(vm.k.prototype)) |slot| {
+                    if (!nt.shape.flagsAt(slot).accessor) {
+                        const pv = nt.slots[slot];
+                        if (pv.isObject()) {
+                            const is = try @import("shape.zig").rootFor(vm, pv.asObject());
+                            const x = nt.extra() orelse blk: {
+                                const nx = try vm.gpa.create(objmod.FnExtra);
+                                nx.* = .{};
+                                nt.host = nx;
+                                break :blk nx;
+                            };
+                            x.inst_shape = is;
+                            x.proto_shape = nt.shape;
+                            x.proto_slot = slot;
+                            return objmod.alloc(vm, is, .object);
+                        }
+                    }
+                };
+            }
+        }
+    }
     const proto = try props.getV(vm, new_target, vm.k.prototype);
     return objmod.create(vm, if (proto.isObject()) proto.asObject() else vm.protos.object, .object);
 }

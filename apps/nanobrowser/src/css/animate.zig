@@ -135,6 +135,11 @@ pub const Animator = struct {
         return a.states.count() > 0;
     }
 
+    pub inline fn hasNode(a: *const Animator, n: *const dom.Node) bool {
+        const m = @constCast(n);
+        return a.states.count() > 0 and (a.states.contains(.{ .node = m, .pseudo = .none }) or a.states.contains(.{ .node = m, .pseudo = .before }) or a.states.contains(.{ .node = m, .pseudo = .after }));
+    }
+
     /// The cascade has `fresh` for an element or pseudo-element: what starts,
     /// what goes on, and what shows of it now. `prior` is what it had before,
     /// when it had a style at all.
@@ -440,6 +445,7 @@ pub const Animator = struct {
             // Always: what it holds was blended in an arena that is going away.
             @constCast(slot).* = out;
             if (change != .none) {
+                if (key.node.ns == .svg) e.doc.svg_style_version +%= 1;
                 if (change == .layout) out_plan.layout = true else out_plan.paint = true;
                 if (inherited and key.pseudo == .none and hasElementChild(key.node)) e.doc.markStyle(key.node);
             }

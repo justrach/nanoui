@@ -251,13 +251,67 @@ pub fn execIter(vm: *Vm, f: *Frame, op: Op) Error!void {
             f.pc = pc + 1;
         },
         .for_in_start => {
-            (sp - 1)[0] = try forInKeys(vm, (sp - 1)[0]);
+            const v = (sp - 1)[0];
+            if (v.isNullish()) {
+                (sp - 1)[0] = Value.undefined;
+                sp[0] = Value.undefined;
+            } else if (v.isObject()) {
+                const o = v.asObject();
+                if (o.shape.all_plain_str and !o.flags.exotic and !o.flags.lazy_fn and o.elems_len == 0 and o.class == .object and
+                    (o.shape.proto == null or (o.shape.proto == vm.protos.object and !vm.protos.object.flags.proto_dirty)))
+                {
+                    sp[0] = Value.fromCell(&o.shape.cell);
+                } else {
+                    (sp - 1)[0] = try forInKeys(vm, v);
+                    sp[0] = Value.undefined;
+                }
+            } else {
+                (sp - 1)[0] = try forInKeys(vm, v);
+                sp[0] = Value.undefined;
+            }
+            vm.sp = sp + 1;
             f.pc = pc + 1;
         },
         .for_in_next => {
-            const keys = f.bp[u16At(pc + 1)].asObject();
+            const keys_slot = u16At(pc + 1);
+            const kv = f.bp[keys_slot];
+            if (kv.isUndefined()) {
+                f.pc = jumpTo(pc + 9, relAt(pc + 5));
+                return;
+            }
+            const sh_val = f.bp[keys_slot + 1];
             const slot = u16At(pc + 3);
             var i: u32 = @intCast(f.bp[slot].asInt());
+            if (sh_val.isInternal()) {
+                const sh: *@import("shape.zig").Shape = @fieldParentPtr("cell", sh_val.asCell());
+                const o = kv.asObject();
+                if (o.shape == sh and o.elems_len == 0) {
+                    if (i >= sh.count) {
+                        f.pc = jumpTo(pc + 9, relAt(pc + 5));
+                        return;
+                    }
+                    f.bp[slot] = Value.fromInt(@intCast(i + 1));
+                    sp[0] = Value.fromString(sh.table.entries.items[i].key.atom());
+                    vm.sp = sp + 1;
+                    f.pc = pc + 9;
+                    return;
+                }
+                const entries = sh.entries();
+                while (i < entries.len) {
+                    const pk = entries[i].key;
+                    i += 1;
+                    if (try stillThere(vm, o, pk)) {
+                        f.bp[slot] = Value.fromInt(@intCast(i));
+                        sp[0] = Value.fromString(pk.atom());
+                        vm.sp = sp + 1;
+                        f.pc = pc + 9;
+                        return;
+                    }
+                }
+                f.pc = jumpTo(pc + 9, relAt(pc + 5));
+                return;
+            }
+            const keys = kv.asObject();
             const obj = keys.elems[0];
             const o = obj.asObject();
             const fast_keep = !o.flags.exotic and !o.shape.is_dict and o.elems_len == 0 and

@@ -21,6 +21,7 @@ const motion = @import("page_motion.zig");
 const frames = @import("frames.zig");
 const web = @import("web/web.zig");
 const webfonts = @import("webfonts.zig");
+const font_cache = @import("font_cache.zig");
 const perf = @import("perf_rules.zig");
 const Page = @import("page.zig").Page;
 
@@ -28,84 +29,8 @@ fn needsPrepare(p: *const Page) bool {
     return perf.needsPrepare(p.doc.style_dirty, p.doc.layout_dirty or p.doc.oof_dirty_node != null, p.list_dirty, p.doc.svg_dirty, p.list != null);
 }
 
-/// What layout measures with during a frame.
-const Fonts = struct {
-    p: *Page,
-    c: *ui.Context,
-    space_key: u64 = 0,
-    space_w: f32 = 0,
-    metrics_key: u64 = 0,
-    metrics_val: box.Metrics = .{},
-
-    fn width(ctx: *anyopaque, text: []const u8, font: box.Font) f32 {
-        const f: *Fonts = @ptrCast(@alignCast(ctx));
-        if (font.size <= 0) return 0;
-        const is_space = text.len == 1 and text[0] == ' ';
-        if (is_space and f.space_key == font.key()) return f.space_w;
-        const k = font.wordKey(text);
-        if (f.p.widths.get(k)) |w| {
-            if (is_space) { f.space_key = font.key(); f.space_w = w; }
-            return w;
-        }
-        webfonts.need(f.p, f.c, font, text);
-        const w = f.c.text.width(text, replay.textStyle(font));
-        if (!f.p.faces.changed) {
-            f.p.widths.put(f.p.gpa, k, w) catch {};
-            if (is_space) { f.space_key = font.key(); f.space_w = w; }
-        }
-        return w;
-    }
-
-    fn metrics(ctx: *anyopaque, font: box.Font) box.Metrics {
-        const f: *Fonts = @ptrCast(@alignCast(ctx));
-        if (font.size <= 0) return .{ .ascent = 0, .descent = 0, .gap = 0 };
-        const k = font.key();
-        if (f.metrics_key == k) return f.metrics_val;
-        if (f.p.font_metrics.get(k)) |m| { f.metrics_key = k; f.metrics_val = m; return m; }
-        webfonts.need(f.p, f.c, font, "");
-        const m = lineMetrics(f.c, replay.textStyle(font));
-        if (!f.p.faces.changed) { f.p.font_metrics.put(f.p.gpa, k, m) catch {}; f.metrics_key = k; f.metrics_val = m; }
-        return m;
-    }
-
-    fn image(ctx: *anyopaque, node: *dom.Node) ?box.Size {
-        const f: *Fonts = @ptrCast(@alignCast(ctx));
-        if (node.image.len == 0) return null;
-        if (replay.isSvg(node.image)) return svgNatural(node.image);
-        const s = ui.imageSize(f.c, node.image_key, node.image) orelse return null;
-        return .{ .w = s.w, .h = s.h };
-    }
-
-    /// An SVG picture's own size; with only a viewBox, its shape alone
-    /// (`Measurer.image`); with neither, what any picture without one is.
-    fn svgNatural(bytes: []const u8) box.Size {
-        const own = replay.svgOwn(bytes);
-        if (own.size) |v| return .{ .w = v[0], .h = v[1] };
-        if (own.ratio) |r| return .{ .w = -1, .h = r };
-        return .{ .w = 300, .h = 150 };
-    }
-
-    fn measurer(f: *Fonts) box.Measurer {
-        return .{ .ctx = f, .width = width, .metrics = metrics, .image = image, .widths = &f.p.widths, .widths_gpa = f.p.gpa };
-    }
-};
-
-/// A font's line metrics as Chromium has them: each rounded to whole pixels, and on
-/// the Mac the ascent of the three classic faces raised to match their Windows
-/// counterparts (`FontMetrics::AscentDescentWithHacks`).
-pub fn lineMetrics(c: *ui.Context, style: ui.TextStyle) box.Metrics {
-    const m = c.text.font(style);
-    var ascent = @round(m.ascent);
-    const descent = @round(m.descent);
-    if (builtin.os.tag == .macos) {
-        var buf: [64]u8 = undefined;
-        const name = c.text.familyName(style, &buf);
-        if (std.mem.eql(u8, name, "Times") or std.mem.eql(u8, name, "Helvetica") or std.mem.eql(u8, name, "Courier")) {
-            ascent += @floor((ascent + descent) * 0.15 + 0.5);
-        }
-    }
-    return .{ .ascent = ascent, .descent = descent, .gap = @round(m.leading), .x_height = m.x_height };
-}
+const Fonts = font_cache.Fonts;
+pub const lineMetrics = font_cache.lineMetrics;
 
 /// Style and box layout (`p.tree`) brought up to date for a viewport of `w` × `h`,
 /// deferring display-list construction (`makeList`) until `prepare`.
@@ -155,7 +80,7 @@ pub fn prepare(p: *Page, c: *ui.Context, w: f32, h: f32) void {
 fn runAnimations(p: *Page, c: *ui.Context) void {
     p.engine.now = c.time;
     const plan = p.engine.anim.tick(&p.engine, c.time);
-    if (plan.layout) p.doc.layout_dirty = true;
+    if (plan.layout) p.doc.touchLayout();
     p.motion_unseen = p.engine.anim.states.count() > 0 and !motion.anyShown(p);
     if (plan.paint) {
         if (p.motion_unseen) p.list_stale = true else p.list_dirty = true;
@@ -228,6 +153,8 @@ pub fn flushStyleForNode(p: *Page, n: *dom.Node) void {
         flushStyle(p);
         return;
     }
+    const t0 = perf.nowNs();
+    defer perf.prof_style_ns += perf.nowNs() -| t0;
     p.engine.layout_change_node = null;
     p.engine.layout_change_many = false;
     const change = p.engine.restyleChanged(target) catch .layout;
@@ -252,6 +179,8 @@ pub fn flushStyle(p: *Page) void {
     const d = p.doc;
     if (!d.style_dirty) return;
     loader.scan(p);
+    const t0 = perf.nowNs();
+    defer perf.prof_style_ns += perf.nowNs() -| t0;
     p.title_stale = true;
     d.style_dirty = false;
     if (d.dirty_all) {
@@ -263,6 +192,8 @@ pub fn flushStyle(p: *Page) void {
         d.layout_dirty = true;
         return;
     }
+    p.engine.beginFlush();
+    defer p.engine.in_batch_flush = false;
     for (d.dirty_nodes.items) |n| {
         if (!n.style_queued) continue;
         // Under one already done, or no longer in the document: nothing to do.
@@ -286,6 +217,10 @@ pub fn flushStyle(p: *Page) void {
 }
 
 pub fn relayoutTree(p: *Page, c: *ui.Context) void {
+    const t0 = perf.nowNs();
+    defer perf.prof_layout_ns += perf.nowNs() -| t0;
+    const had_prev = p.tree != null;
+    std.mem.swap(std.heap.ArenaAllocator, &p.layout_arena, &p.prev_layout_arena);
     _ = p.layout_arena.reset(.retain_capacity);
     const a = p.layout_arena.allocator();
     var fonts: Fonts = .{ .p = p, .c = c };
@@ -293,7 +228,7 @@ pub fn relayoutTree(p: *Page, c: *ui.Context) void {
     p.layouts +%= 1;
     p.doc.layout_dirty = false;
     p.doc.oof_dirty_node = null;
-    var tree = layout.run(a, p.doc, .{ .width = p.viewport_w, .height = p.viewport_h }, m) catch {
+    var tree = layout.runCached(a, p.doc, .{ .width = p.viewport_w, .height = p.viewport_h }, m, had_prev) catch {
         p.tree = null;
         p.list = null;
         return;
@@ -301,8 +236,9 @@ pub fn relayoutTree(p: *Page, c: *ui.Context) void {
     // A container's size decides its contents' style. Each pass settles a level.
     var passes: u8 = 0;
     while (passes < 4 and layout.updateContainers(&p.engine)) : (passes += 1) {
+        p.doc.invalidateLayoutCache();
         _ = p.layout_arena.reset(.retain_capacity);
-        tree = layout.run(a, p.doc, .{ .width = p.viewport_w, .height = p.viewport_h }, m) catch {
+        tree = layout.runCached(a, p.doc, .{ .width = p.viewport_w, .height = p.viewport_h }, m, false) catch {
             p.tree = null;
             p.list = null;
             return;
@@ -322,10 +258,14 @@ pub fn relayout(p: *Page, c: *ui.Context) void {
 }
 
 fn makeList(p: *Page, tree: box.Tree, m: box.Measurer) void {
+    const t0 = perf.nowNs();
+    defer perf.prof_list_ns += perf.nowNs() -| t0;
     p.list_dirty = false;
     p.list_stale = false;
     p.lists +%= 1;
+    const ts = perf.nowNs();
     svg_markup.refresh(p);
+    perf.prof_svg_ns += perf.nowNs() -| ts;
     _ = p.list_arena.reset(.retain_capacity);
     p.list = display.build(p.list_arena.allocator(), tree, p.doc.node, m, &p.scrolls) catch null;
     if (p.restore_scroll > 0) if (p.list) |*l| {
@@ -554,7 +494,9 @@ pub fn view(p: *Page, c: *ui.Context, rect: box.Rect) void {
         }
     }
     web.paintStart(p);
+    const rep_t0 = perf.nowNs();
     replay.replay(c, shown, Replay{ .p = p }, rect);
+    perf.prof_replay_ns += perf.nowNs() -| rep_t0;
     @import("find.zig").draw(p, c, shown, rect);
     scrollbar(c, shown, rect);
     controls.selectList(p, c, rect);

@@ -177,8 +177,24 @@ pub const C = struct {
         try c.u16le(v.index);
     }
 
+    pub inline fn lazyArgsVar(c: *const C, v: *const Var) bool {
+        return c.fi.arguments_var == v and v.kind == .pseudo and !v.captured and !c.func.is_generator and !c.func.is_async;
+    }
+
+    pub inline fn lazyArgsIdent(c: *const C, n: *const Node) ?*Var {
+        if (n.data != .ident) return null;
+        const id = n.data.ident;
+        if (id.with_chain.len != 0) return null;
+        const v = id.binding orelse return null;
+        return if (c.lazyArgsVar(v)) v else null;
+    }
+
     /// Pushes a variable's value, checking the dead zone where that could matter.
     pub fn getVar(c: *C, v: *Var) Error!void {
+        if (c.lazyArgsVar(v)) {
+            try c.opU16(.args_get, v.index);
+            return;
+        }
         if (v.kind == .import) {
             try c.opU32(.get_import, v.import_index);
             return;
@@ -315,6 +331,7 @@ pub fn finish(c: *C, name: *JSString, start: u32, end: u32, length: u32) Error!*
         .nparams = @intCast(scope_mod.rawParamCount(f)),
         .nlocals = c.fi.nlocals,
         .max_stack = @intCast(c.max_depth + 8),
+        .stack_need_bytes = (c.fi.nlocals + @as(u32, @intCast(c.max_depth + 8)) + 64) * @sizeOf(Value),
         .strict = f.strict,
         .is_arrow = f.is_arrow,
         .is_async = f.is_async,
@@ -409,8 +426,12 @@ fn prologue(c: *C) Error!void {
         }
     }
     if (fi.arguments_var) |v| {
-        try c.op(.arguments);
-        try c.initVar(v);
+        if (c.lazyArgsVar(v)) {
+            try c.opU16(.set_hole, v.index);
+        } else {
+            try c.op(.arguments);
+            try c.initVar(v);
+        }
     }
     if (fi.new_target_var) |v| {
         try c.op(.new_target);

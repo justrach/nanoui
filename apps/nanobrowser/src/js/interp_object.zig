@@ -37,7 +37,13 @@ pub fn argumentsObject(vm: *Vm, f: *Frame) Error!*Object {
     const a = try objmod.alloc(vm, sh, .arguments);
     const n = f.argc;
     if (n != 0) {
-        try objmod.growElems(vm, a, n);
+        if (n <= objmod.inline_slots - 3) {
+            a.slot_cap = 3;
+            a.elems = @as([*]Value, &a.inline_store) + 3;
+            a.elems_cap = objmod.inline_slots - 3;
+        } else {
+            try objmod.growElems(vm, a, n);
+        }
         @memcpy(a.elems[0..n], f.args[0..n]);
         a.elems_len = n;
     }
@@ -105,7 +111,7 @@ fn setHome(vm: *Vm, fnv: Value, home: *Object) Error!void {
     }
 }
 
-fn defineMethod(vm: *Vm, target: *Object, key: PropKey, fnv: Value, flags: u8) Error!void {
+pub fn defineMethod(vm: *Vm, target: *Object, key: PropKey, fnv: Value, flags: u8) Error!void {
     const kind = flags & 3;
     const enumerable = flags & 4 != 0;
     try setHome(vm, fnv, target);
@@ -206,7 +212,7 @@ fn makeClass(vm: *Vm, f: *Frame, fp: *bc.FuncProto, has_parent: bool, parent: Va
     ctor.flags.class_ctor = true;
     ctor.flags.derived_ctor = fp.is_derived;
     const x = try vm.gpa.create(objmod.FnExtra);
-    x.* = .{ .home = proto };
+    x.* = .{ .home = proto, .inst_shape = try shape.rootFor(vm, proto) };
     ctor.host = x;
     try props.addProp(vm, ctor, vm.k.length, Value.fromUsize(fp.length), PropFlags.config_only);
     try props.addProp(vm, ctor, vm.k.name, Value.fromString(fp.name), PropFlags.config_only);

@@ -1,5 +1,6 @@
-//! Text on macOS: breaking a paragraph at shaped glyph positions, as GPUI
-//! does (`TextSystem.wrap_rule = .glyph_positions`).
+//! Text on macOS: wrapping (the per-rule cache in `wrapAttributed`) and
+//! breaking a paragraph at shaped glyph positions, as GPUI does
+//! (`TextSystem.wrap_rule = .glyph_positions`).
 const std = @import("std");
 const cf = @import("cf.zig");
 const types = @import("types.zig");
@@ -8,6 +9,23 @@ const text_mac = @import("text_mac.zig");
 const rich = text_mac.rich;
 const TextSystem = text_mac.TextSystem;
 const Line = text_mac.Line;
+
+/// `s` with its spans broken into lines no wider than `max_width`.
+pub fn wrapAttributed(self: *TextSystem, s: []const u8, style: types.TextStyle, spans: []const types.Span, max_width: f32) []const Line {
+    const styled = rich.styled(spans);
+    const k = TextSystem.key(s, style, (@as(u64, @intFromFloat(@max(0, @min(max_width, 1e6)))) + 2) ^ (if (styled) rich.spansHash(spans, 0, s.len) else 0) ^ (@as(u64, @backingInt(self.wrap_rule)) << 60));
+    if (self.wraps.get(self.gpa, k)) |lines| return lines;
+    if (self.oneLine(s, style, spans, max_width)) |line_| {
+        const one = self.gpa.alloc(Line, 1) catch return &.{};
+        one[0] = line_;
+        return self.wraps.put(self.gpa, k, one);
+    }
+    const lines = switch (self.wrap_rule) {
+        .typesetter => self.breakLines(s, style, spans, max_width),
+        .glyph_positions => self.breakAtGlyphs(s, style, spans, max_width),
+    };
+    return self.wraps.put(self.gpa, k, lines catch return &.{});
+}
 
 /// `s` broken as GPUI breaks it, each newline-delimited paragraph alone.
 pub fn breakAtGlyphs(self: *TextSystem, s: []const u8, style: types.TextStyle, spans: []const types.Span, max_width: f32) ![]Line {
@@ -83,4 +101,41 @@ pub fn isWordChar(c: u21) bool {
         0x22EF, 0x202F, 0xA0, 0x2011 => true,
         else => false,
     };
+}
+
+/// `s` as one line, when it has no line breaks and fits.
+pub fn oneLine(self: *TextSystem, s: []const u8, style: types.TextStyle, spans: []const types.Span, max_width: f32) ?Line {
+    if (std.mem.indexOfAny(u8, s, "\n\r\x0b\x0c") != null) return null;
+    if (std.mem.indexOf(u8, s, "\u{85}") != null or std.mem.indexOf(u8, s, "\u{2028}") != null or std.mem.indexOf(u8, s, "\u{2029}") != null) return null;
+    const styled = rich.styled(spans);
+    const full = if (styled) rich.layout(self, s, style, spans, 0).width else self.width(s, style);
+    if (full > @max(1, max_width)) return null;
+    const trimmed = std.mem.trimEnd(u8, s, " \t");
+    const w = if (styled) rich.layout(self, trimmed, style, spans, 0).width else self.width(trimmed, style);
+    return .{ .start = 0, .end = trimmed.len, .width = w };
+}
+
+/// `s` broken where CoreText's typesetter suggests.
+pub fn breakLines(self: *TextSystem, s: []const u8, style: types.TextStyle, spans: []const types.Span, max_width: f32) ![]Line {
+    const styled = rich.styled(spans);
+    var lines: std.ArrayList(Line) = .empty;
+    defer lines.deinit(self.gpa);
+    const attr = if (styled) rich.attributed(self, s, style, spans, 0) else self.attributedOf(s, style);
+    defer cf.CFRelease(attr);
+    const ts = cf.CTTypesetterCreateWithAttributedString(attr).?;
+    defer cf.CFRelease(ts);
+    const total = @min(cf.utf16Offset(s, s.len), cf.CFAttributedStringGetLength(attr));
+    var start16: cf.CFIndex = 0;
+    while (start16 < total) {
+        var n = cf.CTTypesetterSuggestLineBreak(ts, start16, @max(1, max_width));
+        if (n <= 0) n = 1;
+        const a = cf.byteOffset(s, start16);
+        const b = cf.byteOffset(s, start16 + n);
+        const trimmed = std.mem.trimEnd(u8, s[a..b], " \n\r\t");
+        const w = if (styled) rich.layout(self, s[a .. a + trimmed.len], style, spans, a).width else self.width(trimmed, style);
+        lines.append(self.gpa, .{ .start = a, .end = a + trimmed.len, .width = w }) catch break;
+        start16 += n;
+    }
+    if (lines.items.len == 0) lines.append(self.gpa, .{ .start = 0, .end = 0, .width = 0 }) catch {};
+    return lines.toOwnedSlice(self.gpa);
 }

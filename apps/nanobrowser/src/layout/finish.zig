@@ -8,6 +8,7 @@ const box = @import("box.zig");
 const css = @import("../css/style.zig");
 const ctx = @import("ctx.zig");
 const positioned = @import("positioned.zig");
+const cache = @import("cache.zig");
 const Box = box.Box;
 const Ctx = ctx.Ctx;
 const Error = ctx.Error;
@@ -20,6 +21,7 @@ pub fn placeOutOfFlowChild(c: *Ctx, x: *Box, ox: f32, oy: f32, cbs: Cbs) Error!v
     const cb: ?*Box = if (fixed) cbs.fixed else cbs.abs;
     try positioned.place(c, x, x.x + ox, x.y + oy, cb);
     try inside(c, x, x.x, x.y, nextCbs(x, cbs));
+    cache.recordFinished(c, x);
     if (!fixed or cb != null) {
         const target = cb.?;
         const reach = extents(x);
@@ -62,6 +64,10 @@ fn relativeOffset(b: *const Box) [2]f32 {
 /// to, then finishes what is in it.
 fn visit(c: *Ctx, b: *Box, ox: f32, oy: f32, cbs: Cbs) Error!void {
     const rel = relativeOffset(b);
+    if (b.lay.adopted) {
+        try cache.finishAdopted(c, b, ox + rel[0], oy + rel[1]);
+        return;
+    }
     b.x += ox + rel[0];
     b.y += oy + rel[1];
     if (b.kind == .inline_box) {
@@ -73,9 +79,11 @@ fn visit(c: *Ctx, b: *Box, ox: f32, oy: f32, cbs: Cbs) Error!void {
             r.y += inner_y;
         }
         try inside(c, b, inner_x, inner_y, nextCbs(b, cbs));
+        cache.recordFinished(c, b);
         return;
     }
     try inside(c, b, b.x, b.y, nextCbs(b, cbs));
+    cache.recordFinished(c, b);
 }
 
 fn nextCbs(b: *Box, cbs: Cbs) Cbs {

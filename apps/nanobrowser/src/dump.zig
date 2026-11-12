@@ -55,6 +55,49 @@ pub fn eval(p: *Page, source: []const u8) void {
         return;
     };
     std.debug.print("eval: {s}\n", .{w.vm.toStringSlice(v) catch "?"});
+    const pr = @import("perf_rules.zig");
+    std.debug.print("prof(ms): jstask={d:.1} gc={d:.1} replay={d:.1} style={d:.1}(shared={d}/{d} cand={d} rec={d} has={d} unsh={d}/{d}) layout={d:.1}(runs={d} adopted={d} gen={d:.1} size={d:.1} fin={d:.1}) list={d:.1} svg={d:.1} html={d:.1} query={d:.1} compile={d:.1}({d}) js(calls={d} nat={d}/{d:.1}ms slow={d} ic={d} dis={d} iops={d})\n", .{
+        @as(f64, @floatFromInt(pr.prof_js_task_ns)) / 1e6,
+        @as(f64, @floatFromInt(pr.prof_gc_ns)) / 1e6,
+        @as(f64, @floatFromInt(pr.prof_replay_ns)) / 1e6,
+        @as(f64, @floatFromInt(pr.prof_style_ns)) / 1e6,
+        pr.prof_style_shared,
+        pr.prof_style_elems,
+        pr.prof_ss_cand,
+        pr.prof_ss_rec,
+        pr.prof_ss_has,
+        pr.prof_ss_unshare,
+        pr.prof_ss_univ,
+        @as(f64, @floatFromInt(pr.prof_layout_ns)) / 1e6,
+        pr.prof_layout_runs,
+        pr.prof_lay_adopted,
+        @as(f64, @floatFromInt(pr.prof_lay_gen_ns)) / 1e6,
+        @as(f64, @floatFromInt(pr.prof_lay_size_ns)) / 1e6,
+        @as(f64, @floatFromInt(pr.prof_lay_fin_ns)) / 1e6,
+        @as(f64, @floatFromInt(pr.prof_list_ns)) / 1e6,
+        @as(f64, @floatFromInt(pr.prof_svg_ns)) / 1e6,
+        @as(f64, @floatFromInt(pr.prof_html_ns)) / 1e6,
+        @as(f64, @floatFromInt(pr.prof_query_ns)) / 1e6,
+        @as(f64, @floatFromInt(pr.prof_compile_ns)) / 1e6,
+        pr.prof_compile_calls,
+        pr.prof_jit_calls,
+        pr.prof_nat_calls,
+        @as(f64, @floatFromInt(pr.prof_nat_ns)) / 1e6,
+        pr.prof_slow_ops,
+        pr.prof_ic_helpers,
+        pr.prof_jit_disabled,
+        pr.prof_interp_ops,
+    });
+    std.debug.print("  ic_detail: acc={d} miss_slot={d} prim={d} exotic={d} | ss_rej: style={d} id={d} state={d} val={d} rh={d} tag={d} | ss_miss: gen={d} pstyle={d} cousin={d} key={d}\n  slow_ops:", .{
+        pr.prof_ic_acc, pr.prof_ic_miss_slot, pr.prof_ic_prim, pr.prof_ic_exotic,
+        pr.prof_ss_rej_style, pr.prof_ss_rej_id, pr.prof_ss_rej_state, pr.prof_ss_rej_val, pr.prof_ss_rej_root_host, pr.prof_ss_rej_tag,
+        pr.prof_ss_miss_gen, pr.prof_ss_miss_pstyle, pr.prof_ss_miss_cousin, pr.prof_ss_miss_key,
+    });
+    const Op = @import("js/bytecode.zig").Op;
+    for (pr.prof_slow_hist, 0..) |cnt, idx| {
+        if (cnt >= 50_000) std.debug.print(" {s}={d}", .{ @tagName(@as(Op, @enumFromInt(idx))), cnt });
+    }
+    std.debug.print("\n", .{});
 }
 
 /// The whole document, one line an element.

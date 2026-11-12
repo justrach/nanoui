@@ -59,6 +59,131 @@ pub const decodeData = portable.decodeData;
 /// Where a link leads from the URL it is on (`http_url.zig`).
 pub const resolve = @import("http_url.zig").resolve;
 
+/// An answer owned by `gpa`, returned synchronously by `send` (safe to call
+/// from worker threads and headless processes without bouncing to the main queue).
+pub const OwnedResponse = struct {
+    gpa: std.mem.Allocator,
+    answer: Answer = .{},
+
+    pub fn status(r: *const OwnedResponse) u16 {
+        return r.answer.status;
+    }
+
+    pub fn body(r: *const OwnedResponse) []const u8 {
+        return r.answer.body;
+    }
+
+    pub fn err(r: *const OwnedResponse) []const u8 {
+        return r.answer.err;
+    }
+
+    pub fn headers(r: *const OwnedResponse) []const Header {
+        return r.answer.headers.items;
+    }
+
+    pub fn url(r: *const OwnedResponse) []const u8 {
+        return r.answer.url;
+    }
+
+    pub fn header(r: *const OwnedResponse, name: []const u8) ?[]const u8 {
+        for (r.answer.headers.items) |h| if (std.ascii.eqlIgnoreCase(h.name, name)) return h.value;
+        return null;
+    }
+
+    pub fn deinit(r: *OwnedResponse) void {
+        r.gpa.free(r.answer.body);
+        r.answer.freeHead(r.gpa);
+        if (r.answer.err_owned) r.gpa.free(r.answer.err);
+        r.* = .{ .gpa = r.gpa };
+    }
+};
+
+fn makeAppleRequest(req: Request) ?objc.Object {
+    const url = objc.msg(?objc.Object, objc.class("NSURL"), "URLWithString:", .{objc.nsString(req.url)}) orelse return null;
+    const r = objc.msg(objc.Object, objc.class("NSMutableURLRequest"), "requestWithURL:", .{url});
+    objc.msg(void, r, "setHTTPMethod:", .{objc.nsString(req.method)});
+    objc.msg(void, r, "setTimeoutInterval:", .{req.timeout});
+    for (req.headers) |h| objc.msg(void, r, "setValue:forHTTPHeaderField:", .{ objc.nsString(h.value), objc.nsString(h.name) });
+    if (req.body.len > 0) {
+        const data = objc.msg(objc.Object, objc.class("NSData"), "dataWithBytes:length:", .{ req.body.ptr, @as(objc.NSUInteger, req.body.len) });
+        objc.msg(void, r, "setHTTPBody:", .{data});
+    }
+    return r;
+}
+
+fn fillAppleAnswer(gpa: std.mem.Allocator, p: *Answer, data: ?objc.Object, response: ?objc.Object, err: ?objc.Object) void {
+    if (response) |res| {
+        if (objc.msg(objc.BOOL, res, "isKindOfClass:", .{objc.class("NSHTTPURLResponse")}) != objc.NO) {
+            p.status = @intCast(std.math.clamp(objc.msg(objc.NSInteger, res, "statusCode", .{}), 0, 999));
+            const fields = objc.msg(objc.Object, res, "allHeaderFields", .{});
+            const names = objc.msg(objc.Object, fields, "allKeys", .{});
+            for (0..objc.msg(objc.NSUInteger, names, "count", .{})) |i| {
+                const name = objc.msg(objc.Object, names, "objectAtIndex:", .{@as(objc.NSUInteger, i)});
+                const value = objc.msg(?objc.Object, fields, "objectForKey:", .{name});
+                p.addHeader(gpa, objc.fromNSString(name), objc.fromNSString(value)) catch break;
+            }
+        } else p.status = 200; // A `data:` address has no HTTP in it, as on the portable path.
+        if (objc.msg(?objc.Object, res, "URL", .{})) |u|
+            p.url = gpa.dupe(u8, objc.fromNSString(objc.msg(?objc.Object, u, "absoluteString", .{}))) catch "";
+    }
+    if (data) |d| {
+        const len = objc.msg(objc.NSUInteger, d, "length", .{});
+        if (len > 0) if (gpa.alloc(u8, len)) |body| {
+            const bytes = objc.msg(?[*]const u8, d, "bytes", .{});
+            if (bytes) |b| @memcpy(body, b[0..len]);
+            p.body = body;
+        } else |_| {
+            p.err = "out of memory";
+        };
+    }
+    if (err) |e| {
+        const why = objc.fromNSString(objc.msg(?objc.Object, e, "localizedDescription", .{}));
+        if (gpa.dupe(u8, why)) |copy| {
+            p.err = copy;
+            p.err_owned = true;
+        } else |_| p.err = "failed";
+        p.status = 0;
+    }
+}
+
+/// Sends `req` synchronously on the calling thread and returns an `OwnedResponse`
+/// whose buffers belong to `gpa` (call `deinit()` when done). Uses `NSURLSession`
+/// on macOS and iOS so iOS sandbox TLS trust stores, proxies, and HTTP/2 work on
+/// background worker threads without requiring `/etc/ssl/cert.pem` or the main queue.
+pub fn send(gpa: std.mem.Allocator, req: Request) OwnedResponse {
+    var out: OwnedResponse = .{ .gpa = gpa };
+    if (!apple) {
+        portable.sendSync(gpa, req, &out.answer);
+        return out;
+    }
+    const Wait = struct {
+        gpa: std.mem.Allocator,
+        answer: *Answer,
+        sem: objc.dispatch_semaphore_t,
+        fn done(w: *@This(), data: ?objc.Object, response: ?objc.Object, err_obj: ?objc.Object) void {
+            const pool = objc.Pool.push();
+            defer pool.pop();
+            fillAppleAnswer(w.gpa, w.answer, data, response, err_obj);
+            _ = objc.dispatch_semaphore_signal(w.sem);
+        }
+    };
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    const r = makeAppleRequest(req) orelse {
+        out.answer.err = "not a URL";
+        return out;
+    };
+    const sem = objc.dispatch_semaphore_create(0);
+    defer objc.dispatch_release(@ptrCast(sem));
+    var wait_ctx: Wait = .{ .gpa = gpa, .answer = &out.answer, .sem = sem };
+    const session = objc.msg(objc.Object, objc.class("NSURLSession"), "sharedSession", .{});
+    var block = objc.Block(Wait, &.{ ?objc.Object, ?objc.Object, ?objc.Object }).init(&wait_ctx, Wait.done);
+    const task = objc.msg(objc.Object, session, "dataTaskWithRequest:completionHandler:", .{ r, @as(*anyopaque, @ptrCast(&block)) });
+    objc.msg(void, task, "resume", .{});
+    _ = objc.dispatch_semaphore_wait(sem, objc.DISPATCH_TIME_FOREVER);
+    return out;
+}
+
 /// Sends `req` and calls `done(ctx, response)` on the main thread when it
 /// is answered or fails. `req`'s bytes are copied: they need not outlive
 /// the call.
@@ -72,18 +197,10 @@ pub fn fetch(gpa: std.mem.Allocator, req: Request, ctx: anytype, comptime done: 
     };
     const pool = objc.Pool.push();
     defer pool.pop();
-    const url = objc.msg(?objc.Object, objc.class("NSURL"), "URLWithString:", .{objc.nsString(req.url)}) orelse {
+    const r = makeAppleRequest(req) orelse {
         p.answer.err = "not a URL";
         return P.deliver(p);
     };
-    const r = objc.msg(objc.Object, objc.class("NSMutableURLRequest"), "requestWithURL:", .{url});
-    objc.msg(void, r, "setHTTPMethod:", .{objc.nsString(req.method)});
-    objc.msg(void, r, "setTimeoutInterval:", .{req.timeout});
-    for (req.headers) |h| objc.msg(void, r, "setValue:forHTTPHeaderField:", .{ objc.nsString(h.value), objc.nsString(h.name) });
-    if (req.body.len > 0) {
-        const data = objc.msg(objc.Object, objc.class("NSData"), "dataWithBytes:length:", .{ req.body.ptr, @as(objc.NSUInteger, req.body.len) });
-        objc.msg(void, r, "setHTTPBody:", .{data});
-    }
     const session = objc.msg(objc.Object, objc.class("NSURLSession"), "sharedSession", .{});
     // The session copies the block (and with it `p`), and calls it on a
     // queue of its own.
@@ -135,45 +252,8 @@ fn Pending(comptime Ctx: type, comptime done: fn (Ctx, Response) void) type {
         fn answered(s: *Self, data: ?objc.Object, response: ?objc.Object, err: ?objc.Object) void {
             const pool = objc.Pool.push();
             defer pool.pop();
-            const p = &s.answer;
-            if (response) |res| {
-                if (objc.msg(objc.BOOL, res, "isKindOfClass:", .{objc.class("NSHTTPURLResponse")}) != objc.NO) {
-                    p.status = @intCast(std.math.clamp(objc.msg(objc.NSInteger, res, "statusCode", .{}), 0, 999));
-                    s.keepHeaders(res);
-                } else p.status = 200; // A `data:` address has no HTTP in it, as on the portable path.
-                if (objc.msg(?objc.Object, res, "URL", .{})) |u|
-                    p.url = s.gpa.dupe(u8, objc.fromNSString(objc.msg(?objc.Object, u, "absoluteString", .{}))) catch "";
-            }
-            if (data) |d| {
-                const len = objc.msg(objc.NSUInteger, d, "length", .{});
-                if (len > 0) if (s.gpa.alloc(u8, len)) |body| {
-                    const bytes = objc.msg(?[*]const u8, d, "bytes", .{});
-                    if (bytes) |b| @memcpy(body, b[0..len]);
-                    p.body = body;
-                } else |_| {
-                    p.err = "out of memory";
-                };
-            }
-            if (err) |e| {
-                const why = objc.fromNSString(objc.msg(?objc.Object, e, "localizedDescription", .{}));
-                if (s.gpa.dupe(u8, why)) |copy| {
-                    p.err = copy;
-                    p.err_owned = true;
-                } else |_| p.err = "failed";
-                p.status = 0;
-            }
+            fillAppleAnswer(s.gpa, &s.answer, data, response, err);
             objc.dispatchMain(s, deliverC);
-        }
-
-        /// An NSHTTPURLResponse's headers, copied. Out of memory leaves the rest out.
-        fn keepHeaders(s: *Self, res: objc.Object) void {
-            const fields = objc.msg(objc.Object, res, "allHeaderFields", .{});
-            const names = objc.msg(objc.Object, fields, "allKeys", .{});
-            for (0..objc.msg(objc.NSUInteger, names, "count", .{})) |i| {
-                const name = objc.msg(objc.Object, names, "objectAtIndex:", .{@as(objc.NSUInteger, i)});
-                const value = objc.msg(?objc.Object, fields, "objectForKey:", .{name});
-                s.answer.addHeader(s.gpa, objc.fromNSString(name), objc.fromNSString(value)) catch return;
-            }
         }
 
         fn deliverC(context: ?*anyopaque) callconv(.c) void {
@@ -239,4 +319,25 @@ test "headers are found in any case" {
     const r: Response = .{ .status = 200, .body = "", .headers = &.{.{ .name = "content-type", .value = "text/html" }} };
     try std.testing.expectEqualStrings("text/html", r.header("Content-Type").?);
     try std.testing.expect(r.header("location") == null);
+}
+
+test "send answers synchronously on the calling thread and on a worker thread" {
+    var r = send(std.testing.allocator, .{ .url = "data:text/plain,sync%20main" });
+    defer r.deinit();
+    try std.testing.expectEqual(@as(u16, 200), r.status());
+    try std.testing.expectEqualStrings("sync main", r.body());
+    try std.testing.expect(std.mem.startsWith(u8, r.url(), "data:text/plain"));
+
+    const Worker = struct {
+        ok: bool = false,
+        fn run(w: *@This(), gpa: std.mem.Allocator) void {
+            var res = send(gpa, .{ .url = "data:text/plain;base64,d29ya2VyIG9r" });
+            defer res.deinit();
+            w.ok = res.status() == 200 and std.mem.eql(u8, res.body(), "worker ok");
+        }
+    };
+    var w: Worker = .{};
+    const t = try std.Thread.spawn(.{}, Worker.run, .{ &w, std.testing.allocator });
+    t.join();
+    try std.testing.expect(w.ok);
 }

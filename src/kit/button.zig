@@ -30,6 +30,8 @@ pub const Options = struct {
     /// Liquid Glass instead of a fill: clear for default, ghost and text,
     /// tinted by the variant's color otherwise.
     glass: bool = false,
+    /// Custom scale target while pressed (for tactile contraction on glass pills/circles).
+    press_scale: ?f32 = null,
 };
 
 const Look = struct { bg: Color, fg: Color, border: ?Color = null, underline: bool = false };
@@ -66,6 +68,7 @@ pub fn button(c: *ui.Context, label: []const u8, opts: Options) ui.Interaction {
     if (label.len == 0 and !plain) d = d.w(h);
     if (opts.full_width) d = d.wFull();
     d = d.rounded(if (opts.pill) h / 2 else t.radius);
+    if (opts.pill) d = d.circular();
     const it = d.interaction();
     defer d.end();
     const live = !opts.disabled and !opts.loading;
@@ -83,24 +86,31 @@ pub fn button(c: *ui.Context, label: []const u8, opts: Options) ui.Interaction {
     }
     n.style.background = bg;
     n.style.border = l.border;
+    const tinted_glass = l.bg.a > 0.99 and opts.variant != .default and opts.variant != .secondary;
+    const use_glass = opts.glass and !c.access.reduce_transparency;
     if (opts.variant == .default and !opts.glass) n.style.shadow = .{ .color = t.shadow.alpha(0.4), .blur = 2, .y = 1 };
-    if (opts.glass) {
+    if (use_glass) {
         // The variant's color tints the glass (prominent glass); clear
         // variants stay clear, and light up under a press, as interactive
         // glass does.
-        const tinted = l.bg.a > 0.99 and opts.variant != .default and opts.variant != .secondary;
-        n.style.glass = .{ .tint = if (tinted) l.bg.alpha(0.85 + 0.12 * press) else ui.Color.white.alpha(0.22 * press) };
+        n.style.glass = .{ .tint = if (tinted_glass) l.bg.alpha(0.85 + 0.12 * press) else ui.Color.white.alpha(0.22 * press) };
         n.style.background = null;
         n.style.border = null;
+    } else if (opts.glass) {
+        // Reduce Transparency replaces glass refraction with an opaque surface and border.
+        n.style.glass = null;
+        n.style.background = if (tinted_glass) bg else if (opts.selected) t.surface_hover else t.surface;
+        n.style.border = l.border orelse t.border;
     }
     // Disabled and enabled fade into each other.
     n.style.opacity = ui.motion.number(c, "opacity", if (opts.disabled) 0.45 else 1, .{ .tween = .{ .duration = 0.2, .ease = .ease_out } });
     // A spring and a bounce on release: a solid button gives under a press;
-    // glass swells, as iOS's interactive glass does.
-    const pressed_to: f32 = if (opts.glass) 1.08 else 0.965;
-    const hover_to: f32 = if (opts.glass) 1.03 else 1;
-    n.style.scale = ui.motion.number(c, "scale", if (live and it.pressed) pressed_to else if (live and it.hovered) hover_to else 1, .{ .spring = ui.motion.Spring.bouncy });
-    var fg = if (opts.glass and n.style.glass.?.tint.a == 0) t.foreground else l.fg;
+    // glass swells unless `press_scale` asks for contraction; Reduce Motion holds scale at 1.
+    const pressed_to: f32 = opts.press_scale orelse if (use_glass) 1.08 else 0.965;
+    const hover_to: f32 = if (use_glass and opts.press_scale == null) 1.03 else 1;
+    const scale_target: f32 = if (c.reduced_motion) 1 else if (live and it.pressed) pressed_to else if (live and it.hovered) hover_to else 1;
+    n.style.scale = if (c.reduced_motion) 1 else ui.motion.number(c, "scale", scale_target, .{ .spring = ui.motion.Spring.bouncy });
+    var fg = if ((use_glass and n.style.glass.?.tint.a == 0) or (opts.glass and !use_glass and !tinted_glass)) t.foreground else l.fg;
     if (plain) fg = fg.mix(t.muted, hover * 0.35);
     if (opts.loading) {
         kit.spinner(c, .{ .size = size, .color = fg });

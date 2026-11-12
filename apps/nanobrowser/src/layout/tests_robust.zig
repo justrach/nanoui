@@ -31,7 +31,7 @@ test "deep nesting is capped, and deeper content is dropped" {
         const leaf = try deep(&t, 5000, s);
         _ = try t.text(leaf, "aa");
         try t.run(800, 600);
-        try std.testing.expect(leaf.box == null);
+        try std.testing.expect(leaf.liveBox() == null);
     }
 }
 

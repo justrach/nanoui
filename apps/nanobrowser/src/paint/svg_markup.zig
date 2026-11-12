@@ -16,7 +16,16 @@ const Allocator = std.mem.Allocator;
 
 const max_depth = 96;
 
-const Entry = struct { bytes: []u8, key: []u8, sig: u64 };
+const Entry = struct {
+    bytes: []u8,
+    key: []u8,
+    sig: u64,
+    svg_ver: u32 = 0,
+    svg_style_ver: u32 = 0,
+    w: f32 = -1,
+    h: f32 = -1,
+    has_external_refs: bool = true,
+};
 
 /// What each drawn `<svg>` was last made into. A node's `image` and `image_key`
 /// point here.
@@ -64,19 +73,36 @@ fn one(p: *Page, root: *Node) void {
     const b = layout.boxOfNode(root) orelse return;
     const rect = b.contentRect();
     if (rect.w <= 0 or rect.h <= 0) return;
-    const sig = signature(p, root, rect.w, rect.h);
-    if (p.svgs.map.get(root)) |e| if (e.sig == sig and root.image.ptr == e.bytes.ptr) return;
+    const existing = p.svgs.map.getPtr(root);
+    if (existing) |e| {
+        if (!e.has_external_refs and e.svg_ver == p.doc.svg_version and e.svg_style_ver == p.doc.svg_style_version and e.w == rect.w and e.h == rect.h and root.image.ptr == e.bytes.ptr) return;
+    }
+    const ext_refs = if (existing) |e| e.has_external_refs else false;
+    const sig = signature(p, root, rect.w, rect.h, ext_refs);
+    if (existing) |e| if (e.sig == sig and root.image.ptr == e.bytes.ptr) {
+        e.svg_ver = p.doc.svg_version;
+        e.svg_style_ver = p.doc.svg_style_version;
+        e.w = rect.w;
+        e.h = rect.h;
+        return;
+    };
     var a = std.heap.ArenaAllocator.init(p.gpa);
     defer a.deinit();
     var w: Writer = .{ .a = a.allocator(), .engine = &p.engine, .doc = p.doc, .page = p };
     const text = w.document(root, rect.w, rect.h) catch return;
-    store(p, root, text, sig);
+    const final_sig = if (w.used_external_refs != ext_refs) signature(p, root, rect.w, rect.h, w.used_external_refs) else sig;
+    store(p, root, text, final_sig, rect.w, rect.h, w.used_external_refs);
 }
 
-fn store(p: *Page, root: *Node, text: []const u8, sig: u64) void {
+fn store(p: *Page, root: *Node, text: []const u8, sig: u64, bw: f32, bh: f32, ext_refs: bool) void {
     const gop = p.svgs.map.getOrPut(p.gpa, root) catch return;
     if (gop.found_existing and std.mem.eql(u8, gop.value_ptr.bytes, text)) {
         gop.value_ptr.sig = sig;
+        gop.value_ptr.svg_ver = p.doc.svg_version;
+        gop.value_ptr.svg_style_ver = p.doc.svg_style_version;
+        gop.value_ptr.w = bw;
+        gop.value_ptr.h = bh;
+        gop.value_ptr.has_external_refs = ext_refs;
         root.image = gop.value_ptr.bytes;
         root.image_key = gop.value_ptr.key;
         return;
@@ -94,17 +120,26 @@ fn store(p: *Page, root: *Node, text: []const u8, sig: u64) void {
         p.gpa.free(gop.value_ptr.bytes);
         p.gpa.free(gop.value_ptr.key);
     }
-    gop.value_ptr.* = .{ .bytes = bytes, .key = key, .sig = sig };
+    gop.value_ptr.* = .{
+        .bytes = bytes,
+        .key = key,
+        .sig = sig,
+        .svg_ver = p.doc.svg_version,
+        .svg_style_ver = p.doc.svg_style_version,
+        .w = bw,
+        .h = bh,
+        .has_external_refs = ext_refs,
+    };
     root.image = bytes;
     root.image_key = key;
 }
 
 /// What the markup depends on: computed styles are kept by pointer while they
 /// don't change, and any change to any `<svg>` moves the document's version.
-fn signature(p: *Page, root: *Node, w: f32, h: f32) u64 {
+fn signature(p: *Page, root: *Node, w: f32, h: f32, has_external_refs: bool) u64 {
     var hash = std.hash.Wyhash.init(0x5f6);
     hash.update(std.mem.asBytes(&p.doc.svg_version));
-    hash.update(std.mem.asBytes(&p.engine.generation));
+    if (has_external_refs) hash.update(std.mem.asBytes(&p.engine.generation));
     hash.update(std.mem.asBytes(&[2]f32{ w, h }));
     var at: ?*Node = root;
     while (at) |n| : (at = n.nextInTree(root)) {
@@ -114,6 +149,9 @@ fn signature(p: *Page, root: *Node, w: f32, h: f32) u64 {
         // A paint-only restyle writes over the style where it is, so its address
         // says nothing of what it now holds.
         if (n.computed) |s| {
+            hash.update(std.mem.asBytes(&s.display));
+            hash.update(std.mem.asBytes(&s.visibility));
+            hash.update(std.mem.asBytes(&s.opacity));
             hash.update(std.mem.asBytes(&s.color));
             hash.update(std.mem.asBytes(&s.svg));
         }
@@ -132,6 +170,7 @@ const Writer = struct {
     wanted: std.ArrayList([]const u8) = .empty,
     memo: cascade.DetachedMemo = .empty,
     budget: u32 = 200_000,
+    used_external_refs: bool = false,
 
     fn put(w: *Writer, s: []const u8) !void {
         try w.out.appendSlice(w.a, s);
@@ -164,6 +203,7 @@ const Writer = struct {
         while (i < w.wanted.items.len) : (i += 1) {
             const id = w.wanted.items[i];
             if (w.written.contains(id)) continue;
+            w.used_external_refs = true;
             const target = w.doc.getElementById(id) orelse continue;
             if (!isSvgThing(target)) continue;
             if (!opened) try w.put("<defs>");

@@ -18,24 +18,118 @@ const str = @import("string.zig");
 const shape_mod = @import("shape.zig");
 const heap = @import("heap.zig");
 const interp_call = @import("interp_call.zig");
-const typed = @import("b_typed.zig");
 
 pub inline fn callGetterSlot(vm: *Vm, slot_val: Value, receiver: Value) Error!Value {
     return props.callGetter(vm, slot_val, receiver);
 }
 
+pub inline fn noExoticOnChain(o: *const Object) bool {
+    var cur: ?*const Object = o;
+    while (cur) |c| : (cur = c.shape.proto) {
+        if (c.flags.exotic) return false;
+    }
+    return true;
+}
+
 inline fn pushOwnPoly(ic: *bc.IC, cur_sh: *shape_mod.Shape) void {
     if (ic.fast_own_data and ic.shape != null and ic.shape != cur_sh) {
-        var found = false;
-        inline for (0..bc.IC.own_poly_cap) |k| if (ic.own_shapes[k] == ic.shape) {
-            found = true;
-        };
-        if (!found) {
+        if (!addOwnPolySlot(ic, ic.shape.?, ic.slot)) {
             const idx = ic.own_idx & (bc.IC.own_poly_cap - 1);
             ic.own_shapes[idx] = ic.shape;
             ic.own_slots[idx] = ic.slot;
             ic.own_idx +%= 1;
         }
+    }
+}
+
+inline fn addOwnPolySlot(ic: *bc.IC, sh: *shape_mod.Shape, slot: u32) bool {
+    inline for (0..bc.IC.own_poly_cap) |k| {
+        if (ic.own_shapes[k] == sh) return true;
+        if (ic.own_shapes[k] == null) {
+            ic.own_shapes[k] = sh;
+            ic.own_slots[k] = slot;
+            return true;
+        }
+    }
+    return false;
+}
+
+inline fn isStaleProtoIC(ic: *const bc.IC, proto_epoch: u32) bool {
+    if (ic.fast_own_data) return false;
+    if (ic.epoch != proto_epoch) return true;
+    if (ic.holder) |h| if (h.shape != ic.holder_shape) return true;
+    return false;
+}
+
+inline fn fillFromMega(ic: *bc.IC, sh: *shape_mod.Shape, me: *const vm_mod.MegaICEntry, proto_epoch: u32) void {
+    if (me.holder) |mh| {
+        const acc = (me.slot & vm_mod.MegaICEntry.acc_flag) != 0;
+        const idx = me.slot & ~vm_mod.MegaICEntry.acc_flag;
+        if (!ic.fast_own_data and ic.holder == mh and ic.holder_shape == me.holder_shape and ic.slot == idx and ic.is_accessor == acc and ic.epoch == proto_epoch) {
+            if (ic.shape == null) ic.shape = sh else if (ic.shape != sh) insertProtoPoly(ic, sh);
+        } else if (ic.shape == null or isStaleProtoIC(ic, proto_epoch)) {
+            ic.proto_shapes = @splat(null);
+            ic.proto_idx = 0;
+            ic.shape = sh;
+            ic.holder = mh;
+            ic.holder_shape = me.holder_shape;
+            ic.slot = idx;
+            ic.epoch = proto_epoch;
+            ic.is_accessor = acc;
+            ic.is_transition = false;
+            ic.fast_own_data = false;
+            ic.fast_proto_data = !acc;
+        }
+    } else if (me.slot == bc.IC.missing_slot) {
+        if (!ic.fast_own_data and ic.holder == null and ic.slot == bc.IC.missing_slot and ic.epoch == proto_epoch) {
+            if (ic.shape == null) ic.shape = sh else if (ic.shape != sh) insertProtoPoly(ic, sh);
+        } else if (ic.shape == null or isStaleProtoIC(ic, proto_epoch)) {
+            ic.proto_shapes = @splat(null);
+            ic.proto_idx = 0;
+            ic.shape = sh;
+            ic.holder = null;
+            ic.holder_shape = null;
+            ic.slot = bc.IC.missing_slot;
+            ic.epoch = proto_epoch;
+            ic.is_accessor = false;
+            ic.is_transition = false;
+            ic.fast_own_data = false;
+            ic.fast_proto_data = false;
+        }
+    } else {
+        if (ic.shape == null or isStaleProtoIC(ic, proto_epoch)) {
+            ic.proto_shapes = @splat(null);
+            ic.proto_idx = 0;
+            ic.shape = sh;
+            ic.holder = null;
+            ic.holder_shape = null;
+            ic.slot = me.slot;
+            ic.epoch = 0;
+            ic.is_accessor = false;
+            ic.is_transition = false;
+            ic.fast_own_data = true;
+            ic.fast_proto_data = false;
+        } else if (ic.shape != sh) {
+            _ = addOwnPolySlot(ic, sh, me.slot);
+        }
+    }
+}
+
+inline fn hasProtoPoly(ic: *const bc.IC, sh: *const shape_mod.Shape) bool {
+    const base = bc.IC.protoHashBase(sh);
+    return ic.proto_shapes[base] == sh or ic.proto_shapes[base + 1] == sh;
+}
+
+inline fn insertProtoPoly(ic: *bc.IC, sh: *shape_mod.Shape) void {
+    const base = bc.IC.protoHashBase(sh);
+    if (ic.proto_shapes[base] == sh or ic.proto_shapes[base + 1] == sh) return;
+    if (ic.proto_shapes[base] == null) {
+        ic.proto_shapes[base] = sh;
+    } else if (ic.proto_shapes[base + 1] == null) {
+        ic.proto_shapes[base + 1] = sh;
+    } else {
+        ic.proto_shapes[base + (ic.proto_idx & 1)] = sh;
+        ic.proto_idx +%= 1;
     }
 }
 
@@ -57,28 +151,54 @@ pub fn callSetterSlot(vm: *Vm, ic: *bc.IC, slot_val: Value, receiver: Value, v: 
 
 pub fn getField(vm: *Vm, ic: *bc.IC, v: Value) Error!Value {
     if (!v.isObject()) {
-        if (v.isString() and !ic.key.isIndex()) {
-            if (ic.key.eql(vm.k.length)) return Value.fromUsize(v.asString().len16);
-            const sp = vm.protos.string;
-            if (ic.holder == sp and ic.holder_shape == sp.shape and ic.epoch == vm.proto_epoch and ic.slot != bc.IC.missing_slot) {
-                const sv = sp.slots[ic.slot];
-                return if (ic.is_accessor) props.callGetter(vm, sv, v) else sv;
+        if (!ic.key.isIndex()) {
+            if (v.isString() and ic.key.eql(vm.k.length)) {
+                ic.is_str_len = true;
+                return Value.fromUsize(v.asString().len16);
             }
-            if (!sp.shape.is_dict) {
-                if (sp.shape.find(ic.key)) |slot| {
-                    const acc = sp.shape.flagsAt(slot).accessor;
-                    ic.shape = null;
-                    ic.holder = sp;
-                    ic.holder_shape = sp.shape;
-                    ic.slot = slot;
-                    ic.epoch = vm.proto_epoch;
-                    ic.is_accessor = acc;
-                    ic.is_transition = false;
-                    ic.fast_own_data = false;
-                    ic.fast_proto_data = !acc;
-                    ic.proto_shapes = @splat(null);
-                    const sv = sp.slots[slot];
-                    return if (acc) props.callGetter(vm, sv, v) else sv;
+            const pp: ?*Object = if (v.isString()) vm.protos.string else if (v.isNumber()) vm.protos.number else if (v.isBool()) vm.protos.boolean else null;
+            if (pp) |p| {
+                const psh = p.shape;
+                const me = vm.megaSlot(psh, ic.key.bits);
+                if (me.shape == psh and me.key_bits == ic.key.bits) {
+                    if (me.holder) |mh| {
+                        if (me.epoch == vm.proto_epoch and mh.shape == me.holder_shape) {
+                            const sv = mh.slots[me.slot & ~vm_mod.MegaICEntry.acc_flag];
+                            return if ((me.slot & vm_mod.MegaICEntry.acc_flag) != 0) props.callGetter(vm, sv, v) else sv;
+                        }
+                    } else if (me.slot == bc.IC.missing_slot) {
+                        if (me.epoch == vm.proto_epoch) return Value.undefined;
+                    } else {
+                        return p.slots[me.slot];
+                    }
+                }
+                if (!psh.is_dict and !p.flags.lazy_fn) {
+                    if (psh.find(ic.key)) |slot| {
+                        const acc = psh.flagsAt(slot).accessor;
+                        me.* = if (acc)
+                            .{ .shape = psh, .key_bits = ic.key.bits, .holder = p, .holder_shape = psh, .slot = slot | vm_mod.MegaICEntry.acc_flag, .epoch = vm.proto_epoch }
+                        else
+                            .{ .shape = psh, .key_bits = ic.key.bits, .holder = null, .holder_shape = null, .slot = slot, .epoch = 0 };
+                        const sv = p.slots[slot];
+                        return if (acc) props.callGetter(vm, sv, v) else sv;
+                    }
+                    const is_lazy_key = ic.key.eql(vm.k.name) or ic.key.eql(vm.k.length) or ic.key.eql(vm.k.prototype);
+                    var cur = psh.proto;
+                    while (cur) |h| : (cur = h.shape.proto) {
+                        if (h.flags.exotic or h.flags.lazy_fn) break;
+                        if (h.class == .array and ic.key.eql(vm.k.length)) break;
+                        const hs = h.shape;
+                        if ((hs == vm.fn_root or h.class == .closure or h.class == .native) and is_lazy_key) break;
+                        if (hs.find(ic.key)) |hslot| {
+                            const acc = hs.flagsAt(hslot).accessor;
+                            if (!hs.is_dict) me.* = .{ .shape = psh, .key_bits = ic.key.bits, .holder = h, .holder_shape = hs, .slot = hslot | (if (acc) vm_mod.MegaICEntry.acc_flag else 0), .epoch = vm.proto_epoch };
+                            const sv = h.slots[hslot];
+                            return if (acc) props.callGetter(vm, sv, v) else sv;
+                        }
+                    } else {
+                        me.* = .{ .shape = psh, .key_bits = ic.key.bits, .holder = null, .holder_shape = null, .slot = bc.IC.missing_slot, .epoch = vm.proto_epoch };
+                        return Value.undefined;
+                    }
                 }
             }
         }
@@ -97,37 +217,58 @@ pub fn getField(vm: *Vm, ic: *bc.IC, v: Value) Error!Value {
         }
     }
     inline for (0..bc.IC.own_poly_cap) |k| if (ic.own_shapes[k] == sh) {
-        const slot = ic.own_slots[k];
-        if (ic.fast_own_data and ic.shape != null) {
-            ic.own_shapes[k] = ic.shape;
-            ic.own_slots[k] = ic.slot;
-            ic.shape = sh;
-            ic.slot = slot;
-        }
-        return o.slots[slot];
+        return o.slots[ic.own_slots[k]];
     };
     if (ic.holder) |h| {
-        if (ic.epoch == vm.proto_epoch and h.shape == ic.holder_shape and ic.slot != bc.IC.missing_slot) {
-            inline for (0..bc.IC.proto_poly_cap) |k| {
-                if (ic.proto_shapes[k] == sh) {
-                    if (ic.shape != null and !ic.fast_own_data) {
-                        ic.proto_shapes[k] = ic.shape;
-                        ic.shape = sh;
-                    }
-                    const sv = h.slots[ic.slot];
-                    return if (ic.is_accessor) props.callGetter(vm, sv, v) else sv;
+        if (ic.epoch == vm.proto_epoch and h.shape == ic.holder_shape and ic.slot != bc.IC.missing_slot and hasProtoPoly(ic, sh)) {
+            const sv = h.slots[ic.slot];
+            return if (ic.is_accessor) props.callGetter(vm, sv, v) else sv;
+        }
+    } else if (ic.slot == bc.IC.missing_slot and ic.epoch == vm.proto_epoch and hasProtoPoly(ic, sh)) {
+        return Value.undefined;
+    }
+    var exotic_ok = !o.flags.exotic or o.class == .typedarray or (o.class == .host_exotic and o.payload.hooks.get_named == null and !ic.key.eql(vm.k.length));
+    if (!exotic_ok and o.class == .host_exotic and o.payload.hooks.named_null_deterministic and !ic.key.isIndex() and !ic.key.eql(vm.k.length)) {
+        if (ic.key.isAtom()) {
+            if (try o.payload.hooks.get_named.?(vm, o, try ic.key.atom().flat(vm))) |val| return val;
+        }
+        exotic_ok = true;
+    }
+    if (exotic_ok and !ic.key.isIndex()) {
+        const me = vm.megaSlot(sh, ic.key.bits);
+        if (me.shape == sh and me.key_bits == ic.key.bits) {
+            if (me.holder) |mh| {
+                if (me.epoch == vm.proto_epoch and mh.shape == me.holder_shape) {
+                    fillFromMega(ic, sh, me, vm.proto_epoch);
+                    const sv = mh.slots[me.slot & ~vm_mod.MegaICEntry.acc_flag];
+                    return if ((me.slot & vm_mod.MegaICEntry.acc_flag) != 0) props.callGetter(vm, sv, v) else sv;
                 }
+            } else if (me.slot == bc.IC.missing_slot) {
+                if (me.epoch == vm.proto_epoch) {
+                    fillFromMega(ic, sh, me, vm.proto_epoch);
+                    return Value.undefined;
+                }
+            } else {
+                fillFromMega(ic, sh, me, vm.proto_epoch);
+                return o.slots[me.slot];
             }
         }
-    }
-    const exotic_ok = !o.flags.exotic or o.class == .typedarray or (o.class == .host_exotic and o.payload.hooks.get_named == null and !ic.key.eql(vm.k.length));
-    if (exotic_ok and !ic.key.isIndex()) {
         if (o.flags.lazy_fn) try props.touchLazy(vm, o, ic.key);
         const cur_sh = o.shape;
+        const me_cur = if (cur_sh == sh) me else vm.megaSlot(cur_sh, ic.key.bits);
+        const is_lazy_key = ic.key.eql(vm.k.name) or ic.key.eql(vm.k.length) or ic.key.eql(vm.k.prototype);
+        const can_mega = exotic_ok and !(o.class == .array and ic.key.eql(vm.k.length)) and !(o.flags.lazy_fn and cur_sh == vm.fn_root and is_lazy_key);
         if (cur_sh.find(ic.key)) |slot| {
             const acc = cur_sh.flagsAt(slot).accessor;
             if (!cur_sh.is_dict) {
-                if (!acc) pushOwnPoly(ic, cur_sh);
+                if (!acc and can_mega) me_cur.* = .{ .shape = cur_sh, .key_bits = ic.key.bits, .holder = null, .holder_shape = null, .slot = slot, .epoch = 0 };
+                if (!acc and ic.shape != null and !isStaleProtoIC(ic, vm.proto_epoch)) {
+                    if (addOwnPolySlot(ic, cur_sh, slot) or ic.fast_own_data or can_mega) return o.slots[slot];
+                }
+                if (!ic.fast_own_data) {
+                    ic.proto_shapes = @splat(null);
+                    ic.proto_idx = 0;
+                }
                 ic.shape = cur_sh;
                 ic.holder = null;
                 ic.holder_shape = null;
@@ -142,7 +283,6 @@ pub fn getField(vm: *Vm, ic: *bc.IC, v: Value) Error!Value {
             return o.slots[slot];
         }
         // A lazy function's name and length aren't in its shape yet, so "not found here" can't be cached.
-        const is_lazy_key = ic.key.eql(vm.k.name) or ic.key.eql(vm.k.length) or ic.key.eql(vm.k.prototype);
         const recv_may_be_lazy = is_lazy_key and (o.class == .closure or o.class == .native or cur_sh == vm.fn_root);
         if (!cur_sh.is_dict and !recv_may_be_lazy and !(o.class == .array and ic.key.eql(vm.k.length))) {
             var cur = cur_sh.proto;
@@ -154,16 +294,12 @@ pub fn getField(vm: *Vm, ic: *bc.IC, v: Value) Error!Value {
                 if ((hs == vm.fn_root or h.class == .closure or h.class == .native) and is_lazy_key) break;
                 if (hs.find(ic.key)) |slot| {
                     const acc = hs.flagsAt(slot).accessor;
+                    if (!hs.is_dict and can_mega) me_cur.* = .{ .shape = cur_sh, .key_bits = ic.key.bits, .holder = h, .holder_shape = hs, .slot = slot | (if (acc) vm_mod.MegaICEntry.acc_flag else 0), .epoch = vm.proto_epoch };
+                    if (ic.fast_own_data and ic.shape != null and !acc) return h.slots[slot];
+                    pushOwnPoly(ic, cur_sh);
                     if (ic.holder == h and ic.holder_shape == hs and ic.slot == slot and ic.epoch == vm.proto_epoch and ic.shape != null and ic.shape != cur_sh and !ic.fast_own_data) {
-                        var found = false;
-                        inline for (0..bc.IC.proto_poly_cap) |k| if (ic.proto_shapes[k] == ic.shape) {
-                            found = true;
-                        };
-                        if (!found) {
-                            ic.proto_shapes[ic.proto_idx & (bc.IC.proto_poly_cap - 1)] = ic.shape;
-                            ic.proto_idx +%= 1;
-                        }
-                    } else if (ic.holder != h or ic.holder_shape != hs or ic.slot != slot or ic.epoch != vm.proto_epoch) {
+                        insertProtoPoly(ic, ic.shape.?);
+                    } else if (ic.holder != h or ic.holder_shape != hs or ic.slot != slot or ic.epoch != vm.proto_epoch or ic.fast_own_data) {
                         ic.proto_shapes = @splat(null);
                         ic.proto_idx = 0;
                     }
@@ -180,6 +316,15 @@ pub fn getField(vm: *Vm, ic: *bc.IC, v: Value) Error!Value {
                     return h.slots[slot];
                 }
             } else {
+                if (can_mega) me_cur.* = .{ .shape = cur_sh, .key_bits = ic.key.bits, .holder = null, .holder_shape = null, .slot = bc.IC.missing_slot, .epoch = vm.proto_epoch };
+                if (ic.fast_own_data and ic.shape != null) return Value.undefined;
+                pushOwnPoly(ic, cur_sh);
+                if (ic.slot == bc.IC.missing_slot and ic.holder == null and ic.epoch == vm.proto_epoch and ic.shape != null and ic.shape != cur_sh and !ic.fast_own_data) {
+                    insertProtoPoly(ic, ic.shape.?);
+                } else if (ic.slot != bc.IC.missing_slot or ic.holder != null or ic.epoch != vm.proto_epoch or ic.fast_own_data) {
+                    ic.proto_shapes = @splat(null);
+                    ic.proto_idx = 0;
+                }
                 ic.shape = cur_sh;
                 ic.holder = null;
                 ic.holder_shape = null;
@@ -215,27 +360,12 @@ pub fn putField(vm: *Vm, ic: *bc.IC, t: Value, v: Value, strict: bool) Error!voi
         }
     }
     inline for (0..bc.IC.own_poly_cap) |k| if (ic.own_shapes[k] == o.shape) {
-        const slot = ic.own_slots[k];
-        if (ic.fast_own_data and ic.shape != null) {
-            ic.own_shapes[k] = ic.shape;
-            ic.own_slots[k] = ic.slot;
-            ic.shape = o.shape;
-            ic.slot = slot;
-        }
-        o.slots[slot] = v;
+        o.slots[ic.own_slots[k]] = v;
         return;
     };
     if (ic.is_accessor) if (ic.holder) |h| {
-        if (ic.epoch == vm.proto_epoch and h.shape == ic.holder_shape) {
-            inline for (0..bc.IC.proto_poly_cap) |k| {
-                if (ic.proto_shapes[k] == o.shape) {
-                    if (ic.shape != null and !ic.fast_own_data and !ic.is_transition) {
-                        ic.proto_shapes[k] = ic.shape;
-                        ic.shape = o.shape;
-                    }
-                    return callSetterSlot(vm, ic, h.slots[ic.slot], t, v, strict);
-                }
-            }
+        if (ic.epoch == vm.proto_epoch and h.shape == ic.holder_shape and hasProtoPoly(ic, o.shape)) {
+            return callSetterSlot(vm, ic, h.slots[ic.slot], t, v, strict);
         }
     };
     if (!o.flags.exotic and !ic.key.isIndex() and !o.flags.lazy_fn) {
@@ -279,15 +409,8 @@ pub fn putField(vm: *Vm, ic: *bc.IC, t: Value, v: Value, strict: bool) Error!voi
                 if (hs.find(ic.key)) |slot| {
                     if (hs.flagsAt(slot).accessor) {
                         if (ic.holder == h and ic.holder_shape == hs and ic.slot == slot and ic.epoch == vm.proto_epoch and ic.shape != null and ic.shape != sh and !ic.fast_own_data and !ic.is_transition) {
-                            var found = false;
-                            inline for (0..bc.IC.proto_poly_cap) |k| if (ic.proto_shapes[k] == ic.shape) {
-                                found = true;
-                            };
-                            if (!found) {
-                                ic.proto_shapes[ic.proto_idx & (bc.IC.proto_poly_cap - 1)] = ic.shape;
-                                ic.proto_idx +%= 1;
-                            }
-                        } else if (ic.holder != h or ic.holder_shape != hs or ic.slot != slot or ic.epoch != vm.proto_epoch) {
+                            insertProtoPoly(ic, ic.shape.?);
+                        } else if (ic.holder != h or ic.holder_shape != hs or ic.slot != slot or ic.epoch != vm.proto_epoch or ic.fast_own_data or ic.is_transition) {
                             ic.proto_shapes = @splat(null);
                             ic.proto_idx = 0;
                         }
@@ -355,7 +478,7 @@ pub fn defineField(vm: *Vm, ic: *bc.IC, o: *Object, v: Value) Error!void {
     return props.defineData(vm, o, ic.key, v, shape_mod.PropFlags.all);
 }
 
-fn putOnPrimitive(vm: *Vm, t: Value, key: PropKey, v: Value, strict: bool) Error!void {
+pub fn putOnPrimitive(vm: *Vm, t: Value, key: PropKey, v: Value, strict: bool) Error!void {
     if (t.isNullish()) {
         var buf: [128]u8 = undefined;
         const name = str.keyText(vm, key, buf[0..64]);
@@ -369,220 +492,16 @@ fn putOnPrimitive(vm: *Vm, t: Value, key: PropKey, v: Value, strict: bool) Error
     }
 }
 
-pub fn getElem(vm: *Vm, t: Value, k: Value) Error!Value {
-    if (t.isObject()) {
-        const o = t.asObject();
-        if (k.isInt() and k.asInt() >= 0) {
-            const i: u32 = @intCast(k.asInt());
-            if (i < o.elems_len and !o.flags.exotic) {
-                const r = o.elems[i];
-                if (!r.isHole()) return r;
-            }
-            if (o.class == .typedarray) return typed.getIndex(vm, o, i);
-            if (o.class == .host_exotic) {
-                if (o.payload.hooks.get_index) |gi| {
-                    if (try gi(vm, o, i)) |v| return v;
-                    if (!o.flags.has_sparse and o.shape.count == 0 and !vm.protos.object.flags.proto_dirty and (o.shape.proto == null or !o.shape.proto.?.flags.proto_dirty)) return Value.undefined;
-                }
-            }
-            if (!o.flags.exotic and !o.flags.has_sparse) {
-                if ((o.shape.proto == vm.protos.array and !vm.protos.array.flags.proto_dirty and !vm.protos.object.flags.proto_dirty) or
-                    (o.shape.proto == vm.protos.object and !vm.protos.object.flags.proto_dirty) or
-                    o.shape.proto == null)
-                {
-                    return Value.undefined;
-                }
-            }
-            return props.getR(vm, o, PropKey.fromIndex(i), t);
-        }
-        if (k.isString() or k.isSymbol()) {
-            const key = if (k.isString()) (if (k.asString().key.bits != 0) k.asString().key else try str.toKey(vm, k.asString())) else PropKey.fromSymbol(k.asSymbol());
-            if (!o.flags.exotic and !o.flags.lazy_fn and !key.isIndex()) {
-                if (o.shape.find(key)) |slot| {
-                    if (!o.shape.flagsAt(slot).accessor) return o.slots[slot];
-                    return props.callGetter(vm, o.slots[slot], t);
-                }
-                if (o.class == .array and key.eql(vm.k.length)) return Value.fromUsize(o.arr_len);
-                const p = o.shape.proto orelse return Value.undefined;
-                return props.getR(vm, p, key, t);
-            }
-            return props.getR(vm, o, key, t);
-        }
-    }
-    if (t.isString() and k.isInt()) {
-        const s = t.asString();
-        const i: u32 = @bitCast(k.asInt());
-        if (i < s.len16) {
-            return Value.fromString(try str.fromCodeUnit(vm, try s.unitAt(vm, i)));
-        }
-    }
-    if (t.isNullish()) {
-        var b: [128]u8 = undefined;
-        var kb: [32]u8 = undefined;
-        const ks = if (k.isString()) (k.asString().flat(vm) catch "?") else if (k.isInt()) std.fmt.bufPrint(&kb, "{d}", .{k.asInt()}) catch "?" else "?";
-        const m = std.fmt.bufPrint(&b, "Cannot read properties of {s} (reading '{s}')", .{ if (t.isNull()) "null" else "undefined", ks[0..@min(ks.len, 32)] }) catch "Cannot read properties of nullish value";
-        return vm.throwError(.TypeError, m);
-    }
-    const key = try conv.toPropKey(vm, k);
-    return props.getV(vm, t, key);
-}
+const eic = @import("interp_elem.zig");
+pub const getElem = eic.getElem;
+pub const putElem = eic.putElem;
 
-pub fn putElem(vm: *Vm, t: Value, k: Value, v: Value, strict: bool) Error!void {
-    if (t.isObject()) {
-        const o = t.asObject();
-        if (k.isInt() and k.asInt() >= 0) {
-            const i: u32 = @intCast(k.asInt());
-            if (i < o.elems_len and !o.flags.exotic and !o.flags.elems_frozen and !o.elems[i].isHole()) {
-                o.elems[i] = v;
-                return;
-            }
-            if (o.class == .typedarray) return typed.setIndex(vm, o, i, v);
-            if (i == o.elems_len and o.class == .array and o.shape.proto == vm.protos.array and !vm.protos.array.flags.proto_dirty and !vm.protos.object.flags.proto_dirty and o.flags.extensible and !o.flags.elems_frozen and !o.flags.elems_sealed and !o.flags.length_readonly and !o.flags.is_proto) {
-                if (i >= o.elems_cap) try objmod.growElems(vm, o, @as(usize, i) + 1);
-                o.elems[i] = v;
-                o.elems_len = i + 1;
-                if (i >= o.arr_len) o.arr_len = i + 1;
-                return;
-            }
-            if (!try props.setR(vm, o, PropKey.fromIndex(i), v, t)) {
-                if (strict) return props.throwReadonly(vm, PropKey.fromIndex(i));
-            }
-            return;
-        }
-        if (k.isString() or k.isSymbol()) {
-            const key = if (k.isString()) (if (k.asString().key.bits != 0) k.asString().key else try str.toKey(vm, k.asString())) else PropKey.fromSymbol(k.asSymbol());
-            if (!o.flags.exotic and !o.flags.lazy_fn and !key.isIndex()) {
-                if (o.shape.find(key)) |slot| {
-                    const fl = o.shape.flagsAt(slot);
-                    if (fl.writable and !fl.accessor) {
-                        o.slots[slot] = v;
-                        return;
-                    }
-                }
-            }
-            if (!try props.setR(vm, o, key, v, t)) {
-                if (strict) return props.throwReadonly(vm, key);
-            }
-            return;
-        }
-    }
-    if (t.isNullish()) {
-        const key = try conv.toPropKey(vm, k);
-        return putOnPrimitive(vm, t, key, v, strict);
-    }
-    const key = try conv.toPropKey(vm, k);
-    if (!t.isObject()) return putOnPrimitive(vm, t, key, v, strict);
-    if (!try props.setR(vm, t.asObject(), key, v, t)) {
-        if (strict) return props.throwReadonly(vm, key);
-    }
-}
-
-fn notDefined(vm: *Vm, key: PropKey) Error {
-    var buf: [128]u8 = undefined;
-    const name = str.keyText(vm, key, buf[0..64]);
-    const m = std.fmt.bufPrint(buf[64..], "{s} is not defined", .{name[0..@min(name.len, 40)]}) catch "variable is not defined";
-    return vm.throwError(.ReferenceError, m);
-}
-
-pub fn throwTdzKey(vm: *Vm, key: PropKey) Error {
-    var buf: [128]u8 = undefined;
-    const name = str.keyText(vm, key, buf[0..64]);
-    const m = std.fmt.bufPrint(buf[64..], "Cannot access '{s}' before initialization", .{name[0..@min(name.len, 24)]}) catch "Cannot access variable before initialization";
-    return vm.throwError(.ReferenceError, m);
-}
-
-fn fillGlobal(vm: *Vm, ic: *bc.IC, holder: *Object, slot: u32) void {
-    ic.shape = vm.global_lex.shape;
-    ic.holder_shape = vm.global_obj.shape;
-    ic.holder = holder;
-    ic.slot = slot;
-    ic.epoch = vm.proto_epoch;
-}
-
-/// Reads a global. typeof uses getGlobalOrUndefined instead, which never throws for a missing name.
-pub fn getGlobal(vm: *Vm, ic: *bc.IC) Error!Value {
-    const lex = vm.global_lex;
-    if (lex.shape.find(ic.key)) |slot| {
-        const v = lex.slots[slot];
-        if (v.isHole()) return throwTdzKey(vm, ic.key);
-        fillGlobal(vm, ic, lex, slot);
-        return v;
-    }
-    const g = vm.global_obj;
-    if (g.shape.find(ic.key)) |slot| {
-        if (!g.shape.flagsAt(slot).accessor) {
-            fillGlobal(vm, ic, g, slot);
-            return g.slots[slot];
-        }
-    }
-    if (!try props.has(vm, g, ic.key)) return notDefined(vm, ic.key);
-    return props.get(vm, g, ic.key);
-}
-
-pub fn getGlobalOrUndefined(vm: *Vm, ic: *bc.IC) Error!Value {
-    const lex = vm.global_lex;
-    if (lex.shape.find(ic.key)) |slot| {
-        const v = lex.slots[slot];
-        if (v.isHole()) return throwTdzKey(vm, ic.key);
-        return v;
-    }
-    return props.get(vm, vm.global_obj, ic.key);
-}
-
-pub fn putGlobal(vm: *Vm, ic: *bc.IC, v: Value, strict: bool) Error!void {
-    const lex = vm.global_lex;
-    if (lex.shape.find(ic.key)) |slot| {
-        if (lex.slots[slot].isHole()) return throwTdzKey(vm, ic.key);
-        if (!lex.shape.flagsAt(slot).writable) return vm.throwError(.TypeError, "Assignment to constant variable.");
-        lex.slots[slot] = v;
-        fillGlobal(vm, ic, lex, slot);
-        return;
-    }
-    const g = vm.global_obj;
-    if (g.shape.find(ic.key)) |slot| {
-        const f = g.shape.flagsAt(slot);
-        if (f.writable and !f.accessor) {
-            g.slots[slot] = v;
-            fillGlobal(vm, ic, g, slot);
-            return;
-        }
-    } else if (strict and !try props.has(vm, g, ic.key)) {
-        return notDefined(vm, ic.key);
-    }
-    if (!try props.set(vm, g, ic.key, v) and strict) return props.throwReadonly(vm, ic.key);
-}
-
-/// let/const/class initialization at script level.
-pub fn initGlobalLex(vm: *Vm, ic: *bc.IC, v: Value) Error!void {
-    const lex = vm.global_lex;
-    const slot = lex.shape.find(ic.key) orelse return notDefined(vm, ic.key);
-    lex.slots[slot] = v;
-}
-
-pub fn declareGlobalLex(vm: *Vm, key: PropKey, is_const: bool) Error!void {
-    const lex = vm.global_lex;
-    if (lex.shape.find(key) != null) return redeclared(vm, key);
-    if (vm.global_obj.shape.find(key)) |slot| {
-        if (!vm.global_obj.shape.flagsAt(slot).configurable) return redeclared(vm, key);
-    }
-    try props.addProp(vm, lex, key, Value.hole, .{ .writable = !is_const });
-}
-
-pub fn declareGlobalVar(vm: *Vm, key: PropKey) Error!void {
-    if (vm.global_lex.shape.find(key) != null) return redeclared(vm, key);
-    const g = vm.global_obj;
-    if (g.shape.find(key) != null) return;
-    try props.addProp(vm, g, key, Value.undefined, .{ .configurable = false });
-}
-
-pub fn defineGlobalFn(vm: *Vm, key: PropKey, f: Value) Error!void {
-    if (vm.global_lex.shape.find(key) != null) return redeclared(vm, key);
-    try props.defineData(vm, vm.global_obj, key, f, .{ .configurable = false });
-}
-
-fn redeclared(vm: *Vm, key: PropKey) Error {
-    var buf: [128]u8 = undefined;
-    const name = str.keyText(vm, key, buf[0..64]);
-    const m = std.fmt.bufPrint(buf[64..], "Identifier '{s}' has already been declared", .{name[0..@min(name.len, 24)]}) catch "Identifier has already been declared";
-    return vm.throwError(.SyntaxError, m);
-}
+const gic = @import("interp_global.zig");
+pub const throwTdzKey = gic.throwTdzKey;
+pub const getGlobal = gic.getGlobal;
+pub const getGlobalOrUndefined = gic.getGlobalOrUndefined;
+pub const putGlobal = gic.putGlobal;
+pub const initGlobalLex = gic.initGlobalLex;
+pub const declareGlobalLex = gic.declareGlobalLex;
+pub const declareGlobalVar = gic.declareGlobalVar;
+pub const defineGlobalFn = gic.defineGlobalFn;

@@ -13,7 +13,10 @@
 //! (`Style.window_maximize`) HTMAXBUTTON. That last answer diverts the
 //! pointer over the button into non-client messages, which are projected
 //! back onto the view as ordinary mouse input, so the button still hovers
-//! and clicks like its neighbours.
+//! and clicks like its neighbours. A middle press over the caption or the
+//! button is the view's too, as on the Mac: the system does nothing with
+//! it, and the view takes the capture, so its moves and release come as
+//! client messages.
 //!
 //! The frame is never extended into the client (`DwmExtendFrameIntoClientArea`):
 //! the real app measured the DWM then painting its own caption material over
@@ -36,6 +39,9 @@ pub const WM_NCMOUSEMOVE: u32 = 0x00A0;
 pub const WM_NCLBUTTONDOWN: u32 = 0x00A1;
 pub const WM_NCLBUTTONUP: u32 = 0x00A2;
 pub const WM_NCLBUTTONDBLCLK: u32 = 0x00A3;
+pub const WM_NCMBUTTONDOWN: u32 = 0x00A7;
+pub const WM_NCMBUTTONUP: u32 = 0x00A8;
+pub const WM_NCMBUTTONDBLCLK: u32 = 0x00A9;
 pub const WM_NCMOUSELEAVE: u32 = 0x02A2;
 
 pub const HTCLIENT: u32 = 1;
@@ -166,6 +172,13 @@ pub fn handle(win: *Window, hwnd: w.HWND, msg: u32, wp: w.WPARAM, lp: w.LPARAM) 
             forward(win, hwnd, msg, lp);
             return 0;
         },
+        // A middle press over a `window_drag` box or the empty band (the
+        // caption) or the maximize button: the view's, as on the Mac.
+        WM_NCMBUTTONDOWN, WM_NCMBUTTONDBLCLK, WM_NCMBUTTONUP => {
+            if (wp != HTCAPTION and wp != HTMAXBUTTON) return null;
+            forward(win, hwnd, msg, lp);
+            return 0;
+        },
         WM_NCMOUSELEAVE => {
             if (win.max_hover) {
                 win.max_hover = false;
@@ -211,7 +224,19 @@ pub fn hitAt(win: *Window, hwnd: w.HWND, sp: w.POINT) u32 {
     });
 }
 
-/// The pointer over the maximize button, as the view's own mouse input.
+/// The buttons held as a message is handled (its MK_ flags, which a
+/// non-client message's wParam does not carry).
+fn heldFlags() w.WPARAM {
+    var f: w.WPARAM = 0;
+    // VK_LBUTTON, VK_RBUTTON, VK_MBUTTON: the high bit is "down".
+    if (w.GetKeyState(0x01) < 0) f |= w.MK_LBUTTON;
+    if (w.GetKeyState(0x02) < 0) f |= w.MK_RBUTTON;
+    if (w.GetKeyState(0x04) < 0) f |= w.MK_MBUTTON;
+    return f;
+}
+
+/// The pointer over the maximize button (or a middle press over the
+/// caption), as the view's own mouse input.
 fn forward(win: *Window, hwnd: w.HWND, msg: u32, lp: w.LPARAM) void {
     const s = win.surface orelse return;
     var p = screenPoint(lp);
@@ -226,12 +251,24 @@ fn forward(win: *Window, hwnd: w.HWND, msg: u32, lp: w.LPARAM) void {
     // The client's own leave tracking would fire at once: the pointer is
     // outside the client as Windows counts it.
     s.tracking = true;
+    // A press's own button is held as it arrives, a release's no longer.
+    const held = heldFlags();
     const as: u32 = switch (msg) {
         WM_NCMOUSEMOVE => w.WM_MOUSEMOVE,
         WM_NCLBUTTONDOWN, WM_NCLBUTTONDBLCLK => w.WM_LBUTTONDOWN,
+        WM_NCMBUTTONDOWN => w.WM_MBUTTONDOWN,
+        WM_NCMBUTTONDBLCLK => w.WM_MBUTTONDBLCLK,
+        WM_NCMBUTTONUP => w.WM_MBUTTONUP,
         else => w.WM_LBUTTONUP,
     };
-    _ = s.handle(hwnd, as, 0, client);
+    const flags: w.WPARAM = switch (as) {
+        w.WM_LBUTTONDOWN => held | w.MK_LBUTTON,
+        w.WM_MBUTTONDOWN, w.WM_MBUTTONDBLCLK => held | w.MK_MBUTTON,
+        w.WM_LBUTTONUP => held & ~w.MK_LBUTTON,
+        w.WM_MBUTTONUP => held & ~w.MK_MBUTTON,
+        else => held,
+    };
+    _ = s.handle(hwnd, as, flags, client);
 }
 
 test "the reclaimed top: the window's own, a frame lower when maximized" {

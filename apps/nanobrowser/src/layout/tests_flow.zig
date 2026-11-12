@@ -200,7 +200,7 @@ fn pseudoText(b: *box.Box) ?[]const u8 {
 }
 
 fn textOf(n: *dom.Node) []const u8 {
-    return pseudoText(@ptrCast(@alignCast(n.box.?))) orelse "";
+    return pseudoText(@ptrCast(@alignCast(n.liveBox().?))) orelse "";
 }
 
 test "counters: reset, increment, nesting and counters()" {
@@ -223,7 +223,7 @@ test "text-wrap: balance evens the lines without adding one" {
     // Every character 8 wide: "aaaa bbbb cccc dddd eeee ffff" fits 3 words a line at 200.
     const p = try Page.make("<!doctype html><div id=b style=\"width:200px;text-wrap:balance;line-height:16px\">aaaa bbbb cccc dddd eeee ffff</div><div id=g style=\"width:200px;line-height:16px\">aaaa bbbb cccc dddd eeee ffff gggg</div>", reset);
     defer p.done();
-    const runs = @as(*box.Box, @ptrCast(@alignCast(p.find("b").?.box.?))).runs;
+    const runs = @as(*box.Box, @ptrCast(@alignCast(p.find("b").?.liveBox().?))).runs;
     try std.testing.expectEqual(@as(usize, 2), runs.len);
     try u.eqText("aaaa bbbb cccc", runs[0].text);
     try u.eqText("dddd eeee ffff", runs[1].text);
@@ -313,7 +313,7 @@ test "aspect-ratio and a height say an inline-block's width" {
 test "env() of what a window has none of is nothing" {
     const p = try Page.make("<!doctype html><div id=a style=\"--s:env(safe-area-inset-left);padding-left:max(22px,var(--s));height:1px\"></div>", reset);
     defer p.done();
-    try std.testing.expectEqual(@as(f32, 22), @as(*box.Box, @ptrCast(@alignCast(p.find("a").?.box.?))).padding.left);
+    try std.testing.expectEqual(@as(f32, 22), @as(*box.Box, @ptrCast(@alignCast(p.find("a").?.liveBox().?))).padding.left);
 }
 
 test "subgrid: columns and rows from the grid around it" {

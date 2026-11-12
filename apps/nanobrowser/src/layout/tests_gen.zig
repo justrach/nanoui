@@ -18,8 +18,8 @@ test "display none is skipped, contents splices its children" {
     const a = try t.div(contents, .{ .width = px(10), .height = px(10) });
     const b = try t.div(contents, .{ .width = px(10), .height = px(10) });
     try t.run(800, 600);
-    try std.testing.expect(none.box == null);
-    try std.testing.expect(contents.box == null);
+    try std.testing.expect(none.liveBox() == null);
+    try std.testing.expect(contents.liveBox() == null);
     try t.rect(a, 0, 0, 10, 10);
     try t.rect(b, 10, 0, 10, 10);
 }
@@ -271,7 +271,7 @@ test "controls by their font" {
     try u.close(160, t.boxOf(prog).w, "progress");
     try u.close(16, t.boxOf(prog).h, "progress");
     try u.close(80, t.boxOf(meter).w, "meter");
-    try std.testing.expect(hidden.box == null);
+    try std.testing.expect(hidden.liveBox() == null);
     try std.testing.expect(t.boxOf(text).kind == .control);
 }
 

@@ -233,10 +233,13 @@ fn unshift(vm: *Vm, this: Value, args: []const Value) Error!Value {
 
 /// ArraySpeciesCreate.
 pub fn speciesCreate(vm: *Vm, o: *Object, n: usize) Error!*Object {
+    if (o.class == .array and o.shape == vm.array_root and !vm.protos.array.flags.proto_dirty and !vm.protos.array_ctor.flags.proto_dirty) {
+        return newWithLength(vm, n);
+    }
     if (!try isArrayValue(vm, o.value())) return newWithLength(vm, n);
     var c = try props.get(vm, o, vm.k.constructor);
     if (c.isObject()) {
-        if (c.asObject() == vm.protos.array_ctor) return newWithLength(vm, n);
+        if (c.asObject() == vm.protos.array_ctor and !vm.protos.array_ctor.flags.proto_dirty) return newWithLength(vm, n);
         c = try props.get(vm, c.asObject(), PropKey.fromSymbol(vm.sym.species));
         if (c.isNull()) c = Value.undefined;
     }
@@ -248,11 +251,37 @@ pub fn speciesCreate(vm: *Vm, o: *Object, n: usize) Error!*Object {
 fn newWithLength(vm: *Vm, n: usize) Error!*Object {
     if (n > std.math.maxInt(u32)) return vm.throwError(.RangeError, "Invalid array length");
     const a = try objmod.newArray(vm, &.{});
+    if (n > 0 and n <= 65536) {
+        try objmod.growElems(vm, a, n);
+        @memset(a.elems[0..n], Value.hole);
+        a.elems_len = @intCast(n);
+    }
     a.arr_len = @intCast(n);
     return a;
 }
 
 fn slice(vm: *Vm, this: Value, args: []const Value) Error!Value {
+    if (this.isObject() and !vm.protos.array.flags.proto_dirty and !vm.protos.object.flags.proto_dirty and
+        (args.len == 0 or args[0].isUndefined() or args[0].isInt()) and
+        (args.len < 2 or args[1].isUndefined() or args[1].isInt()))
+    {
+        const o = this.asObject();
+        const is_fast_arr = isPlain(o) and o.shape == vm.array_root and !vm.protos.array_ctor.flags.proto_dirty;
+        const is_fast_args = o.class == .arguments and (o.shape == vm.args_strict_shape or o.shape == vm.args_sloppy_shape) and !o.flags.exotic and !o.flags.has_sparse and o.slots[0].bits == Value.fromUsize(o.elems_len).bits;
+        if (is_fast_arr or is_fast_args) {
+            const n: usize = o.elems_len;
+            const start = if (args.len == 0 or args[0].isUndefined()) 0 else blk: {
+                const k = args[0].asInt();
+                break :blk if (k < 0) n -| @as(usize, @intCast(-@as(i64, k))) else @min(@as(usize, @intCast(k)), n);
+            };
+            const end = if (args.len < 2 or args[1].isUndefined()) n else blk: {
+                const k = args[1].asInt();
+                break :blk if (k < 0) n -| @as(usize, @intCast(-@as(i64, k))) else @min(@as(usize, @intCast(k)), n);
+            };
+            const count = if (end > start) end - start else 0;
+            return (try objmod.newArray(vm, o.elems[start..][0..count])).value();
+        }
+    }
     const o = try conv.toObject(vm, this);
     const n = try conv.lengthOf(vm, o);
     const start = try u.relativeIndex(vm, u.arg(args, 0), n, 0);
@@ -341,24 +370,39 @@ fn splice(vm: *Vm, this: Value, args: []const Value) Error!Value {
 fn concat(vm: *Vm, this: Value, args: []const Value) Error!Value {
     const o = try conv.toObject(vm, this);
     const r = try speciesCreate(vm, o, 0);
+    const clean_protos = !vm.protos.array.flags.proto_dirty and !vm.protos.object.flags.proto_dirty;
     var at: usize = 0;
     var idx: usize = 0;
     const total = args.len + 1;
     while (idx < total) : (idx += 1) {
         const item = if (idx == 0) o.value() else args[idx - 1];
         var spread = false;
+        var fast_plain_arr = false;
         if (item.isObject()) {
-            const s = try props.get(vm, item.asObject(), PropKey.fromSymbol(vm.sym.isConcatSpreadable));
-            spread = if (s.isUndefined()) try isArrayValue(vm, item) else ops.truthy(s);
+            const io = item.asObject();
+            if (clean_protos and io.class == .array and io.shape == vm.array_root) {
+                spread = true;
+                fast_plain_arr = true;
+            } else {
+                const s = try props.get(vm, io, PropKey.fromSymbol(vm.sym.isConcatSpreadable));
+                spread = if (s.isUndefined()) try isArrayValue(vm, item) else ops.truthy(s);
+            }
         }
         if (!spread) {
-            try props.defineData(vm, r, try key(vm, at), item, u.PropFlags.all);
+            if (isPlain(r) and at == r.elems_len) {
+                if (at >= r.elems_cap) try objmod.growElems(vm, r, at + 1);
+                r.elems[at] = item;
+                r.elems_len = @intCast(at + 1);
+                r.arr_len = r.elems_len;
+            } else {
+                try props.defineData(vm, r, try key(vm, at), item, u.PropFlags.all);
+            }
             at += 1;
             continue;
         }
         const src = item.asObject();
-        const n = try conv.lengthOf(vm, src);
-        if (isPlain(src) and isPlain(r) and at == r.elems_len) {
+        const n: usize = if (fast_plain_arr) src.arr_len else try conv.lengthOf(vm, src);
+        if (isPlain(src) and isPlain(r) and at == r.elems_len and (clean_protos or fast_plain_arr)) {
             try objmod.growElems(vm, r, at + n);
             @memcpy(r.elems[at..][0..n], src.elems[0..n]);
             r.elems_len = @intCast(at + n);
@@ -389,10 +433,16 @@ pub fn joinImpl(vm: *Vm, o: *Object, sep: *str.JSString) Error!Value {
     const n = try conv.lengthOf(vm, o);
     var b = str.Builder.init(vm);
     defer b.deinit();
+    const clean_plain = o.class == .array and o.shape == vm.array_root and !vm.protos.array.flags.proto_dirty and !vm.protos.object.flags.proto_dirty;
     var i: usize = 0;
     while (i < n) : (i += 1) {
-        if (i != 0) try b.str(sep);
-        const v = try props.get(vm, o, try key(vm, i));
+        if (i != 0 and sep.len16 != 0) try b.str(sep);
+        const v: Value = if (i < o.elems_len and !o.flags.exotic) blk: {
+            const ev = o.elems[i];
+            if (!ev.isHole()) break :blk ev;
+            if (clean_plain) break :blk Value.undefined;
+            break :blk try props.get(vm, o, try key(vm, i));
+        } else try props.get(vm, o, try key(vm, i));
         if (!v.isNullish()) try b.str(try conv.toStr(vm, v));
     }
     return Value.fromString(try b.finish());

@@ -270,3 +270,65 @@ test "canvas color from the root, else body" {
     try t.run(800, 600);
     try u.close(1, t.tree.canvas.g, "root's");
 }
+
+test "clean-subtree layout cache matches full layout across arena swaps and width changes" {
+    var t = try T.init();
+    defer t.deinit();
+    const lay_mod = @import("layout.zig");
+    var a1 = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer a1.deinit();
+    var a2 = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer a2.deinit();
+
+    const ul = try t.el(t.body, "ul", .{ .display = .block, .list_style = .none });
+    var items: [4]*u.Node = undefined;
+    var labels: [4]*u.Node = undefined;
+    var btns: [4]*u.Node = undefined;
+    for (0..4) |i| {
+        const li = try t.el(ul, "li", .{
+            .display = .list_item,
+            .list_style = .none,
+            .position = .relative,
+            .border_bottom = .{ .style = .solid, .width = 1 },
+        });
+        const view = try t.div(li, .{});
+        const lbl = try t.el(view, "label", .{ .display = .block, .padding_top = px(10), .padding_bottom = px(10) });
+        _ = try t.text(lbl, "todo item");
+        const btn = try t.el(li, "button", .{ .display = .block, .position = .absolute, .right = px(10), .top = px(5), .width = px(20), .height = px(20) });
+        items[i] = li;
+        labels[i] = lbl;
+        btns[i] = btn;
+    }
+
+    // Pass 1: cold layout into a1.
+    t.tree = try lay_mod.runCached(a1.allocator(), t.doc, .{ .width = 800, .height = 600 }, u.measurer, false);
+    try t.rect(items[0], 0, 0, 800, 37);
+    try t.rect(items[3], 0, 111, 800, 37);
+    try t.rect(btns[3], 770, 116, 20, 20);
+
+    // Mutate only item 1's height by inserting an extra block above item 2, leaving items 0, 2, 3 clean!
+    const inserted = try t.div(ul, .{ .height = px(25) });
+    ul.insertBefore(inserted, items[2]);
+
+    // Pass 2: swap to a2 while a1 holds previous tree. Items 0, 2, 3 are adopted & shifted by +25px!
+    _ = a2.reset(.retain_capacity);
+    t.tree = try lay_mod.runCached(a2.allocator(), t.doc, .{ .width = 800, .height = 600 }, u.measurer, true);
+    try t.rect(items[0], 0, 0, 800, 37);
+    try t.rect(items[2], 0, 99, 800, 37);
+    try t.rect(items[3], 0, 136, 800, 37);
+    try t.rect(btns[3], 770, 141, 20, 20);
+    try u.close(136 + 10 + 12.8, t.firstRun(labels[3]).baseline, "shifted baseline");
+
+    // Pass 3: wipe a1 and swap back to a1 to prove zero dangling pointers into wiped arena!
+    _ = a1.reset(.free_all);
+    inserted.remove();
+    t.tree = try lay_mod.runCached(a1.allocator(), t.doc, .{ .width = 800, .height = 600 }, u.measurer, true);
+    try t.rect(items[3], 0, 111, 800, 37);
+    try t.rect(btns[3], 770, 116, 20, 20);
+
+    // Pass 4: width change (800 -> 400) triggers unadopt fallback cleanly!
+    _ = a2.reset(.retain_capacity);
+    t.tree = try lay_mod.runCached(a2.allocator(), t.doc, .{ .width = 400, .height = 600 }, u.measurer, true);
+    try t.rect(items[3], 0, 111, 400, 37);
+    try t.rect(btns[3], 370, 116, 20, 20);
+}

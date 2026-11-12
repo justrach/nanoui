@@ -2,8 +2,9 @@
 //! launches (`window_place.zig`), the surface's `after_frame` and docked
 //! pages, on real hidden windows: `WM_NCCALCSIZE`'s client area, the codes
 //! `WM_NCHITTEST` answers at the edges, the caption and the maximize
-//! button, the pointer over that button reaching the view, and a
-//! placement written and given back. The idioms are `tests_window.zig`'s.
+//! button, the pointer over that button and a middle press over the
+//! caption reaching the view, and a placement written and given back. The
+//! idioms are `tests_window.zig`'s.
 const std = @import("std");
 const testing = std.testing;
 const ui = @import("../ui/ui.zig");
@@ -179,6 +180,41 @@ test "the pointer over the maximize button reaches the view: hover and click" {
     // Elsewhere in the frame the messages are the system's.
     _ = w.SendMessageW(h, chrome.WM_NCLBUTTONUP, chrome.HTCAPTION, lparam(p.x, p.y));
     try testing.expectEqual(@as(u32, 1), bar.max_clicks);
+}
+
+test "a middle press over the caption or a drag handle reaches the view, as on the Mac" {
+    const gpa = testing.allocator;
+    const app = try makeApp(gpa);
+    defer app.destroy();
+    var bar: Bar = .{};
+    const win = try chromeless(app, &bar, .hidden);
+    defer win.destroyNow();
+    const h = win.hwnd orelse return error.SkipZigTest;
+    const in = &win.surface.?.ctx.input;
+    loop.runFor(0.05);
+    // A `window_drag` box, the empty band and the maximize button: the
+    // system calls each part of its frame, and gives a middle press there
+    // to the non-client messages.
+    for ([_][2]f32{ .{ 100, 20 }, .{ 340, 20 }, .{ 220, 20 } }) |at| {
+        const p = screenAt(h, at[0], at[1]);
+        const code = hit(h, p);
+        try testing.expect(code == chrome.HTCAPTION or code == chrome.HTMAXBUTTON);
+        try testing.expectEqual(@as(w.LRESULT, 0), w.SendMessageW(h, chrome.WM_NCMBUTTONDOWN, code, lparam(p.x, p.y)));
+        try testing.expect(in.down and in.button == .middle and in.click_count == 1);
+        // Held, it took the capture: its release comes as a client message.
+        _ = w.SendMessageW(h, w.WM_MBUTTONUP, 0, lparam(10, 10));
+        try testing.expect(!in.down);
+    }
+    // A double click there, and a release still arriving as a non-client one.
+    const p = screenAt(h, 100, 20);
+    _ = w.SendMessageW(h, chrome.WM_NCMBUTTONDBLCLK, chrome.HTCAPTION, lparam(p.x, p.y));
+    try testing.expect(in.down and in.button == .middle and in.click_count == 2);
+    _ = w.SendMessageW(h, chrome.WM_NCMBUTTONUP, chrome.HTCAPTION, lparam(p.x, p.y));
+    try testing.expect(!in.down);
+    // A left press on the caption stays the system's (its move loop).
+    try testing.expect(chrome.handle(win, h, chrome.WM_NCLBUTTONDOWN, chrome.HTCAPTION, lparam(p.x, p.y)) == null);
+    // Over a resize grip a middle press is not the view's either.
+    try testing.expect(chrome.handle(win, h, chrome.WM_NCMBUTTONDOWN, chrome.HTTOP, lparam(p.x, p.y)) == null);
 }
 
 test "frame_autosave: a hidden window's placement is kept and given back" {

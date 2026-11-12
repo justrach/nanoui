@@ -239,3 +239,85 @@ pub const Stream = struct {
         };
     }
 };
+
+/// True when `d` carries AAT state tables (`morx`/`mort`) or an OpenType `GSUB`
+/// ligature of 3+ glyphs whose 2-glyph prefix is not itself a ligature in the
+/// same `LigatureSet` (such as an icon font turning `"home"` into one glyph),
+/// requiring full CoreText shaping rather than pairwise `shaper.Table`.
+pub fn hasUnshieldedMultiLigature(d: []const u8) bool {
+    var at: usize = 0;
+    if (sniff(d) == .collection) at = be32(d, 12) orelse return true;
+    const n = be16(d, at + 4) orelse return true;
+    var gsub: ?[]const u8 = null;
+    for (0..n) |i| {
+        const rec = at + 12 + 16 * i;
+        const t = be32(d, rec) orelse return true;
+        const off = be32(d, rec + 8) orelse return true;
+        const len = be32(d, rec + 12) orelse return true;
+        if (off > d.len or len > d.len - off) return true;
+        if (t == tag("morx") or t == tag("mort")) return true;
+        if (t == tag("GSUB")) gsub = d[off..][0..len];
+    }
+    const g = gsub orelse return false;
+    const llist_off = be16(g, 8) orelse return true;
+    if (llist_off > g.len) return true;
+    const ll = g[llist_off..];
+    const lcount = be16(ll, 0) orelse return true;
+    for (0..lcount) |li| {
+        const loff = be16(ll, 2 + 2 * li) orelse return true;
+        if (loff > ll.len) return true;
+        const lk = ll[loff..];
+        const ltype = be16(lk, 0) orelse return true;
+        const scount = be16(lk, 4) orelse return true;
+        for (0..scount) |si| {
+            const soff = be16(lk, 6 + 2 * si) orelse return true;
+            if (soff > lk.len) return true;
+            var sub = lk[soff..];
+            var stype = ltype;
+            if (stype == 7) {
+                if ((be16(sub, 0) orelse return true) != 1) return true;
+                stype = be16(sub, 2) orelse return true;
+                const eoff = be32(sub, 4) orelse return true;
+                if (eoff > sub.len) return true;
+                sub = sub[eoff..];
+            }
+            if (stype == 5 or stype == 6 or stype == 8) return true;
+            if (stype != 4) continue;
+            if ((be16(sub, 0) orelse return true) != 1) return true;
+            const set_count = be16(sub, 4) orelse return true;
+            for (0..set_count) |set_i| {
+                const set_off = be16(sub, 6 + 2 * set_i) orelse return true;
+                if (set_off > sub.len) return true;
+                const lset = sub[set_off..];
+                const lig_n = be16(lset, 0) orelse return true;
+                var pair_g1: [32]u16 = undefined;
+                var pair_len: usize = 0;
+                for (0..lig_n) |k| {
+                    const lig_off = be16(lset, 2 + 2 * k) orelse return true;
+                    if (lig_off > lset.len) return true;
+                    const lig = lset[lig_off..];
+                    const comp_n = be16(lig, 2) orelse return true;
+                    if (comp_n == 2 and pair_len < pair_g1.len) {
+                        pair_g1[pair_len] = be16(lig, 4) orelse return true;
+                        pair_len += 1;
+                    }
+                }
+                for (0..lig_n) |k| {
+                    const lig_off = be16(lset, 2 + 2 * k) orelse return true;
+                    const lig = lset[lig_off..];
+                    const comp_n = be16(lig, 2) orelse return true;
+                    if (comp_n >= 3) {
+                        const g1 = be16(lig, 4) orelse return true;
+                        var shielded = false;
+                        for (pair_g1[0..pair_len]) |pg| if (pg == g1) {
+                            shielded = true;
+                            break;
+                        };
+                        if (!shielded) return true;
+                    }
+                }
+            }
+        }
+    }
+    return false;
+}

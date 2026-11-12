@@ -16,6 +16,8 @@ const heap = @import("heap.zig");
 const jit = @import("jit.zig");
 const JitFn = jit.JitFn;
 const enc = @import("jit_arm64_enc.zig");
+const arm64_iter = @import("jit_arm64_iter.zig");
+const arm64_fuse = @import("jit_arm64_fuse.zig");
 const Cond = enc.Cond;
 const Emitter = enc.Emitter;
 
@@ -26,10 +28,7 @@ inline fn targetPc(pc: usize, op_len: usize, rel: isize) usize {
     const base = pc + op_len;
     return if (rel >= 0) base + @as(usize, @intCast(rel)) else base - @as(usize, @intCast(-rel));
 }
-inline fn pushReg(e: *Emitter, r: u5) void {
-    e.strImm64(r, 22, 0);
-    e.addImm64(22, 22, 8);
-}
+inline fn pushReg(e: *Emitter, r: u5) void { e.strImm64(r, 22, 0); e.addImm64(22, 22, 8); }
 
 fn instrLen(op: Op) ?usize {
     return switch (op) {
@@ -46,6 +45,7 @@ fn instrLen(op: Op) ?usize {
         .ret, .ret_undef, .throw_, .check_coercible, .pop_try, .ret_sub => 1,
         .iter_init, .iter_step, .iter_rest, .iter_close, .iter_drop, .for_in_start, .to_object, .nop => 1,
         .int8, .define_method, .define_private_method => 2,
+        .args_get, .args_len, .args_elem, .args_apply => 3,
         .rest, .get_loc, .put_loc, .set_loc, .set_hole, .push_env, .object_rest, .call, .new_, .super_call => 3,
         .get_env, .put_env => 4,
         .int32, .constant, .get_global, .get_global_typeof, .put_global, .decl_global_var, .def_global_fn => 5,
@@ -61,8 +61,9 @@ fn instrLen(op: Op) ?usize {
     };
 }
 
-fn emitFunction(e: *Emitter, fp: *bc.FuncProto, pc_map: []u32, epilogue_idx: u32, pass: u1) bool {
+fn emitFunction(e: *Emitter, fp: *bc.FuncProto, targets: []const bool, pc_map: []u32, epilogue_idx: u32, pass: u1) bool {
     const code = fp.code;
+    // Standard C-ABI entry (`fp.jit_fn`, words 0..23): saves callee-saved regs and calls `fp.jit_fast_fn` (word 24).
     e.stpPre64(29, 30, 31, -12);
     e.addImm64(29, 31, 0);
     e.stpOffset64(19, 20, 31, 2);
@@ -74,12 +75,27 @@ fn emitFunction(e: *Emitter, fp: *bc.FuncProto, pc_map: []u32, epilogue_idx: u32
     e.mov64(20, 1);
     e.mov64(21, 2);
     e.mov64(22, 3);
-    e.movImm64(23, @intFromPtr(fp.constants.ptr));
-    e.movImm64(24, @intFromPtr(fp.ics.ptr));
+    e.ldrImm64(8, 20, @intCast(@offsetOf(Frame, "fp") / 8));
     e.movz(25, 0xFFF9, 3);
     e.movz(26, 2, 0);
     e.movk(26, 0xFFFA, 3);
     e.movz(27, 0xFFFB, 3);
+    e.blImm(8);
+    e.ldrImm64(27, 31, 10);
+    e.ldpOffset64(25, 26, 31, 8);
+    e.ldpOffset64(23, 24, 31, 6);
+    e.ldpOffset64(21, 22, 31, 4);
+    e.ldpOffset64(19, 20, 31, 2);
+    e.ldpPost64(29, 30, 31, 12);
+    e.ret();
+    std.debug.assert(e.len == bc.FuncProto.fast_entry_words);
+
+    // Direct JIT-to-JIT entry (`fp.jit_fast_fn`, word 24): expects `x8 = fp`, `x19..x22` & `x25..x27` live.
+    e.stpPre64(29, 30, 31, -4);
+    e.addImm64(29, 31, 0);
+    e.stpOffset64(23, 24, 31, 2);
+    e.ldrImm64(23, 8, @intCast(@offsetOf(bc.FuncProto, "constants") / 8));
+    e.ldrImm64(24, 8, @intCast(@offsetOf(bc.FuncProto, "ics") / 8));
 
     var pc: usize = 0;
     while (pc < code.len) {
@@ -87,6 +103,11 @@ fn emitFunction(e: *Emitter, fp: *bc.FuncProto, pc_map: []u32, epilogue_idx: u32
             pc_map[pc] = e.len;
         } else if (pc_map[pc] != e.len) {
             return false;
+        }
+        if (arm64_fuse.tryEmitFused(e, code, pc, targets, pc_map, epilogue_idx, pass)) |fused_step| {
+            if (e.overflow) return false;
+            pc += fused_step;
+            continue;
         }
         const op: Op = @enumFromInt(code[pc]);
         const step = instrLen(op) orelse return false;
@@ -111,7 +132,12 @@ fn emitFunction(e: *Emitter, fp: *bc.FuncProto, pc_map: []u32, epilogue_idx: u32
             },
             .constant => {
                 const k = u32At(code.ptr + pc + 1);
-                if (k < 4096) e.ldrImm64(0, 23, @intCast(k)) else e.movImm64(0, fp.constants[k].bits);
+                if (k < 4096) {
+                    e.ldrImm64(0, 23, @intCast(k));
+                } else {
+                    e.movImm64(2, k);
+                    e.ldrRegScaled64(0, 23, 2);
+                }
                 pushReg(e, 0);
             },
             .this => { e.ldrImm64(0, 20, @intCast(@offsetOf(Frame, "this") / 8)); pushReg(e, 0); },
@@ -121,6 +147,7 @@ fn emitFunction(e: *Emitter, fp: *bc.FuncProto, pc_map: []u32, epilogue_idx: u32
                 pushReg(e, 0);
             },
             .new_target => { e.ldrImm64(0, 20, @intCast(@offsetOf(Frame, "new_target") / 8)); pushReg(e, 0); },
+            .home, .check_super_once, .run_fields => arm64_iter.emitClassMisc(e, op, pc_addr, epilogue_idx, pass),
             .check_coercible => {
                 e.ldur64(0, 22, -8);
                 e.eorReg64(2, 0, 26);
@@ -182,34 +209,29 @@ fn emitFunction(e: *Emitter, fp: *bc.FuncProto, pc_map: []u32, epilogue_idx: u32
             },
             .get_loc => {
                 const slot = u16At(code.ptr + pc + 1);
-                if (slot >= 4096) return false;
-                e.ldrImm64(0, 21, @intCast(slot));
+                if (slot < 4096) e.ldrImm64(0, 21, @intCast(slot)) else { e.movz(2, @intCast(slot), 0); e.ldrRegScaled64(0, 21, 2); }
                 pushReg(e, 0);
             },
             .put_loc => {
                 const slot = u16At(code.ptr + pc + 1);
-                if (slot >= 4096) return false;
                 e.ldur64(0, 22, -8);
                 e.subImm64(22, 22, 8);
-                e.strImm64(0, 21, @intCast(slot));
+                if (slot < 4096) e.strImm64(0, 21, @intCast(slot)) else { e.movz(2, @intCast(slot), 0); e.strRegScaled64(0, 21, 2); }
             },
             .set_loc => {
                 const slot = u16At(code.ptr + pc + 1);
-                if (slot >= 4096) return false;
                 e.ldur64(0, 22, -8);
-                e.strImm64(0, 21, @intCast(slot));
+                if (slot < 4096) e.strImm64(0, 21, @intCast(slot)) else { e.movz(2, @intCast(slot), 0); e.strRegScaled64(0, 21, 2); }
             },
             .set_hole => {
                 const slot = u16At(code.ptr + pc + 1);
-                if (slot >= 4096) return false;
                 e.addImm64(0, 26, 2);
-                e.strImm64(0, 21, @intCast(slot));
+                if (slot < 4096) e.strImm64(0, 21, @intCast(slot)) else { e.movz(2, @intCast(slot), 0); e.strRegScaled64(0, 21, 2); }
             },
             .get_loc_check, .put_loc_check => {
                 const slot = u16At(code.ptr + pc + 1);
                 const name_idx = u32At(code.ptr + pc + 3);
-                if (slot >= 4096) return false;
-                e.ldrImm64(0, 21, @intCast(slot));
+                if (slot < 4096) e.ldrImm64(0, 21, @intCast(slot)) else { e.movz(3, @intCast(slot), 0); e.ldrRegScaled64(0, 21, 3); }
                 e.addImm64(2, 26, 2);
                 e.cmpReg64(0, 2);
                 const before_call = e.len;
@@ -222,7 +244,7 @@ fn emitFunction(e: *Emitter, fp: *bc.FuncProto, pc_map: []u32, epilogue_idx: u32
                 } else {
                     e.ldur64(0, 22, -8);
                     e.subImm64(22, 22, 8);
-                    e.strImm64(0, 21, @intCast(slot));
+                    if (slot < 4096) e.strImm64(0, 21, @intCast(slot)) else { e.movz(3, @intCast(slot), 0); e.strRegScaled64(0, 21, 3); }
                 }
             },
             .get_env, .put_env, .get_env_check, .put_env_check => {
@@ -269,69 +291,66 @@ fn emitFunction(e: *Emitter, fp: *bc.FuncProto, pc_map: []u32, epilogue_idx: u32
             },
             .define_field => {
                 const ic_off = u32At(code.ptr + pc + 1) * @sizeOf(bc.IC);
-                e.ldur64(0, 22, -16);
-                e.ldur64(6, 22, -8);
-                e.eorReg64(2, 0, 27);
-                if (ic_off < 4096) {
-                    e.addImm64(4, 24, @intCast(ic_off));
-                } else {
-                    e.movImm64(4, ic_off);
-                    e.addReg64(4, 24, 4);
-                }
-                e.ldrImm64(3, 2, @intCast(@offsetOf(Object, "shape") / 8));
-                e.ldrImm64(5, 4, @intCast(@offsetOf(bc.IC, "shape") / 8));
-                e.cmpReg64(3, 5);
-                const b1 = e.len;
-                e.bCond(.ne, 0);
-                e.ldrbImm(5, 4, @intCast(@offsetOf(bc.IC, "is_transition")));
-                const b2 = e.len;
-                e.cbz32(5, 0);
-                e.ldrImm32(5, 4, @intCast(@offsetOf(bc.IC, "slot") / 4));
-                e.ldrImm32(3, 2, @intCast(@offsetOf(Object, "slot_cap") / 4));
-                e.cmpReg32(5, 3);
-                const b3 = e.len;
-                e.bCond(.hs, 0);
-                e.ldrbImm(3, 2, @intCast(@offsetOf(Object, "flags") + 1));
-                const b4 = e.len;
-                e.tbnz32(3, @bitOffsetOf(objmod.Flags, "is_proto") - 8, 0);
-                e.ldrImm64(3, 4, @intCast(@offsetOf(bc.IC, "holder_shape") / 8));
-                e.strImm64(3, 2, @intCast(@offsetOf(Object, "shape") / 8));
-                e.ldrImm64(3, 2, @intCast(@offsetOf(Object, "slots") / 8));
-                e.strRegScaled64(6, 3, 5);
-                const b_done = e.len;
-                e.bImm(0);
-                const slow_idx = e.len;
-                e.buf[b1] |= (@as(u32, @intCast(slow_idx - b1)) & 0x7FFFF) << 5;
-                e.buf[b2] |= (@as(u32, @intCast(slow_idx - b2)) & 0x7FFFF) << 5;
-                e.buf[b3] |= (@as(u32, @intCast(slow_idx - b3)) & 0x7FFFF) << 5;
-                e.buf[b4] |= (@as(u32, @intCast(slow_idx - b4)) & 0x3FFF) << 5;
-                e.callHelper4(@intFromPtr(&jit.jitDefineField), pc_addr, epilogue_idx, pass);
-                e.buf[b_done] |= @as(u32, @intCast(e.len - b_done)) & 0x03FF_FFFF;
-                e.subImm64(22, 22, 8);
+                e.emitDefineField(ic_off, pc_addr, epilogue_idx, pass);
             },
             .get_global => {
-                e.callHelper4(@intFromPtr(&jit.jitGetGlobal), pc_addr, epilogue_idx, pass);
-                pushReg(e, 0);
+                const ic_off = u32At(code.ptr + pc + 1) * @sizeOf(bc.IC);
+                e.emitGetGlobal(ic_off, pc_addr, epilogue_idx, pass);
             },
             .put_global => e.callHelper4(@intFromPtr(&jit.jitPutGlobal), pc_addr, epilogue_idx, pass),
             .get_length => e.emitGetLength(pc_addr, epilogue_idx, pass),
             .get_elem, .get_elem2 => e.emitGetElem(op, pc_addr, epilogue_idx, pass),
-            .put_elem => {
-                e.callHelper4(@intFromPtr(&jit.jitPutElem), pc_addr, epilogue_idx, pass);
-                e.ldur64(0, 22, -8);
-                e.stur64(0, 22, -24);
-                e.subImm64(22, 22, 16);
-            },
+            .put_elem => e.emitPutElem(pc_addr, epilogue_idx, pass),
             .new_object => {
                 e.callHelper4(@intFromPtr(&jit.jitNewObject), pc_addr, epilogue_idx, pass);
                 pushReg(e, 0);
             },
-            .add, .sub, .bit_and, .bit_or, .bit_xor, .shl, .sar, .shr => e.emitBinaryOp(op, pc_addr, epilogue_idx, pass),
-            .mul, .div => {
-                e.callHelper5(@intFromPtr(&jit.jitBinaryOp), pc_addr, @intFromEnum(op), epilogue_idx, pass);
+            .closure => {
+                const proto_idx = u32At(code.ptr + pc + 1);
+                e.callHelper5(@intFromPtr(&jit.jitClosure), pc_addr, proto_idx, epilogue_idx, pass);
+                pushReg(e, 0);
+            },
+            .push_env => {
+                const n = u16At(code.ptr + pc + 1);
+                e.callHelper5(@intFromPtr(&jit.jitPushEnv), pc_addr, n, epilogue_idx, pass);
+            },
+            .array_from => {
+                const n = u32At(code.ptr + pc + 1);
+                e.callHelper5(@intFromPtr(&jit.jitArrayFrom), pc_addr, n, epilogue_idx, pass);
+                e.mov64(22, 0);
+            },
+            .arguments => {
+                e.callHelper4(@intFromPtr(&jit.jitArguments), pc_addr, epilogue_idx, pass);
+                pushReg(e, 0);
+            },
+            .args_get => arm64_iter.emitArgsGet(e, u16At(code.ptr + pc + 1), pc_addr, epilogue_idx, pass),
+            .args_len => arm64_iter.emitArgsLen(e, u16At(code.ptr + pc + 1), pc_addr, epilogue_idx, pass),
+            .args_elem => arm64_iter.emitArgsElem(e, u16At(code.ptr + pc + 1), pc_addr, epilogue_idx, pass),
+            .args_apply => {
+                e.movImm64(3, @intFromPtr(code.ptr + pc + 3));
+                e.movz(4, @truncate(u16At(code.ptr + pc + 1)), 0);
+                e.ldrImm64(9, 19, @intCast(@offsetOf(Vm, "fast_args_apply_stub") / 8));
+                e.blr(9);
+                const ep_rel: i32 = if (pass == 1) @as(i32, @intCast(epilogue_idx)) - @as(i32, @intCast(e.len)) else 0;
+                e.cbnz64(1, ep_rel);
+                e.mov64(22, 0);
+            },
+            .rest => {
+                e.callHelper5(@intFromPtr(&jit.jitRest), pc_addr, u16At(code.ptr + pc + 1), epilogue_idx, pass);
+                pushReg(e, 0);
+            },
+            .new_regexp => {
+                e.callHelper4(@intFromPtr(&jit.jitNewRegExp), pc_addr, epilogue_idx, pass);
+                pushReg(e, 0);
+            },
+            .in_, .instanceof_ => {
+                e.callHelper4(if (op == .in_) @intFromPtr(&jit.jitIn) else @intFromPtr(&jit.jitInstanceOf), pc_addr, epilogue_idx, pass);
                 e.stur64(0, 22, -16);
                 e.subImm64(22, 22, 8);
             },
+            .bit_not, .neg, .to_propkey, .inc, .dec => e.emitUnaryFast(op, pc_addr, epilogue_idx, pass),
+            .add, .sub, .mul, .div, .bit_and, .bit_or, .bit_xor, .shl, .sar, .shr => e.emitBinaryOp(op, pc_addr, epilogue_idx, pass),
+            .mod => arm64_iter.emitMod(e, pc_addr, epilogue_idx, pass),
             .lt, .le, .gt, .ge, .seq, .sne, .eq, .ne => e.emitCompareOp(op, pc_addr, epilogue_idx, pass),
             .not => {
                 e.ldur64(0, 22, -8);
@@ -368,29 +387,15 @@ fn emitFunction(e: *Emitter, fp: *bc.FuncProto, pc_map: []u32, epilogue_idx: u32
                 e.lsrImm64(2, 2, 48);
                 const b_num2 = e.len;
                 e.cbz64(2, 0);
-                e.callHelper5(@intFromPtr(&jit.jitSlowOp), pc_addr, @intFromEnum(op), epilogue_idx, pass);
-                e.mov64(22, 0);
+                if (op == .plus) {
+                    e.callHelper5(@intFromPtr(&jit.jitUnaryOp), pc_addr, @intFromEnum(op), epilogue_idx, pass);
+                    e.stur64(0, 22, -8);
+                } else {
+                    e.callHelper5(@intFromPtr(&jit.jitSlowOp), pc_addr, @intFromEnum(op), epilogue_idx, pass);
+                    e.mov64(22, 0);
+                }
                 e.buf[b_num1] |= (@as(u32, @intCast(e.len - b_num1)) & 0x7FFFF) << 5;
                 e.buf[b_num2] |= (@as(u32, @intCast(e.len - b_num2)) & 0x7FFFF) << 5;
-            },
-            .inc, .dec => {
-                e.ldur64(0, 22, -8);
-                e.eorReg64(2, 0, 25);
-                e.lsrImm64(2, 2, 48);
-                const b_slow1 = e.len;
-                e.cbnz64(2, 0);
-                if (op == .inc) e.addsImm32(0, 0, 1) else e.subsImm32(0, 0, 1);
-                const b_slow2 = e.len;
-                e.bCond(.vs, 0);
-                e.orrReg64(0, 0, 25);
-                const b_done = e.len;
-                e.bImm(0);
-                const slow_idx = e.len;
-                e.buf[b_slow1] |= (@as(u32, @intCast(slow_idx - b_slow1)) & 0x7FFFF) << 5;
-                e.buf[b_slow2] |= (@as(u32, @intCast(slow_idx - b_slow2)) & 0x7FFFF) << 5;
-                e.callHelper5(@intFromPtr(&jit.jitUnaryOp), pc_addr, @intFromEnum(op), epilogue_idx, pass);
-                e.buf[b_done] |= @as(u32, @intCast(e.len - b_done)) & 0x03FF_FFFF;
-                e.stur64(0, 22, -8);
             },
             .jump => {
                 const dst = targetPc(pc, 5, relAt(code.ptr + pc + 1));
@@ -449,10 +454,19 @@ fn emitFunction(e: *Emitter, fp: *bc.FuncProto, pc_map: []u32, epilogue_idx: u32
                 e.bCond(.ne, rel);
                 e.subImm64(22, 22, 8);
             },
-            .call, .new_ => {
+            .call => {
                 const argc = u16At(code.ptr + pc + 1);
-                const helper = if (op == .call) @intFromPtr(&jit.jitCall) else @intFromPtr(&jit.jitNew);
-                e.callHelper5(helper, @intFromPtr(code.ptr + pc + 3), argc, epilogue_idx, pass);
+                e.movImm64(3, @intFromPtr(code.ptr + pc + 3));
+                e.movz(4, @truncate(argc), 0);
+                e.ldrImm64(9, 19, @intCast(@offsetOf(Vm, "fast_call_stub") / 8));
+                e.blr(9);
+                const ep_rel: i32 = if (pass == 1) @as(i32, @intCast(epilogue_idx)) - @as(i32, @intCast(e.len)) else 0;
+                e.cbnz64(1, ep_rel);
+                e.mov64(22, 0);
+            },
+            .new_ => {
+                const argc = u16At(code.ptr + pc + 1);
+                e.callHelper5(@intFromPtr(&jit.jitNew), @intFromPtr(code.ptr + pc + 3), argc, epilogue_idx, pass);
                 e.mov64(22, 0);
             },
             .apply, .apply_new => {
@@ -475,24 +489,14 @@ fn emitFunction(e: *Emitter, fp: *bc.FuncProto, pc_map: []u32, epilogue_idx: u32
             .push_try => {
                 const dst = targetPc(pc, 5, relAt(code.ptr + pc + 1));
                 if (dst > code.len) return false;
-                e.ldrImm64(2, 20, @intCast(@offsetOf(Frame, "env") / 8));
-                e.subImm64(0, 26, 2);
-                const b_no_env = e.len;
-                e.cbz64(2, 0);
-                if (@offsetOf(heap.Env, "cell") != 0) e.addImm64(2, 2, @intCast(@offsetOf(heap.Env, "cell")));
-                e.movz(3, 0xFFF8, 3);
-                e.orrReg64(0, 2, 3);
-                e.buf[b_no_env] |= (@as(u32, @intCast(e.len - b_no_env)) & 0x7FFFF) << 5;
-                e.strImm64(0, 22, 0);
-                e.movImm64(0, fr.catchMarker(@intCast(dst)).bits);
-                e.strImm64(0, 22, 1);
-                e.addImm64(22, 22, 16);
+                arm64_iter.emitPushTry(e, @intCast(dst));
             },
             .pop_try => e.subImm64(22, 22, 16),
             .gosub => {
                 const dst = targetPc(pc, 5, relAt(code.ptr + pc + 1));
                 if (dst > code.len) return false;
-                e.movz(0, @intCast(pc + 5), 0);
+                const ret_bc = pc + 5;
+                if (ret_bc < 65536) e.movz(0, @intCast(ret_bc), 0) else e.movImm64(0, ret_bc);
                 e.orrReg64(0, 0, 25);
                 e.strImm64(0, 22, 0);
                 e.addImm64(22, 22, 8);
@@ -509,9 +513,9 @@ fn emitFunction(e: *Emitter, fp: *bc.FuncProto, pc_map: []u32, epilogue_idx: u32
                     const g_step = instrLen(g_op) orelse return false;
                     if (g_op == .gosub) {
                         gosub_count += 1;
-                        if (gosub_count > 128) return false;
+                        if (gosub_count > 512) return false;
                         const ret_bc = g_pc + 5;
-                        e.movz(2, @intCast(ret_bc), 0);
+                        if (ret_bc < 65536) e.movz(2, @intCast(ret_bc), 0) else e.movImm64(2, ret_bc);
                         e.cmpReg32(0, 2);
                         const rel: i32 = if (pass == 1) @as(i32, @intCast(pc_map[ret_bc])) - @as(i32, @intCast(e.len)) else 0;
                         e.bCond(.eq, rel);
@@ -521,46 +525,38 @@ fn emitFunction(e: *Emitter, fp: *bc.FuncProto, pc_map: []u32, epilogue_idx: u32
             },
             .opt_chain => {
                 const dst = targetPc(pc, 5, relAt(code.ptr + pc + 1));
-                const extra: u12 = @as(u12, code[pc + 5]) * 8;
                 if (dst > code.len) return false;
-                e.ldur64(0, 22, -8);
-                e.eorReg64(2, 0, 26);
-                e.lsrImm64(2, 2, 1);
-                e.cmpImm64(2, 1);
-                const b_not_nullish = e.len;
-                e.bCond(.ne, 0);
-                if (extra != 0) e.subImm64(22, 22, extra);
-                e.subImm64(0, 26, 2);
-                e.stur64(0, 22, -8);
-                const rel: i32 = if (pass == 1) @as(i32, @intCast(pc_map[dst])) - @as(i32, @intCast(e.len)) else 0;
-                e.bImm(rel);
-                e.buf[b_not_nullish] |= (@as(u32, @intCast(e.len - b_not_nullish)) & 0x7FFFF) << 5;
+                arm64_iter.emitOptChain(e, if (pass == 1) pc_map[dst] else 0, @as(u12, code[pc + 5]) * 8, pass);
             },
-            .ctor_ret_check, .iter_next, .iter_result, .for_in_next, .with_get, .with_get_call, .with_put, .with_delete => {
-                const is_9 = op == .for_in_next or op == .with_get or op == .with_get_call or op == .with_put or op == .with_delete;
+            .iter_drop => e.subImm64(22, 22, 24),
+            .iter_close => arm64_iter.emitIterClose(e, pc_addr, epilogue_idx, pass),
+            .iter_init => arm64_iter.emitIterInit(e, pc_addr, epilogue_idx, pass),
+            .iter_step => arm64_iter.emitIterStep(e, pc_addr, epilogue_idx, pass),
+            .for_in_start => arm64_iter.emitForInStart(e, pc_addr, epilogue_idx, pass),
+            .ctor_ret_check => {
+                const dst = targetPc(pc, 5, relAt(code.ptr + pc + 1));
+                if (dst > code.len) return false;
+                arm64_iter.emitCtorRetCheck(e, if (pass == 1) pc_map[dst] else 0, pc_addr, epilogue_idx, pass);
+            },
+            .iter_next => {
+                const dst = targetPc(pc, 5, relAt(code.ptr + pc + 1));
+                if (dst > code.len) return false;
+                arm64_iter.emitIterNext(e, if (pass == 1) pc_map[dst] else 0, pc_addr, @intFromPtr(code.ptr + pc + 5), epilogue_idx, pass);
+            },
+            .for_in_next => {
+                const dst = targetPc(pc, 9, relAt(code.ptr + pc + 5));
+                if (dst > code.len) return false;
+                arm64_iter.emitForInNext(e, code.ptr + pc, if (pass == 1) pc_map[dst] else 0, pc_addr, @intFromPtr(code.ptr + pc + 9), epilogue_idx, pass);
+            },
+            .iter_result, .with_get, .with_get_call, .with_put, .with_delete => {
+                const is_9 = op != .iter_result;
                 const rel_off: usize = if (is_9) 5 else 1;
                 const base_off: usize = if (is_9) 9 else 5;
                 const dst = targetPc(pc, base_off, relAt(code.ptr + pc + rel_off));
                 if (dst > code.len) return false;
-                e.mov64(0, 19);
-                e.mov64(1, 20);
-                e.mov64(2, 22);
-                e.movImm64(3, pc_addr);
-                e.movz(4, @intFromEnum(op), 0);
-                e.movImm64(5, @intFromPtr(code.ptr + pc + step));
-                e.movImm64(9, @intFromPtr(&jit.jitBranchSlowOp));
-                e.blr(9);
-                const ep_rel: i32 = if (pass == 1) @as(i32, @intCast(epilogue_idx)) - @as(i32, @intCast(e.len)) else 0;
-                e.cbnz64(1, ep_rel);
-                e.ubfm64(22, 0, 0, 62);
-                e.lsrImm64(0, 0, 63);
-                const rel: i32 = if (pass == 1) @as(i32, @intCast(pc_map[dst])) - @as(i32, @intCast(e.len)) else 0;
-                e.cbnz64(0, rel);
+                arm64_iter.emitBranchSlow(e, op, if (pass == 1) pc_map[dst] else 0, pc_addr, @intFromPtr(code.ptr + pc + step), epilogue_idx, pass);
             },
-            else => {
-                e.callHelper5(@intFromPtr(&jit.jitSlowOp), pc_addr, @intFromEnum(op), epilogue_idx, pass);
-                e.mov64(22, 0);
-            },
+            else => @import("jit_arm64_elem.zig").emitMiscOp(e, op, code.ptr + pc, pc_addr, epilogue_idx, pass),
         }
         if (e.overflow) return false;
         pc += step;
@@ -572,26 +568,27 @@ fn emitFunction(e: *Emitter, fp: *bc.FuncProto, pc_map: []u32, epilogue_idx: u32
         return false;
     }
 
-    e.ldrImm64(27, 31, 10);
-    e.ldpOffset64(25, 26, 31, 8);
-    e.ldpOffset64(23, 24, 31, 6);
-    e.ldpOffset64(21, 22, 31, 4);
-    e.ldpOffset64(19, 20, 31, 2);
-    e.ldpPost64(29, 30, 31, 12);
+    e.ldpOffset64(23, 24, 31, 2);
+    e.ldpPost64(29, 30, 31, 4);
     e.ret();
     return !e.overflow;
 }
 
+threadlocal var targets_buf: [enc.max_bc_len + 1]bool = undefined;
 threadlocal var pc_map_buf: [enc.max_bc_len + 1]u32 = undefined;
 threadlocal var inst_words_buf: [enc.max_inst_words]u32 = undefined;
 
 pub fn compile(vm: *Vm, fp: *bc.FuncProto) ?JitFn {
     if (comptime !jit.enabled) return null;
     if (fp.is_generator or fp.is_async or fp.code.len == 0 or fp.code.len > enc.max_bc_len) return null;
+    const targets = targets_buf[0 .. fp.code.len + 1];
+    if (!arm64_fuse.computeJumpTargets(fp.code, targets, &instrLen)) return null;
     var e = Emitter{ .buf = &inst_words_buf };
-    if (!emitFunction(&e, fp, pc_map_buf[0 .. fp.code.len + 1], 0, 0)) return null;
+    if (!emitFunction(&e, fp, targets, pc_map_buf[0 .. fp.code.len + 1], 0, 0)) return null;
     const epilogue_idx = pc_map_buf[fp.code.len];
     e.len = 0;
-    if (!emitFunction(&e, fp, pc_map_buf[0 .. fp.code.len + 1], epilogue_idx, 1)) return null;
-    return vm.jit_pool.allocCode(vm.raw_gpa, inst_words_buf[0..e.len]);
+    if (!emitFunction(&e, fp, targets, pc_map_buf[0 .. fp.code.len + 1], epilogue_idx, 1)) return null;
+    const jfn = (if (fp.borrowed_code) jit.global_jit_pool.allocCode(std.heap.page_allocator, inst_words_buf[0..e.len]) else vm.jit_pool.allocCode(vm.raw_gpa, inst_words_buf[0..e.len])) orelse return null;
+    arm64_fuse.buildCatchMap(vm, fp, pc_map_buf[0 .. fp.code.len + 1], &instrLen);
+    return jfn;
 }

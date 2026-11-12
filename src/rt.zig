@@ -33,6 +33,9 @@ comptime {
         @export(&nanoui_rt_tester_init, .{ .name = "nanoui_rt_tester_init" });
         @export(&nanoui_rt_tester_deinit, .{ .name = "nanoui_rt_tester_deinit" });
         @export(&nanoui_rt_tester_frame, .{ .name = "nanoui_rt_tester_frame" });
+        @export(&nanoui_rt_set_font_smoothing, .{ .name = "nanoui_rt_set_font_smoothing" });
+        @export(&nanoui_rt_set_inline_predictions, .{ .name = "nanoui_rt_set_inline_predictions" });
+        @export(&nanoui_rt_suspend_menu_key_equivalents, .{ .name = "nanoui_rt_suspend_menu_key_equivalents" });
     }
 }
 
@@ -67,6 +70,21 @@ pub fn createFromMinimal(min: std.process.Init.Minimal, options: nanoui.AppOptio
 
 fn nanoui_rt_panic(ptr: [*]const u8, len: usize, addr: usize, has_addr: u8) callconv(.c) noreturn {
     std.debug.defaultPanic(ptr[0..len], if (has_addr != 0) addr else null);
+}
+
+// The app's settings that live in globals: this library's copy of each is
+// its own, so the app's setter forwards here as well (`ui.setFontSmoothing`,
+// `ui.setInlinePredictions`, `ui.suspendMenuKeyEquivalents`).
+fn nanoui_rt_set_font_smoothing(on: u8) callconv(.c) void {
+    ui.setFontSmoothing(on != 0);
+}
+
+fn nanoui_rt_set_inline_predictions(on: u8) callconv(.c) void {
+    ui.setInlinePredictions(on != 0);
+}
+
+fn nanoui_rt_suspend_menu_key_equivalents(on: u8) callconv(.c) void {
+    ui.suspendMenuKeyEquivalents(on != 0);
 }
 
 fn nanoui_rt_app_create(init_ptr: *const std.process.Init, opts_ptr: *const nanoui.AppOptions, out: **nanoui.App) callconv(.c) u8 {

@@ -403,8 +403,16 @@ pub fn build(gpa: std.mem.Allocator, list: []const u8, style: types.TextStyle, z
         break;
     };
     const p = owned[st.primary];
-    st.fast = !p.brought and p.stroke == 0 and p.ranges.len == 0;
+    st.fast = !p.brought and p.stroke == 0 and !earlierTouchesAscii(owned[0..st.primary]) and registry.rangesCoverPrintableAscii(p.ranges);
     return st;
+}
+
+fn earlierTouchesAscii(slice: []const Entry) bool {
+    for (slice) |e| {
+        if (e.ranges.len == 0) return true;
+        for (e.ranges) |r| if (r[0] <= 0x7e and r[1] >= 0x20) return true;
+    }
+    return false;
 }
 
 fn brought(gpa: std.mem.Allocator, face: *const registry.Face, style: types.TextStyle, size: f64, weight: u16) ?Entry {
@@ -421,7 +429,7 @@ fn brought(gpa: std.mem.Allocator, face: *const registry.Face, style: types.Text
         return null;
     };
     const bold = weight >= 600 and face.weight[1] < 600;
-    return .{ .ref = ref, .ranges = ranges, .stroke = if (bold) strokeFor(@floatCast(size)) else 0, .brought = face.native != null };
+    return .{ .ref = ref, .ranges = ranges, .stroke = if (bold) strokeFor(@floatCast(size)) else 0, .brought = face.complex_ascii };
 }
 
 /// The names that mean the system's own fonts.

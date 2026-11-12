@@ -4,12 +4,53 @@
 const std = @import("std");
 const box = @import("box.zig");
 const css = @import("../css/style.zig");
+const dom = @import("../dom.zig");
 const ctx = @import("ctx.zig");
 const Box = box.Box;
 const Piece = box.Piece;
 const Entry = box.Entry;
 const Ctx = ctx.Ctx;
 const Error = ctx.Error;
+
+const TextPieceCache = struct {
+    data_ptr: [*]const u8,
+    data_len: usize,
+    family_ptr: [*]const u8,
+    family_len: usize,
+    measurer_fn: *const anyopaque,
+    font_epoch: u32,
+    font_size: f32,
+    word_spacing: f32,
+    letter_spacing: f32,
+    tab_size: f32,
+    font_weight: u16,
+    font_stretch: u16,
+    flags: u16,
+    out_after_space: bool,
+    cap: u32,
+    pieces_ptr: [*]Piece,
+    pieces_len: u32,
+};
+
+inline fn textFlags(s: *const css.Style, nowrap: bool, after_space: bool) u16 {
+    return @as(u16, @intFromBool(s.italic)) |
+        (@as(u16, @intFromBool(s.mono)) << 1) |
+        (@as(u16, @intFromBool(s.serif)) << 2) |
+        (@as(u16, @intFromBool(s.tabular)) << 3) |
+        (@as(u16, @intFromBool(s.letter_spacing == 0)) << 4) |
+        (@as(u16, @intFromEnum(s.white_space)) << 5) |
+        (@as(u16, @intFromBool(nowrap)) << 8) |
+        (@as(u16, @intFromBool(after_space)) << 9);
+}
+
+inline fn matchTextCache(tc: *const TextPieceCache, raw: []const u8, n: *const dom.Node, s: *const css.Style, c: *const Ctx, nowrap: bool, after_space: bool) bool {
+    if (tc.data_ptr != raw.ptr or tc.data_len != raw.len) return false;
+    if (tc.flags != textFlags(s, nowrap, after_space) or tc.font_size != s.font_size or tc.font_weight != s.font_weight) return false;
+    if (tc.font_stretch != s.font_stretch or tc.word_spacing != s.word_spacing or tc.letter_spacing != s.letter_spacing or tc.tab_size != s.tab_size) return false;
+    if (tc.font_epoch != n.doc.font_epoch or tc.measurer_fn != @as(*const anyopaque, @ptrCast(c.m.width))) return false;
+    if (tc.family_len != s.font_family.len) return false;
+    return tc.family_len == 0 or std.mem.eql(u8, tc.family_ptr[0..tc.family_len], s.font_family);
+}
 
 const Builder = struct {
     c: *Ctx,
@@ -23,8 +64,30 @@ const Builder = struct {
 
 /// Builds `root.lay.pieces` from `root.lay.entries`.
 pub fn build(c: *Ctx, root: *Box) Error!void {
+    const entries = root.lay.entries;
+    if (entries.len == 0) return;
+    if (entries.len == 1 and entries[0].tag == .text) {
+        const e = entries[0];
+        if (e.text.len == 0) return;
+        const s = e.style orelse root.style;
+        if ((s.white_space == .normal or s.white_space == .nowrap) and allCollapsibleSpace(e.text)) return;
+        if (e.node) |n| if (s.text_transform == .none) if (n.text_cache) |raw_tc| {
+            const tc: *const TextPieceCache = @ptrCast(@alignCast(raw_tc));
+            if (matchTextCache(tc, e.text, n, s, c, root.lay.nowrap, true)) {
+                if (tc.pieces_len == 0) return;
+                const pcs = try c.arena.dupe(Piece, tc.pieces_ptr[0..tc.pieces_len]);
+                for (pcs) |*pc| {
+                    pc.box = root;
+                    pc.style = s;
+                    pc.font.family = s.font_family;
+                }
+                root.lay.pieces = pcs;
+                return;
+            }
+        };
+    }
     var b: Builder = .{ .c = c, .root = root };
-    try walk(&b, root.lay.entries, root);
+    try walk(&b, entries, root);
     root.lay.pieces = b.out.items;
 }
 
@@ -65,14 +128,59 @@ fn isSpace(ch: u8) bool {
     return ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r' or ch == 0x0c;
 }
 
-fn addText(b: *Builder, raw: []const u8, node: ?*@import("../dom.zig").Node, s: *const css.Style, owner: *Box) Error!void {
+inline fn allCollapsibleSpace(s: []const u8) bool {
+    for (s) |ch| if (!isSpace(ch)) return false;
+    return true;
+}
+
+fn addText(b: *Builder, raw: []const u8, node: ?*dom.Node, s: *const css.Style, owner: *Box) Error!void {
     if (raw.len == 0) return;
+    if (s.text_transform == .none and (s.white_space == .normal or s.white_space == .nowrap) and allCollapsibleSpace(raw)) {
+        if (!b.after_space) {
+            const font = box.fontOf(s);
+            const single = raw.len == 1 and raw[0] == ' ';
+            try b.out.append(b.c.arena, .{
+                .tag = .space,
+                .text = if (single) raw[0..1] else " ",
+                .w = b.c.width(" ", font) + ctx.clean(s.word_spacing) + ctx.clean(s.letter_spacing),
+                .box = owner,
+                .node = node,
+                .style = s,
+                .font = font,
+                .start = 0,
+                .plain = node != null and single,
+                .wraps = s.white_space == .normal and !b.root.lay.nowrap,
+                .sliced = single,
+            });
+            b.after_space = true;
+        }
+        return;
+    }
     const c = b.c;
+    const nowrap_hint = b.root.lay.nowrap;
+    const can_cache = node != null and s.text_transform == .none and (b.out.items.len == 0 or b.out.items[b.out.items.len - 1].tag != .space);
+    const in_after_space = b.after_space;
+    if (can_cache) if (node.?.text_cache) |raw_tc| {
+        const tc: *const TextPieceCache = @ptrCast(@alignCast(raw_tc));
+        if (matchTextCache(tc, raw, node.?, s, c, nowrap_hint, in_after_space)) {
+            if (tc.pieces_len > 0) {
+                const base = b.out.items.len;
+                try b.out.appendSlice(c.arena, tc.pieces_ptr[0..tc.pieces_len]);
+                for (b.out.items[base..]) |*pc| {
+                    pc.box = owner;
+                    pc.style = s;
+                    pc.font.family = s.font_family;
+                }
+            }
+            b.after_space = tc.out_after_space;
+            return;
+        }
+    };
+    const base_idx = b.out.items.len;
     const data = if (s.text_transform == .none) raw else try transformed(c, raw, s.text_transform, &b.word_start);
     const plain = node != null and data.ptr == raw.ptr;
     const font = box.fontOf(s);
     const wrap_mode = s.white_space;
-    const nowrap_hint = b.root.lay.nowrap;
     const wraps = (wrap_mode == .normal or wrap_mode == .pre_wrap or wrap_mode == .pre_line) and !nowrap_hint;
     const collapse = wrap_mode == .normal or wrap_mode == .nowrap or wrap_mode == .pre_line;
     const keep_lf = wrap_mode == .pre or wrap_mode == .pre_wrap or wrap_mode == .pre_line;
@@ -137,6 +245,50 @@ fn addText(b: *Builder, raw: []const u8, node: ?*@import("../dom.zig").Node, s: 
         }
         i = try addWord(b, data, i, node, s, owner, font, plain, wraps);
         b.after_space = false;
+    }
+    if (can_cache) {
+        const n = node.?;
+        const gen_slice = b.out.items[base_idx..];
+        if (gen_slice.len <= std.math.maxInt(u32)) {
+            const da = n.doc.arena;
+            const len32: u32 = @intCast(gen_slice.len);
+            const tc: *TextPieceCache = if (n.text_cache) |raw_tc| @ptrCast(@alignCast(raw_tc)) else blk: {
+                const created = da.create(TextPieceCache) catch return;
+                created.cap = 0;
+                created.family_ptr = "".ptr;
+                created.family_len = 0;
+                created.pieces_ptr = @constCast(@as([]const Piece, &.{}).ptr);
+                n.text_cache = created;
+                break :blk created;
+            };
+            if (len32 > tc.cap) {
+                const buf = da.alloc(Piece, len32) catch return;
+                tc.pieces_ptr = buf.ptr;
+                tc.cap = len32;
+            }
+            if (len32 > 0) @memcpy(tc.pieces_ptr[0..len32], gen_slice);
+            tc.pieces_len = len32;
+            tc.data_ptr = raw.ptr;
+            tc.data_len = raw.len;
+            if (s.font_family.len == 0) {
+                tc.family_ptr = "".ptr;
+                tc.family_len = 0;
+            } else if (tc.family_len != s.font_family.len or !std.mem.eql(u8, tc.family_ptr[0..tc.family_len], s.font_family)) {
+                const fam = da.dupe(u8, s.font_family) catch return;
+                tc.family_ptr = fam.ptr;
+                tc.family_len = fam.len;
+            }
+            tc.measurer_fn = @ptrCast(c.m.width);
+            tc.font_epoch = n.doc.font_epoch;
+            tc.font_size = s.font_size;
+            tc.word_spacing = s.word_spacing;
+            tc.letter_spacing = s.letter_spacing;
+            tc.tab_size = s.tab_size;
+            tc.font_weight = s.font_weight;
+            tc.font_stretch = s.font_stretch;
+            tc.flags = textFlags(s, nowrap_hint, in_after_space);
+            tc.out_after_space = b.after_space;
+        }
     }
 }
 

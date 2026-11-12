@@ -25,6 +25,7 @@ pub fn register(bytes: []const u8) bool {
     if (!portable and !@import("fonts.zig").registerData(bytes)) return false;
     fonts[count] = bytes;
     count += 1;
+    unscoped_generation += 1;
     return true;
 }
 
@@ -71,6 +72,8 @@ pub const Face = struct {
     gpa: std.mem.Allocator,
     /// The text system's handle for it, where it has one (a font descriptor).
     native: ?*anyopaque = null,
+    /// True when the sfnt carries AAT state tables or unshielded 3+-glyph ligatures.
+    complex_ascii: bool = false,
 
     pub fn covers(f: *const Face, cp: u21) bool {
         return rangesCover(f.ranges, cp);
@@ -83,6 +86,13 @@ pub fn rangesCover(ranges: []const [2]u21, cp: u21) bool {
     return false;
 }
 
+pub fn rangesCoverPrintableAscii(ranges: []const [2]u21) bool {
+    if (ranges.len == 0) return true;
+    var cp: u21 = 0x20;
+    while (cp < 0x7f) : (cp += 1) if (!rangesCover(ranges, cp)) return false;
+    return true;
+}
+
 pub const RegisterError = sfnt.Error;
 
 /// The faces brought so far. Touched on the main thread only.
@@ -91,11 +101,21 @@ var faces_gpa: ?std.mem.Allocator = null;
 var serial: u64 = 0;
 /// Bumped when faces come or go: text systems drop what they shaped.
 pub var generation: u64 = 0;
+/// Bumped when unscoped fonts (`register` or non-`@` `registerFace`) change.
+pub var unscoped_generation: u64 = 0;
+/// True while every registered `@font-face` family contains `'@'` (page-scoped web fonts).
+pub var only_scoped_at: bool = true;
+
+pub fn unscopedGeneration() u64 {
+    return unscoped_generation;
+}
 
 /// Adds a face (`FaceOptions`). The bytes need not outlive the call. `gpa` is
 /// used until the family is unregistered.
 pub fn registerFace(gpa: std.mem.Allocator, o: FaceOptions) RegisterError!void {
     if (o.family.len == 0) return error.NotAFont;
+    const is_unscoped = std.mem.indexOfScalar(u8, o.family, '@') == null;
+    if (is_unscoped) only_scoped_at = false;
     const f = try gpa.create(Face);
     errdefer gpa.destroy(f);
     const family = try gpa.dupe(u8, o.family);
@@ -123,6 +143,7 @@ pub fn registerFace(gpa: std.mem.Allocator, o: FaceOptions) RegisterError!void {
         .serial = serial,
         .gpa = gpa,
         .native = native,
+        .complex_ascii = bytes.len > 0 and sfnt.hasUnshieldedMultiLigature(bytes),
     };
     const list_gpa = faces_gpa orelse gpa;
     faces_gpa = list_gpa;
@@ -131,6 +152,7 @@ pub fn registerFace(gpa: std.mem.Allocator, o: FaceOptions) RegisterError!void {
         return e;
     };
     generation += 1;
+    if (is_unscoped) unscoped_generation += 1;
 }
 
 /// Gives a pending face of `family`, the one registered with `order`, its file or
@@ -145,8 +167,10 @@ pub fn fillFace(family: []const u8, order: u32, bytes: []const u8, local: ?[]con
             errdefer f.gpa.free(decoded);
             if (!portable) f.native = @import("text_stack_mac.zig").describe(decoded) orelse return error.Unsupported;
             f.bytes = decoded;
+            f.complex_ascii = sfnt.hasUnshieldedMultiLigature(decoded);
         }
         generation += 1;
+        if (std.mem.indexOfScalar(u8, f.family, '@') == null) unscoped_generation += 1;
         return;
     }
     return error.NotAFont;
@@ -166,8 +190,10 @@ fn release(f: *Face) void {
 pub fn unregisterFamilies(prefix: []const u8) void {
     var kept: usize = 0;
     var gone = false;
+    var gone_unscoped = false;
     for (faces.items) |f| {
         if (std.ascii.startsWithIgnoreCase(f.family, prefix)) {
+            if (std.mem.indexOfScalar(u8, f.family, '@') == null) gone_unscoped = true;
             release(f);
             gone = true;
         } else {
@@ -177,6 +203,7 @@ pub fn unregisterFamilies(prefix: []const u8) void {
     }
     faces.items.len = kept;
     if (gone) generation += 1;
+    if (gone_unscoped) unscoped_generation += 1;
     if (kept == 0) if (faces_gpa) |g| {
         faces.deinit(g);
         faces = .empty;

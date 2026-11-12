@@ -31,25 +31,44 @@ fn parts(vm: *Vm, o: *Object) Error!Parts {
     return .{ .target = d.target.?, .handler = d.handler.? };
 }
 
-fn trap(vm: *Vm, h: *Object, name: []const u8) Error!?Value {
-    const t = try props.get(vm, h, try str.keyFromBytes(vm, name));
+fn trapKey(vm: *Vm, h: *Object, k: PropKey) Error!?Value {
+    const t: Value = blk: {
+        if (!h.flags.exotic and !h.flags.lazy_fn) {
+            if (h.shape.find(k)) |slot| {
+                if (!h.shape.flagsAt(slot).accessor) break :blk h.slots[slot];
+            } else if (h.shape.proto == null or (h.shape.proto == vm.protos.object and !vm.protos.object.flags.proto_dirty)) {
+                break :blk Value.undefined;
+            }
+        }
+        break :blk try props.get(vm, h, k);
+    };
     if (t.isNullish()) return null;
     if (!t.isCallable()) return vm.throwError(.TypeError, "Proxy trap is not a function");
     return t;
 }
 
+fn trap(vm: *Vm, h: *Object, name: []const u8) Error!?Value {
+    return trapKey(vm, h, try str.keyFromBytes(vm, name));
+}
+
+inline fn targetAllConfigurable(t: *const Object) bool {
+    return t.shape.all_plain_str and !t.flags.exotic and !t.flags.lazy_fn and t.elems_len == 0 and t.class == .object;
+}
+
 pub fn get(vm: *Vm, o: *Object, key: PropKey, receiver: Value) Error!Value {
     try vm.checkNativeStack();
     const p = try parts(vm, o);
-    const t = try trap(vm, p.handler, "get") orelse return props.getR(vm, p.target, key, receiver);
+    const t = try trapKey(vm, p.handler, vm.k.get) orelse return props.getR(vm, p.target, key, receiver);
     const r = try calls.call(vm, t, p.handler.value(), &.{ p.target.value(), try str.keyToValue(vm, key), receiver });
-    if (try props.getOwn(vm, p.target, key)) |own| {
-        if (!own.flags.configurable) {
-            if (!own.flags.accessor and !own.flags.writable and !conv.sameValue(vm, r, own.value)) {
-                return vm.throwError(.TypeError, "'get' on proxy: value differs from the non-writable, non-configurable target property");
-            }
-            if (own.flags.accessor and own.get.isUndefined() and !r.isUndefined()) {
-                return vm.throwError(.TypeError, "'get' on proxy: non-configurable accessor without a getter must report undefined");
+    if (!targetAllConfigurable(p.target)) {
+        if (try props.getOwn(vm, p.target, key)) |own| {
+            if (!own.flags.configurable) {
+                if (!own.flags.accessor and !own.flags.writable and !conv.sameValue(vm, r, own.value)) {
+                    return vm.throwError(.TypeError, "'get' on proxy: value differs from the non-writable, non-configurable target property");
+                }
+                if (own.flags.accessor and own.get.isUndefined() and !r.isUndefined()) {
+                    return vm.throwError(.TypeError, "'get' on proxy: non-configurable accessor without a getter must report undefined");
+                }
             }
         }
     }
@@ -59,16 +78,18 @@ pub fn get(vm: *Vm, o: *Object, key: PropKey, receiver: Value) Error!Value {
 pub fn set(vm: *Vm, o: *Object, key: PropKey, val: Value, receiver: Value) Error!bool {
     try vm.checkNativeStack();
     const p = try parts(vm, o);
-    const t = try trap(vm, p.handler, "set") orelse return props.setR(vm, p.target, key, val, receiver);
+    const t = try trapKey(vm, p.handler, vm.k.set) orelse return props.setR(vm, p.target, key, val, receiver);
     const r = try calls.call(vm, t, p.handler.value(), &.{ p.target.value(), try str.keyToValue(vm, key), val, receiver });
     if (!ops.truthy(r)) return false;
-    if (try props.getOwn(vm, p.target, key)) |own| {
-        if (!own.flags.configurable) {
-            if (!own.flags.accessor and !own.flags.writable and !conv.sameValue(vm, val, own.value)) {
-                return vm.throwError(.TypeError, "'set' on proxy: cannot change a non-writable, non-configurable property");
-            }
-            if (own.flags.accessor and own.set.isUndefined()) {
-                return vm.throwError(.TypeError, "'set' on proxy: non-configurable accessor has no setter");
+    if (!targetAllConfigurable(p.target)) {
+        if (try props.getOwn(vm, p.target, key)) |own| {
+            if (!own.flags.configurable) {
+                if (!own.flags.accessor and !own.flags.writable and !conv.sameValue(vm, val, own.value)) {
+                    return vm.throwError(.TypeError, "'set' on proxy: cannot change a non-writable, non-configurable property");
+                }
+                if (own.flags.accessor and own.set.isUndefined()) {
+                    return vm.throwError(.TypeError, "'set' on proxy: non-configurable accessor has no setter");
+                }
             }
         }
     }
@@ -78,9 +99,9 @@ pub fn set(vm: *Vm, o: *Object, key: PropKey, val: Value, receiver: Value) Error
 pub fn has(vm: *Vm, o: *Object, key: PropKey) Error!bool {
     try vm.checkNativeStack();
     const p = try parts(vm, o);
-    const t = try trap(vm, p.handler, "has") orelse return props.has(vm, p.target, key);
+    const t = try trapKey(vm, p.handler, vm.k.has) orelse return props.has(vm, p.target, key);
     const r = ops.truthy(try calls.call(vm, t, p.handler.value(), &.{ p.target.value(), try str.keyToValue(vm, key) }));
-    if (!r) {
+    if (!r and !(targetAllConfigurable(p.target) and p.target.flags.extensible)) {
         if (try props.getOwn(vm, p.target, key)) |own| {
             if (!own.flags.configurable or !try props.isExtensible(vm, p.target)) {
                 return vm.throwError(.TypeError, "'has' on proxy: cannot hide this property");
@@ -305,18 +326,67 @@ fn target(vm: *Vm, args: []const Value) Error!*Object {
     return t.asObject();
 }
 
+inline fn fastPropKey(vm: *Vm, v: Value) Error!PropKey {
+    if (v.isString()) {
+        const s = v.asString();
+        if (s.key.bits != 0) return s.key;
+    } else if (v.isSymbol()) {
+        return PropKey.fromSymbol(v.asSymbol());
+    } else if (v.isInt() and v.asInt() >= 0) {
+        return PropKey.fromIndex(@intCast(v.asInt()));
+    }
+    return conv.toPropKey(vm, v);
+}
+
 fn rGet(vm: *Vm, _: Value, args: []const Value) Error!Value {
     const t = try target(vm, args);
-    const key = try conv.toPropKey(vm, u.arg(args, 1));
-    return props.getR(vm, t, key, if (args.len > 2) args[2] else t.value());
+    const key = try fastPropKey(vm, u.arg(args, 1));
+    const recv = if (args.len > 2) args[2] else t.value();
+    if (!key.isIndex() and !t.flags.exotic and !t.flags.lazy_fn and !(t.class == .array and key.eql(vm.k.length))) {
+        const sh = t.shape;
+        const me = vm.megaSlot(sh, key.bits);
+        if (me.shape == sh and me.key_bits == key.bits) {
+            if (me.holder) |mh| {
+                if (me.epoch == vm.proto_epoch and mh.shape == me.holder_shape) {
+                    const sv = mh.slots[me.slot & ~vm_mod.MegaICEntry.acc_flag];
+                    return if ((me.slot & vm_mod.MegaICEntry.acc_flag) != 0) props.callGetter(vm, sv, recv) else sv;
+                }
+            } else if (me.slot == @import("bytecode.zig").IC.missing_slot) {
+                if (me.epoch == vm.proto_epoch) return Value.undefined;
+            } else {
+                return t.slots[me.slot];
+            }
+        }
+        if (!sh.is_dict) {
+            if (sh.find(key)) |slot| {
+                if (!sh.flagsAt(slot).accessor) {
+                    me.* = .{ .shape = sh, .key_bits = key.bits, .holder = null, .holder_shape = null, .slot = slot, .epoch = 0 };
+                    return t.slots[slot];
+                }
+                return props.callGetter(vm, t.slots[slot], recv);
+            }
+        }
+    }
+    return props.getR(vm, t, key, recv);
 }
 fn rSet(vm: *Vm, _: Value, args: []const Value) Error!Value {
     const t = try target(vm, args);
-    const key = try conv.toPropKey(vm, u.arg(args, 1));
-    return Value.fromBool(try props.setR(vm, t, key, u.arg(args, 2), if (args.len > 3) args[3] else t.value()));
+    const key = try fastPropKey(vm, u.arg(args, 1));
+    const val = u.arg(args, 2);
+    const recv = if (args.len > 3) args[3] else t.value();
+    if (recv.bits == t.value().bits and !key.isIndex() and !t.flags.exotic and !t.flags.lazy_fn and !t.flags.is_proto) {
+        if (t.shape.find(key)) |slot| {
+            const fl = t.shape.flagsAt(slot);
+            if (fl.writable and !fl.accessor) {
+                t.slots[slot] = val;
+                return Value.true;
+            }
+        }
+    }
+    return Value.fromBool(try props.setR(vm, t, key, val, recv));
 }
 fn rHas(vm: *Vm, _: Value, args: []const Value) Error!Value {
-    return Value.fromBool(try props.has(vm, try target(vm, args), try conv.toPropKey(vm, u.arg(args, 1))));
+    return Value.fromBool(try props.has(vm, try target(vm, args), try fastPropKey(vm, u.arg(args, 1))));
 }
 fn rDelete(vm: *Vm, _: Value, args: []const Value) Error!Value {
     return Value.fromBool(try props.delete(vm, try target(vm, args), try conv.toPropKey(vm, u.arg(args, 1))));

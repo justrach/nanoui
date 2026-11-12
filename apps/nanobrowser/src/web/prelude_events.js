@@ -3,8 +3,9 @@
 // the target's wrapper does. Called with `$`, the private natives, and the global.
 (function ($, g) {
 "use strict";
-const def = (o, name, v) => Object.defineProperty(o, name, { value: v, writable: true, configurable: true, enumerable: false });
+const def = (o, name, v) => $.defHidden(o, name, v);
 $.def = def;
+$.ep = 0;
 
 const codes = { IndexSizeError: 1, HierarchyRequestError: 3, WrongDocumentError: 4, InvalidCharacterError: 5, NoModificationAllowedError: 7, NotFoundError: 8, NotSupportedError: 9, InvalidStateError: 11, SyntaxError: 12, InvalidModificationError: 13, NamespaceError: 14, InvalidAccessError: 15, SecurityError: 18, NetworkError: 19, AbortError: 20, QuotaExceededError: 22, TimeoutError: 23, DataCloneError: 25 };
 
@@ -27,10 +28,12 @@ const state = $.eventState = (event) => {
   return (s && s.owner === event ? s : null) || $.remoteEventState?.(event);
 };
 
+const matOf = (slot) => $.materializePath(slot);
+
 class Event {
   constructor(type, init) {
     if (arguments.length === 0) throw new TypeError("Event: 1 argument required");
-    def(this, STATE, { owner: this, stop: false, stopNow: false, path: null, passive: false, active: false, canceled: false });
+    def(this, STATE, { owner: this, stop: false, stopNow: false, path: null, activePath: null, mat: null, slot: -1, passive: false, active: false, canceled: false });
     this.type = String(type);
     this.bubbles = !!(init && init.bubbles);
     this.cancelable = !!(init && init.cancelable);
@@ -50,7 +53,12 @@ class Event {
   stopPropagation() { state(this).stop = true; }
   stopImmediatePropagation() { const st = state(this); st.stop = true; st.stopNow = true; }
   preventDefault() { const st = state(this); if (this.cancelable && !st.passive) st.canceled = true; }
-  composedPath() { const p = state(this).path; return p ? p.slice() : []; }
+  composedPath() {
+    const st = state(this);
+    let p = st.path;
+    if (!p && st.slot >= 0 && st.mat) p = st.path = st.mat(st.slot) || st.activePath;
+    return p ? p.slice() : [];
+  }
   initEvent(type, bubbles, cancelable) {
     const st = state(this);
     if (st.active) return;
@@ -157,7 +165,7 @@ function addEventListener(type, cb, opts) {
   const signal = opts && typeof opts === "object" ? opts.signal : undefined;
   if (signal && signal.aborted) return;
   let map = t[LS];
-  if (!map) { map = new Map(); def(t, LS, map); }
+  if (!map) { map = new Map(); def(t, LS, map); $.markTarget(t); }
   let list = map.get(type);
   if (!list) { list = []; map.set(type, list); }
   for (let i = 0; i < list.length; i++) {
@@ -166,6 +174,7 @@ function addEventListener(type, cb, opts) {
   }
   const l = { cb, capture, once, passive, removed: false, handler: false };
   list.push(l);
+  $.ep++;
   $.listen(type);
   if (signal) signal.addEventListener("abort", () => removeFrom(t, type, l));
 }
@@ -226,7 +235,7 @@ function compileInline(t, type, src) {
 
 function handlerStore(t) {
   let s = t[HANDLERS];
-  if (!s) { s = Object.create(null); def(t, HANDLERS, s); }
+  if (!s) { s = Object.create(null); def(t, HANDLERS, s); $.markTarget(t); }
   return s;
 }
 
@@ -262,6 +271,7 @@ function callHandler(t, ev, f) {
 function runHandler(t, ev) {
   const s = t[HANDLERS];
   const type = ev.type;
+  if (!s && t === g && !windowBodyEvents.has(type)) return;
   const src = t === g ? (windowBodyEvents.has(type) && g.document && g.document.body ? $.inlineAttr(g.document.body, type) : null) : $.inlineAttr(t, type);
   if (!s && src === null) return;
   const key = "prop:" + type;
@@ -330,22 +340,62 @@ function invoke(t, ev, phase, st) {
   }
 }
 
+let dispatchDepth = 0;
 function dispatch(target, ev, st = state(ev)) {
   ev.target = target;
   st.active = true;
   st.stop = false; st.stopNow = false;
-  const path = pathOf(target, ev.type);
-  st.path = path;
+  let slot = -1, path;
+  if (dispatchDepth < 8) {
+    slot = dispatchDepth++;
+    path = $.pushPath(target, ev.type);
+    st.slot = slot;
+    st.mat = matOf;
+    st.activePath = path;
+    st.path = null;
+  } else {
+    path = pathOf(target, ev.type);
+    st.slot = -1;
+    st.mat = null;
+    st.path = path;
+  }
+  let ep = $.ep;
   const savedEvent = g.event;
   g.event = ev;
-  for (let i = path.length - 1; i > 0; i--) invoke(path[i], ev, 1, st);
+  for (let i = path.length - 1; i > 0; i--) {
+    const cur = path[i];
+    invoke(cur, ev, 1, st);
+    if (ep !== $.ep && slot >= 0) {
+      ep = $.ep;
+      path = st.path || (st.path = $.materializePath(slot) || path);
+      i = path.indexOf(cur);
+    }
+  }
   invoke(target, ev, 2, st);
-  if (ev.bubbles) for (let i = 1; i < path.length; i++) invoke(path[i], ev, 3, st);
+  if (ep !== $.ep && slot >= 0) {
+    ep = $.ep;
+    path = st.path || (st.path = $.materializePath(slot) || path);
+  }
+  if (ev.bubbles) {
+    for (let i = 1; i < path.length; i++) {
+      const cur = path[i];
+      invoke(cur, ev, 3, st);
+      if (ep !== $.ep && slot >= 0) {
+        ep = $.ep;
+        path = st.path || (st.path = $.materializePath(slot) || path);
+        i = path.indexOf(cur);
+      }
+    }
+  }
   g.event = savedEvent;
+  if (slot >= 0) { dispatchDepth--; $.popPath(); }
   st.active = false;
   ev.currentTarget = null;
   ev.eventPhase = 0;
   st.path = null;
+  st.activePath = null;
+  st.mat = null;
+  st.slot = -1;
   return !st.canceled;
 }
 
@@ -378,6 +428,7 @@ function eventDesc(type) {
       const s = handlerStore(t);
       s["prop:" + type] = typeof v === "function" || (v && typeof v === "object") ? v : null;
       s["src:" + type] = t === g ? (g.document && g.document.body ? $.inlineAttr(g.document.body, type) : null) : $.inlineAttr(t, type);
+      $.ep++;
       $.listen(type);
     },
   };

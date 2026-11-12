@@ -49,21 +49,23 @@ fn valignOf(raw: []const u8) ?css.VerticalAlign {
 /// it. The cascade applies most of these too, in which case nothing changes here.
 pub fn apply(c: *Ctx, n: *dom.Node, s: *const Style, htag: gen.HtmlTag) Error!*const Style {
     if (n.ns != .html) return s;
+    switch (htag) {
+        .cell => {},
+        .table, .img => if (n.attrs.items.len == 0) return s,
+        .tr => if (n.attrs.items.len == 0 or s.height.kind != .auto) return s,
+        else => return s,
+    }
     var out = s.*;
     var changed = false;
     switch (htag) {
         .cell => changed = cellHints(n, &out),
-        .table => if (n.attrs.items.len > 0) {
-            changed = tableHints(n, &out);
-        },
-        .tr => if (n.attrs.items.len > 0 and s.height.kind == .auto) if (dimLen(n, "height")) |h| {
+        .table => changed = tableHints(n, &out),
+        .tr => if (dimLen(n, "height")) |h| {
             out.height = h;
             changed = true;
         },
-        .img => if (n.attrs.items.len > 0) {
-            changed = imageHints(n, &out);
-        },
-        else => return s,
+        .img => changed = imageHints(n, &out),
+        else => unreachable,
     }
     if (!changed) return s;
     const copy = try c.arena.create(Style);

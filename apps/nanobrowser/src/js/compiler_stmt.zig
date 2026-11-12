@@ -253,6 +253,7 @@ fn forIn(c: *C, left: *Node, right: *Node, body: *Node, scope: ?*ast.Scope) Erro
     const labels = takeLabels(c);
     const saved = c.scope;
     const keys = c.tempLocal();
+    const sh_loc = c.tempLocal();
     const idx = c.tempLocal();
     // Annex B: `for (var x = 1 in o)` runs the initializer first.
     if (left.data == .var_decl) {
@@ -264,6 +265,7 @@ fn forIn(c: *C, left: *Node, right: *Node, body: *Node, scope: ?*ast.Scope) Erro
     try expr(c, right);
     try c.mark(right.pos);
     try c.op(.for_in_start);
+    try c.opU16(.put_loc, sh_loc);
     try c.opU16(.put_loc, keys);
     try c.op(.int8);
     try c.byte(0);
