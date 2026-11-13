@@ -21,8 +21,8 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.17.0
-      - run: zig build lines
-      - run: zig fmt --check src build.zig build.zig.zon examples tools
+      - run: sh tools/check-snapshot.sh HEAD
+      - run: sh tools/test-hooks.sh
       - run: zig build test
       - run: zig build test -Dportable=true
       - run: zig build -Dtarget=x86_64-windows-gnu --prefix zig-out/windows
@@ -47,6 +47,7 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.17.0
+      - run: sh tools/test-hooks.sh
       - name: GTK, WebKitGTK, Mesa's OpenGL and OpenGL ES (llvmpipe), fonts and a virtual display
         run: |
           sudo apt-get update
@@ -103,6 +104,9 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.17.0
+      - name: Git hooks in Git Bash
+        shell: bash
+        run: sh tools/test-hooks.sh
       # Tests write their pictures to /tmp: on Windows, \tmp on this drive.
       - run: New-Item -ItemType Directory -Force -Path \tmp | Out-Null
       # Run directly, each test named (Direct3D's says whether it ran or skipped).
