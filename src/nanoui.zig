@@ -46,7 +46,7 @@ const plat = switch (builtin.os.tag) {
         pub const app = @import("linux/app.zig");
         pub const window = @import("linux/window.zig");
         pub const menu = @import("menu_accel.zig");
-        pub const tray = @import("tray_none.zig");
+        pub const tray = @import("linux/tray.zig");
         pub const dialog = @import("linux/dialog.zig");
         pub const desktop = @import("linux/desktop.zig");
         pub const fdwatch = @import("linux/fdwatch.zig");
@@ -194,6 +194,8 @@ test {
     if (builtin.os.tag != .ios) _ = @import("update_portable.zig");
     // The Windows tray's menu model and callback decoding, platform-free.
     if (builtin.os.tag != .ios) _ = @import("windows/tray_model.zig");
+    // The Linux tray's menu tree and its pixels, platform-free too.
+    if (builtin.os.tag != .ios) _ = @import("linux/tray_menu.zig");
     // Windows' virtual keys as nanoui names them: key-ups, the repeat bit.
     if (builtin.os.tag != .ios) _ = @import("windows/key_names.zig");
     if (is_android) {
@@ -250,6 +252,8 @@ test {
         }
         // The GTK window's: decorations, the taskbar hint, opacity.
         if (builtin.os.tag == .linux) _ = @import("linux/tests_window.zig");
+        // A tray on a private session bus, when the suite has one.
+        if (builtin.os.tag == .linux) _ = @import("linux/tests_tray.zig");
         // A page in WebKitGTK, end to end, where one is installed.
         if (builtin.os.tag == .linux) _ = @import("linux/tests_page.zig");
         return;

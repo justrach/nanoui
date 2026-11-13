@@ -3,13 +3,16 @@
 //! need no display and never start GTK. Otherwise GTK starts with the first
 //! window: which GTK depends on whether it shows a page (`webkit.zig`).
 const std = @import("std");
-const gtk = @import("gtk.zig");
+
 const dev = @import("../dev.zig");
-const window_mod = @import("window.zig");
-const menu_mod = @import("../menu_accel.zig");
-const ui = @import("../ui/ui.zig");
-const tsgen = @import("../tsgen.zig");
+const gtk = @import("gtk.zig");
 const ipc = @import("../ipc.zig").ipc(window_mod.Window, App);
+const menu_mod = @import("../menu_accel.zig");
+const tray_mod = @import("tray.zig");
+const tsgen = @import("../tsgen.zig");
+const ui = @import("../ui/ui.zig");
+const window_mod = @import("window.zig");
+
 const Window = window_mod.Window;
 
 pub const Options = struct {
@@ -37,6 +40,8 @@ pub const App = struct {
     options: Options,
     windows: std.ArrayList(*Window) = .empty,
     main_menu: ?*menu_mod.Menu = null,
+    /// Icons published on the session bus (`newTray`), destroyed with the app.
+    trays: std.ArrayList(*tray_mod.Tray) = .empty,
     flags: dev.Flags = .{},
     /// The services pages call (`bind`) and the events they listen for.
     services: std.StringHashMapUnmanaged(ipc.Service) = .empty,
@@ -136,6 +141,8 @@ pub const App = struct {
     pub fn destroyImpl(self: *App) void {
         while (self.windows.items.len > 0) self.windows.items[self.windows.items.len - 1].close();
         self.windows.deinit(self.gpa);
+        while (self.trays.items.len > 0) self.trays.items[self.trays.items.len - 1].destroy();
+        self.trays.deinit(self.gpa);
         if (self.main_menu) |m| m.destroy();
         self.services.deinit(self.gpa);
         self.events.deinit(self.gpa);
@@ -340,10 +347,29 @@ pub const App = struct {
         return m.item(id);
     }
 
-    pub fn newTray(self: *App, opts: anytype) !noreturn {
-        _ = self;
-        _ = opts;
-        return error.TraysUnsupported;
+    /// Adds an icon to the session bus's status notifier host; it lives until
+    /// removed with `Tray.destroy` or the app ends. Not when the app runs
+    /// hidden or headless (snapshots, scripts, tests).
+    pub fn newTray(self: *App, opts: tray_mod.Options) !*tray_mod.Tray {
+        if (self.flags.hidden or self.headless) return error.Hidden;
+        try self.trays.ensureUnusedCapacity(self.gpa, 1);
+        const t = try tray_mod.Tray.create(self.gpa, self.options.name, opts);
+        t.owner = .{ .ctx = self, .quit = trayQuit, .forget = trayForget };
+        self.trays.appendAssumeCapacity(t);
+        return t;
+    }
+
+    fn trayQuit(ctx: *anyopaque) void {
+        const self: *App = @ptrCast(@alignCast(ctx));
+        self.quit();
+    }
+
+    fn trayForget(ctx: *anyopaque, t: *tray_mod.Tray) void {
+        const self: *App = @ptrCast(@alignCast(ctx));
+        for (self.trays.items, 0..) |item, i| if (item == t) {
+            _ = self.trays.orderedRemove(i);
+            return;
+        };
     }
 
     /// Runs the menu item whose accelerator `sc` is; true if one was.
