@@ -46,7 +46,8 @@ pub const Atlas = struct {
     size: u32 = initial_size,
     scale: f32 = 2,
     pixels: []u8,
-    /// RGB coverage plus a tag: 255 ClearType, 128 native grayscale,
+    /// RGB coverage plus a tag: 255/254 Natural/Classic ClearType,
+    /// 128/127 Natural/Classic native grayscale,
     /// zero portable glyph/icon. Parallel to the existing scalar atlas.
     native_pixels: []u8,
     sprites: std.AutoHashMapUnmanaged(Key, ?Sprite) = .empty,
@@ -86,7 +87,7 @@ pub const Atlas = struct {
 
     /// The texels, as the CPU renderer samples them.
     pub fn mask(a: *const Atlas) @import("raster.zig").Mask {
-        return .{ .pixels = a.pixels, .size = a.size, .native_pixels = a.native_pixels, .text_params = a.native.blending };
+        return .{ .pixels = a.pixels, .size = a.size, .native_pixels = a.native_pixels, .text_params = a.native.blending, .classic_text_params = a.native.classic_blending orelse a.native.blending, .classic_gray_params = a.native.classic_grayscale_blending orelse a.native.blending };
     }
 
     /// For the test against Metal: texels are already in memory.
@@ -284,7 +285,9 @@ pub const Atlas = struct {
         var r = tt_raster.Raster.init(a.gpa, dw, dw) catch return null;
         defer r.deinit(a.gpa);
         const k = @as(f32, @floatFromInt(side)) / 24;
-        icons.draw(icon, &r, k, @floatFromInt(pad), 1.6 + 0.35 * @as(f32, @floatFromInt(weight)));
+        var part = tt_raster.Raster.init(a.gpa, dw, dw) catch return null;
+        defer part.deinit(a.gpa);
+        icons.draw(icon, &r, &part, k, @floatFromInt(pad), 1.6 + 0.35 * @as(f32, @floatFromInt(weight)));
         a.scratch.resize(a.gpa, dw * dw) catch return null;
         r.coverage(a.scratch.items);
         const at = a.place(dw, dw) orelse return null;

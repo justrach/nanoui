@@ -84,8 +84,8 @@ const CreateRasterizerState = api.CreateRasterizerState;
 const CreateSamplerState = api.CreateSamplerState;
 
 /// A shader of `source`, entry point `entry`, as `create` makes it.
-fn shader(device: *Com, comptime entry: [:0]const u8, comptime target: [:0]const u8, comptime create: usize) !*Com {
-    return api.shaderFrom(device, source, "shader.hlsl", entry, target, create);
+fn shader(device: *Com, cache_root: ?[]const u8, comptime entry: [:0]const u8, comptime target: [:0]const u8, comptime create: usize) !*Com {
+    return api.shaderFrom(device, source, "shader.hlsl", entry, target, create, cache_root);
 }
 
 extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
@@ -126,6 +126,8 @@ pub const Renderer = struct {
     images_size: u32 = 0,
     images_generation: u64 = std.math.maxInt(u64),
     text_params: text_blend.Params = .{},
+    classic_text_params: text_blend.Params = .{},
+    classic_gray_params: text_blend.Params = .{},
     rgb_text: bool = true,
     frame: Target = .{},
     /// The size the last frame was drawn at, which the frame texture may be
@@ -164,7 +166,7 @@ pub const Renderer = struct {
     /// without a GPU. Four parity tests skipped on a machine with Direct3D 11
     /// and a shader whose `Instance` was 96 bytes instead of 144, and printed
     /// numbers from an earlier, working build while doing it.
-    pub fn init() !Renderer {
+    pub fn init(cache_root: ?[]const u8) !Renderer {
         // Made as the app's shared device is (`d3d11_device.zig`): video
         // support where there is some, multithread protected.
         const pair = try @import("d3d11_device.zig").create();
@@ -174,7 +176,7 @@ pub const Renderer = struct {
             ctx.release();
             dev.release();
         }
-        var r = try prepare(dev, ctx);
+        var r = try prepare(dev, ctx, cache_root);
         r.owns_device = true;
         return r;
     }
@@ -182,29 +184,39 @@ pub const Renderer = struct {
     /// On a device someone else owns — the window's swap chain — so that
     /// what this draws can be copied into that swap chain's back buffer
     /// without a second device, which D3D would refuse to copy across.
-    pub fn initOn(device: *Com, context: *Com) !Renderer {
-        return prepare(device, context);
+    pub fn initOn(device: *Com, context: *Com, cache_root: ?[]const u8) !Renderer {
+        return prepare(device, context, cache_root);
     }
 
-    fn prepare(dev: *Com, ctx: *Com) !Renderer {
+    fn prepare(dev: *Com, ctx: *Com, cache_root: ?[]const u8) !Renderer {
         var r: Renderer = .{
             .device = dev,
             .context = ctx,
-            .quad_vs = try shader(dev, "quad_vs", "vs_5_0", CreateVertexShader),
-            .quad_ps = try shader(dev, "quad_ps", "ps_5_0", CreatePixelShader),
-            .glass_ps = try shader(dev, "glass_ps", "ps_5_0", CreatePixelShader),
-            .pass_vs = try shader(dev, "pass_vs", "vs_5_0", CreateVertexShader),
-            .down_ps = try shader(dev, "down_ps", "ps_5_0", CreatePixelShader),
-            .blur_ps = try shader(dev, "blur_ps", "ps_5_0", CreatePixelShader),
+            .quad_vs = undefined,
+            .quad_ps = undefined,
+            .glass_ps = undefined,
+            .pass_vs = undefined,
+            .down_ps = undefined,
+            .blur_ps = undefined,
             .blend = undefined,
             .rasterizer = undefined,
             .sampler = undefined,
             .params = undefined,
             .rgb_text = rgbTextEnabled(),
         };
-        // The six shaders are in `r` already: if a state object or the params
-        // buffer cannot be made, they go with it.
-        errdefer for ([_]*Com{ r.quad_vs, r.quad_ps, r.glass_ps, r.pass_vs, r.down_ps, r.blur_ps }) |s| s.release();
+        // Every shader now: bytecode from the cache is a millisecond each.
+        r.quad_vs = try shader(dev, cache_root, "quad_vs", "vs_5_0", CreateVertexShader);
+        errdefer r.quad_vs.release();
+        r.quad_ps = try shader(dev, cache_root, "quad_ps", "ps_5_0", CreatePixelShader);
+        errdefer r.quad_ps.release();
+        r.glass_ps = try shader(dev, cache_root, "glass_ps", "ps_5_0", CreatePixelShader);
+        errdefer r.glass_ps.release();
+        r.pass_vs = try shader(dev, cache_root, "pass_vs", "vs_5_0", CreateVertexShader);
+        errdefer r.pass_vs.release();
+        r.down_ps = try shader(dev, cache_root, "down_ps", "ps_5_0", CreatePixelShader);
+        errdefer r.down_ps.release();
+        r.blur_ps = try shader(dev, cache_root, "blur_ps", "ps_5_0", CreatePixelShader);
+        errdefer r.blur_ps.release();
         const bd: BlendDesc = .{};
         try check(dev.slot(*const fn (*Com, *const BlendDesc, *?*Com) callconv(.winapi) HRESULT, CreateBlendState)(dev, &bd, @ptrCast(&r.blend)));
         const rd: RasterizerDesc = .{};
@@ -225,7 +237,16 @@ pub const Renderer = struct {
         if (r.native_atlas) |t| t.release();
         if (r.images_srv) |t| t.release();
         if (r.images) |t| t.release();
-        for ([_]*Com{ r.params, r.sampler, r.rasterizer, r.blend, r.quad_vs, r.quad_ps, r.glass_ps, r.pass_vs, r.down_ps, r.blur_ps }) |s| s.release();
+        r.params.release();
+        r.sampler.release();
+        r.rasterizer.release();
+        r.blend.release();
+        r.quad_vs.release();
+        r.quad_ps.release();
+        r.glass_ps.release();
+        r.pass_vs.release();
+        r.down_ps.release();
+        r.blur_ps.release();
         r.slots.deinit();
         r.frame.deinit();
         r.snap.deinit();
@@ -240,6 +261,8 @@ pub const Renderer = struct {
     /// Brings the GPU's copies of the glyph and picture atlases up to date.
     pub fn sync(r: *Renderer, mask: raster.Mask, mask_generation: u64, pictures: raster.Pictures, pictures_generation: u64) void {
         r.text_params = mask.text_params;
+        r.classic_text_params = mask.classic_text_params;
+        r.classic_gray_params = mask.classic_gray_params;
         if (mask.size > 0 and (mask_generation != r.atlas_generation or mask.size != r.atlas_size)) {
             if (r.atlas_srv) |t| t.release();
             r.atlas_srv = null;
@@ -394,8 +417,9 @@ pub const Renderer = struct {
         var p: Params = extra;
         p.start_instance = @intCast(first);
         r.setParams(size, scale, p);
+        const ps = if (pane) r.glass_ps else r.quad_ps;
         g.slot(*const fn (*Com, ?*Com, ?*const anyopaque, u32) callconv(.winapi) void, VSSetShader)(g, r.quad_vs, null, 0);
-        g.slot(*const fn (*Com, ?*Com, ?*const anyopaque, u32) callconv(.winapi) void, PSSetShader)(g, if (pane) r.glass_ps else r.quad_ps, null, 0);
+        g.slot(*const fn (*Com, ?*Com, ?*const anyopaque, u32) callconv(.winapi) void, PSSetShader)(g, ps, null, 0);
         var inst = [1]?*Com{r.instance_srv};
         g.slot(*const fn (*Com, u32, u32, [*]const ?*Com) callconv(.winapi) void, VSSetShaderResources)(g, 0, 1, &inst);
         var views = [6]?*Com{ r.instance_srv, r.atlas_srv, r.images_srv, r.a.srv, r.native_atlas_srv, r.bound_texture };
@@ -421,6 +445,9 @@ pub const Renderer = struct {
             r.setState();
         }
         const b = glass.backdropFor(instances[at], scale, r.frame_w, r.frame_h) orelse return;
+        const pass_vs = r.pass_vs;
+        const down_ps = r.down_ps;
+        const blur_ps = if (b.sigma > 0) r.blur_ps else null;
         const w: usize = @intCast(b.w);
         const h: usize = @intCast(b.h);
         r.a.reserve(r.device, w, h, false);
@@ -445,14 +472,14 @@ pub const Renderer = struct {
             .progressive = b.progressive,
             .size = .{ @floatFromInt(b.w), @floatFromInt(b.h) },
         };
-        r.pass(r.down_ps, r.snap.srv.?, r.a.rtv.?, back, b.w, b.h);
-        if (b.sigma > 0) {
+        r.pass(pass_vs, down_ps, r.snap.srv.?, r.a.rtv.?, back, b.w, b.h);
+        if (blur_ps) |ps| {
             var across = back;
             across.dir = .{ 1, 0 };
-            r.pass(r.blur_ps, r.a.srv.?, r.b.rtv.?, across, b.w, b.h);
+            r.pass(pass_vs, ps, r.a.srv.?, r.b.rtv.?, across, b.w, b.h);
             var down_dir = back;
             down_dir.dir = .{ 0, 1 };
-            r.pass(r.blur_ps, r.b.srv.?, r.a.rtv.?, down_dir, b.w, b.h);
+            r.pass(pass_vs, ps, r.b.srv.?, r.a.rtv.?, down_dir, b.w, b.h);
         }
         // The pane itself over the frame, reading `a` as its backdrop.
         setViewport(g, @floatFromInt(r.frame_w), @floatFromInt(r.frame_h));
@@ -467,13 +494,13 @@ pub const Renderer = struct {
 
     /// One pass of a pane's backdrop: `ps` reading `src` into `dst`, the
     /// whole target covered by one triangle.
-    fn pass(r: *Renderer, ps: *Com, src: *Com, dst: *Com, p: Params, w: i32, h: i32) void {
+    fn pass(r: *Renderer, pass_vs: *Com, ps: *Com, src: *Com, dst: *Com, p: Params, w: i32, h: i32) void {
         const g = r.context;
         setViewport(g, @floatFromInt(w), @floatFromInt(h));
         bindTarget(g, dst);
         r.setBlend(false);
         r.setParams(.{ .w = @floatFromInt(w), .h = @floatFromInt(h) }, 1, p);
-        g.slot(*const fn (*Com, ?*Com, ?*const anyopaque, u32) callconv(.winapi) void, VSSetShader)(g, r.pass_vs, null, 0);
+        g.slot(*const fn (*Com, ?*Com, ?*const anyopaque, u32) callconv(.winapi) void, VSSetShader)(g, pass_vs, null, 0);
         g.slot(*const fn (*Com, ?*Com, ?*const anyopaque, u32) callconv(.winapi) void, PSSetShader)(g, ps, null, 0);
         var srcs = [1]?*Com{src};
         g.slot(*const fn (*Com, u32, u32, [*]const ?*Com) callconv(.winapi) void, PSSetShaderResources)(g, 0, 1, &srcs);
@@ -491,6 +518,10 @@ pub const Renderer = struct {
         p.gamma = r.text_params.gamma;
         p.contrast = r.text_params.contrast;
         p.grayscale_contrast = r.text_params.grayscale_contrast;
+        p.classic_gamma = r.classic_text_params.gamma;
+        p.classic_gray_gamma = r.classic_gray_params.gamma;
+        p.classic_contrast = r.classic_text_params.contrast;
+        p.classic_gray_contrast = r.classic_gray_params.grayscale_contrast;
         // A dynamic buffer is written by mapping it, one call each way; that is
         // what `D3D11_USAGE_DYNAMIC` is for.
         var mapped: Mapped = undefined;

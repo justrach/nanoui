@@ -251,7 +251,8 @@ moved by `ui.motion`:
 - **Buttons** in its variants (primary, danger, ghost, outline, link, …) and
   sizes, with icons, loading and tooltips.
 - **Display:** tags, badges, avatars and stacks of them, alerts, skeletons,
-  spinners, progress bars and rings.
+  spinners, progress bars and rings, and [timeline rows](docs/kit-timeline.md)
+  with a decorative rail beside ordinary native content.
 - **Overlays:** tooltips, popovers, menus, dialogs, sheets and toasts. They
   open on layers over the page, go where they fit, and close on Escape or a
   click elsewhere.

@@ -122,7 +122,7 @@ src/ui/tt/            TrueType: font files, the installed fonts, outlines to cov
 src/ui/font_registry.zig  fonts an app brings, by family, weight, style and range
 src/ui/text_stack_*.zig   a text's fonts when it names families (`TextStyle.family`)
 src/ui/atlas_tt.zig   the glyph atlas in memory; icons.zig: line icons
-src/ui/raster.zig     the CPU renderer (same pixels as shader.metal)
+src/ui/raster.zig     the CPU renderer (same pixels as shader.metal); raster_glyph.zig: its text quads
 src/ui/canvas.zig     a CPU-drawn window's pixels: only what a frame changed is drawn
 src/ui/opengl.zig     the OpenGL 3.3 renderer (Linux), and OpenGL ES 3's (Android); shader.glsl: both Metal shaders in GLSL
 src/ui/d3d11.zig      the Direct3D 11 renderer (Windows), shader.hlsl; d3d11_texture: ui.texture's slots;

@@ -1,7 +1,8 @@
 //! Text where nanoui shapes it itself (Linux, Windows, Android, and macOS built
 //! with `-Dportable=true`): the installed TrueType fonts (`tt/fontdb.zig`),
 //! characters to glyphs with kerning and fallback fonts for characters a
-//! font lacks, greedy wrapping at spaces, carets, and the glyph atlas.
+//! font lacks, greedy wrapping at spaces and between CJK characters
+//! (`cjk_break.zig`), carets, and the glyph atlas.
 //! The same interface as `text_mac.zig`; layouts are cached the same way.
 const std = @import("std");
 const builtin = @import("builtin");
@@ -10,6 +11,7 @@ const fontdb = @import("tt/fontdb.zig");
 const tt = @import("tt/font.zig");
 const atlas_mod = @import("atlas_tt.zig");
 const utf8 = @import("utf8.zig");
+const cjk_break = @import("cjk_break.zig");
 const stacks = @import("text_stack_tt.zig");
 const registry = @import("font_registry.zig");
 pub const rich = @import("rich_tt.zig");
@@ -455,6 +457,7 @@ fn breakLines(gpa: std.mem.Allocator, lines: *std.ArrayList(Line), s: []const u8
         const x0 = xAt(lay, start);
         var end = start;
         var last_break: ?usize = null;
+        var previous: u21 = 0;
         var i = start;
         while (i < s.len) {
             if (s[i] == '\n') {
@@ -463,6 +466,9 @@ fn breakLines(gpa: std.mem.Allocator, lines: *std.ArrayList(Line), s: []const u8
             }
             const n = utf8.seqLen(s[i]);
             const next = @min(s.len, i + n);
+            const current = cjk_break.codepoint(s[i..next]);
+            if (i > start and cjk_break.between(previous, current)) last_break = i;
+            previous = current;
             // A character that ends past the line, unless it is a space.
             if (s[i] != ' ' and xAt(lay, next) - x0 > max and i > start) {
                 end = last_break orelse i;
@@ -489,4 +495,35 @@ test "a character cut off at a string's end is shaped, not decoded short" {
     // "a→" with the arrow's last byte gone, as a span can end.
     const w = ts.width("a\xe2\x86", .{ .size = 13 });
     try std.testing.expect(w > 0);
+}
+
+test "a closing mark takes the character before it to the next line" {
+    var ts = TextSystem.init(std.testing.allocator);
+    defer ts.deinit();
+    const s = "中文中文中文。";
+    const style: types.TextStyle = .{ .size = 13 };
+    const lines = ts.wrap(s, style, ts.width(s, style) - ts.width("。", style) / 2);
+    try std.testing.expectEqual(@as(usize, 2), lines.len);
+    try std.testing.expectEqualStrings("文。", s[lines[1].start..lines[1].end]);
+}
+
+test "ideographs after a Latin word fill the line instead of breaking at its space" {
+    var ts = TextSystem.init(std.testing.allocator);
+    defer ts.deinit();
+    const s = "连接 Agent 或 API，然后继续发送中文消息并等待回复完成";
+    const first = "连接 Agent 或 API，然后继续";
+    const style: types.TextStyle = .{ .size = 13 };
+    const lines = ts.wrap(s, style, ts.width(first, style) + 1);
+    try std.testing.expect(lines.len >= 2);
+    try std.testing.expectEqualStrings(first, s[lines[0].start..lines[0].end]);
+}
+
+test "Latin text still wraps only at spaces" {
+    var ts = TextSystem.init(std.testing.allocator);
+    defer ts.deinit();
+    const s = "alpha beta gamma";
+    const style: types.TextStyle = .{ .size = 13 };
+    const lines = ts.wrap(s, style, ts.width("alpha beta", style) + 1);
+    try std.testing.expectEqual(@as(usize, 2), lines.len);
+    try std.testing.expectEqualStrings("gamma", s[lines[1].start..lines[1].end]);
 }

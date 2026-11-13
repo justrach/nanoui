@@ -30,7 +30,7 @@ mkdir "$work/tree"
     unset GIT_WORK_TREE GIT_OBJECT_DIRECTORY
     git -c init.templateDir= init --bare --object-format="$object_format" -q "$work/export.git"
     mkdir -p "$work/export.git/info"
-    printf '* -export-ignore -export-subst\n' > "$work/export.git/info/attributes"
+    printf '%s\n' '* -export-ignore -export-subst -text -crlf -ident -filter !working-tree-encoding' > "$work/export.git/info/attributes"
     GIT_OBJECT_DIRECTORY="$objects" git archive --format=tar --output="$work/tree.tar" "$tree"
 )
 tar -xf "$work/tree.tar" -C "$work/tree"

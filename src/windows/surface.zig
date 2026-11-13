@@ -456,7 +456,8 @@ pub const Surface = struct {
                 }
             },
             // The buttons, and the capture lost mid-press: `surface_win_mouse.zig`.
-            w.WM_LBUTTONDOWN, w.WM_LBUTTONDBLCLK, w.WM_LBUTTONUP, w.WM_MBUTTONDOWN, w.WM_MBUTTONDBLCLK, w.WM_MBUTTONUP, w.WM_CAPTURECHANGED => return mouse.message(self, h, msg, wp, lp),
+            w.WM_LBUTTONDOWN, w.WM_LBUTTONDBLCLK, w.WM_LBUTTONUP, w.WM_RBUTTONDOWN, w.WM_RBUTTONDBLCLK, w.WM_RBUTTONUP => return mouse.message(self, h, msg, wp, lp),
+            w.WM_MBUTTONDOWN, w.WM_MBUTTONDBLCLK, w.WM_MBUTTONUP, w.WM_CAPTURECHANGED => return mouse.message(self, h, msg, wp, lp),
             w.WM_MOUSEWHEEL => {
                 var p: w.POINT = .{ .x = @as(i16, @truncate(lp)), .y = @as(i16, @truncate(lp >> 16)) };
                 _ = w.ScreenToClient(h, &p);

@@ -44,7 +44,10 @@ pub fn sourceMode(f: gpu.Format) u32 {
 /// The uniforms for `t`, its source read as `mode`.
 pub fn uniforms(t: gpu.Texture, mode: u32) Uniforms {
     var u: Uniforms = .{
-        .source_mode = mode,
+        // A float pixel format does not imply linear light. Decoders can
+        // supply already display-encoded sRGB in half-float storage; sending
+        // it through the linear/HDR path brightens and tone-maps it twice.
+        .source_mode = if (mode == 3 and t.format == .rgba16f and t.transfer == .srgb) 0 else mode,
         .range_mode = @backingInt(t.range),
         .matrix_mode = @backingInt(t.matrix),
         .transfer_mode = @backingInt(t.transfer),
@@ -224,4 +227,19 @@ test "an identity LUT returns what it is given" {
     try std.testing.expectApproxEqAbs(@as(f32, 0.2), out[0], 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 0.55), out[1], 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 0.9), out[2], 0.001);
+}
+
+test "sRGB half-float storage keeps display codes and linear half-floats keep the color stage" {
+    const testing = std.testing;
+    var t: gpu.Texture = .{ .width = 1, .height = 1, .format = .rgba16f, .transfer = .srgb };
+    try testing.expectEqual(@as(u32, 0), uniforms(t, sourceMode(t.format)).source_mode);
+    t.transfer = .linear;
+    try testing.expectEqual(@as(u32, 3), uniforms(t, sourceMode(t.format)).source_mode);
+    // Untagged callers historically use half-float storage for linear light.
+    t.transfer = .rec709;
+    try testing.expectEqual(@as(u32, 3), uniforms(t, sourceMode(t.format)).source_mode);
+    // Ordinary video still uses its Y'CbCr conversion and transfer.
+    t.format = .ycbcr420_8;
+    t.transfer = .srgb;
+    try testing.expectEqual(@as(u32, 1), uniforms(t, sourceMode(t.format)).source_mode);
 }

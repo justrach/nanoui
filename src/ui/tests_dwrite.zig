@@ -44,12 +44,12 @@ fn compare(t: *ui.Tester, sample: Sample) !void {
     defer pixels.deinit(gpa);
     const bg = t.theme.background;
     const fg = sample.color;
-    const rendering = native.mode(face, rf.size, t.scale).rendering;
-    // Direct2D uses a different Classic edge-contrast equation. This exact
-    // pixel reference is for Natural; Classic has a mode and integer-phase
-    // regression below instead.
-    if (rendering <= 3) return;
-    const expected = try renderReference(run, pixels.width, pixels.height, @round((f.leading / 2 + f.ascent) * t.scale), .{ fg.r, fg.g, fg.b, fg.a }, .{ bg.r, bg.g, bg.b, bg.a }, if (native.aliased) 3 else if (native.cleartype) 1 else 2, @ptrCast(native.params.?));
+    const m = native.mode(face, rf.size, t.scale);
+    // The system's parameters say Natural; small ems are drawn GDI Classic
+    // (`Cache.mode`), so Direct2D is given the same mode to draw them in.
+    const params = try referenceParams(@ptrCast(native.params.?), m.rendering, m.grid);
+    defer if (params.owned) params.com.release();
+    const expected = try renderReference(run, pixels.width, pixels.height, @round((f.leading / 2 + f.ascent) * t.scale), .{ fg.r, fg.g, fg.b, fg.a }, .{ bg.r, bg.g, bg.b, bg.a }, if (native.aliased) 3 else if (native.cleartype) 1 else 2, params.com);
     defer gpa.free(expected);
     for (0..pixels.width * pixels.height) |i| for (0..3) |channel| {
         const at = i * 4 + channel;
@@ -61,7 +61,7 @@ fn compare(t: *ui.Tester, sample: Sample) !void {
     };
 }
 
-test "Windows Natural final color pixels match Direct2D at six sizes and five DPI scales" {
+test "Windows Natural and Classic final color pixels match Direct2D at six sizes and five DPI scales" {
     for ([_]f32{ 1, 1.25, 1.5, 1.75, 2 }) |scale| for ([_]bool{ false, true }) |dark| {
         var sample: Sample = .{ .color = if (dark) .hex(0xf0f0f0) else .hex(0x1a1a1a) };
         var t: ui.Tester = undefined;
@@ -100,9 +100,9 @@ test "Windows small physical ems use GDI Classic and integer positions, large em
 }
 
 test "Windows grayscale and aliased coverage match native rendering" {
-    for ([_]bool{ false, true }) |aliased| {
-        // Keep this independent Natural reference above the Classic cutoff.
-        var sample: Sample = .{ .style = .{ .size = 20 }, .color = .hex(0x2378bb) };
+    for ([_]f32{ 12, 20 }) |size| for ([_]bool{ false, true }) |aliased| {
+        // Exercise both Classic and Natural with ClearType disabled locally.
+        var sample: Sample = .{ .style = .{ .size = size }, .color = .hex(0x2378bb) };
         var t: ui.Tester = undefined;
         try init(&t, &sample, 1.25, .white);
         defer t.deinit();
@@ -114,7 +114,7 @@ test "Windows grayscale and aliased coverage match native rendering" {
         t.text.atlas.reset();
         t.frame();
         try compare(&t, sample);
-    }
+    };
 }
 
 fn hashGlyphs(t: *ui.Tester, weight: ui.Weight, bin: u8) !u64 {
@@ -251,6 +251,7 @@ const Com = extern struct {
 };
 const Guid = extern struct { a: u32, b: u16, c: u16, d: [8]u8 };
 const factory_iid: Guid = .{ .a = 0x06152247, .b = 0x6f50, .c = 0x465a, .d = .{ 0x92, 0x45, 0x11, 0x8b, 0xfd, 0x3b, 0x60, 0x07 } };
+extern "dwrite" fn DWriteCreateFactory(u32, *const Guid, *?*Com) callconv(.winapi) i32;
 extern "d2d1" fn D2D1CreateFactory(u32, *const Guid, ?*const anyopaque, *?*Com) callconv(.winapi) i32;
 extern "gdi32" fn CreateCompatibleDC(?*anyopaque) callconv(.winapi) ?*anyopaque;
 extern "gdi32" fn DeleteDC(*anyopaque) callconv(.winapi) i32;
@@ -283,6 +284,30 @@ pub const Run = extern struct {
     sideways: i32 = 0,
     bidi: u32 = 0,
 };
+
+/// The system's rendering parameters, or for a GDI rendering mode (1-3) a
+/// copy of them in that mode (IDWriteFactory2::CreateCustomRenderingParams).
+fn referenceParams(system: *Com, rendering: u32, grid: u32) !struct { com: *Com, owned: bool } {
+    if (rendering > 3) return .{ .com = system, .owned = false };
+    const factory2_iid: Guid = .{ .a = 0x0439fc60, .b = 0xca44, .c = 0x4994, .d = .{ 0x8d, 0xee, 0x3a, 0x9a, 0xf7, 0xb7, 0x32, 0xec } };
+    const params1_iid: Guid = .{ .a = 0x94413cf4, .b = 0xa6fc, .c = 0x4248, .d = .{ 0x8b, 0x50, 0x66, 0x74, 0x34, 0x8f, 0xca, 0xd3 } };
+    var factory: ?*Com = null;
+    if (DWriteCreateFactory(1, &factory2_iid, &factory) < 0) return error.ReferenceWriteFactory;
+    const f = factory orelse return error.ReferenceWriteFactory;
+    defer f.release();
+    var params1: ?*Com = null;
+    if (system.method(0, *const fn (*Com, *const Guid, *?*Com) callconv(.winapi) i32)(system, &params1_iid, &params1) < 0) return error.ReferenceParams;
+    const p = params1 orelse return error.ReferenceParams;
+    defer p.release();
+    const gamma = p.method(3, *const fn (*Com) callconv(.winapi) f32)(p);
+    const contrast = p.method(4, *const fn (*Com) callconv(.winapi) f32)(p);
+    const gray_contrast = p.method(8, *const fn (*Com) callconv(.winapi) f32)(p);
+    const level = p.method(5, *const fn (*Com) callconv(.winapi) f32)(p);
+    const geometry = p.method(6, *const fn (*Com) callconv(.winapi) u32)(p);
+    var custom: ?*Com = null;
+    if (f.method(29, *const fn (*Com, f32, f32, f32, f32, u32, u32, u32, *?*Com) callconv(.winapi) i32)(f, gamma, contrast, gray_contrast, level, geometry, rendering, grid, &custom) < 0) return error.ReferenceParams;
+    return .{ .com = custom orelse return error.ReferenceParams, .owned = true };
+}
 
 fn renderReference(run: Run, width: usize, height: usize, baseline: f32, fg: [4]f32, bg: [4]f32, antialias: u32, params: *Com) ![]u8 {
     const dc = CreateCompatibleDC(null) orelse return error.ReferenceDC;

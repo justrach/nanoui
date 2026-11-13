@@ -352,6 +352,44 @@ test "double-click selects a word in a selectable box and copies even when a tex
     try testing.expectEqualStrings("parrot", t.clipboard.items);
 }
 
+test "a press in a textField does not keep later presses from selecting text outside it" {
+    const Page = struct {
+        buf: ui.TextBuffer = .{},
+        fn view(s: *@This(), cx: *ui.Context) void {
+            const d = ui.div(cx).column().sizeFull().p(12).gap(12);
+            defer d.end();
+            {
+                const sel = ui.div(cx).column();
+                cx.node(sel.index).style.selectable = true;
+                defer sel.end();
+                ui.text(cx, "alpine parrot habitat", .{ .size = 13 });
+            }
+            _ = ui.textField(cx, &s.buf, .{ .placeholder = "Ask" });
+        }
+    };
+    var p: Page = .{};
+    defer p.buf.deinit();
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&p, Page.view), .{ .width = 320, .height = 200 });
+    defer t.deinit();
+    t.settle(1);
+    try t.clickText("Ask");
+    t.settle(1);
+    const r = t.findText("alpine parrot habitat").?;
+    const x_parrot = r.x + t.ctx.text.caretX("alpine parrot habitat", .{ .size = 13 }, 9);
+    t.doubleClick(x_parrot, r.y + r.h / 2);
+    t.settle(1);
+    try testing.expectEqualStrings("parrot", t.ctx.selection.text.items);
+    // A press in the field keeps that selection; a plain press on the text
+    // afterwards replaces it, as it would without the field.
+    try t.clickText("Ask");
+    t.settle(1);
+    try testing.expectEqualStrings("parrot", t.ctx.selection.text.items);
+    t.click(r.x + 2, r.y + r.h / 2);
+    t.settle(1);
+    try testing.expectEqualStrings("", t.ctx.selection.text.items);
+}
+
 test "multiline textArea preserves newlines on paste" {
     const Area = struct {
         buf: ui.TextBuffer = .{},

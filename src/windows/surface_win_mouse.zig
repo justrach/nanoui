@@ -1,6 +1,6 @@
-//! A Windows surface's mouse buttons: the left and middle buttons' presses
-//! and releases, and the capture going elsewhere mid-press. One press is
-//! in flight at a time, as on the Mac (`ui/pointer_press.zig`): another
+//! A Windows surface's mouse buttons: the left, right and middle buttons'
+//! presses and releases, and the capture going elsewhere mid-press. One
+//! press is in flight at a time, as on the Mac (`ui/pointer_press.zig`): another
 //! button's press while it is held is ignored, and so is its release.
 const w = @import("win32.zig");
 const input = @import("../ui/input.zig");
@@ -12,13 +12,17 @@ pub fn held(wp: w.WPARAM) pointer_press.Held {
     return .{ .left = wp & w.MK_LBUTTON != 0, .right = wp & w.MK_RBUTTON != 0, .middle = wp & w.MK_MBUTTON != 0 };
 }
 
-/// WM_LBUTTONDOWN/UP/DBLCLK, WM_MBUTTONDOWN/UP/DBLCLK and
-/// WM_CAPTURECHANGED; null for any other message.
+/// WM_LBUTTONDOWN/UP/DBLCLK, WM_RBUTTONDOWN/UP/DBLCLK,
+/// WM_MBUTTONDOWN/UP/DBLCLK and WM_CAPTURECHANGED; null for any other
+/// message. Answering WM_RBUTTONUP keeps DefWindowProc from following it
+/// with a WM_CONTEXTMENU.
 pub fn message(self: *Surface, h: w.HWND, msg: u32, wp: w.WPARAM, lp: w.LPARAM) ?w.LRESULT {
     switch (msg) {
         w.WM_LBUTTONDOWN, w.WM_LBUTTONDBLCLK => press(self, h, .left, msg == w.WM_LBUTTONDBLCLK, wp, lp),
+        w.WM_RBUTTONDOWN, w.WM_RBUTTONDBLCLK => press(self, h, .right, msg == w.WM_RBUTTONDBLCLK, wp, lp),
         w.WM_MBUTTONDOWN, w.WM_MBUTTONDBLCLK => press(self, h, .middle, msg == w.WM_MBUTTONDBLCLK, wp, lp),
         w.WM_LBUTTONUP => release(self, .left, lp),
+        w.WM_RBUTTONUP => release(self, .right, lp),
         w.WM_MBUTTONUP => release(self, .middle, lp),
         w.WM_CAPTURECHANGED => {
             // Another window took the capture (Alt+Tab, a modal loop, focus
@@ -36,8 +40,9 @@ pub fn message(self: *Surface, h: w.HWND, msg: u32, wp: w.WPARAM, lp: w.LPARAM) 
 /// A press of `button`: the box under the pointer takes it, and the
 /// window the capture, so the moves and the release come here wherever
 /// the pointer goes. The left button's may instead start the system's
-/// move loop over a borderless window's drag handle; the middle one has
-/// no such affordance.
+/// move loop over a borderless window's drag handle; the others have no
+/// such affordance. A right press is also the secondary click that asks
+/// for a box's context menu (`Input.secondary`), as on the Mac.
 fn press(self: *Surface, h: w.HWND, button: input.Button, double: bool, wp: w.WPARAM, lp: w.LPARAM) void {
     if (!pointer_press.starts(&self.ctx.input, button, held(wp))) return;
     self.setMouse(lp);
@@ -58,7 +63,13 @@ fn press(self: *Surface, h: w.HWND, button: input.Button, double: bool, wp: w.WP
         }
         return;
     }
-    _ = w.SetCapture(h);
+    // A right press ends with the frame it opens a menu in
+    // (`Context.finish`), so no release would let a capture go.
+    if (button == .right) {
+        self.ctx.secondaryDown();
+    } else {
+        _ = w.SetCapture(h);
+    }
     self.ctx.pointerDown();
     self.frame();
 }
