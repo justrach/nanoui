@@ -52,7 +52,7 @@ contains() {
 }
 unchanged() {
     [ "$(git write-tree)" = "$index_before" ] || fail 'hook changed staged contents'
-    [ "$(git hash-object src/main.zig)" = "$file_before" ] || fail 'hook changed working contents'
+    [ "$(git hash-object --no-filters src/main.zig)" = "$file_before" ] || fail 'hook changed working contents'
 }
 
 ok sh tools/install-hooks.sh
@@ -144,19 +144,40 @@ cd "$repo"
 [ "$(git write-tree)" = "$normal_tree" ] || fail 'linked check changed original index'
 echo 'ok: linked worktree with spaces and a shared object directory'
 
+# Archive conversion must not make formatted blobs fail on Windows settings.
+git reset -q --hard "$good"
+index_before=$(git write-tree)
+file_before=$(git hash-object src/main.zig)
+ok env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.autocrlf GIT_CONFIG_VALUE_0=true sh .githooks/pre-commit
+unchanged
+printf 'src/*.zig text eol=crlf working-tree-encoding=UTF-16LE-BOM\n' > .gitattributes
+git add .gitattributes
+index_before=$(git write-tree)
+ok env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.autocrlf GIT_CONFIG_VALUE_0=true sh .githooks/pre-commit
+unchanged
+echo 'ok: autocrlf, eol and working-tree encoding cannot rewrite staged blobs'
+
+git reset -q --hard "$good"
+crlf_blob=$(printf 'pub const answer = 2;\r\n' | git hash-object -w --stdin)
+git update-index --cacheinfo "100644,$crlf_blob,src/main.zig"
+index_before=$(git write-tree)
+file_before=$(git hash-object --no-filters src/main.zig)
+reject env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.autocrlf GIT_CONFIG_VALUE_0=input sh .githooks/pre-commit
+contains 'src/main.zig'
+unchanged
+echo 'ok: genuinely unformatted CRLF blobs are still rejected'
+
 # Neither archive attributes nor a smudge filter may conceal staged errors.
 git reset -q --hard "$good"
-git config filter.format.smudge 'sed "s/answer=9/answer = 9/"'
 printf 'src/main.zig filter=format export-ignore\n' > .gitattributes
 printf 'pub const answer=9;\n' > src/main.zig
 git add .gitattributes src/main.zig
 printf 'pub const answer = 9;\n' > src/main.zig
 index_before=$(git write-tree)
 file_before=$(git hash-object src/main.zig)
-reject sh .githooks/pre-commit
+reject env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=filter.format.smudge GIT_CONFIG_VALUE_0='sed "s/answer=9/answer = 9/"' sh .githooks/pre-commit
 contains 'src/main.zig'
 unchanged
-git config --unset filter.format.smudge
 echo 'ok: export-ignore and checkout filters cannot hide staged formatting'
 
 # Git's exporter must preserve paths containing spaces, newlines and glob chars.

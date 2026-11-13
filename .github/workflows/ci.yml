@@ -104,6 +104,9 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.17.0
+      - name: Snapshot checks in Git Bash
+        shell: bash
+        run: sh tools/check-snapshot.sh HEAD
       - name: Git hooks in Git Bash
         shell: bash
         run: sh tools/test-hooks.sh

@@ -29,6 +29,8 @@ restaged automatically. The temporary checkout is removed on success or
 failure; Zig may populate its normal global compiler cache. Snapshot export
 uses raw Git blobs: checkout filters and line-ending conversion do not run,
 and export attributes cannot omit or rewrite tracked files.
+Windows users can keep `core.autocrlf=true`: checks read repository bytes
+independently of checkout settings.
 
 Fix formatting in the working tree with `zig fmt`, then stage the intended
 changes again. Split files over 600 lines by responsibility. Before pushing,
