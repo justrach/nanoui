@@ -215,3 +215,19 @@ test "fromPlanes: NV12 white and black, and BGRA copied as it is" {
     defer same.deinit(gpa);
     try std.testing.expectEqualSlices(u8, &.{ 1, 2, 3, 4, 5, 6, 7, 8 }, same.bgra.pixels);
 }
+
+test "sRGB half-float display codes are unchanged by the color stage" {
+    const testing = std.testing;
+    const pixel = [4]f16{ 0.5, 0.5, 0.5, 1 };
+    const plane: Plane = .{ .bytes = std.mem.sliceAsBytes(&pixel).ptr, .width = 1, .height = 1, .stride = 8 };
+    for ([_]bool{ false, true }) |tone_map| {
+        const t: gpu.Texture = .{ .width = 1, .height = 1, .format = .rgba16f, .transfer = .srgb, .tone_map = tone_map };
+        var result = fromPlanes(testing.allocator, t, plane, null) orelse return error.ConversionFailed;
+        defer result.deinit(testing.allocator);
+        try testing.expectEqualSlices(u8, &.{ 128, 128, 128, 255 }, result.bgra.pixels);
+    }
+    const linear: gpu.Texture = .{ .width = 1, .height = 1, .format = .rgba16f, .transfer = .linear, .tone_map = false };
+    var result = fromPlanes(testing.allocator, linear, plane, null) orelse return error.ConversionFailed;
+    defer result.deinit(testing.allocator);
+    try testing.expectEqualSlices(u8, &.{ 188, 188, 188, 255 }, result.bgra.pixels);
+}
