@@ -222,6 +222,27 @@ test "d3d11: ClearType coverage blends each color channel" {
     }
 }
 
+test "d3d11: small Classic and large Natural glyphs share one atlas" {
+    const Mixed = struct {
+        fn view(_: *@This(), c: *ui.Context) void {
+            ui.text(c, "Task Manager 1006.3 MB", .{ .size = 12, .color = c.theme.text });
+            ui.text(c, "Task Manager 1006.3 MB", .{ .size = 26, .color = c.theme.text });
+        }
+    };
+    for ([_]bool{ false, true }) |dark| for ([_]f32{ 1, 1.25 }) |scale| {
+        var sample: Mixed = .{};
+        var theme = ui.Theme.light;
+        theme.background = if (dark) .hex(0x202020) else .white;
+        theme.text = if (dark) .hex(0xf0f0f0) else .hex(0x1a1a1a);
+        theme.font = "Segoe UI";
+        var t: ui.Tester = undefined;
+        try t.init(testing.allocator, .init(&sample, Mixed.view), .{ .width = 400, .height = 100, .scale = scale, .theme = theme });
+        defer t.deinit();
+        for (0..3) |_| t.frame();
+        try compare(&t, .{ .mean = 2, .worst = 2, .off_in = 0 });
+    };
+}
+
 test "d3d11: painted glyph quads use physical atlas texels" {
     const Scene = struct {
         fn view(_: *@This(), c: *ui.Context) void {

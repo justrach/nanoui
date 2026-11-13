@@ -77,6 +77,9 @@ pub const Cache = struct {
     loader: ?*Com = null,
     params: ?*Com = null,
     blending: blending.Params = .{},
+    classic_blending: ?blending.Params = null,
+    classic_grayscale_blending: ?blending.Params = null,
+    classic_clear_level: f32 = 1,
     cleartype: bool = false,
     aliased: bool = false,
     bgr: bool = false,
@@ -220,6 +223,15 @@ pub const Cache = struct {
         };
     }
 
+    /// Analysis-specific parameters differ from system defaults in Classic.
+    fn analysisBlend(self: *Cache, analysis: *Com) !struct { params: blending.Params, clear_level: f32 } {
+        var gamma: f32 = 0;
+        var contrast: f32 = 0;
+        var level: f32 = 0;
+        if (analysis.method(5, *const fn (*Com, *Com, *f32, *f32, *f32) callconv(.winapi) i32)(analysis, self.params.?, &gamma, &contrast, &level) < 0) return error.DirectWriteBlendParams;
+        return .{ .params = .{ .gamma = blending.gammaRatios(gamma), .contrast = contrast, .grayscale_contrast = contrast }, .clear_level = std.math.clamp(level, 0, 1) };
+    }
+
     fn analyze(self: *Cache, run: *const GlyphRun, phase: f32, rendering: u32, grid: u32, clear: bool) !struct { analysis: *Com, bounds: Rect } {
         const factory = self.factory.?;
         var analysis: ?*Com = null;
@@ -240,6 +252,15 @@ pub const Cache = struct {
         defer gray.analysis.release();
         const clear = if (self.cleartype) try self.analyze(&run, phase, m.rendering, m.grid, true) else null;
         defer if (clear) |c| c.analysis.release();
+        if (m.rendering == 2) {
+            if (self.classic_grayscale_blending == null)
+                self.classic_grayscale_blending = (try self.analysisBlend(gray.analysis)).params;
+            if (clear) |c| if (self.classic_blending == null) {
+                const p = try self.analysisBlend(c.analysis);
+                self.classic_blending = p.params;
+                self.classic_clear_level = p.clear_level;
+            };
+        }
         const gb = gray.bounds;
         const cb = if (clear) |c| c.bounds else gb;
         const bounds: Rect = .{ .left = @min(gb.left, cb.left), .top = @min(gb.top, cb.top), .right = @max(gb.right, cb.right), .bottom = @max(gb.bottom, cb.bottom) };
@@ -251,6 +272,7 @@ pub const Cache = struct {
         if (gray.analysis.method(4, *const fn (*Com, u32, *const Rect, [*]u8, u32) callconv(.winapi) i32)(gray.analysis, 0, &bounds, self.bytes.items.ptr, len) < 0) return error.DirectWriteTexture;
         try self.rgb.resize(gpa, len * 4);
         @memset(self.rgb.items, 0);
+        const clear_level = if (m.rendering == 2) self.classic_clear_level else self.clear_level;
         if (clear) |c| {
             try self.scratch.resize(gpa, len * 3);
             if (c.analysis.method(4, *const fn (*Com, u32, *const Rect, [*]u8, u32) callconv(.winapi) i32)(c.analysis, 1, &bounds, self.scratch.items.ptr, len * 3) < 0) return error.DirectWriteTexture;
@@ -259,12 +281,12 @@ pub const Cache = struct {
                 const mean = (@as(f32, @floatFromInt(v[0])) + @as(f32, @floatFromInt(v[1])) + @as(f32, @floatFromInt(v[2]))) / 3;
                 for (0..3) |ch| {
                     const value: f32 = @floatFromInt(v[if (self.bgr) 2 - ch else ch]);
-                    self.rgb.items[i * 4 + ch] = @intFromFloat(@round(mean + (value - mean) * self.clear_level));
+                    self.rgb.items[i * 4 + ch] = @intFromFloat(@round(mean + (value - mean) * clear_level));
                 }
-                self.rgb.items[i * 4 + 3] = 255;
+                self.rgb.items[i * 4 + 3] = if (m.rendering == 2) 254 else 255;
             }
         } else {
-            for (0..len) |i| self.rgb.items[i * 4 + 3] = 128;
+            for (0..len) |i| self.rgb.items[i * 4 + 3] = if (m.rendering == 2) 127 else 128;
         }
         return .{ .bytes = self.bytes.items, .rgb = self.rgb.items, .w = w, .h = h, .stride = w, .x = @floatFromInt(bounds.left), .y = @floatFromInt(-bounds.top) };
     }

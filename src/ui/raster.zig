@@ -19,6 +19,10 @@ pub const Mask = struct {
     size: u32,
     native_pixels: []const u8 = &.{},
     text_params: @import("text_blend.zig").Params = .{},
+    /// For glyphs tagged Classic (254, 127): DirectWrite blends GDI Classic
+    /// analyses with their own gamma and contrast, not the system default's.
+    classic_text_params: @import("text_blend.zig").Params = .{},
+    classic_gray_params: @import("text_blend.zig").Params = .{},
 };
 
 /// The image atlas: BGRA premultiplied, `size` × `size` (empty: none).

@@ -126,6 +126,8 @@ pub const Renderer = struct {
     images_size: u32 = 0,
     images_generation: u64 = std.math.maxInt(u64),
     text_params: text_blend.Params = .{},
+    classic_text_params: text_blend.Params = .{},
+    classic_gray_params: text_blend.Params = .{},
     rgb_text: bool = true,
     frame: Target = .{},
     /// The size the last frame was drawn at, which the frame texture may be
@@ -240,6 +242,8 @@ pub const Renderer = struct {
     /// Brings the GPU's copies of the glyph and picture atlases up to date.
     pub fn sync(r: *Renderer, mask: raster.Mask, mask_generation: u64, pictures: raster.Pictures, pictures_generation: u64) void {
         r.text_params = mask.text_params;
+        r.classic_text_params = mask.classic_text_params;
+        r.classic_gray_params = mask.classic_gray_params;
         if (mask.size > 0 and (mask_generation != r.atlas_generation or mask.size != r.atlas_size)) {
             if (r.atlas_srv) |t| t.release();
             r.atlas_srv = null;
@@ -491,6 +495,10 @@ pub const Renderer = struct {
         p.gamma = r.text_params.gamma;
         p.contrast = r.text_params.contrast;
         p.grayscale_contrast = r.text_params.grayscale_contrast;
+        p.classic_gamma = r.classic_text_params.gamma;
+        p.classic_gray_gamma = r.classic_gray_params.gamma;
+        p.classic_contrast = r.classic_text_params.contrast;
+        p.classic_gray_contrast = r.classic_gray_params.grayscale_contrast;
         // A dynamic buffer is written by mapping it, one call each way; that is
         // what `D3D11_USAGE_DYNAMIC` is for.
         var mapped: Mapped = undefined;

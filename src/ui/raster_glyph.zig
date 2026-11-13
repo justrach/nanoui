@@ -62,18 +62,21 @@ pub fn glyph(out: gpu.Pixels, i: *const gpu.Instance, mask: Mask, scale: f32, b:
                 const ay: usize = @intFromFloat(std.math.clamp(@floor(v * side), 0, side - 1));
                 const native = mask.native_pixels[(ay * mask.size + ax) * 4 ..][0..4];
                 if (native[3] != 0) {
+                    const classic = native[3] == 254 or native[3] == 127;
+                    const text_params = if (classic) mask.classic_text_params else mask.text_params;
+                    const gray_params = if (classic) mask.classic_gray_params else mask.text_params;
                     const lightness = 0.30 * c[0] + 0.59 * c[1] + 0.11 * c[2];
                     // ClearType requires an opaque destination. Transparent
                     // pixels retain genuine grayscale coverage and alpha.
-                    if (native[3] == 255 and out.bytes[at + 3] == 255) {
+                    if ((native[3] == 255 or native[3] == 254) and out.bytes[at + 3] == 255) {
                         for (0..3) |channel| {
-                            const cov = mask.text_params.coverage(@as(f32, @floatFromInt(native[channel])) / 255, c[channel], lightness, true) * opacity;
+                            const cov = text_params.coverage(@as(f32, @floatFromInt(native[channel])) / 255, c[channel], lightness, true) * opacity;
                             const dest = at + 2 - channel; // output is BGRA
                             out.bytes[dest] = unit(c[channel] * cov + @as(f32, @floatFromInt(out.bytes[dest])) / 255 * (1 - cov));
                         }
                         continue;
                     }
-                    const a = mask.text_params.coverage(sample(mask, u, v), 0.25 * c[0] + 0.5 * c[1] + 0.25 * c[2], lightness, false) * opacity;
+                    const a = gray_params.coverage(sample(mask, u, v), 0.25 * c[0] + 0.5 * c[1] + 0.25 * c[2], lightness, false) * opacity;
                     blend(out.bytes, at, c[0] * a, c[1] * a, c[2] * a, a);
                     continue;
                 }
