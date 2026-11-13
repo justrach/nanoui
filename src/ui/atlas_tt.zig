@@ -284,7 +284,9 @@ pub const Atlas = struct {
         var r = tt_raster.Raster.init(a.gpa, dw, dw) catch return null;
         defer r.deinit(a.gpa);
         const k = @as(f32, @floatFromInt(side)) / 24;
-        icons.draw(icon, &r, k, @floatFromInt(pad), 1.6 + 0.35 * @as(f32, @floatFromInt(weight)));
+        var part = tt_raster.Raster.init(a.gpa, dw, dw) catch return null;
+        defer part.deinit(a.gpa);
+        icons.draw(icon, &r, &part, k, @floatFromInt(pad), 1.6 + 0.35 * @as(f32, @floatFromInt(weight)));
         a.scratch.resize(a.gpa, dw * dw) catch return null;
         r.coverage(a.scratch.items);
         const at = a.place(dw, dw) orelse return null;

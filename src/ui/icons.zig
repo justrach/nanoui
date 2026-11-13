@@ -159,24 +159,44 @@ pub fn find(name: []const u8) ?*const Icon {
 }
 
 /// Draws `icon` into `r`: grid units × `k` pixels, offset by `off`, its
-/// strokes `sw` units wide.
-pub fn draw(icon: *const Icon, r: *Raster, k: f32, off: f32, sw: f32) void {
-    const p: Pen = .{ .r = r, .k = k, .off = off, .half = sw / 2 };
+/// strokes `sw` units wide. `part`, the same size as `r`, is scratch.
+///
+/// Each part (a stroke's body, each round end, a filled shape) is
+/// rasterized alone in `part` and merged into `r` by coverage. Summed in one
+/// buffer, overlapping parts clamp their shared edge pixels to solid, which
+/// stair-steps every joint, cap and crossing.
+pub fn draw(icon: *const Icon, r: *Raster, part: *Raster, k: f32, off: f32, sw: f32) void {
+    std.debug.assert(r.w == part.w and r.h == part.h);
+    const n = r.w * r.h;
+    @memset(r.acc, 0);
+    @memset(part.acc, 0);
+    const p: Pen = .{ .r = part, .out = r.acc[0..n], .k = k, .off = off, .half = sw / 2 };
     for (icon.ops) |op| switch (op) {
         .line => |pts| p.stroke(pts, false, 1),
         .cut => |pts| p.stroke(pts, false, -1),
         .loop => |pts| p.stroke(pts, true, 1),
-        .fill => |pts| p.poly(pts, 1),
+        .fill => |pts| {
+            p.poly(pts, 1);
+            p.merge(1);
+        },
         .circle => |c| {
             p.ellipse(c[0], c[1], c[2] + p.half, 1);
             if (c[2] - p.half > 0) p.ellipse(c[0], c[1], c[2] - p.half, -1);
+            p.merge(1);
         },
-        .disc => |c| p.ellipse(c[0], c[1], c[2], 1),
+        .disc => |c| {
+            p.ellipse(c[0], c[1], c[2], 1);
+            p.merge(1);
+        },
         .box => |b| {
             p.roundRect(b[0] - p.half, b[1] - p.half, b[2] + 2 * p.half, b[3] + 2 * p.half, b[4] + p.half, 1);
             p.roundRect(b[0] + p.half, b[1] + p.half, b[2] - 2 * p.half, b[3] - 2 * p.half, @max(0, b[4] - p.half), -1);
+            p.merge(1);
         },
-        .solid => |b| p.roundRect(b[0], b[1], b[2], b[3], b[4], 1),
+        .solid => |b| {
+            p.roundRect(b[0], b[1], b[2], b[3], b[4], 1);
+            p.merge(1);
+        },
         .arc => |a| {
             if (a[3] == a[4]) continue;
             var pts: [33][2]f32 = undefined;
@@ -187,13 +207,34 @@ pub fn draw(icon: *const Icon, r: *Raster, k: f32, off: f32, sw: f32) void {
             p.stroke(&pts, false, 1);
         },
     };
+    // Back to the per-cell differences `Raster.coverage` sums.
+    var i = n;
+    while (i > 1) {
+        i -= 1;
+        r.acc[i] -= r.acc[i - 1];
+    }
 }
 
 const Pen = struct {
+    /// The part being drawn.
     r: *Raster,
+    /// Coverage merged so far, one value per pixel.
+    out: []f32,
     k: f32,
     off: f32,
     half: f32,
+
+    /// Merges the part drawn since the last merge into `out` and clears it:
+    /// ink (`sign` > 0) by the larger coverage, a cut by removing its own.
+    fn merge(p: Pen, sign: f32) void {
+        var sum: f32 = 0;
+        for (p.out, p.r.acc[0..p.out.len]) |*o, a| {
+            sum += a;
+            const c = @min(1, @abs(sum));
+            o.* = if (sign > 0) @max(o.*, c) else o.* * (1 - c);
+        }
+        @memset(p.r.acc, 0);
+    }
 
     /// A filled polygon, wound positive (adds ink) or negative (cuts).
     fn poly(p: Pen, pts: []const [2]f32, sign: f32) void {
@@ -251,6 +292,7 @@ const Pen = struct {
             }
             p.poly(outer[0..n], sign);
             p.poly(inner[0..n], -sign);
+            p.merge(sign);
             return;
         }
         var ring: [130][2]f32 = undefined;
@@ -263,9 +305,12 @@ const Pen = struct {
             ring[2 * n - 1 - i] = .{ pts[i][0] - m[0], pts[i][1] - m[1] };
         }
         p.poly(ring[0 .. 2 * n], sign);
+        p.merge(sign);
         if (sign > 0) {
             p.ellipse(pts[0][0], pts[0][1], p.half, 1);
+            p.merge(1);
             p.ellipse(pts[n - 1][0], pts[n - 1][1], p.half, 1);
+            p.merge(1);
         }
     }
 };
@@ -302,7 +347,9 @@ test "every icon draws ink" {
     for (&all) |*icon| {
         var r = try Raster.init(gpa, 26, 26);
         defer r.deinit(gpa);
-        draw(icon, &r, 1, 1, 2);
+        var part = try Raster.init(gpa, 26, 26);
+        defer part.deinit(gpa);
+        draw(icon, &r, &part, 1, 1, 2);
         var px: [26 * 26]u8 = undefined;
         r.coverage(&px);
         var ink: usize = 0;
@@ -312,4 +359,31 @@ test "every icon draws ink" {
             return error.TestUnexpectedResult;
         }
     }
+}
+
+fn coverageOf(gpa: std.mem.Allocator, icon: *const Icon, out: *[26 * 26]u8) !void {
+    var r = try Raster.init(gpa, 26, 26);
+    defer r.deinit(gpa);
+    var part = try Raster.init(gpa, 26, 26);
+    defer part.deinit(gpa);
+    draw(icon, &r, &part, 1, 1, 2);
+    r.coverage(out);
+}
+
+test "overlapping parts keep their edges antialiased" {
+    const gpa = std.testing.allocator;
+    const diagonal = [_][2]f32{ .{ 4, 5 }, .{ 19, 17 } };
+    var once: [26 * 26]u8 = undefined;
+    try coverageOf(gpa, &.{ .name = "once", .ops = &.{.{ .line = &diagonal }} }, &once);
+    // The same stroke twice, and a disc on its end: summed in one buffer,
+    // every shared edge pixel would come out solid.
+    var twice: [26 * 26]u8 = undefined;
+    try coverageOf(gpa, &.{ .name = "twice", .ops = &.{ .{ .line = &diagonal }, .{ .line = &diagonal } } }, &twice);
+    try std.testing.expectEqualSlices(u8, &once, &twice);
+    var capped: [26 * 26]u8 = undefined;
+    try coverageOf(gpa, &.{ .name = "capped", .ops = &.{ .{ .line = &diagonal }, .{ .disc = .{ 19, 17, 1 } } } }, &capped);
+    try std.testing.expectEqualSlices(u8, &once, &capped);
+    var partial: usize = 0;
+    for (once) |v| partial += @intFromBool(v > 0 and v < 255);
+    try std.testing.expect(partial > 10);
 }
