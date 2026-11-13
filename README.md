@@ -545,6 +545,9 @@ A counter app each, from empty build caches, on the same M3 Ultra (`sh tools/bui
 
 ## Development
 
+Enable local formatting and line-limit checks with `sh tools/install-hooks.sh`.
+The hooks check staged/pushed snapshots without restaging; see [Git hooks](docs/git-hooks.md).
+
 ```sh
 zig build lines                                                       # the 600-line limit, enforced
 zig build test-bin -Dtarget=aarch64-linux-gnu --prefix zig-out/linux  # Linux tests, for the container

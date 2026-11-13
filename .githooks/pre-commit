@@ -1,0 +1,5 @@
+#!/bin/sh
+# Check the index, including partial commits and an alternate GIT_INDEX_FILE.
+set -eu
+root=$(git rev-parse --show-toplevel)
+exec sh "$root/tools/check-snapshot.sh" --staged
