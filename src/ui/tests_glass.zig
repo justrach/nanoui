@@ -29,6 +29,8 @@ pub const Scene = struct {
         }
         const pane = ui.div(c).absolute().offset(220, 120).w(110).h(110).rounded(30).glass(.{ .style = .clear });
         pane.end();
+        const sidebar = ui.div(c).absolute().offset(16, 100).w(180).h(180).rounded(12).glass(.{ .style = .sidebar });
+        sidebar.end();
     }
 };
 
@@ -42,7 +44,7 @@ fn render(gpa: std.mem.Allocator, theme: ui.Theme) !struct { metal: gpu.Pixels, 
     for (t.instances.items) |i| {
         if (i.kind == gpu.Kind.glass) panes += 1;
     }
-    try testing.expectEqual(@as(usize, 3), panes);
+    try testing.expectEqual(@as(usize, 4), panes);
     const metal = try t.renderer.drawOffscreen(gpa, t.instances.items, t.text.texture(), t.size, t.scale, t.theme.background);
     errdefer metal.deinit(gpa);
     const texels = try t.text.atlas.read(gpa);
@@ -125,4 +127,64 @@ test "drawn on many threads, glass and all, the pixels are those of one" {
     const one = try t.render(gpa);
     defer one.deinit(gpa);
     try testing.expectEqualSlices(u8, one.bytes, many.bytes);
+}
+
+const SidebarScene = struct {
+    adjacent: ui.Color = .{ .b = 1, .a = 1 },
+    under: ui.Color = .{ .r = 1, .a = 1 },
+    reflection: f32 = 0.5,
+
+    fn view(s: *SidebarScene, c: *ui.Context) void {
+        const root = ui.div(c).sizeFull();
+        defer root.end();
+        for (0..15) |n| {
+            const stripe = ui.div(c).absolute().offset(@as(f32, @floatFromInt(n)) * 8, 0).w(8).hFull().bg(if (n % 2 == 0) s.under else .black);
+            stripe.end();
+        }
+        const adjacent = ui.div(c).absolute().offset(120, 0).w(120).hFull().bg(s.adjacent);
+        adjacent.end();
+        const sidebar = ui.div(c).absolute().w(120).hFull().glass(.{ .style = .sidebar, .blur = 8, .edge_blur = 32, .reflection = s.reflection });
+        sidebar.end();
+    }
+};
+
+test "glass sidebar progressively blurs both edges and updates its live sources" {
+    const gpa = testing.allocator;
+    var s: SidebarScene = .{};
+    var t: ui.Tester = undefined;
+    try t.init(gpa, .init(&s, SidebarScene.view), .{ .width = 240, .height = 200 });
+    defer t.deinit();
+    const before = try t.render(gpa);
+    defer before.deinit(gpa);
+    const mid_contrast = @abs(lightness(at(before, t.scale, 35, 100)) - lightness(at(before, t.scale, 43, 100)));
+    for ([_]f32{ 2, 198 }) |y| {
+        const edge_contrast = @abs(lightness(at(before, t.scale, 35, y)) - lightness(at(before, t.scale, 43, y)));
+        try testing.expect(edge_contrast < mid_contrast * 0.5);
+    }
+    // Well beyond the blur's reach, only the reflection can carry a
+    // changed adjacent color to this pixel inside the sidebar.
+    s.adjacent = .{ .g = 1, .a = 1 };
+    t.frame();
+    const reflected = try t.render(gpa);
+    defer reflected.deinit(gpa);
+    const a = at(before, t.scale, 80, 100);
+    const b = at(reflected, t.scale, 80, 100);
+    try testing.expect(b[1] > a[1] + 5);
+    try testing.expect(b[0] + 5 < a[0]);
+    // Content painted directly beneath the sidebar is also live.
+    s.under = .{ .g = 1, .a = 1 };
+    t.frame();
+    const changed = try t.render(gpa);
+    defer changed.deinit(gpa);
+    try testing.expect(at(changed, t.scale, 35, 100)[1] > at(reflected, t.scale, 35, 100)[1] + 10);
+    // Disabling reflection removes the distant content's contribution.
+    s.reflection = 0;
+    t.frame();
+    const plain = try t.render(gpa);
+    defer plain.deinit(gpa);
+    s.adjacent = .{ .r = 1, .a = 1 };
+    t.frame();
+    const other = try t.render(gpa);
+    defer other.deinit(gpa);
+    try testing.expectEqual(at(plain, t.scale, 80, 100), at(other, t.scale, 80, 100));
 }

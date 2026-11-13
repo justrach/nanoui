@@ -17,7 +17,13 @@ const BackdropArgs = extern struct {
     down: i32,
     radius: i32,
     sigma: f32,
+    pad: [3]f32 = .{ 0, 0, 0 },
+    progressive: [4]f32,
 };
+comptime {
+    std.debug.assert(@offsetOf(BackdropArgs, "progressive") == 48);
+    std.debug.assert(@sizeOf(BackdropArgs) == 64);
+}
 
 /// What `fs_glass` reads (its GlassPane).
 pub const Pane = extern struct {
@@ -85,11 +91,11 @@ pub const Glass = struct {
     pub fn backdrop(g: *Glass, device: objc.Object, cmd: objc.Object, target: objc.Object, i: gpu.Instance, scale: f32) ?Pane {
         const fw = objc.msg(objc.NSUInteger, target, "width", .{});
         const fh = objc.msg(objc.NSUInteger, target, "height", .{});
-        const b = glass.backdropOf(i.rect, i.border_width, scale, fw, fh) orelse return null;
+        const b = glass.backdropFor(i, scale, fw, fh) orelse return null;
         const w: usize = @intCast(b.w);
         const h: usize = @intCast(b.h);
         g.reserve(device, w, h);
-        const args: BackdropArgs = .{ .area = b.area, .size = .{ b.w, b.h }, .down = b.down, .radius = b.radius, .sigma = b.sigma };
+        const args: BackdropArgs = .{ .area = b.area, .size = .{ b.w, b.h }, .down = b.down, .radius = b.radius, .sigma = b.sigma, .progressive = b.progressive };
         const enc = objc.msg(objc.Object, cmd, "computeCommandEncoder", .{});
         g.pass(enc, g.down, target, g.a.?, &args, null, w, h);
         if (b.sigma > 0) {

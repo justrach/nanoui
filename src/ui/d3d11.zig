@@ -420,7 +420,7 @@ pub const Renderer = struct {
             // resources: `setState` puts back what the next quad draw needs.
             r.setState();
         }
-        const b = glass.backdropOf(instances[at].rect, instances[at].border_width, scale, r.frame_w, r.frame_h) orelse return;
+        const b = glass.backdropFor(instances[at], scale, r.frame_w, r.frame_h) orelse return;
         const w: usize = @intCast(b.w);
         const h: usize = @intCast(b.h);
         r.a.reserve(r.device, w, h, false);
@@ -442,6 +442,7 @@ pub const Renderer = struct {
             .frame_height = @intCast(r.frame_h),
             .radius = b.radius,
             .sigma = b.sigma,
+            .progressive = b.progressive,
             .size = .{ @floatFromInt(b.w), @floatFromInt(b.h) },
         };
         r.pass(r.down_ps, r.snap.srv.?, r.a.rtv.?, back, b.w, b.h);

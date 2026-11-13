@@ -242,8 +242,13 @@ pub const Glass = struct {
     style: Kind = .regular,
     /// Colors the glass toward this, by its alpha: a prominent button's.
     tint: Color = .transparent,
-    /// `frost`: how far it blurs, in points.
+    /// `frost` or `sidebar`: maximum blur, in points.
     blur: f32 = 8,
+    /// `sidebar`: distance from the top/bottom over which blur increases
+    /// from 35% to its maximum. Zero gives a uniform blur.
+    edge_blur: f32 = 64,
+    /// `sidebar`: strength (0–1) of the right-hand content's reflection.
+    reflection: f32 = 0.16,
 
     pub const Kind = enum {
         /// Frosts and lightens (darkens, in dark mode) what shows through,
@@ -254,6 +259,10 @@ pub const Glass = struct {
         /// Only blurs it by `blur`: no rim, no lens, no tone (a web page's
         /// `backdrop-filter`).
         frost,
+        /// A toned sidebar with progressive top/bottom blur, no lens or
+        /// rim, and a reflection across its right edge. Paint the content
+        /// first, extending it beneath the sidebar for live translucency.
+        sidebar,
     };
 };
 

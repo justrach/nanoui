@@ -2,7 +2,7 @@
 //! springs in over cards that scroll under it and stagger in; glass tabs
 //! whose tinted lens slides; glass buttons that give when pressed and
 //! bounce back; a glass menu and glass toasts; and a pane of clear glass
-//! floating over it all.
+//! floating over it all, plus a sidebar reflecting the adjacent cards.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
@@ -37,11 +37,26 @@ pub const Demo = struct {
                 ui.key(c, c.print("card-{d}-{d}", .{ d.tab, i }));
                 // Each tab's cards come in one after another.
                 const f = motion.frame(c, .{ .initial = .{ .y = 24, .opacity = 0, .scale = 0.97 }, .delay = motion.stagger(@min(i, 8), 0.04), .transition = .{ .spring = .{} } });
-                const card = ui.div(c).row().wFull().h(64).px(18).gap(12).itemsCenter().rounded(16).bg(.hex(hues[(i + d.tab * 2) % hues.len])).motion(f);
+                const card = ui.div(c).row().wFull().h(64).px(if (compact) 18 else 210).gap(12).itemsCenter().rounded(16).bg(.hex(hues[(i + d.tab * 2) % hues.len])).motion(f);
                 defer card.end();
                 ui.icon(c, "photo", .{ .size = 18, .color = .white });
                 ui.textf(c, .{ .size = 15, .weight = .semibold, .color = .white }, "{s} under the glass · {d}", .{ labels[d.tab], i + 1 });
             }
+        }
+        if (!compact) {
+            // Cards were painted first and extend beneath this pane. Their
+            // scrolling drives the live backdrop and its right-edge reflection.
+            const sidebar = ui.div(c).absolute().offset(20, 104).w(190).h(@max(180, c.size.h - 128)).column().px(20).py(24).gap(24).rounded(20).glass(.{ .style = .sidebar, .tint = th.surface.alpha(0.75) });
+            defer sidebar.end();
+            ui.text(c, "FOLDERS", .{ .size = 11, .weight = .semibold, .color = th.muted });
+            for ([_][]const u8{ "Work", "Personal", "Finances", "Travel", "Receipts" }) |label| {
+                const row = ui.div(c).row().gap(12).itemsCenter();
+                defer row.end();
+                ui.icon(c, "folder", .{ .size = 18, .color = th.text });
+                ui.text(c, label, .{ .size = 14, .color = th.text });
+            }
+            ui.spacer(c);
+            ui.text(c, "Scroll the cards alongside", .{ .size = 11, .color = th.muted });
         }
         {
             const f = motion.frame(c, .{ .initial = .{ .y = -30, .opacity = 0, .scale = 0.96 }, .transition = .{ .spring = motion.Spring.bouncy } });
@@ -72,6 +87,5 @@ pub const Demo = struct {
             if (i == 3) d.toaster.push(.{ .status = .success, .title = "On glass", .message = "Toasts can be glass too.", .duration = 3 });
         }
         d.toaster.view(c);
-        _ = th;
     }
 };

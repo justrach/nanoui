@@ -30,6 +30,9 @@ pub const Material = struct {
     curve: f32,
     saturation: f32,
     tint: [4]f32 = .{ 0, 0, 0, 0 },
+    sidebar: bool = false,
+    edge_blur: f32 = 0,
+    reflection: f32 = 0,
 };
 
 /// The material of a pane `w` × `h` points, as macOS 27's: the regular
@@ -64,6 +67,15 @@ pub fn material(g: types.Glass, w: f32, h: f32, dark: bool, scale: f32) Material
         mat.curve = 2;
         mat.saturation = 2.2;
     }
+    if (g.style == .sidebar) {
+        mat.bezel = 0;
+        mat.refraction = 0;
+        mat.rim_width = 0;
+        mat.blur = @max(g.blur, 0.5);
+        mat.sidebar = true;
+        mat.edge_blur = @max(g.edge_blur, 0);
+        mat.reflection = std.math.clamp(g.reflection, 0, 1);
+    }
     // An opaque tint lets a little of the glass show, as AppKit's does.
     if (g.tint.a > 0) mat.tint = .{ g.tint.r, g.tint.g, g.tint.b, g.tint.a * 0.88 };
     return mat;
@@ -77,7 +89,7 @@ pub fn instance(m: Material, rect: [4]f32, radius: f32, clip: [4]f32, opacity: f
     return .{
         .rect = rect,
         .color = m.tint,
-        .uv = .{ m.bezel, m.refraction, opacity, m.rim_width },
+        .uv = if (m.sidebar) .{ -1, m.edge_blur, opacity, m.reflection } else .{ m.bezel, m.refraction, opacity, m.rim_width },
         .border_color = .{ m.low, m.high, m.curve, m.saturation },
         .border_width = m.blur,
         .radius = radius,
@@ -97,7 +109,32 @@ pub const Backdrop = struct {
     radius: i32,
     w: i32,
     h: i32,
+    /// Top, bottom and fade distance in backdrop texels; zero disables it.
+    progressive: [4]f32 = .{ 0, 0, 0, 0 },
 };
+
+/// A sidebar also reads the mirrored area to its right, even when no
+/// content lies under the pane. All reads are clamped to the frame.
+pub fn backdropFor(i: gpu.Instance, scale: f32, fw: usize, fh: usize) ?Backdrop {
+    var rect = i.rect;
+    const sidebar = i.uv[0] < 0;
+    if (sidebar and i.uv[3] > 0) rect[2] *= 2;
+    var b = backdropOf(rect, i.border_width, scale, fw, fh) orelse return null;
+    if (sidebar and i.uv[1] > 0) {
+        const down: f32 = @floatFromInt(b.down);
+        const y: f32 = @floatFromInt(b.area[1]);
+        b.progressive = .{ (i.rect[1] * scale - y) / down, ((i.rect[1] + i.rect[3]) * scale - y) / down, i.uv[1] * scale / down, 0 };
+    }
+    return b;
+}
+
+/// Smoothly increase blur toward either vertical edge of a sidebar.
+pub fn blurSigma(b: Backdrop, y: f32) f32 {
+    const p = b.progressive;
+    if (p[2] <= 0) return b.sigma;
+    const t = std.math.clamp(@min(y - p[0], p[1] - y) / p[2], 0, 1);
+    return b.sigma * (1 - 0.65 * t * t * (3 - 2 * t));
+}
 
 /// The backdrop of a pane at `rect` (points) blurred by `blur` points, in
 /// a frame `fw` × `fh` pixels: what the blur reaches around it. Large
@@ -251,12 +288,13 @@ fn blurPass(src: []const f32, dst: []f32, w: usize, h: usize, b: Backdrop, dir: 
     for (0..h) |y| for (0..w) |x| {
         var sum: [3]f32 = .{ 0, 0, 0 };
         var wsum: f32 = 0;
+        const sigma = blurSigma(b, @as(f32, @floatFromInt(y)) + 0.5);
         var k: i32 = -b.radius;
         while (k <= b.radius) : (k += 1) {
             const sx: usize = @intCast(std.math.clamp(@as(i32, @intCast(x)) + dir[0] * k, 0, @as(i32, @intCast(w)) - 1));
             const sy: usize = @intCast(std.math.clamp(@as(i32, @intCast(y)) + dir[1] * k, 0, @as(i32, @intCast(h)) - 1));
             const kf: f32 = @floatFromInt(k);
-            const wt = @exp(-(kf * kf) / (2 * b.sigma * b.sigma));
+            const wt = @exp(-(kf * kf) / (2 * sigma * sigma));
             for (0..3) |ch| sum[ch] += src[(sy * w + sx) * 3 + ch] * wt;
             wsum += wt;
         }
@@ -275,7 +313,8 @@ pub fn color(i: *const gpu.Instance, im: Image, px: f32, py: f32, scale: f32) [3
     const t = @max(-roundedBox(qx, qy, hx, hy, rr), 0);
     const bezel = i.uv[0] * scale;
     const refraction = i.uv[1] * scale;
-    const rim_width = i.uv[3] * scale;
+    const sidebar = i.uv[0] < 0;
+    const rim_width = if (sidebar) 0 else i.uv[3] * scale;
     var n: [2]f32 = .{ 0, 0 };
     if (t < bezel or t < 3 * rim_width) n = normal(qx, qy, hx, hy, rr);
     var sx = px;
@@ -286,7 +325,15 @@ pub fn color(i: *const gpu.Instance, im: Image, px: f32, py: f32, scale: f32) [3
         sy -= n[1] * d;
     }
     const tc = i.border_color;
-    var c = tone(im.sample(sx, sy), tc[0], tc[1], tc[2], tc[3]);
+    var sample = im.sample(sx, sy);
+    if (sidebar and i.uv[3] > 0) {
+        const right = (i.rect[0] + i.rect[2]) * scale;
+        const reflected = im.sample(2 * right - px, py);
+        const u = std.math.clamp((px - i.rect[0] * scale) / (2 * hx), 0, 1);
+        const amount = i.uv[3] * u * u;
+        for (0..3) |ch| sample[ch] += (reflected[ch] - sample[ch]) * amount;
+    }
+    var c = tone(sample, tc[0], tc[1], tc[2], tc[3]);
     for (0..3) |ch| c[ch] += (i.color[ch] - c[ch]) * i.color[3];
     if (rim > 0 and t < 3 * rim_width) {
         const r = t / rim_width;
@@ -354,4 +401,28 @@ test "on a flat backdrop, the rim is lit above and below and shaded at the sides
     try std.testing.expect(color(&i, im, 100, 0.5, 1)[0] > mid);
     try std.testing.expect(color(&i, im, 100, 99.5, 1)[0] > mid);
     try std.testing.expect(color(&i, im, 0.5, 50, 1)[0] < mid);
+}
+
+test "glass sidebar blur plan is scaled, symmetric and bounded by the frame" {
+    for ([_]f32{ 1, 2 }) |scale| {
+        const mat = material(.{ .style = .sidebar }, 120, 200, true, scale);
+        const i = instance(mat, .{ 10, 20, 120, 200 }, 12, .{ 0, 0, 300, 300 }, 0.5);
+        const b = backdropFor(i, scale, 600, 600).?;
+        try std.testing.expect(b.area[2] >= @as(i32, @intFromFloat(250 * scale)));
+        const p = b.progressive;
+        try std.testing.expectEqual(b.sigma, blurSigma(b, p[0]));
+        try std.testing.expectEqual(b.sigma, blurSigma(b, p[1]));
+        try std.testing.expectApproxEqAbs(b.sigma * 0.35, blurSigma(b, (p[0] + p[1]) / 2), 1e-5);
+        try std.testing.expectApproxEqAbs(blurSigma(b, p[0] + 2), blurSigma(b, p[1] - 2), 1e-5);
+        const clipped = backdropFor(i, scale, 140, 140).?;
+        try std.testing.expect(clipped.area[2] <= 140 and clipped.area[3] <= 140);
+    }
+    // Opting out restores a uniform blur and the ordinary backdrop area.
+    const mat = material(.{ .style = .sidebar, .edge_blur = 0, .reflection = 0 }, 120, 200, false, 1);
+    const i = instance(mat, .{ 10, 20, 120, 200 }, 0, .{ 0, 0, 300, 300 }, 1);
+    const b = backdropFor(i, 1, 600, 600).?;
+    const plain = backdropOf(i.rect, i.border_width, 1, 600, 600).?;
+    try std.testing.expectEqualDeep(plain, b);
+    try std.testing.expectEqual(b.sigma, blurSigma(b, 0));
+    try std.testing.expect(backdropFor(i, 1, 0, 0) == null);
 }
