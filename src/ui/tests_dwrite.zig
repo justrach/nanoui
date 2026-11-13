@@ -100,9 +100,9 @@ test "Windows small physical ems use GDI Classic and integer positions, large em
 }
 
 test "Windows grayscale and aliased coverage match native rendering" {
-    for ([_]bool{ false, true }) |aliased| {
-        // Keep this independent Natural reference above the Classic cutoff.
-        var sample: Sample = .{ .style = .{ .size = 20 }, .color = .hex(0x2378bb) };
+    for ([_]f32{ 12, 20 }) |size| for ([_]bool{ false, true }) |aliased| {
+        // Exercise both Classic and Natural with ClearType disabled locally.
+        var sample: Sample = .{ .style = .{ .size = size }, .color = .hex(0x2378bb) };
         var t: ui.Tester = undefined;
         try init(&t, &sample, 1.25, .white);
         defer t.deinit();
@@ -114,7 +114,7 @@ test "Windows grayscale and aliased coverage match native rendering" {
         t.text.atlas.reset();
         t.frame();
         try compare(&t, sample);
-    }
+    };
 }
 
 fn hashGlyphs(t: *ui.Tester, weight: ui.Weight, bin: u8) !u64 {
