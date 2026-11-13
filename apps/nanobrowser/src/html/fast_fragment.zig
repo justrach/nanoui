@@ -79,8 +79,8 @@ const tag_map = std.StaticStringMap(TagSpec).initComptime(.{
 });
 
 const reserved_hyphen_tags = std.StaticStringMap(void).initComptime(.{
-    .{"annotation-xml"}, .{"color-profile"},   .{"font-face"},
-    .{"font-face-src"},  .{"font-face-uri"},   .{"font-face-format"},
+    .{"annotation-xml"}, .{"color-profile"}, .{"font-face"},
+    .{"font-face-src"},  .{"font-face-uri"}, .{"font-face-format"},
     .{"font-face-name"}, .{"missing-glyph"},
 });
 
@@ -100,13 +100,13 @@ const attr_name_map = std.StaticStringMap([]const u8).initComptime(.{
 });
 
 const attr_val_map = std.StaticStringMap([]const u8).initComptime(.{
-    .{ "", "" },                         .{ "checkbox", "checkbox" },         .{ "text", "text" },
-    .{ "button", "button" },             .{ "submit", "submit" },             .{ "toggle", "toggle" },
-    .{ "destroy", "destroy" },           .{ "edit", "edit" },                 .{ "view", "view" },
-    .{ "completed", "completed" },       .{ "selected", "selected" },         .{ "active", "active" },
-    .{ "new-todo", "new-todo" },         .{ "todo-list", "todo-list" },       .{ "todo-count", "todo-count" },
+    .{ "", "" },                               .{ "checkbox", "checkbox" },   .{ "text", "text" },
+    .{ "button", "button" },                   .{ "submit", "submit" },       .{ "toggle", "toggle" },
+    .{ "destroy", "destroy" },                 .{ "edit", "edit" },           .{ "view", "view" },
+    .{ "completed", "completed" },             .{ "selected", "selected" },   .{ "active", "active" },
+    .{ "new-todo", "new-todo" },               .{ "todo-list", "todo-list" }, .{ "todo-count", "todo-count" },
     .{ "clear-completed", "clear-completed" }, .{ "true", "true" },           .{ "false", "false" },
-    .{ "#", "#" },                       .{ "0", "0" },                       .{ "1", "1" },
+    .{ "#", "#" },                             .{ "0", "0" },                 .{ "1", "1" },
 });
 
 const nl_spaces = "\n                                ";
@@ -187,13 +187,15 @@ fn canOpenOnStack(stack: []const TagSpec, spec: TagSpec) bool {
     return true;
 }
 
+const InternSlot = struct { hash: u64 = 0, slice: []const u8 = "" };
+
 const DecodeResult = union(enum) {
     ok: []const u8,
     bail,
     oom,
 };
 
-fn decodeText(arena: Allocator, raw: []const u8, is_attr: bool) DecodeResult {
+fn decodeText(arena: Allocator, raw: []const u8, is_attr: bool, intern: *[32]InternSlot) DecodeResult {
     if (!is_attr) {
         if (staticWsSlice(raw)) |ws| return .{ .ok = ws };
     } else if (raw.len <= 16) {
@@ -215,7 +217,19 @@ fn decodeText(arena: Allocator, raw: []const u8, is_attr: bool) DecodeResult {
         if (c == 0 or c == '\r') return .bail;
         if (c == '&') has_amp = true;
     }
-    if (!has_amp) return .{ .ok = arena.dupe(u8, raw) catch return .oom };
+    if (!has_amp) {
+        if (raw.len <= 64) {
+            const h = std.hash.Wyhash.hash(0x51c3, raw);
+            const slot = &intern[@as(usize, @truncate(h)) & 31];
+            if (slot.hash == h and slot.slice.len == raw.len and std.mem.eql(u8, slot.slice, raw)) {
+                return .{ .ok = slot.slice };
+            }
+            const duped = arena.dupe(u8, raw) catch return .oom;
+            slot.* = .{ .hash = h, .slice = duped };
+            return .{ .ok = duped };
+        }
+        return .{ .ok = arena.dupe(u8, raw) catch return .oom };
+    }
 
     var out: std.ArrayList(u8) = .empty;
     out.ensureTotalCapacity(arena, raw.len) catch return .oom;
@@ -273,6 +287,7 @@ pub fn tryParseFragment(doc: *dom.Document, context: *dom.Node, source: []const 
     if (source.len > 512 * 1024) return null;
 
     const arena = doc.arena;
+    var intern: [32]InternSlot = @splat(.{});
     const fragment = try doc.createFragment();
     var node_stack: [32]*dom.Node = undefined;
     var spec_stack: [32]TagSpec = undefined;
@@ -284,7 +299,7 @@ pub fn tryParseFragment(doc: *dom.Document, context: *dom.Node, source: []const 
         const lt_rel = std.mem.indexOfScalarPos(u8, source, i, '<');
         const text_end = lt_rel orelse source.len;
         if (text_end > i) {
-            const decoded = switch (decodeText(arena, source[i..text_end], false)) {
+            const decoded = switch (decodeText(arena, source[i..text_end], false, &intern)) {
                 .ok => |s| s,
                 .bail => return null,
                 .oom => return error.OutOfMemory,
@@ -413,7 +428,7 @@ pub fn tryParseFragment(doc: *dom.Document, context: *dom.Node, source: []const 
                 if (q == '"' or q == '\'') {
                     i += 1;
                     const q_end = std.mem.indexOfScalarPos(u8, source, i, q) orelse return null;
-                    aval = switch (decodeText(arena, source[i..q_end], true)) {
+                    aval = switch (decodeText(arena, source[i..q_end], true, &intern)) {
                         .ok => |s| s,
                         .bail => return null,
                         .oom => return error.OutOfMemory,
@@ -427,7 +442,7 @@ pub fn tryParseFragment(doc: *dom.Document, context: *dom.Node, source: []const 
                         if (c <= 0x1f or c == '"' or c == '\'' or c == '=' or c == '<' or c == '`' or c == '/') return null;
                     }
                     if (i == v_start) return null;
-                    aval = switch (decodeText(arena, source[v_start..i], true)) {
+                    aval = switch (decodeText(arena, source[v_start..i], true, &intern)) {
                         .ok => |s| s,
                         .bail => return null,
                         .oom => return error.OutOfMemory,
