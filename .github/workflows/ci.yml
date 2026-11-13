@@ -24,6 +24,7 @@ jobs:
       - run: zig build lines
       - run: zig fmt --check src build.zig build.zig.zon examples tools
       - run: zig build test
+      - run: zig build test-luau -Dluau=true -Doptimize=ReleaseSafe -j2
       - run: zig build test -Dportable=true
       - run: zig build -Dtarget=x86_64-windows-gnu --prefix zig-out/windows
       # Windows on Arm too: COM's function pointers are aligned there.
@@ -51,6 +52,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libgtk-3-0t64 libgtk-4-1 libwebkit2gtk-4.1-0 libwebkitgtk-6.0-4 libegl1 libegl-mesa0 libgles2 libgl1-mesa-dri fonts-dejavu-core fonts-noto-core xvfb xauth zsh
+      - run: zig build test-luau -Dluau=true -Doptimize=ReleaseSafe -j2
       - run: zig build test-bin --prefix zig-out/linux
       # GTK 4 with WebKitGTK 6.0; the page's test then runs under GTK 3 with 4.1.
       - run: xvfb-run -a zig-out/linux/bin/nanoui-tests
@@ -108,6 +110,7 @@ jobs:
       # Run directly, each test named (Direct3D's says whether it ran or skipped).
       - run: zig build test-bin --prefix zig-out/windows
       - run: zig-out/windows/bin/nanoui-tests.exe
+      - run: zig build test-luau -Dluau=true -Doptimize=ReleaseSafe -j2
       - run: zig build test-nui
       - name: nui makes an app that builds, passes its test and renders
         run: |

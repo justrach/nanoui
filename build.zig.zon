@@ -4,6 +4,11 @@
     .fingerprint = 0xd93ac916310aedc1,
     .minimum_zig_version = "0.17.0",
     .dependencies = .{
+        .luau = .{
+            .lazy = true,
+            .url = "git+https://github.com/luau-lang/luau#12a6ba75883272c79b66b59815efef4c574196f6",
+            .hash = "N-V-__8AABJAKgHM4O3pSxNXVoa8X0g4RMvVMsKGk8qs2RpV",
+        },
         // HTTP where the system has no client nanoui uses (Linux, Windows):
         // fetched only for those targets.
         .http_zig = .{

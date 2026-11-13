@@ -219,6 +219,10 @@ Motion keeps its state in the frame's context, by box, so there are no
 objects to hold. It draws frames only while something moves, and jumps
 straight to the end when the system asks for reduced motion.
 
+An [optional Luau module](docs/luau.md) lets desktop apps describe bounded
+native layouts and spring/tween targets in scripts (`-Dluau=true`). It is
+separate from the core: no VM or C++ dependency unless explicitly selected.
+
 ```zig
 const f = ui.motion.frame(c, .{
     .target = .{ .width = if (open) 320 else 180, .background = if (open) th.accent else th.surface },

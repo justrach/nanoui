@@ -32,6 +32,9 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     nanoui.addOptions("build_options", options);
+    // Luau is an optional, separate module: no VM or C++ in the core graph.
+    if (b.option(bool, "luau", "Build the optional sandboxed native Luau UI module") orelse false)
+        @import("src/luau/build.zig").add(b, nanoui, target, optimize);
     const os = target.result.os.tag;
     if (os == .macos) {
         const rt_options = b.addOptions();

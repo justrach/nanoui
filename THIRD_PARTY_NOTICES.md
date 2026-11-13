@@ -3,6 +3,15 @@
 nanoui's own source code is licensed under the MIT License in
 [`LICENSE`](LICENSE). The material below keeps its own copyright and license.
 
+## Optional Luau runtime
+
+The opt-in `nanoui_luau` module compiles [Luau](https://github.com/luau-lang/luau)
+0.746, commit `12a6ba75883272c79b66b59815efef4c574196f6`, Copyright (c) 2019–2026
+Roblox Corporation. Luau and its Lua-derived VM retain their MIT notices in
+[`third_party/licenses/Luau-MIT.txt`](third_party/licenses/Luau-MIT.txt) and
+[`third_party/licenses/Lua-MIT.txt`](third_party/licenses/Lua-MIT.txt).
+They are not linked by NanoUI's default build.
+
 ## mygo
 
 nanoui began as a port of the core of [mygo](https://github.com/egoist/mygo)
