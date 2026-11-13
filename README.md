@@ -1,0 +1,1 @@
+Screenshots for issues and pull requests, one folder per number. Not part of the app.
