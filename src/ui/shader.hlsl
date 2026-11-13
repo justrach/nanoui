@@ -37,9 +37,12 @@ cbuffer Params : register(b0) {
     float4 text_gamma;   // 80  DirectWrite's coverage correction
     float  text_contrast; // 96
     float  gray_contrast; // 100
-    float2 pad2;         // 104
+    float  classic_contrast; // 104 the same for GDI Classic glyphs
+    float  classic_gray_contrast; // 108
     float4 progressive; // 112 sidebar blur: top, bottom, fade in texels
-};                       // 128 bytes
+    float4 classic_gamma; // 128
+    float4 classic_gray_gamma; // 144
+};                       // 160 bytes
 
 // One quad, byte-identical to shader.metal's `Instance` and to gpu.zig's.
 struct Instance {
@@ -328,10 +331,12 @@ float4 triangle_color(Varyings v) {
     return float4(v.i_color.rgb * alpha, alpha);
 }
 
-float text_coverage(float a, float intensity, float lightness, bool subpixel) {
-    float k = (subpixel ? text_contrast : gray_contrast) * clamp(3.0 - 4.0 * lightness, 0.0, 1.0);
+float text_coverage(float a, float intensity, float lightness, bool subpixel, bool classic) {
+    float4 gamma = classic ? (subpixel ? classic_gamma : classic_gray_gamma) : text_gamma;
+    float contrast = classic ? (subpixel ? classic_contrast : classic_gray_contrast) : (subpixel ? text_contrast : gray_contrast);
+    float k = contrast * clamp(3.0 - 4.0 * lightness, 0.0, 1.0);
     float v = a * (k + 1.0) / (a * k + 1.0);
-    float correction = (text_gamma[0] * intensity + text_gamma[1]) * v + text_gamma[2] * intensity + text_gamma[3];
+    float correction = (gamma[0] * intensity + gamma[1]) * v + gamma[2] * intensity + gamma[3];
     return clamp(v + v * (1.0 - v) * correction, 0.0, 1.0);
 }
 
@@ -351,15 +356,18 @@ Pixel glyph_pixel(Varyings v, float clip_cover) {
     bool one_to_one = all(abs(screen_pixels - atlas_texels) < float2(0.001, 0.001));
     if (rgb_text > 0.5 && one_to_one) {
         // Native glyphs are nearest-sampled, as raster.zig does. The RGB
-        // texel's alpha is a tag: 1 ClearType, 128/255 native grayscale.
+        // texel's alpha is a tag: 255/254 Natural/Classic ClearType,
+        // 128/127 Natural/Classic native grayscale.
         int2 at = clamp(int2(v.v_uv * float2(side)), int2(0, 0), int2(side) - 1);
         float4 native = native_atlas.Load(int3(at, 0));
+        uint tag = (uint)round(native.a * 255.0);
+        bool classic = tag == 254 || tag == 127;
         float lightness = 0.30 * v.i_color.r + 0.59 * v.i_color.g + 0.11 * v.i_color.b;
         if (native.a > 0.75) {
             float3 coverage = float3(
-                text_coverage(native.r, v.i_color.r, lightness, true),
-                text_coverage(native.g, v.i_color.g, lightness, true),
-                text_coverage(native.b, v.i_color.b, lightness, true)) * opacity;
+                text_coverage(native.r, v.i_color.r, lightness, true, classic),
+                text_coverage(native.g, v.i_color.g, lightness, true, classic),
+                text_coverage(native.b, v.i_color.b, lightness, true, classic)) * opacity;
             Pixel o;
             o.color = float4(v.i_color.rgb * coverage, dot(coverage, float3(1.0, 1.0, 1.0)) / 3.0);
             o.coverage = float4(coverage, o.color.a);
@@ -367,7 +375,7 @@ Pixel glyph_pixel(Varyings v, float clip_cover) {
         }
         if (native.a > 0.0) {
             float intensity = 0.25 * v.i_color.r + 0.5 * v.i_color.g + 0.25 * v.i_color.b;
-            float a = text_coverage(gray, intensity, lightness, false) * opacity;
+            float a = text_coverage(gray, intensity, lightness, false, classic) * opacity;
             return scalar_pixel(float4(v.i_color.rgb * a, a));
         }
     }

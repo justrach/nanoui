@@ -199,7 +199,7 @@ comptime {
     std.debug.assert(@sizeOf(BlendDesc) == 264);
     std.debug.assert(@sizeOf(RasterizerDesc) == 40);
     std.debug.assert(@sizeOf(SamplerDesc) == 52);
-    std.debug.assert(@sizeOf(Params) == 128);
+    std.debug.assert(@sizeOf(Params) == 160);
 }
 
 pub fn check(hr: HRESULT) !void {
@@ -327,8 +327,11 @@ pub const Params = extern struct {
     gamma: [4]f32 = .{ 0, 0, 0, 0 },
     contrast: f32 = 0,
     grayscale_contrast: f32 = 0,
-    pad2: [2]f32 = .{ 0, 0 },
+    classic_contrast: f32 = 0,
+    classic_gray_contrast: f32 = 0,
     progressive: [4]f32 = .{ 0, 0, 0, 0 },
+    classic_gamma: [4]f32 = .{ 0, 0, 0, 0 },
+    classic_gray_gamma: [4]f32 = .{ 0, 0, 0, 0 },
 };
 
 /// The size a texture is made at to hold a `want`-tall or -wide frame that the

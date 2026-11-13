@@ -46,7 +46,8 @@ pub const Atlas = struct {
     size: u32 = initial_size,
     scale: f32 = 2,
     pixels: []u8,
-    /// RGB coverage plus a tag: 255 ClearType, 128 native grayscale,
+    /// RGB coverage plus a tag: 255/254 Natural/Classic ClearType,
+    /// 128/127 Natural/Classic native grayscale,
     /// zero portable glyph/icon. Parallel to the existing scalar atlas.
     native_pixels: []u8,
     sprites: std.AutoHashMapUnmanaged(Key, ?Sprite) = .empty,
@@ -86,7 +87,7 @@ pub const Atlas = struct {
 
     /// The texels, as the CPU renderer samples them.
     pub fn mask(a: *const Atlas) @import("raster.zig").Mask {
-        return .{ .pixels = a.pixels, .size = a.size, .native_pixels = a.native_pixels, .text_params = a.native.blending };
+        return .{ .pixels = a.pixels, .size = a.size, .native_pixels = a.native_pixels, .text_params = a.native.blending, .classic_text_params = a.native.classic_blending orelse a.native.blending, .classic_gray_params = a.native.classic_grayscale_blending orelse a.native.blending };
     }
 
     /// For the test against Metal: texels are already in memory.
