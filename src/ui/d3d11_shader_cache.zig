@@ -55,8 +55,11 @@ pub fn load(key: Key, root: ?[]const u8) ?Blob {
     if (builtin.is_test or !enabled()) return null;
     var path_buf: [512]u8 = undefined;
     const file = path(key.entry, root, &path_buf) orelse return null;
-    const io = std.Io.Threaded.global_single_threaded.io();
-    const bytes = std.Io.Dir.cwd().readFileAlloc(io, file, std.heap.page_allocator, .limited(max_bytes + header_len)) catch return null;
+    return loadIn(key, std.Io.Dir.cwd(), std.Io.Threaded.global_single_threaded.io(), file);
+}
+
+fn loadIn(key: Key, dir: std.Io.Dir, io: std.Io, file: []const u8) ?Blob {
+    const bytes = dir.readFileAlloc(io, file, std.heap.page_allocator, .limited(max_bytes + header_len)) catch return null;
     if (!valid(bytes, key)) {
         std.heap.page_allocator.free(bytes);
         return null;
@@ -67,18 +70,21 @@ pub fn load(key: Key, root: ?[]const u8) ?Blob {
 /// Keeps `code` as `key`'s shader for the next run, replacing what was there.
 pub fn store(key: Key, root: ?[]const u8, code: []const u8) void {
     if (builtin.is_test or !enabled()) return;
-    if (code.len < 32 or code.len > max_bytes) return;
     var path_buf: [512]u8 = undefined;
     const file = path(key.entry, root, &path_buf) orelse return;
-    const io = std.Io.Threaded.global_single_threaded.io();
-    std.Io.Dir.cwd().createDirPath(io, std.fs.path.dirname(file) orelse return) catch return;
+    storeIn(key, std.Io.Dir.cwd(), std.Io.Threaded.global_single_threaded.io(), file, code);
+}
+
+fn storeIn(key: Key, dir: std.Io.Dir, io: std.Io, file: []const u8, code: []const u8) void {
+    if (code.len < 32 or code.len > max_bytes) return;
+    dir.createDirPath(io, std.fs.path.dirname(file) orelse return) catch return;
     const bytes = std.heap.page_allocator.alloc(u8, header_len + code.len) catch return;
     defer std.heap.page_allocator.free(bytes);
     @memcpy(bytes[0..4], magic);
     std.mem.writeInt(u32, bytes[4..8], format_version, .little);
     std.mem.writeInt(u64, bytes[8..16], sourceHash(key), .little);
     @memcpy(bytes[header_len..], code);
-    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = file, .data = bytes }) catch {};
+    dir.writeFile(io, .{ .sub_path = file, .data = bytes }) catch {};
 }
 
 /// Our header, for this source, and the device's own: a file from another
@@ -91,4 +97,52 @@ fn valid(bytes: []const u8, key: Key) bool {
     const code = bytes[header_len..];
     if (!std.mem.eql(u8, code[0..4], "DXBC")) return false;
     return std.mem.readInt(u32, code[24..28], .little) == code.len;
+}
+
+test "shader cache: cold miss, warm hit, source invalidation and replacement in a temporary directory" {
+    const testing = std.testing;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const file = "shader-cache/quad_ps.dxbc";
+    const key: Key = .{ .source = "first shader", .entry = "quad_ps" };
+    var code: [32]u8 = @splat(0);
+    @memcpy(code[0..4], "DXBC");
+    std.mem.writeInt(u32, code[24..28], code.len, .little);
+    try testing.expect(loadIn(key, tmp.dir, testing.io, file) == null);
+    storeIn(key, tmp.dir, testing.io, file, &code);
+    const first = loadIn(key, tmp.dir, testing.io, file) orelse return error.CacheMiss;
+    defer first.deinit();
+    try testing.expectEqualSlices(u8, &code, first.code());
+    const changed: Key = .{ .source = "changed shader", .entry = "quad_ps" };
+    try testing.expect(loadIn(changed, tmp.dir, testing.io, file) == null);
+    code[31] = 42;
+    storeIn(changed, tmp.dir, testing.io, file, &code);
+    const replaced = loadIn(changed, tmp.dir, testing.io, file) orelse return error.CacheMiss;
+    defer replaced.deinit();
+    try testing.expectEqualSlices(u8, &code, replaced.code());
+    try testing.expect(loadIn(key, tmp.dir, testing.io, file) == null);
+}
+
+test "shader cache: corrupt and truncated cache files are misses" {
+    const testing = std.testing;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const key: Key = .{ .source = "shader", .entry = "quad_ps" };
+    const file = "shader-cache/quad_ps.dxbc";
+    var code: [32]u8 = @splat(0);
+    @memcpy(code[0..4], "DXBC");
+    std.mem.writeInt(u32, code[24..28], code.len, .little);
+    storeIn(key, tmp.dir, testing.io, file, &code);
+    const original = loadIn(key, tmp.dir, testing.io, file) orelse return error.CacheMiss;
+    defer original.deinit();
+    for ([_]usize{ 0, 4, 8, header_len, header_len + 24 }) |at| {
+        original.file[at] ^= 1;
+        try tmp.dir.writeFile(testing.io, .{ .sub_path = file, .data = original.file });
+        try testing.expect(loadIn(key, tmp.dir, testing.io, file) == null);
+        original.file[at] ^= 1;
+    }
+    for ([_]usize{ 0, header_len - 1, original.file.len - 1 }) |len| {
+        try tmp.dir.writeFile(testing.io, .{ .sub_path = file, .data = original.file[0..len] });
+        try testing.expect(loadIn(key, tmp.dir, testing.io, file) == null);
+    }
 }

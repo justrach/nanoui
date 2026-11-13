@@ -316,6 +316,8 @@ test {
     _ = @import("tests_field_layout.zig");
     _ = frame_log;
     _ = @import("present_slots.zig");
+    // The disk format and temporary-directory cache tests need no D3D device.
+    _ = @import("d3d11_shader_cache.zig");
     _ = @import("tests_effects.zig");
     _ = @import("tests_scroll_x.zig");
     _ = @import("tests_a11y_adjust.zig");
