@@ -38,7 +38,8 @@ cbuffer Params : register(b0) {
     float  text_contrast; // 96
     float  gray_contrast; // 100
     float2 pad2;         // 104
-};                       // 112 bytes
+    float4 progressive; // 112 sidebar blur: top, bottom, fade in texels
+};                       // 128 bytes
 
 // One quad, byte-identical to shader.metal's `Instance` and to gpu.zig's.
 struct Instance {
@@ -503,12 +504,19 @@ Pixel glass_ps(Varyings v) {
     float rr = min(v.i_misc.x * s, min(h.x, h.y));
     float t = max(-rounded_box(q, h, rr), 0.0);
     float bezel = v.i_uv.x * s;
-    float rim_width = v.i_uv.w * s;
+    bool sidebar = v.i_uv.x < 0.0;
+    float rim_width = sidebar ? 0.0 : v.i_uv.w * s;
     float2 n = float2(0.0, 0.0);
     if (t < bezel || t < 3.0 * rim_width) n = glass_normal(q, h, rr);
     float2 at = p;
     if (t < bezel) at -= n * (v.i_uv.y * s * glass_lens(t, bezel));
-    float3 c = glass_tone(glass_sample(at), v.i_border_color);
+    float3 back_color = glass_sample(at);
+    if (sidebar && v.i_uv.w > 0.0) {
+        float right = (v.i_rect.x + v.i_rect.z) * s;
+        float u = clamp((p.x - v.i_rect.x * s) / (2.0 * h.x), 0.0, 1.0);
+        back_color = lerp(back_color, glass_sample(float2(2.0 * right - p.x, p.y)), v.i_uv.w * u * u);
+    }
+    float3 c = glass_tone(back_color, v.i_border_color);
     c += (v.i_color.rgb - c) * v.i_color.a;
     if (t < 3.0 * rim_width) {
         float r = t / rim_width;
@@ -551,9 +559,15 @@ float4 blur_ps(float4 pos : SV_Position) : SV_Target {
     int2 sz = int2(size);
     float3 sum = float3(0.0, 0.0, 0.0);
     float wsum = 0.0;
+    float sigma_at = sigma;
+    if (progressive.z > 0.0) {
+        float y = float(gid.y) + 0.5;
+        float t = clamp(min(y - progressive.x, progressive.y - y) / progressive.z, 0.0, 1.0);
+        sigma_at *= 1.0 - 0.65 * t * t * (3.0 - 2.0 * t);
+    }
     for (int k = -radius; k <= radius; k++) {
         int2 p = clamp(gid + dir * k, int2(0, 0), sz - 1);
-        float w = exp(-float(k * k) / (2.0 * sigma * sigma));
+        float w = exp(-float(k * k) / (2.0 * sigma_at * sigma_at));
         sum += source.Load(int3(p, 0)).rgb * w;
         wsum += w;
     }

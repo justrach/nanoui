@@ -65,6 +65,7 @@ pub const Kind = struct {
     /// `color` its tint, `uv` its bezel, refraction, opacity and rim width,
     /// `border_color` its tone (low, high, curve, saturation), and
     /// `border_width` the blur of what shows through, all in points.
+    /// Sidebar: uv.x = -1, uv.y = edge fade, uv.w = reflection strength.
     pub const glass: f32 = 4;
     /// A shadow drawn outside its box only (`Shadow.knockout`): what is
     /// under the box shows through it. `uv`'s x, y: where the box is from

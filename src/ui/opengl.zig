@@ -232,7 +232,7 @@ pub const Renderer = struct {
     /// Pane `at`: its backdrop from what was drawn, then the pane.
     fn drawPane(r: *Renderer, instances: []const gpu.Instance, at: usize, size: types.Size, scale: f32, time: f64) void {
         const g = &gl.api;
-        const b = glass.backdropOf(instances[at].rect, instances[at].border_width, scale, r.frame.w, r.frame.h) orelse return;
+        const b = glass.backdropFor(instances[at], scale, r.frame.w, r.frame.h) orelse return;
         const w: usize = @intCast(b.w);
         const h: usize = @intCast(b.h);
         r.a.reserve(w, h, false, r.bgra());
@@ -248,6 +248,7 @@ pub const Renderer = struct {
             g.glUseProgram(r.blur);
             g.glUniform1i(g.glGetUniformLocation(r.blur, "radius"), b.radius);
             g.glUniform1f(g.glGetUniformLocation(r.blur, "sigma"), b.sigma);
+            g.glUniform4f(g.glGetUniformLocation(r.blur, "progressive"), b.progressive[0], b.progressive[1], b.progressive[2], 0);
             g.glUniform2i(g.glGetUniformLocation(r.blur, "dir"), 1, 0);
             pass(r.blur, r.a.texture, &r.b, b, w, h);
             g.glUniform2i(g.glGetUniformLocation(r.blur, "dir"), 0, 1);

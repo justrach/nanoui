@@ -546,7 +546,7 @@ fn glyph(out: gpu.Pixels, i: *const gpu.Instance, mask: Mask, scale: f32, b: [4]
 /// it: its backdrop read from the pixels so far, then its color at each
 /// pixel, by its rounded edge's coverage.
 fn pane(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize) void {
-    const plan = glass.backdropOf(i.rect, i.border_width, scale, out.width, out.height) orelse return;
+    const plan = glass.backdropFor(i.*, scale, out.width, out.height) orelse return;
     const im = glass.readBackdrop(std.heap.page_allocator, out, plan) catch return;
     defer std.heap.page_allocator.free(im.pix);
     const inv = 1 / scale;

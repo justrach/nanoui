@@ -11,6 +11,7 @@ struct GlassBackdrop {
     int down;
     int radius;
     float sigma;
+    float4 progressive;
 };
 
 kernel void glass_down(texture2d<float, access::read> frame [[texture(0)]],
@@ -36,9 +37,15 @@ kernel void glass_blur(texture2d<float, access::read> src [[texture(0)]],
     if (int(gid.x) >= b.size.x || int(gid.y) >= b.size.y) return;
     float3 sum = float3(0.0);
     float wsum = 0.0;
+    float sigma = b.sigma;
+    if (b.progressive.z > 0.0) {
+        float y = float(gid.y) + 0.5;
+        float t = clamp(min(y - b.progressive.x, b.progressive.y - y) / b.progressive.z, 0.0, 1.0);
+        sigma *= 1.0 - 0.65 * t * t * (3.0 - 2.0 * t);
+    }
     for (int k = -b.radius; k <= b.radius; k++) {
         int2 p = clamp(int2(gid) + dir * k, int2(0), b.size - 1);
-        float w = exp(-float(k * k) / (2.0 * b.sigma * b.sigma));
+        float w = exp(-float(k * k) / (2.0 * sigma * sigma));
         sum += src.read(uint2(p)).rgb * w;
         wsum += w;
     }
@@ -120,12 +127,19 @@ fragment float4 fs_glass(VOut in [[stage_in]],
     float rr = min(i.radius * s, min(h.x, h.y));
     float t = max(-rounded_box(q, h, rr), 0.0);
     float bezel = i.uv.x * s;
-    float rim_width = i.uv.w * s;
+    bool sidebar = i.uv.x < 0.0;
+    float rim_width = sidebar ? 0.0 : i.uv.w * s;
     float2 n = float2(0.0);
     if (t < bezel || t < 3.0 * rim_width) n = glass_normal(q, h, rr);
     float2 at = p;
     if (t < bezel) at -= n * (i.uv.y * s * glass_lens(t, bezel));
-    float3 c = glass_tone(glass_sample(backdrop, pane, at), i.border_color);
+    float3 back_color = glass_sample(backdrop, pane, at);
+    if (sidebar && i.uv.w > 0.0) {
+        float right = (i.rect.x + i.rect.z) * s;
+        float u = clamp((p.x - i.rect.x * s) / (2.0 * h.x), 0.0, 1.0);
+        back_color = mix(back_color, glass_sample(backdrop, pane, float2(2.0 * right - p.x, p.y)), i.uv.w * u * u);
+    }
+    float3 c = glass_tone(back_color, i.border_color);
     c += (i.color.rgb - c) * i.color.a;
     if (t < 3.0 * rim_width) {
         float r = t / rim_width;

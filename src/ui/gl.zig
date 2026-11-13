@@ -35,6 +35,7 @@ pub const Api = struct {
     glUniform1i: *const fn (at: i32, v: i32) callconv(.c) void,
     glUniform1f: *const fn (at: i32, v: f32) callconv(.c) void,
     glUniform2f: *const fn (at: i32, x: f32, y: f32) callconv(.c) void,
+    glUniform4f: *const fn (at: i32, x: f32, y: f32, z: f32, w: f32) callconv(.c) void,
     glUniform2i: *const fn (at: i32, x: i32, y: i32) callconv(.c) void,
     glUniform4i: *const fn (at: i32, x: i32, y: i32, z: i32, w: i32) callconv(.c) void,
     glGenVertexArrays: *const fn (n: i32, out: *u32) callconv(.c) void,

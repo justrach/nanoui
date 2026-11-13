@@ -204,6 +204,13 @@ zig-out/bin/hello --nanoui-eval='nanoui.call("Greeter.greet","Ada").then(v=>{nan
 
 ## Conventions
 
+- A **hotfix update** is a focused patch release on the current major/minor
+  version. Increment the final component of `major.minor.patch` by one
+  (`0.14.1` → `0.14.2`, a `+0.0.1` bump).
+  Set it with `sh tools/version.sh`, run the relevant tests and platform
+  checks, merge only after CI is green, then push the matching `v<version>`
+  tag from the merged commit. Wait for the Release workflow to publish and
+  verify the GitHub release before calling the hotfix shipped.
 - New widgets are made of boxes (`Context.open`/`leaf`) styled from the
   theme and animated with `Context.animate`; a widget whose interaction
   changes app state sets `c.changed` so the frame is built again.

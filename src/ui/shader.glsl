@@ -491,12 +491,19 @@ void main() {
     float rr = min(i_misc.x * s, min(h.x, h.y));
     float t = max(-rounded_box(q, h, rr), 0.0);
     float bezel = i_uv.x * s;
-    float rim_width = i_uv.w * s;
+    bool sidebar = i_uv.x < 0.0;
+    float rim_width = sidebar ? 0.0 : i_uv.w * s;
     vec2 n = vec2(0.0);
     if (t < bezel || t < 3.0 * rim_width) n = glass_normal(q, h, rr);
     vec2 at = p;
     if (t < bezel) at -= n * (i_uv.y * s * glass_lens(t, bezel));
-    vec3 c = glass_tone(glass_sample(at), i_border_color);
+    vec3 back_color = glass_sample(at);
+    if (sidebar && i_uv.w > 0.0) {
+        float right = (i_rect.x + i_rect.z) * s;
+        float u = clamp((p.x - i_rect.x * s) / (2.0 * h.x), 0.0, 1.0);
+        back_color = mix(back_color, glass_sample(vec2(2.0 * right - p.x, p.y)), i_uv.w * u * u);
+    }
+    vec3 c = glass_tone(back_color, i_border_color);
     c += (i_color.rgb - c) * i_color.a;
     if (t < 3.0 * rim_width) {
         float r = t / rim_width;
@@ -547,15 +554,22 @@ void main() {
 uniform sampler2D src;
 uniform int radius;
 uniform float sigma;
+uniform vec4 progressive;
 uniform ivec2 dir;
 
 void main() {
     ivec2 gid = ivec2(gl_FragCoord.xy);
     vec3 sum = vec3(0.0);
     float wsum = 0.0;
+    float sigma_at = sigma;
+    if (progressive.z > 0.0) {
+        float y = float(gid.y) + 0.5;
+        float t = clamp(min(y - progressive.x, progressive.y - y) / progressive.z, 0.0, 1.0);
+        sigma_at *= 1.0 - 0.65 * t * t * (3.0 - 2.0 * t);
+    }
     for (int k = -radius; k <= radius; k++) {
         ivec2 p = clamp(gid + dir * k, ivec2(0), size - 1);
-        float w = exp(-float(k * k) / (2.0 * sigma * sigma));
+        float w = exp(-float(k * k) / (2.0 * sigma_at * sigma_at));
         sum += texelFetch(src, p, 0).rgb * w;
         wsum += w;
     }
