@@ -18,6 +18,8 @@ git config user.name 'Hook Test'
 git config user.email 'hook-test@example.invalid'
 git config commit.gpgsign false
 git config tag.gpgsign false
+# Normalize copied fixtures even when the source checkout uses CRLF on Windows.
+git config core.autocrlf input
 mkdir .githooks src examples tools
 cp "$source_root"/.githooks/pre-* .githooks/
 cp "$source_root"/tools/check-snapshot.sh "$source_root"/tools/install-hooks.sh tools/
@@ -43,7 +45,7 @@ reject() {
     fi
 }
 contains() {
-    grep -Fq -- "$1" "$work/result" || {
+    tr '\134' '/' < "$work/result" | grep -Fq -- "$1" || {
         cat "$work/result" >&2
         fail "missing diagnostic: $1"
     }
@@ -160,6 +162,8 @@ echo 'ok: export-ignore and checkout filters cannot hide staged formatting'
 # Git's exporter must preserve paths containing spaces, newlines and glob chars.
 git reset -q --hard "$good"
 odd=$(printf 'odd name\n[1].zig')
+# Win32 rejects newlines in filenames; retain the spaces and glob characters.
+case $(uname -s) in MINGW*|MSYS*|CYGWIN*) odd='odd name [1].zig' ;; esac
 git mv src/main.zig "src/$odd"
 ok sh .githooks/pre-commit
 git rm -qf "src/$odd"
