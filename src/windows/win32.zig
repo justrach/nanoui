@@ -126,6 +126,7 @@ pub extern "user32" fn DestroyIcon(hicon: HICON) callconv(.winapi) BOOL;
 pub extern "user32" fn GetSystemMetrics(index: i32) callconv(.winapi) i32;
 pub extern "user32" fn SetCapture(hwnd: HWND) callconv(.winapi) ?HWND;
 pub extern "user32" fn ReleaseCapture() callconv(.winapi) BOOL;
+pub extern "user32" fn GetCapture() callconv(.winapi) ?HWND;
 pub extern "user32" fn TrackMouseEvent(e: *TRACKMOUSEEVENT) callconv(.winapi) BOOL;
 pub extern "user32" fn ScreenToClient(hwnd: HWND, p: *POINT) callconv(.winapi) BOOL;
 pub extern "user32" fn ClientToScreen(hwnd: HWND, p: *POINT) callconv(.winapi) BOOL;
@@ -331,6 +332,9 @@ pub const WM_MOUSEMOVE = 0x0200;
 pub const WM_LBUTTONDOWN = 0x0201;
 pub const WM_LBUTTONUP = 0x0202;
 pub const WM_LBUTTONDBLCLK = 0x0203;
+pub const WM_RBUTTONDOWN = 0x0204;
+pub const WM_RBUTTONUP = 0x0205;
+pub const WM_RBUTTONDBLCLK = 0x0206;
 /// The middle button (the wheel pressed): down, up, and down again as a
 /// double click (the class has CS_DBLCLKS).
 pub const WM_MBUTTONDOWN = 0x0207;
