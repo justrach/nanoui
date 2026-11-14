@@ -350,7 +350,12 @@ fragment float4 fs(VOut in [[stage_in]],
 
 static float4 shade(VOut in, Instance i, texture2d<float> atlas, texture2d<float> images, texture2d<float> layer_tex, texture2d<float> frame, constant float4 *grads) {
     if (i.kind == 11.0) {
-        return layer_tex.read(uint2(in.pos.xy)) * i.color.a;
+        // Mask the already-composited premultiplied subtree, not its
+        // overlapping primitives or the surface underneath it.
+        float fade = 1.0;
+        if (i.border_color.z > 0.0) fade = min(fade, clamp((in.world.y - i.border_color.x) / i.border_color.z, 0.0, 1.0));
+        if (i.border_color.w > 0.0) fade = min(fade, clamp((i.border_color.y - in.world.y) / i.border_color.w, 0.0, 1.0));
+        return layer_tex.read(uint2(in.pos.xy)) * (i.color.a * fade);
     }
     if (i.kind == 9.0 || i.kind == 10.0) {
         return float4(0.0);

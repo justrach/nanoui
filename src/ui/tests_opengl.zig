@@ -155,4 +155,13 @@ fn scenes(es: bool) !void {
         t.settle(0.1);
         try compare(&t, .{ .mean = 0.05, .worst = 32, .off_in = 1000 }, es);
     }
+    {
+        const Scene = @import("tests_scroll_fade.zig").Scene;
+        var s: Scene = .{ .opacity = 0.65 };
+        var t: ui.Tester = undefined;
+        try t.init(gpa, .init(&s, Scene.view), .{ .width = 140, .height = 110, .scale = 1 });
+        defer t.deinit();
+        t.settle(0.1);
+        try compare(&t, .{ .mean = 0.05, .worst = 16, .off_in = 1000 }, es);
+    }
 }

@@ -226,8 +226,9 @@ test "rubber-band overscroll on precise trackpad and spring back" {
     t.ctx.scroll_holding = true;
     _ = t.ctx.applyScroll(40); // pull down past top (0)
     t.frame();
-    try testing.expectApproxEqAbs(@as(f32, -14), t.ctx.overscroll.get(s.id).?, 0.1);
-    try testing.expectApproxEqAbs(@as(f32, 14), t.ctx.nodes.items[2].rect.y, 0.5);
+    const want: f32 = 100.0 * (40.0 * 0.55) / (100.0 + 40.0 * 0.55);
+    try testing.expectApproxEqAbs(-want, t.ctx.overscroll.get(s.id).?, 0.1);
+    try testing.expectApproxEqAbs(want, t.ctx.nodes.items[2].rect.y, 0.5);
     // Release fingers: springs back to 0.
     t.ctx.scroll_holding = false;
     t.ctx.input.scroll_phase = .ended;

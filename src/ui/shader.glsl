@@ -254,6 +254,7 @@ float clip_coverage() {
 #if defined(QUAD_FS)
 uniform sampler2D atlas;
 uniform sampler2D images;
+uniform sampler2D group_layer;
 
 // Shadows as GPUI draws them (after Evan Wallace's "fast rounded rectangle
 // shadows"): the box's coverage blurred by a Gaussian, exact along x with
@@ -340,6 +341,13 @@ vec4 triangle_color() {
 
 vec4 shade() {
     float kind = i_misc.z;
+    if (kind == 10.0 || kind == 11.0) {
+        float fade = 1.0;
+        if (i_border_color.z > 0.0) fade = min(fade, clamp((v_world.y - i_border_color.x) / i_border_color.z, 0.0, 1.0));
+        if (i_border_color.w > 0.0) fade = min(fade, clamp((i_border_color.y - v_world.y) / i_border_color.w, 0.0, 1.0));
+        return texelFetch(group_layer, ivec2(gl_FragCoord.xy), 0) * (i_color.a * fade);
+    }
+    if (kind == 9.0) return vec4(0.0);
     if (kind == 6.0) return line_color();
     if (kind == 7.0) return triangle_color();
     if (kind == 1.0) {

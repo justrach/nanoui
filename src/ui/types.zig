@@ -392,6 +392,12 @@ pub const Style = struct {
     /// The indicator shows only while the box scrolls and a moment after,
     /// as macOS's overlay scrollers.
     scroll_bar_fades: bool = false,
+    /// When positive, the vertical scrollbar hides after this many idle seconds
+    /// following a scroll or thumb drag (independent of stationary hover).
+    scroll_bar_idle: f32 = 0,
+    /// Points of composited alpha ramp at hidden top/bottom edges of a
+    /// scrolling viewport (`scroll`).
+    scroll_edge_fade: f32 = 0,
     /// A box whose place down its parent changes from one layout to the
     /// next (a row above it gone) springs from where it was shown to where
     /// it is, as SwiftUI animates a stack's rows; its ancestors' offsets
