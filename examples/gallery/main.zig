@@ -126,6 +126,7 @@ const Gallery = struct {
 
     fn sidebar(g: *Gallery, c: *ui.Context) void {
         const th = c.theme;
+        c.title_bar_height = 40;
         ui.column(c, .{
             .width = .{ .px = 200 },
             .height = .fill,
@@ -137,8 +138,12 @@ const Gallery = struct {
             .border_width = 0,
         });
         defer ui.end(c);
-        ui.text(c, "nanoui", .{ .size = 18, .weight = .bold });
-        ui.label(c, c.print("Zig 0.17 · {s}", .{c.renderer}));
+        {
+            const head = ui.div(c).column().px(2).gap(4);
+            defer head.end();
+            ui.text(c, "nanoui", .{ .size = 18, .weight = .bold });
+            ui.label(c, c.print("Zig 0.17 · {s}", .{c.renderer}));
+        }
         _ = c.leaf(.{ .height = .{ .px = 12 } }, .none, null);
         {
             const nav = ui.div(c).column().wFull().grow().gap(4).scrollY().scrollEdgeFade(12).scrollBarIdle(3.0);
@@ -497,6 +502,7 @@ const Gallery = struct {
     /// `window_drag` handle — only when borderless, because a decorated window
     /// already moves by its own title bar and would be moved twice.
     fn demoView(g: *Gallery, c: *ui.Context) void {
+        if (!g.demo_borderless) c.title_bar_height = 38;
         ui.column(c, .{ .padding = .all(16), .gap = 10, .width = .fill, .height = .fill });
         defer ui.end(c);
         const drag = ui.div(c).row().wFull().itemsCenter().h(24);

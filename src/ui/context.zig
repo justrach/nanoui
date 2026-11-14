@@ -236,8 +236,12 @@ pub const Context = struct {
     drop_targets: std.ArrayList(u64) = .empty,
     /// How far down from the top of a window with a hidden title bar
     /// its empty space moves the window, as a title bar does: a view with
-    /// a toolbar there makes it the toolbar's height.
+    /// a toolbar there makes it the toolbar's height. On macOS, the traffic
+    /// lights center vertically in it unless `traffic_lights` says otherwise.
     title_bar_height: f32 = 28,
+    /// Optional explicit macOS traffic-light center `(x, y)` for this frame,
+    /// overriding automatic centering in `title_bar_height`. Cleared each frame.
+    traffic_lights: ?types.Point = null,
     /// The window's edges the system draws over, in points: on iOS the
     /// status bar, the home indicator, the screen's corners and the
     /// keyboard. Zero on the desktop, and in an iOS window that isn't
@@ -378,6 +382,7 @@ pub const Context = struct {
         c.cursor_hand = false;
         c.cursor_text = false;
         c.cursor = null;
+        c.traffic_lights = null;
         c.focused_text = null;
         c.focused_multiline = false;
         c.focused_password = false;
@@ -426,7 +431,7 @@ pub const Context = struct {
         if (@hasField(@TypeOf(c.text.images), "wants_frame") and c.text.images.wants_frame) c.animationFrame();
     }
 
-    fn childId(c: *Context, key: ?[]const u8) u64 {
+    pub fn childId(c: *Context, key: ?[]const u8) u64 {
         const parent = &c.nodes.items[c.stack.items[c.stack.items.len - 1]];
         var h = std.hash.Wyhash.init(parent.id);
         const k = key orelse c.next_key;
@@ -505,16 +510,7 @@ pub const Context = struct {
         return &c.nodes.items[index];
     }
 
-    /// The id the next child of the open box will get.
-    pub fn peekId(c: *Context, key: ?[]const u8) u64 {
-        const saved = c.next_key;
-        const saved_int = c.next_key_int;
-        defer {
-            c.next_key = saved;
-            c.next_key_int = saved_int;
-        }
-        return c.childId(key);
-    }
+    pub const peekId = hooks.peekId;
 
     pub const interact = hooks.interact;
     pub const requestClose = hooks.requestClose;
