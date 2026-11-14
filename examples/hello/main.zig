@@ -102,6 +102,7 @@ pub fn main(init: std.process.Init) !void {
         .width = 720,
         .height = 560,
         .title_bar = .hidden,
+        .traffic_lights = .{ .x = 20, .y = 19 },
         .content = .{
             .page = .{
                 .url = "/",

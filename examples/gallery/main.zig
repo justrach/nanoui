@@ -126,31 +126,40 @@ const Gallery = struct {
 
     fn sidebar(g: *Gallery, c: *ui.Context) void {
         const th = c.theme;
+        c.title_bar_height = 40;
         ui.column(c, .{
             .width = .{ .px = 200 },
             .height = .fill,
             .padding = .{ .top = 44, .left = 12, .right = 12, .bottom = 12 },
             .gap = 4,
+            .clip = true,
             .background = th.surface.alpha(0.6),
             .border = th.border,
             .border_width = 0,
         });
         defer ui.end(c);
-        ui.text(c, "nanoui", .{ .size = 18, .weight = .bold });
-        ui.label(c, c.print("Zig 0.17 · {s}", .{c.renderer}));
-        _ = c.leaf(.{ .height = .{ .px = 12 } }, .none, null);
-        for (phone.pages, 0..) |p, i| {
-            const selected = g.page == i;
-            // GPUI's way: a box styled by a chain of methods.
-            var item = ui.div(c).row().wFull().px(10).py(7).gap(8).itemsCenter().rounded(7);
-            item = if (selected) item.bg(th.accent) else item.hover(th.surface_hover);
-            defer item.end();
-            if (item.clicked()) g.page = i;
-            const fg = if (selected) th.accent_text else th.text;
-            ui.icon(c, p[1], .{ .size = 14, .frame = 18, .color = fg });
-            ui.text(c, p[0], .{ .weight = .medium, .color = fg });
+        {
+            const head = ui.div(c).column().px(2).gap(4);
+            defer head.end();
+            ui.text(c, "nanoui", .{ .size = 18, .weight = .bold });
+            ui.label(c, c.print("Zig 0.17 · {s}", .{c.renderer}));
         }
-        ui.spacer(c);
+        _ = c.leaf(.{ .height = .{ .px = 12 } }, .none, null);
+        {
+            const nav = ui.div(c).column().wFull().grow().gap(4).scrollY().scrollEdgeFade(12).scrollBarIdle(3.0);
+            defer nav.end();
+            for (phone.pages, 0..) |p, i| {
+                const selected = g.page == i;
+                // GPUI's way: a box styled by a chain of methods.
+                var item = ui.div(c).row().wFull().px(10).py(7).gap(8).itemsCenter().rounded(7);
+                item = if (selected) item.bg(th.accent) else item.hover(th.surface_hover);
+                defer item.end();
+                if (item.clicked()) g.page = i;
+                const fg = if (selected) th.accent_text else th.text;
+                ui.icon(c, p[1], .{ .size = 14, .frame = 18, .color = fg });
+                ui.text(c, p[0], .{ .weight = .medium, .color = fg });
+            }
+        }
         ui.label(c, c.print("{d} frames", .{c.frame}));
         ui.label(c, c.print("{d:.0} fps", .{g.fps}));
     }
@@ -493,6 +502,7 @@ const Gallery = struct {
     /// `window_drag` handle — only when borderless, because a decorated window
     /// already moves by its own title bar and would be moved twice.
     fn demoView(g: *Gallery, c: *ui.Context) void {
+        if (!g.demo_borderless) c.title_bar_height = 38;
         ui.column(c, .{ .padding = .all(16), .gap = 10, .width = .fill, .height = .fill });
         defer ui.end(c);
         const drag = ui.div(c).row().wFull().itemsCenter().h(24);

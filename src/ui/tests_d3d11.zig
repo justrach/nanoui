@@ -162,6 +162,16 @@ test "d3d11: a canvas matches the CPU renderer" {
     try compare(&t, .{ .mean = 0.5, .worst = 240, .off_in = 20 });
 }
 
+test "d3d11: scroll fade groups match the CPU renderer" {
+    const Scene = @import("tests_scroll_fade.zig").Scene;
+    var s: Scene = .{ .opacity = 0.65 };
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&s, Scene.view), .{ .width = 140, .height = 110, .scale = 1 });
+    defer t.deinit();
+    t.settle(0.1);
+    try compare(&t, .{ .mean = 0.1, .worst = 16, .off_in = 500 });
+}
+
 test "d3d11: a coloured quad keeps its channels" {
     const gpa = testing.allocator;
     var maybe = try renderer();

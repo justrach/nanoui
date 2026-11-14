@@ -94,6 +94,33 @@ pub const Kind = struct {
     pub const hole: f32 = 12;
 };
 
+/// The matching end of a grouped subtree, including nested masks. A
+/// malformed stream cannot accidentally consume the remainder of a frame.
+pub fn groupEnd(instances: []const Instance, begin: usize) ?usize {
+    if (begin >= instances.len or instances[begin].kind != Kind.layer_begin) return null;
+    var depth: usize = 1;
+    var at = begin + 1;
+    while (at < instances.len) : (at += 1) {
+        if (instances[at].kind == Kind.layer_begin) depth += 1;
+        if (instances[at].kind == Kind.layer_end) {
+            depth -= 1;
+            if (depth == 0) return at;
+        }
+    }
+    return null;
+}
+
+test "scroll fade groups match nested ends without changing the instance ABI" {
+    const begin: Instance = .{ .rect = .{ 0, 0, 10, 10 }, .color = .{ 1, 1, 1, 1 }, .kind = Kind.layer_begin };
+    var end = begin;
+    end.kind = Kind.layer_end;
+    const nested = [_]Instance{ begin, begin, end, end };
+    try std.testing.expectEqual(@as(?usize, 3), groupEnd(&nested, 0));
+    try std.testing.expectEqual(@as(?usize, 2), groupEnd(&nested, 1));
+    try std.testing.expectEqual(@as(?usize, null), groupEnd(nested[0..3], 0));
+    try std.testing.expectEqual(@as(?usize, null), groupEnd(&nested, 2));
+}
+
 /// A texture's linear map (`Kind.texture` with `border_color` set, from
 /// `ui.textureAffine`): its 2×2 matrix (row major) after its turn by
 /// `xf[0]`, folded into one, applied about the pivot `xf[2..4]`. Null for

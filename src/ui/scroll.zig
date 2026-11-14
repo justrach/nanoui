@@ -58,6 +58,24 @@ pub fn wheelAt(c: *const Context) bool {
     return false;
 }
 
+/// Finger travel becomes a bounded displacement: responsive at the edge,
+/// progressively firmer on a long pull. Keep this separate from the logical
+/// scroll offset, so stretching the bottom never releases `follow_end`.
+fn rubberBand(travel: f32, limit: f32) f32 {
+    const resisted = @abs(travel) * 0.55;
+    const shown = limit * (resisted / (limit + resisted));
+    return if (travel < 0) -shown else shown;
+}
+
+/// Recover finger travel before adding another event. Applying resistance
+/// independently to each delta would make a coalesced gesture feel different
+/// from the same pull delivered as many small events, and break reversal.
+fn rubberTravel(shown: f32, limit: f32) f32 {
+    const magnitude = @min(@abs(shown), limit - 0.001);
+    const travel = magnitude * limit / (0.55 * (limit - magnitude));
+    return if (shown < 0) -travel else travel;
+}
+
 /// Scrolls the innermost scrolling box under the pointer.
 pub fn applyScroll(c: *Context, dy: f32) bool {
     var i = c.hits.items.len;
@@ -70,7 +88,25 @@ pub fn applyScroll(c: *Context, dy: f32) bool {
             const gop = c.scroll.getOrPut(c.gpa, h.id) catch return false;
             if (!gop.found_existing) gop.value_ptr.* = 0;
             if (!isHolding(c)) {
-                gop.value_ptr.* = @max(0, gop.value_ptr.* - dy);
+                const previous = gop.value_ptr.*;
+                const next = @max(0, previous - dy);
+                gop.value_ptr.* = next;
+                const max_s = c.scroll_max.get(h.id) orelse std.math.inf(f32);
+                // A native fling gets one bounded impact when it crosses the
+                // bottom. Later momentum deltas at that edge must not keep
+                // pumping the spring or move the logical follow-end offset.
+                if (c.input.precise and c.input.scroll_phase == .momentum and next > max_s) {
+                    if (!c.reduced_motion and !c.reduce_motion and previous < max_s) {
+                        const limit = @max(1, @min(160, h.rect.h));
+                        const over = rubberBand(next - max_s, limit);
+                        c.overscroll.put(c.gpa, h.id, over) catch {};
+                        motion.jump(c, h.id, salt_overscroll, over);
+                        // A retained scene only translates the logical offset;
+                        // the impact and its recovery need fresh layout/paint.
+                        c.retain.scroll_scene_ok = false;
+                    }
+                    gop.value_ptr.* = max_s;
+                }
                 if (dy != 0) c.retain.scroll_delta = true;
                 return true;
             }
@@ -79,23 +115,27 @@ pub fn applyScroll(c: *Context, dy: f32) bool {
             var over = ov_gop.value_ptr.*;
             var cur = gop.value_ptr.*;
             var delta = -dy;
-            if (over < 0 and delta > 0) {
-                const step = @min(-over, delta * 0.35);
-                over += step;
-                delta -= step / 0.35;
-            } else if (over > 0 and delta < 0) {
-                const step = @min(over, -delta * 0.35);
-                over -= step;
-                delta += step / 0.35;
+            // Use the viewport, not the content height, so a long pull
+            // asymptotically resists instead of sliding far off the edge.
+            const limit = @max(1, @min(160, h.rect.h));
+            if (over != 0) {
+                const travel = rubberTravel(over, limit) + delta;
+                if ((over < 0 and travel <= 0) or (over > 0 and travel >= 0)) {
+                    over = rubberBand(travel, limit);
+                    delta = 0;
+                } else {
+                    over = 0;
+                    delta = travel;
+                }
             }
             const max_s = c.scroll_max.get(h.id) orelse std.math.inf(f32);
             const next = cur + delta;
             if (next < 0) {
                 cur = 0;
-                over += next * 0.35;
+                over = rubberBand(next, limit);
             } else if (next > max_s) {
                 cur = max_s;
-                over += (next - max_s) * 0.35;
+                over = rubberBand(next - max_s, limit);
             } else {
                 cur = next;
             }
@@ -208,18 +248,74 @@ pub fn updateScrollbarDrag(c: *Context) void {
 
 pub fn paintScrollbars(c: *Context, out: *std.ArrayList(metal.Instance), n: ctx_mod.Node, visible: types.Rect, opacity: f32) void {
     const st = n.style;
+    if (st.scroll and st.scrollbar == .overlay) {
+        paintOverlayScrollbar(c, out, n, visible, opacity);
+        if (st.scroll_x and st.scroll_bar) paintScrollbarX(c, out, n, visible, opacity);
+        return;
+    }
     const dragging = if (c.scrollbar_drag) |d| d.id == n.id else false;
     const over_bar = dragging or (visible.contains(c.input.mouse) and c.input.mouse.x >= n.rect.x + n.rect.w - 10);
-    if (st.scroll and st.scroll_bar and visible.contains(c.input.mouse)) c.wants_moves = true;
     const moved = (c.scroll.get(n.id) orelse 0) + (c.scroll_x.get(n.id) orelse 0);
-    var bar: f32 = if (st.scroll_bar_fades) motion.flash(c, n.id, salt_bar_flash, moved, 0.8, 0.3) else 1;
-    if (over_bar and bar > 0) {
+    const idle_hides = st.scroll_bar_idle > 0;
+    const fade_dur: f32 = if (idle_hides) @min(0.24, st.scroll_bar_idle * 0.25) else 0.3;
+    const hold_dur: f32 = if (idle_hides) @max(0, st.scroll_bar_idle - fade_dur) else 0.8;
+    var bar: f32 = if (idle_hides or st.scroll_bar_fades) motion.flash(c, n.id, salt_bar_flash, moved, hold_dur, fade_dur) else 1;
+    // `scroll_bar_idle` keeps the rail visible only while scrolling or dragging
+    // the thumb; stationary pointer hover lets the idle countdown finish.
+    if (dragging or (!idle_hides and over_bar and bar > 0)) {
         bar = 1;
-        _ = motion.flash(c, n.id, salt_bar_flash, moved + 0.0001, 0.8, 0.3);
-        _ = motion.flash(c, n.id, salt_bar_flash, moved, 0.8, 0.3);
+        if (idle_hides or st.scroll_bar_fades) {
+            _ = motion.flash(c, n.id, salt_bar_flash, moved + 0.0001, hold_dur, fade_dur);
+            bar = motion.flash(c, n.id, salt_bar_flash, moved, hold_dur, fade_dur);
+        }
     }
+    if (st.scroll and st.scroll_bar and bar > 0 and visible.contains(c.input.mouse)) c.wants_moves = true;
     if (st.scroll and st.scroll_bar) paintScrollbar(c, out, n, visible, opacity * bar, over_bar);
     if (st.scroll_x and st.scroll_bar and bar > 0) paintScrollbarX(c, out, n, visible, opacity * bar);
+}
+
+/// How long an overlay bar stays after the box last scrolled, then how
+/// long it takes to fade (GPUI's `MENU_SCROLLBAR_LINGER_MS`, `_FADE_MS`).
+const overlay_linger: f64 = 1.4;
+const overlay_fade: f64 = 0.26;
+
+fn paintOverlayBar(c: *Context, out: *std.ArrayList(metal.Instance), n: ctx_mod.Node, visible: types.Rect, opacity: f32, offset: f32, view_h: f32, content_h: f32, t: f32) void {
+    const color = n.style.scrollbar.overlay;
+    const gop = c.overlay_bars.getOrPut(c.gpa, n.id) catch return;
+    // First seen: nothing has scrolled yet.
+    if (!gop.found_existing) gop.value_ptr.* = .{ .offset = offset, .moved_at = -1e9 };
+    if (gop.value_ptr.offset != offset) gop.value_ptr.* = .{ .offset = offset, .moved_at = c.time };
+    const strip: types.Rect = .{ .x = n.rect.x + n.rect.w - 10, .y = n.rect.y, .w = 10, .h = n.rect.h };
+    const held = strip.contains(c.input.mouse);
+    const since = c.time - gop.value_ptr.moved_at;
+    const fade: f32 = if (held) 1 else @floatCast(std.math.clamp(1 - (since - overlay_linger) / overlay_fade, 0, 1));
+    if (!held and since < overlay_linger + overlay_fade) {
+        // Wake for the fade's start, then step through it.
+        c.frameIn(@floatCast(if (since < overlay_linger) overlay_linger - since else 1.0 / 60.0));
+    }
+    if (fade <= 0) return;
+    const inset: f32 = 4;
+    const track = view_h - 2 * inset;
+    const bar_h = @max(24, track * view_h / content_h);
+    const w: f32 = if (held) 5 else 3;
+    out.append(c.gpa, .{
+        .rect = .{ n.rect.x + n.rect.w - 2 - w, n.rect.y + inset + (track - bar_h) * std.math.clamp(t, 0, 1), w, bar_h },
+        .color = metal.color4(color.alpha(color.a * @as(f32, if (held) 0.68 / 0.5 else 1) * fade * opacity)),
+        .radius = w / 2,
+        .clip = metal.clip4(visible),
+    }) catch {};
+}
+
+fn paintOverlayScrollbar(c: *Context, out: *std.ArrayList(metal.Instance), n: ctx_mod.Node, visible: types.Rect, opacity: f32) void {
+    const offset = c.scroll.get(n.id) orelse 0;
+    if (n.first_child == none) return;
+    const first = c.node(n.first_child).rect;
+    const last = c.node(n.last_child).rect;
+    const content_h = last.y + last.h - first.y + n.style.padding.vertical();
+    const view_h = n.rect.h;
+    if (content_h <= view_h + 0.5) return;
+    const t = offset / (content_h - view_h);
+    paintOverlayBar(c, out, n, visible, opacity, offset, view_h, content_h, t);
 }
 
 fn paintScrollbar(c: *Context, out: *std.ArrayList(metal.Instance), n: ctx_mod.Node, visible: types.Rect, opacity: f32, over_bar: bool) void {

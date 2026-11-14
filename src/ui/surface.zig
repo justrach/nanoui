@@ -347,6 +347,7 @@ pub const Surface = struct {
             r = frame_mod.run(c, self.view, &self.text, &self.instances, self.size, self.scale, a11y.themed(self, self.theme()), dt, now - self.start_time);
         }
         if (self.dead) return;
+        @import("../window_lights.zig").Lights.sync(self.window, c.traffic_lights, c.title_bar_height);
         a11y.afterFrame(self);
         @import("../play.zig").paint(self.gpa, &self.instances);
         self.frame_in_due = if (c.frame_in) |fi| now + @as(f64, fi) else 0;
@@ -522,21 +523,8 @@ pub const Surface = struct {
         } else self.scheduleTick();
     }
 
-    /// The display link's pace: the display's (null), or one frame every
-    /// `seconds`.
-    pub fn setRate(self: *Surface, seconds: ?f32) void {
-        const link = self.display_link orelse return;
-        const fps: f32 = if (seconds) |s| (if (s < 0.009) 0 else std.math.clamp(1 / @max(s, 0.001), 1, 60)) else 0;
-        if (fps == self.link_fps) return;
-        const faster = (fps == 0 and self.link_fps > 0) or (fps > self.link_fps and self.link_fps > 0);
-        if (fps == 0 and self.link_fps > 0) {
-            if (self.frame_log) |*fl| fl.last_t = 0;
-        }
-        self.link_fps = fps;
-        if (self.paced and faster) objc.msg(void, link, "setPaused:", .{objc.YES});
-        objc.msg(void, link, "setPreferredFrameRateRange:", .{pacing.range(fps, self.max_fps)});
-        if (self.paced and faster) objc.msg(void, link, "setPaused:", .{objc.NO});
-    }
+    pub const setRate = link_pace.setRate;
+    pub const setPaced = link_pace.setPaced;
 
     pub fn visible(self: *Surface) bool {
         if (!self.is_visible) {
@@ -547,14 +535,6 @@ pub const Surface = struct {
             }
         }
         return self.is_visible;
-    }
-
-    pub fn setPaced(self: *Surface, on: bool) void {
-        if (on) wake.watch(self);
-        if (self.paced == on) return;
-        self.paced = on;
-        if (!on and self.frame_log != null) self.frame_log.?.last_t = 0;
-        if (self.display_link) |link| objc.msg(void, link, "setPaused:", .{!on});
     }
 
     pub fn occlusionChanged(self: *Surface) void {

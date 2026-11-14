@@ -25,6 +25,7 @@ pub const Demo = struct {
     notes: ui.TextBuffer = .{},
     alert: bool = true,
     progress: f32 = 0.42,
+    commit: usize = 0,
     /// The gallery's theme choice, which the sheet's radios set: the gallery
     /// owns it, so the sheet and the Toggles page cannot disagree.
     appearance: ?*Appearance = null,
@@ -44,6 +45,7 @@ pub const Demo = struct {
             ui.text(c, "Components after GPUI Kit, drawn by nanoui and moved by ui.motion.", .{ .wrap = true, .color = c.theme.muted });
             d.buttons(c);
             d.display(c);
+            d.timeline(c);
             d.navigation(c);
             d.forms(c);
             d.overlays(c);
@@ -141,6 +143,53 @@ pub const Demo = struct {
                 kit.skeleton(c, .{ .height = 10 });
                 kit.skeleton(c, .{ .height = 10, .width = .{ .px = 90 } });
             }
+        }
+    }
+
+    fn timeline(d: *Demo, c: *ui.Context) void {
+        const s = section(c, "Timeline");
+        defer s.end();
+        const th = c.theme;
+        const t = kit.tokens(c);
+        const commits = [_]struct {
+            sha: []const u8,
+            title: []const u8,
+            meta: []const u8,
+            tag: ?[]const u8 = null,
+            status: kit.Status = .neutral,
+            color: ?ui.Color = null,
+        }{
+            .{ .sha = "9f4c1a8", .title = "Release v0.3.0", .meta = "main · Ada · 12m ago", .tag = "v0.3.0", .status = .success, .color = t.success },
+            .{ .sha = "6e8b210", .title = "feat(ui): masked scroll edge fades", .meta = "Ada · 1h ago", .tag = "ui", .status = .info, .color = t.info },
+            .{ .sha = "3c7d92e", .title = "fix(glass): clip and scroll sidebar", .meta = "Linus · 3h ago" },
+            .{ .sha = "a1054f2", .title = "init: nanoui workspace", .meta = "Grace · yesterday" },
+        };
+        const box = ui.div(c).column().wFull().maxW(560).gap(0);
+        defer box.end();
+        for (commits, 0..) |e, i| {
+            ui.key(c, e.sha);
+            var item = kit.timelineItem(c, .{
+                .height = 58,
+                .first = i == 0,
+                .last = i == commits.len - 1,
+                .selected = d.commit == i,
+                .color = e.color,
+            });
+            item = item.control().rounded(8).pr(8);
+            if (d.commit != i) item = item.hover(th.surface_hover);
+            if (item.clicked()) d.commit = i;
+            defer item.end();
+            const body = ui.div(c).column().grow().gap(3);
+            defer body.end();
+            {
+                const top = ui.div(c).row().wFull().gap(8).itemsCenter();
+                defer top.end();
+                ui.text(c, e.title, .{ .size = 13.5, .weight = if (d.commit == i) .semibold else .medium, .truncate = .ellipsis });
+                if (e.tag) |lbl| kit.tag(c, lbl, .{ .status = e.status, .pill = true });
+                ui.spacer(c);
+                ui.text(c, e.sha, .{ .size = 11.5, .family = "ui-monospace", .color = th.muted });
+            }
+            ui.text(c, e.meta, .{ .size = 11.5, .color = th.muted, .truncate = .ellipsis });
         }
     }
 

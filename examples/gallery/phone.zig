@@ -57,6 +57,9 @@ fn canvas(th: ui.Theme) ui.Color {
 }
 
 pub fn view(g: anytype, c: *ui.Context) void {
+    const mac = @import("builtin").os.tag == .macos;
+    if (mac) c.title_bar_height = 38;
+    const mac_top: f32 = if (mac) 28 else 0;
     const th = c.theme;
     const w = c.size.w;
     const root = ui.div(c).sizeFull().clip().bg(canvas(th));
@@ -80,7 +83,7 @@ pub fn view(g: anytype, c: *ui.Context) void {
             .shadow(.{ .color = .{ .a = if (th.dark) 0.5 else 0.12 }, .blur = 24, .x = -4 }).motion(f);
         defer screen.end();
         {
-            const bar = ui.div(c).row().wFull().px(gutter - 8).pt(8).gap(8).itemsCenter();
+            const bar = ui.div(c).row().wFull().px(gutter - 8).pt(8 + mac_top).gap(8).itemsCenter();
             defer bar.end();
             if (glassButton(c, "chevron.right", std.math.pi)) g.open = false;
         }
@@ -105,7 +108,8 @@ fn glassButton(c: *ui.Context, icon: []const u8, rotation: f32) bool {
 
 fn home(g: anytype, c: *ui.Context) void {
     const th = c.theme;
-    const sc = ui.div(c).column().sizeFull().scrollY().pt(16).pb(gutter);
+    const mac_top: f32 = if (@import("builtin").os.tag == .macos) 28 else 0;
+    const sc = ui.div(c).column().sizeFull().scrollY().pt(16 + mac_top).pb(gutter);
     defer sc.end();
     {
         const head = ui.div(c).column().wFull().px(gutter).gap(4);

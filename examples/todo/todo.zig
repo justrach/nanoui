@@ -173,11 +173,14 @@ pub const Todo = struct {
     pub fn view(t: *Todo, c: *ui.Context) void {
         if (t.promo.on) t.promo.step(c);
         if (!t.started) t.start();
+        const mac = @import("builtin").os.tag == .macos;
+        if (mac) c.title_bar_height = 38;
         const safe = c.safe_area;
+        const top = if (mac) @max(safe.top, 28) else safe.top;
         const root = ui.div(c).sizeFull().clip().bg(canvas);
         defer root.end();
         if (!t.promo.on or t.promo.list) {
-            const sc = ui.div(c).column().sizeFull().scrollY().scrollbar(.{ .overlay = ink.alpha(0.35) }).pt(safe.top + 14).pb(safe.bottom + 112);
+            const sc = ui.div(c).column().sizeFull().scrollY().scrollbar(.{ .overlay = ink.alpha(0.35) }).pt(top + 14).pb(safe.bottom + 112);
             defer sc.end();
             {
                 const f = t.promo.enter(c, 0);
@@ -200,7 +203,8 @@ pub const Todo = struct {
     /// floats by the title, over the list as it scrolls under, and opens
     /// a menu of glass.
     fn moreButton(t: *Todo, c: *ui.Context) void {
-        const at = ui.div(c).absolute().offset(c.size.w - gutter - 44, c.safe_area.top + 10).w(44).h(44).center();
+        const top = if (@import("builtin").os.tag == .macos) @max(c.safe_area.top, 28) else c.safe_area.top;
+        const at = ui.div(c).absolute().offset(c.size.w - gutter - 44, top + 10).w(44).h(44).center();
         defer at.end();
         const m = kit.iconButton(c, "ellipsis", .{ .glass = true, .pill = true });
         if (m.clicked) t.menu = !t.menu;

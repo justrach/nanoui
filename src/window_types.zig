@@ -158,10 +158,11 @@ pub fn Options(comptime Window: type) type {
         title_bar: TitleBar = .default,
         /// With `title_bar = .hidden`, macOS: where the close button's center
         /// goes, from the window's top left, the title bar grown to twice
-        /// `y` to hold it; the other two follow at AppKit's spacing. Lets a
-        /// view's own taller top bar (`ui.Context.title_bar_height`) line up
-        /// with them. Null leaves them where AppKit puts them; other systems
-        /// have none to move.
+        /// `y` to hold it; the other two follow at AppKit's spacing. Native
+        /// views also center the lights automatically in `ui.Context.title_bar_height`
+        /// (or place them explicitly with `ui.Context.traffic_lights`). When
+        /// both are left default, AppKit keeps its standard placement; other
+        /// systems have none to move.
         traffic_lights: ?ui.Point = null,
         /// Whether the window has a title bar and a resizable frame at all.
         /// `false` is a borderless window: no title bar, no border and no

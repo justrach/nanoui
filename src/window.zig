@@ -44,8 +44,10 @@ pub const Window = struct {
     on_fullscreen: ?Callback = null,
     on_key: ?Callback = null,
     should_close: ?ShouldClose = null,
-    /// The traffic lights kept where `Options.traffic_lights` put them.
+    /// The traffic lights kept where `Options.traffic_lights` or the view's top bar put them.
     lights: ?Lights = null,
+    can_place_lights: bool = false,
+    options_lights: ?ui.Point = null,
     closed: bool = false,
     /// When a popover last hid itself, losing the keys.
     resigned_at: f64 = 0,
@@ -129,6 +131,8 @@ pub const Window = struct {
             .nswindow = nswindow,
             .delegate = delegate,
             .title_bar = options.title_bar,
+            .can_place_lights = options.title_bar == .hidden and !borderless,
+            .options_lights = options.traffic_lights,
             .on_close = options.on_close,
             .on_resize = options.on_resize,
             .on_move = options.on_move,
@@ -141,11 +145,7 @@ pub const Window = struct {
             .page => |p| self.page = try Page.create(self, p),
             .view => |v| self.surface = try Surface.create(self, v, options.theme),
         }
-        if (options.traffic_lights) |p| if (options.title_bar == .hidden and !borderless) {
-            self.lights = Lights.init(nswindow, p.x, p.y);
-            Lights.observe(nswindow, delegate);
-            self.lights.?.place(nswindow);
-        };
+        if (self.surface == null) Lights.sync(self, options.traffic_lights, 28);
         if (popover) {
             objc.msg(void, nswindow, "setOpaque:", .{objc.NO});
             objc.msg(void, nswindow, "setBackgroundColor:", .{objc.msg(objc.Object, objc.class("NSColor"), "clearColor", .{})});

@@ -185,6 +185,65 @@ test "traffic_lights is left alone without a hidden title bar" {
     try testing.expect(win.lights == null);
 }
 
+test "traffic_lights centers in Context.title_bar_height and follows per-frame changes" {
+    const BarView = struct {
+        bar_h: f32 = 44,
+        lights: ?ui.Point = null,
+
+        fn view(self: *@This(), c: *ui.Context) void {
+            c.title_bar_height = self.bar_h;
+            c.traffic_lights = self.lights;
+            ui.text(c, "bar", .{});
+        }
+    };
+    const expectAt = struct {
+        fn check(w: *Window, want_x: f64, want_y: f64) !void {
+            const win_h = objc.msg(objc.CGRect, w.nswindow, "frame", .{}).size.height;
+            const l = w.lights orelse return error.MissingLights;
+            for (0..3) |i| {
+                const b = objc.msg(objc.Object, w.nswindow, "standardWindowButton:", .{@as(objc.NSUInteger, i)});
+                const bounds = objc.msg(objc.CGRect, b, "bounds", .{});
+                const at = objc.msg(objc.CGPoint, b, "convertPoint:toView:", .{
+                    objc.CGPoint{ .x = bounds.size.width / 2, .y = bounds.size.height / 2 },
+                    @as(?objc.Object, null),
+                });
+                try testing.expectApproxEqAbs(want_y, win_h - at.y, 0.5);
+                try testing.expectApproxEqAbs(want_x + @as(f64, @floatFromInt(i)) * l.spacing, at.x, 0.5);
+            }
+        }
+    }.check;
+
+    const app = try makeApp(testing.allocator);
+    defer freeApp(app);
+    var v: BarView = .{};
+    const win = try app.newWindow(.{ .title = "bar", .width = 600, .height = 400, .visible = false, .title_bar = .hidden, .content = .{ .view = .init(&v, BarView.view) } });
+
+    try testing.expect(win.lights != null);
+    try expectAt(win, 22, 22);
+    const content = objc.msg(objc.Object, win.nswindow, "contentView", .{});
+    const theme_frame = objc.msg(objc.Object, content, "superview", .{});
+    const h = objc.msg(objc.CGRect, theme_frame, "bounds", .{}).size.height;
+    const hit = objc.msg(?objc.Object, theme_frame, "hitTest:", .{objc.CGPoint{ .x = 300, .y = h - 36 }}) orelse return error.NoHit;
+    try testing.expect(objc.msg(objc.BOOL, hit, "isDescendantOf:", .{content}) == objc.YES);
+
+    v.bar_h = 52;
+    win.surface.?.frame();
+    try expectAt(win, 26, 26);
+
+    v.bar_h = 34;
+    win.surface.?.frame();
+    try expectAt(win, @import("window_lights.zig").Lights.autoX(win.lights.?.default_x, 17), 17);
+
+    v.lights = .{ .x = 24, .y = 21 };
+    win.surface.?.frame();
+    try expectAt(win, 24, 21);
+
+    v.lights = null;
+    v.bar_h = 28;
+    win.surface.?.frame();
+    try expectAt(win, win.lights.?.default_x, win.lights.?.default_y);
+}
+
 const wake = @import("ui/surface_wake.zig");
 
 /// Closes a window whose surface has a wake queued `after` seconds out, as

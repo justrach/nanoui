@@ -44,7 +44,7 @@ pub const Renderer = struct {
     images_texture: ?objc.Object = null,
     images_generation: u64 = std.math.maxInt(u64),
     images_side: u32 = 0,
-    layer_texture: ?objc.Object = null,
+    layer_textures: std.ArrayList(objc.Object) = .empty,
     layer_w: usize = 0,
     layer_h: usize = 0,
     device: objc.Object,
@@ -187,7 +187,8 @@ pub const Renderer = struct {
 
     pub fn deinit(self: *Renderer) void {
         if (self.images_texture) |t| objc.release(t);
-        if (self.layer_texture) |t| objc.release(t);
+        self.releaseLayers();
+        self.layer_textures.deinit(std.heap.page_allocator);
         // Wait for the frames in flight: their handlers signal this renderer.
         self.waitIdle();
         for (&self.held) |*h| {
@@ -213,12 +214,7 @@ pub const Renderer = struct {
     }
 
     pub fn resize(self: *Renderer, size: types.Size, scale: f32) void {
-        if (self.layer_texture) |t| {
-            objc.release(t);
-            self.layer_texture = null;
-            self.layer_w = 0;
-            self.layer_h = 0;
-        }
+        self.releaseLayers();
         if (size.w <= 1 and size.h <= 1) self.glass.releaseTextures();
         objc.msg(void, self.layer, "setContentsScale:", .{@as(f64, scale)});
         objc.msg(void, self.layer, "setDrawableSize:", .{objc.CGSize{
@@ -380,22 +376,27 @@ pub const Renderer = struct {
         return objc.msg(objc.Object, cmd, "renderCommandEncoderWithDescriptor:", .{desc});
     }
 
-    /// Draws instances [first, first + count) with `pipeline`.
-    fn ensureLayerTexture(self: *Renderer, w: usize, h: usize) objc.Object {
-        if (self.layer_texture) |t| {
-            if (self.layer_w == w and self.layer_h == h) return t;
-            objc.release(t);
+    fn releaseLayers(self: *Renderer) void {
+        for (self.layer_textures.items) |t| objc.release(t);
+        self.layer_textures.clearRetainingCapacity();
+        self.layer_w = 0;
+        self.layer_h = 0;
+    }
+
+    fn ensureLayerTexture(self: *Renderer, w: usize, h: usize, depth: usize) objc.Object {
+        if (self.layer_w != w or self.layer_h != h) self.releaseLayers();
+        while (self.layer_textures.items.len <= depth) {
+            const desc = objc.msg(objc.Object, objc.class("MTLTextureDescriptor"), "texture2DDescriptorWithPixelFormat:width:height:mipmapped:", .{
+                pixel_format, w, h, objc.NO,
+            });
+            objc.msg(void, desc, "setUsage:", .{@as(objc.NSUInteger, 1 | 4)}); // shader read, render target
+            objc.msg(void, desc, "setStorageMode:", .{@as(objc.NSUInteger, 2)}); // private
+            const t = objc.msg(objc.Object, self.device, "newTextureWithDescriptor:", .{desc});
+            self.layer_textures.append(std.heap.page_allocator, t) catch @panic("nanoui: layer texture allocation failed");
         }
-        const desc = objc.msg(objc.Object, objc.class("MTLTextureDescriptor"), "texture2DDescriptorWithPixelFormat:width:height:mipmapped:", .{
-            pixel_format, w, h, objc.NO,
-        });
-        objc.msg(void, desc, "setUsage:", .{@as(objc.NSUInteger, 1 | 4)}); // shader read, render target
-        objc.msg(void, desc, "setStorageMode:", .{@as(objc.NSUInteger, 2)}); // private
-        const t = objc.msg(objc.Object, self.device, "newTextureWithDescriptor:", .{desc});
-        self.layer_texture = t;
         self.layer_w = w;
         self.layer_h = h;
-        return t;
+        return self.layer_textures.items[depth];
     }
 
     /// Draws instances [first, first + count) with `pipeline`.
@@ -454,18 +455,24 @@ pub const Renderer = struct {
             objc.msg(void, pass(cmd, texture, clear), "endEncoding", .{});
             return cmd;
         };
-        const tex_w = objc.msg(objc.NSUInteger, texture, "width", .{});
-        const tex_h = objc.msg(objc.NSUInteger, texture, "height", .{});
-        const scale: f32 = @as(f32, @floatFromInt(tex_w)) / size.w;
         // What an opaque quad over the whole frame hides is never drawn:
         // the quad becomes the clear.
         const cover = gpu.lastCover(instances, size);
-        var first: usize = if (cover) |k| k + 1 else 0;
+        const first: usize = if (cover) |k| k + 1 else 0;
         const frame_clear: types.Color = if (cover) |k| .{ .r = instances[k].color[0], .g = instances[k].color[1], .b = instances[k].color[2], .a = 1 } else clear;
+        self.encodeRange(cmd, texture, buffer, instances, atlas, size, first, instances.len, 0, frame_clear, false);
+        return cmd;
+    }
+
+    fn encodeRange(self: *Renderer, cmd: objc.Object, texture: objc.Object, buffer: objc.Object, instances: []const Instance, atlas: objc.Object, size: types.Size, begin: usize, last: usize, depth: usize, frame_clear: types.Color, skip_glass: bool) void {
+        const tex_w = objc.msg(objc.NSUInteger, texture, "width", .{});
+        const tex_h = objc.msg(objc.NSUInteger, texture, "height", .{});
+        const scale: f32 = @as(f32, @floatFromInt(tex_w)) / size.w;
+        var first = begin;
         var cleared = false;
         while (true) {
-            const split_at = nextSplit(instances, first);
-            const end = split_at orelse instances.len;
+            const split_at = nextSplit(instances[0..last], first);
+            const end = split_at orelse last;
             if (end > first or !cleared) {
                 const enc = pass(cmd, texture, if (cleared) null else frame_clear);
                 cleared = true;
@@ -475,6 +482,7 @@ pub const Renderer = struct {
             const at = split_at orelse break;
             if (instances[at].kind == Kind.glass) {
                 first = at + 1;
+                if (skip_glass) continue;
                 const p = self.glass.backdrop(self.device, cmd, texture, instances[at], scale) orelse continue;
                 const genc = pass(cmd, texture, null);
                 objc.msg(void, genc, "setFragmentBytes:length:atIndex:", .{ @as(*const anyopaque, &p), @as(objc.NSUInteger, @sizeOf(metal_glass.Pane)), @as(objc.NSUInteger, 1) });
@@ -483,10 +491,9 @@ pub const Renderer = struct {
                 continue;
             }
             // Kind.layer_begin .. Kind.layer_end
-            var end_at = at + 1;
-            while (end_at < instances.len and instances[end_at].kind != Kind.layer_end) : (end_at += 1) {}
-            first = if (end_at < instances.len) end_at + 1 else instances.len;
-            if (end_at <= at + 1 or end_at >= instances.len) continue;
+            const end_at = gpu.groupEnd(instances[0..last], at) orelse break;
+            first = end_at + 1;
+            if (end_at <= at + 1) continue;
             const r = instances[at].rect;
             const fw: f32 = @floatFromInt(tex_w);
             const fh: f32 = @floatFromInt(tex_h);
@@ -495,27 +502,26 @@ pub const Renderer = struct {
             const sx1: usize = @intFromFloat(std.math.clamp(@ceil((r[0] + r[2]) * scale), 0, fw));
             const sy1: usize = @intFromFloat(std.math.clamp(@ceil((r[1] + r[3]) * scale), 0, fh));
             if (sx1 <= sx0 or sy1 <= sy0) continue;
-            // Any glass inside the group draws in the main pass before the group.
-            for (instances[at + 1 .. end_at], at + 1..) |gi, gk| {
-                if (gi.kind == Kind.glass) {
-                    const p = self.glass.backdrop(self.device, cmd, texture, gi, scale) orelse continue;
+            const masked = instances[end_at].border_color[2] > 0 or instances[end_at].border_color[3] > 0;
+            if (!masked) {
+                // Any glass inside an ordinary-opacity group draws in the parent
+                // pass before the group; nested masks handle their own glass.
+                var glass_at = at + 1;
+                while (glass_at < end_at) : (glass_at += 1) {
+                    if (instances[glass_at].kind == Kind.layer_begin) {
+                        glass_at = gpu.groupEnd(instances[0..end_at], glass_at) orelse break;
+                        continue;
+                    }
+                    if (instances[glass_at].kind != Kind.glass) continue;
+                    const p = self.glass.backdrop(self.device, cmd, texture, instances[glass_at], scale) orelse continue;
                     const genc = pass(cmd, texture, null);
                     objc.msg(void, genc, "setFragmentBytes:length:atIndex:", .{ @as(*const anyopaque, &p), @as(objc.NSUInteger, @sizeOf(metal_glass.Pane)), @as(objc.NSUInteger, 1) });
-                    self.drawRange(genc, self.glass.pipeline, buffer, atlas, self.glass.a.?, size, gk, 1);
+                    self.drawRange(genc, self.glass.pipeline, buffer, atlas, self.glass.a.?, size, glass_at, 1);
                     objc.msg(void, genc, "endEncoding", .{});
                 }
             }
-            const ltex = self.ensureLayerTexture(tex_w, tex_h);
-            const lenc = pass(cmd, ltex, types.Color.transparent);
-            objc.msg(void, lenc, "setScissorRect:", .{MTLScissorRect{ .x = sx0, .y = sy0, .width = sx1 - sx0, .height = sy1 - sy0 }});
-            var seg_start = at + 1;
-            while (seg_start < end_at) {
-                var seg_end = seg_start;
-                while (seg_end < end_at and instances[seg_end].kind != Kind.glass) : (seg_end += 1) {}
-                if (seg_end > seg_start) self.drawRun(lenc, buffer, atlas, size, instances, seg_start, seg_end);
-                seg_start = seg_end + 1;
-            }
-            objc.msg(void, lenc, "endEncoding", .{});
+            const ltex = self.ensureLayerTexture(tex_w, tex_h, depth);
+            self.encodeRange(cmd, ltex, buffer, instances, atlas, size, at + 1, end_at, depth + 1, types.Color.transparent, !masked);
             var comp_inst = instances[end_at];
             comp_inst.kind = Kind.layer_composite;
             const cenc = pass(cmd, texture, null);
@@ -533,7 +539,6 @@ pub const Renderer = struct {
             });
             objc.msg(void, cenc, "endEncoding", .{});
         }
-        return cmd;
     }
 };
 

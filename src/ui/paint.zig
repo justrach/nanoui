@@ -237,12 +237,28 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip_
     const first = out.items.len;
     var child = n.first_child;
     const inner_scrolled = scrolled + if (st.scroll) c.scroll.get(n.id) orelse 0 else 0;
-    while (child != none) : (child = c.node(child).next) paintNode(c, out, child, child_clip, opacity, selectable, inner_scrolled);
+    const fade = @import("scroll_fade.zig");
+    const edges = if (st.scroll) fade.Edges.of(r.h, c.scroll.get(n.id) orelse 0, c.scroll_max.get(n.id) orelse 0, st.scroll_edge_fade) else fade.Edges{};
+    const masked = edges.active() and visible.w > 0 and visible.h > 0;
+    const was_group = c.painting_group;
+    if (masked) {
+        c.painting_group = true;
+        push(c, out, .{ .rect = .{ visible.x, visible.y, visible.w, visible.h }, .color = .{ 1, 1, 1, 1 }, .kind = metal.Kind.layer_begin, .clip = metal.clip4(child_clip) });
+    }
+    while (child != none) : (child = c.node(child).next) paintNode(c, out, child, child_clip, if (masked) 1 else opacity, selectable, inner_scrolled);
+    if (masked) {
+        c.painting_group = was_group;
+        push(c, out, .{
+            .rect = .{ visible.x, visible.y, visible.w, visible.h },
+            .color = .{ 1, 1, 1, opacity },
+            .border_color = .{ r.y, r.y + r.h, edges.top, edges.bottom },
+            .kind = metal.Kind.layer_end,
+            .clip = metal.clip4(child_clip),
+        });
+    }
     if ((st.clip or st.scroll or st.scroll_x) and st.radius > 0) roundClip(out.items[first..], r, visible, st.radius, st.clip_corners);
 
-    if (st.scroll and st.scrollbar == .overlay) {
-        paintScrollbar(c, out, n.*, visible, opacity);
-    } else if (st.scroll or st.scroll_x) {
+    if (st.scroll or st.scroll_x) {
         @import("scroll.zig").paintScrollbars(c, out, n.*, visible, opacity);
     }
     if (st.scale != 1) scaleItems(out.items[start..], r, @max(st.scale, 0), st.scale_anchor, clip4);
@@ -522,59 +538,6 @@ fn roundClip(items: []metal.Instance, box: types.Rect, visible: types.Rect, radi
             i.clip_round = metal.clipRound(radius, corners);
         } else if (near(had.radius, radius)) i.clip_round = metal.clipRound(radius, had.corners | corners);
     }
-}
-
-/// How long an overlay bar stays after the box last scrolled, then how
-/// long it takes to fade (GPUI's `MENU_SCROLLBAR_LINGER_MS`, `_FADE_MS`).
-const overlay_linger: f64 = 1.4;
-const overlay_fade: f64 = 0.26;
-
-fn paintOverlayBar(c: *Context, out: *std.ArrayList(metal.Instance), n: ctx_mod.Node, visible: types.Rect, opacity: f32, offset: f32, view_h: f32, content_h: f32, t: f32) void {
-    const color = n.style.scrollbar.overlay;
-    const gop = c.overlay_bars.getOrPut(c.gpa, n.id) catch return;
-    // First seen: nothing has scrolled yet.
-    if (!gop.found_existing) gop.value_ptr.* = .{ .offset = offset, .moved_at = -1e9 };
-    if (gop.value_ptr.offset != offset) gop.value_ptr.* = .{ .offset = offset, .moved_at = c.time };
-    const strip: types.Rect = .{ .x = n.rect.x + n.rect.w - 10, .y = n.rect.y, .w = 10, .h = n.rect.h };
-    const held = strip.contains(c.input.mouse);
-    const since = c.time - gop.value_ptr.moved_at;
-    const fade: f32 = if (held) 1 else @floatCast(std.math.clamp(1 - (since - overlay_linger) / overlay_fade, 0, 1));
-    if (!held and since < overlay_linger + overlay_fade) {
-        // Wake for the fade's start, then step through it.
-        c.frameIn(@floatCast(if (since < overlay_linger) overlay_linger - since else 1.0 / 60.0));
-    }
-    if (fade <= 0) return;
-    const inset: f32 = 4;
-    const track = view_h - 2 * inset;
-    const bar_h = @max(24, track * view_h / content_h);
-    const w: f32 = if (held) 5 else 3;
-    push(c, out, .{
-        .rect = .{ n.rect.x + n.rect.w - 2 - w, n.rect.y + inset + (track - bar_h) * std.math.clamp(t, 0, 1), w, bar_h },
-        .color = metal.color4(color.alpha(color.a * @as(f32, if (held) 0.68 / 0.5 else 1) * fade * opacity)),
-        .radius = w / 2,
-        .clip = metal.clip4(visible),
-    });
-}
-
-fn paintScrollbar(c: *Context, out: *std.ArrayList(metal.Instance), n: ctx_mod.Node, visible: types.Rect, opacity: f32) void {
-    const offset = c.scroll.get(n.id) orelse 0;
-    // The content's height: from the first child's top to the last child's bottom.
-    if (n.first_child == none) return;
-    const first = c.node(n.first_child).rect;
-    const last = c.node(n.last_child).rect;
-    const content_h = last.y + last.h - first.y + n.style.padding.vertical();
-    const view_h = n.rect.h;
-    if (content_h <= view_h + 0.5) return;
-    const t = offset / (content_h - view_h);
-    if (n.style.scrollbar == .overlay) return paintOverlayBar(c, out, n, visible, opacity, offset, view_h, content_h, t);
-    const bar_h = @max(24, view_h * view_h / content_h);
-    const y = n.rect.y + (view_h - bar_h) * std.math.clamp(t, 0, 1);
-    push(c, out, .{
-        .rect = .{ n.rect.x + n.rect.w - 7, y + 2, 4, bar_h - 4 },
-        .color = metal.color4(c.theme.muted.alpha(0.5 * opacity)),
-        .radius = 2,
-        .clip = metal.clip4(visible),
-    });
 }
 
 /// A box's gradient of many stops into the frame's gradients, its uv

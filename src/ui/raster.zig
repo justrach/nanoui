@@ -56,8 +56,7 @@ pub fn drawRegion(out: gpu.Pixels, instances: []const gpu.Instance, mask: Mask, 
         while (k < instances.len) {
             const inst = &instances[k];
             if (inst.kind == gpu.Kind.layer_begin) {
-                var end_at = k + 1;
-                while (end_at < instances.len and instances[end_at].kind != gpu.Kind.layer_end) : (end_at += 1) {}
+                const end_at = gpu.groupEnd(instances, k) orelse instances.len;
                 if (end_at > k + 1 and end_at < instances.len) {
                     drawGroup(out, instances[k + 1 .. end_at], &instances[k], &instances[end_at], mask, pictures, scale, region);
                 }
@@ -175,17 +174,34 @@ fn cover(region: *?[4]usize, b: ?[4]usize) void {
     region.* = if (region.*) |r| .{ @min(r[0], add[0]), @min(r[1], add[1]), @max(r[2], add[2]), @max(r[3], add[3]) } else add;
 }
 fn drawGroup(out: gpu.Pixels, span: []const gpu.Instance, begin_inst: *const gpu.Instance, end_inst: *const gpu.Instance, mask: Mask, pictures: Pictures, scale: f32, region: [4]usize) void {
-    for (span) |*gi| {
-        if (gi.kind == gpu.Kind.glass) drawOne(out, gi, mask, pictures, scale, region);
+    const masked = end_inst.border_color[2] > 0 or end_inst.border_color[3] > 0;
+    if (!masked) {
+        var at: usize = 0;
+        while (at < span.len) : (at += 1) {
+            if (span[at].kind == gpu.Kind.layer_begin) {
+                at = gpu.groupEnd(span, at) orelse break;
+                continue;
+            }
+            if (span[at].kind == gpu.Kind.glass) drawOne(out, &span[at], mask, pictures, scale, region);
+        }
     }
     const b = bounds(out, begin_inst, scale) orelse return;
     const tmp_bytes = std.heap.page_allocator.alloc(u8, out.width * out.height * 4) catch return;
     defer std.heap.page_allocator.free(tmp_bytes);
     @memset(tmp_bytes, 0);
     const tmp: gpu.Pixels = .{ .bytes = tmp_bytes, .width = out.width, .height = out.height };
-    for (span) |*gi| {
-        if (gi.kind == gpu.Kind.glass or gi.kind == gpu.Kind.layer_begin or gi.kind == gpu.Kind.layer_end) continue;
-        drawOne(tmp, gi, mask, pictures, scale, region);
+    if (masked) drawRegion(tmp, span, mask, pictures, scale, types.Color.transparent, region);
+    var at: usize = 0;
+    while (!masked and at < span.len) {
+        const gi = &span[at];
+        if (gi.kind == gpu.Kind.layer_begin) {
+            const end_at = gpu.groupEnd(span, at) orelse break;
+            drawGroup(tmp, span[at + 1 .. end_at], gi, &span[end_at], mask, pictures, scale, region);
+            at = end_at + 1;
+            continue;
+        }
+        if (gi.kind != gpu.Kind.glass and gi.kind != gpu.Kind.layer_end) drawOne(tmp, gi, mask, pictures, scale, region);
+        at += 1;
     }
     const alpha = std.math.clamp(end_inst.color[3], 0, 1);
     if (alpha <= 0) return;
@@ -197,7 +213,8 @@ fn drawGroup(out: gpu.Pixels, span: []const gpu.Instance, begin_inst: *const gpu
             const wx = (@as(f32, @floatFromInt(x)) + 0.5) * inv;
             const s = tmp.bytes[row + x * 4 ..][0..4];
             if (s[3] == 0) continue;
-            const k = alpha * clipCover(end_inst, wx, wy, inv) / 255.0;
+            const local = unmatrix(end_inst, wx, wy);
+            const k = alpha * @import("scroll_fade.zig").alpha(end_inst.border_color, local[1]) * clipCover(end_inst, wx, wy, inv) / 255.0;
             blend(out.bytes, row + x * 4, @as(f32, @floatFromInt(s[2])) * k, @as(f32, @floatFromInt(s[1])) * k, @as(f32, @floatFromInt(s[0])) * k, @as(f32, @floatFromInt(s[3])) * k);
         }
     }

@@ -5,6 +5,8 @@
 const std = @import("std");
 const objc = @import("../objc.zig");
 const cf = @import("cf.zig");
+const pacing = @import("pacing.zig");
+const wake = @import("surface_wake.zig");
 const Surface = @import("surface.zig").Surface;
 
 extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
@@ -140,4 +142,28 @@ pub fn setFrameSize(obj: objc.Object, _: objc.SEL, size: objc.CGSize) callconv(.
         return s.requestFrame();
     }
     s.frame();
+}
+
+/// The display link's pace: the display's (null), or one frame every
+/// `seconds`.
+pub fn setRate(self: *Surface, seconds: ?f32) void {
+    const link = self.display_link orelse return;
+    const fps: f32 = if (seconds) |s| (if (s < 0.009) 0 else std.math.clamp(1 / @max(s, 0.001), 1, 60)) else 0;
+    if (fps == self.link_fps) return;
+    const faster = (fps == 0 and self.link_fps > 0) or (fps > self.link_fps and self.link_fps > 0);
+    if (fps == 0 and self.link_fps > 0) {
+        if (self.frame_log) |*fl| fl.last_t = 0;
+    }
+    self.link_fps = fps;
+    if (self.paced and faster) objc.msg(void, link, "setPaused:", .{objc.YES});
+    objc.msg(void, link, "setPreferredFrameRateRange:", .{pacing.range(fps, self.max_fps)});
+    if (self.paced and faster) objc.msg(void, link, "setPaused:", .{objc.NO});
+}
+
+pub fn setPaced(self: *Surface, on: bool) void {
+    if (on) wake.watch(self);
+    if (self.paced == on) return;
+    self.paced = on;
+    if (!on and self.frame_log != null) self.frame_log.?.last_t = 0;
+    if (self.display_link) |link| objc.msg(void, link, "setPaused:", .{!on});
 }

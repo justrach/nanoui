@@ -386,6 +386,17 @@ pub fn animateImpl(c: *Context, id: u64, salt: u32, target: f32, speed: f32) f32
     return a.value;
 }
 
+/// The id the next child of the open box will get.
+pub fn peekId(c: *Context, key: ?[]const u8) u64 {
+    const saved = c.next_key;
+    const saved_int = c.next_key_int;
+    defer {
+        c.next_key = saved;
+        c.next_key_int = saved_int;
+    }
+    return c.childId(key);
+}
+
 /// Asks the window to close once this frame is done, which is the only safe
 /// time to: closing during it frees the Context the view is building in.
 pub fn requestClose(c: *Context) void {

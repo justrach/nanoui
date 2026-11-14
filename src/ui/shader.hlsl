@@ -354,7 +354,7 @@ Pixel glyph_pixel(Varyings v, float clip_cover) {
     float2 screen_pixels = v.i_rect.zw * scale;
     float2 atlas_texels = (v.i_uv.zw - v.i_uv.xy) * float2(side);
     bool one_to_one = all(abs(screen_pixels - atlas_texels) < float2(0.001, 0.001));
-    if (rgb_text > 0.5 && one_to_one) {
+    if (rgb_text != 0.0 && one_to_one) {
         // Native glyphs are nearest-sampled, as raster.zig does. The RGB
         // texel's alpha is a tag: 255/254 Natural/Classic ClearType,
         // 128/127 Natural/Classic native grayscale.
@@ -363,7 +363,7 @@ Pixel glyph_pixel(Varyings v, float clip_cover) {
         uint tag = (uint)round(native.a * 255.0);
         bool classic = tag == 254 || tag == 127;
         float lightness = 0.30 * v.i_color.r + 0.59 * v.i_color.g + 0.11 * v.i_color.b;
-        if (native.a > 0.75) {
+        if (native.a > 0.75 && rgb_text > 0.5) {
             float3 coverage = float3(
                 text_coverage(native.r, v.i_color.r, lightness, true, classic),
                 text_coverage(native.g, v.i_color.g, lightness, true, classic),
@@ -442,6 +442,13 @@ float4 shade(Varyings v) {
 
 Pixel quad_ps(Varyings v) {
     float clip_cover = clip_coverage(v);
+    if (v.i_misc.z == 10.0 || v.i_misc.z == 11.0) {
+        float fade = 1.0;
+        if (v.i_border_color.z > 0.0) fade = min(fade, clamp((v.v_world.y - v.i_border_color.x) / v.i_border_color.z, 0.0, 1.0));
+        if (v.i_border_color.w > 0.0) fade = min(fade, clamp((v.i_border_color.y - v.v_world.y) / v.i_border_color.w, 0.0, 1.0));
+        return scalar_pixel(frame_tex.Load(int3(int2(v.pos.xy), 0)) * (v.i_color.a * fade * clip_cover));
+    }
+    if (v.i_misc.z == 9.0) return scalar_pixel(float4(0.0, 0.0, 0.0, 0.0));
     if (v.i_misc.z == 1.0) return glyph_pixel(v, clip_cover);
     return scalar_pixel(shade(v) * clip_cover);
 }
