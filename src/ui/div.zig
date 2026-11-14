@@ -211,6 +211,24 @@ pub const Div = struct {
     pub fn scrollbar(d: Div, v: types.Scrollbar) Div {
         return d.set("scrollbar", v);
     }
+    /// Composited alpha fade in points at hidden top/bottom edges of a scrolling
+    /// box (`scrollY`).
+    pub fn scrollEdgeFade(d: Div, v: f32) Div {
+        return d.set("scroll_edge_fade", v);
+    }
+    /// Show the scroll indicator only while scrolling and briefly after.
+    pub fn scrollBarFades(d: Div) Div {
+        return d.set("scroll_bar_fades", true);
+    }
+    /// Hide the vertical scrollbar after `seconds` of idle time after scrolling
+    /// or thumb dragging (does not stay open on stationary pointer hover).
+    pub fn scrollBarIdle(d: Div, seconds: f32) Div {
+        return d.set("scroll_bar_idle", seconds);
+    }
+    /// Hide the scrollbar on a scrolling box.
+    pub fn hideScrollBar(d: Div) Div {
+        return d.set("scroll_bar", false);
+    }
     pub fn absolute(d: Div) Div {
         return d.set("absolute", true);
     }

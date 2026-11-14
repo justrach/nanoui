@@ -14,6 +14,9 @@ pub const Demo = struct {
     tab: usize = 0,
     menu: bool = false,
     menu_at: ?ui.Rect = null,
+    pinned_open: bool = true,
+    folders_open: bool = true,
+    selected: []const u8 = "2026 Trips",
     toaster: kit.Toaster = undefined,
     ready: bool = false,
 
@@ -46,17 +49,63 @@ pub const Demo = struct {
         if (!compact) {
             // Cards were painted first and extend beneath this pane. Their
             // scrolling drives the live backdrop and its right-edge reflection.
-            const sidebar = ui.div(c).absolute().offset(20, 104).w(190).h(@max(180, c.size.h - 128)).column().px(20).py(24).gap(24).rounded(20).glass(.{ .style = .sidebar, .tint = th.surface.alpha(0.75) });
+            const side_top: f32 = if (c.size.h < 360) 92 else 104;
+            const side_h: f32 = @max(80, c.size.h - side_top - 16);
+            const sidebar = ui.div(c).absolute().offset(20, side_top).w(196).h(side_h).column().px(12).py(12).gap(8).rounded(20).clip().glass(.{ .style = .sidebar, .tint = th.surface.alpha(0.75) });
             defer sidebar.end();
-            ui.text(c, "FOLDERS", .{ .size = 11, .weight = .semibold, .color = th.muted });
-            for ([_][]const u8{ "Work", "Personal", "Finances", "Travel", "Receipts" }) |label| {
-                const row = ui.div(c).row().gap(12).itemsCenter();
-                defer row.end();
-                ui.icon(c, "folder", .{ .size = 18, .color = th.text });
-                ui.text(c, label, .{ .size = 14, .color = th.text });
+            {
+                const head = ui.div(c).row().wFull().px(6).itemsCenter();
+                defer head.end();
+                ui.text(c, "WORKSPACE", .{ .size = 10, .weight = .semibold, .color = th.muted });
+                ui.spacer(c);
+                const badge = ui.div(c).px(6).py(2).rounded(6).bg(th.text.alpha(0.08));
+                ui.text(c, "11", .{ .size = 10, .weight = .semibold, .color = th.muted, .tabular = true });
+                badge.end();
             }
-            ui.spacer(c);
-            ui.text(c, "Scroll the cards alongside", .{ .size = 11, .color = th.muted });
+            {
+                const list = ui.div(c).column().wFull().grow().scrollY().scrollEdgeFade(14).scrollBarIdle(3.0);
+                defer list.end();
+                if (sectionHeader(c, "Pinned", d.pinned_open)) d.pinned_open = !d.pinned_open;
+                if (d.pinned_open) {
+                    if (sidebarRow(c, "star.fill", "Favorites", false, false)) d.selected = "Favorites";
+                    {
+                        const branch = ui.div(c).row().wFull().gap(8).pl(10);
+                        defer branch.end();
+                        _ = c.leaf(.{ .width = .{ .px = 1.5 }, .height = .fill, .background = th.border.alpha(0.75) }, .none, null);
+                        const kids = ui.div(c).column().grow().gap(2);
+                        defer kids.end();
+                        for ([_]struct { []const u8, []const u8 }{ .{ "photo", "2026 Trips" }, .{ "sparkles", "Design" } }) |item| {
+                            ui.key(c, item[1]);
+                            if (sidebarRow(c, item[0], item[1], std.mem.eql(u8, d.selected, item[1]), true)) d.selected = item[1];
+                        }
+                    }
+                    if (sidebarRow(c, "bookmark", "Shared", false, false)) d.selected = "Shared";
+                    {
+                        const branch = ui.div(c).row().wFull().gap(8).pl(10);
+                        defer branch.end();
+                        _ = c.leaf(.{ .width = .{ .px = 1.5 }, .height = .fill, .background = th.border.alpha(0.75) }, .none, null);
+                        const kids = ui.div(c).column().grow().gap(2);
+                        defer kids.end();
+                        ui.key(c, "Invoices");
+                        if (sidebarRow(c, "doc.text", "Invoices", std.mem.eql(u8, d.selected, "Invoices"), true)) d.selected = "Invoices";
+                    }
+                }
+                // Keep a steady gap between sections even when the top one collapses.
+                _ = c.leaf(.{ .height = .{ .px = 8 } }, .none, null);
+                if (sectionHeader(c, "Folders", d.folders_open)) d.folders_open = !d.folders_open;
+                if (d.folders_open) {
+                    const folders = [_][]const u8{ "Work", "Personal", "Finances", "Travel", "Receipts", "Archive", "Screenshots", "Imports" };
+                    for (folders) |label| {
+                        ui.key(c, label);
+                        if (sidebarRow(c, "folder", label, std.mem.eql(u8, d.selected, label), false)) d.selected = label;
+                    }
+                }
+            }
+            {
+                const foot = ui.div(c).row().wFull().px(6).pt(2).itemsCenter();
+                defer foot.end();
+                ui.text(c, c.print("Selected · {s}", .{d.selected}), .{ .size = 11, .color = th.muted, .truncate = .ellipsis });
+            }
         }
         {
             const f = motion.frame(c, .{ .initial = .{ .y = -30, .opacity = 0, .scale = 0.96 }, .transition = .{ .spring = motion.Spring.bouncy } });
@@ -89,3 +138,24 @@ pub const Demo = struct {
         d.toaster.view(c);
     }
 };
+
+fn sectionHeader(c: *ui.Context, title: []const u8, open: bool) bool {
+    const th = c.theme;
+    ui.key(c, title);
+    const hdr = ui.div(c).row().wFull().px(6).py(4).gap(6).itemsCenter().rounded(6).hover(th.surface_hover).control();
+    defer hdr.end();
+    ui.icon(c, if (open) "chevron.down" else "chevron.right", .{ .size = 10, .frame = 12, .color = th.muted });
+    ui.text(c, title, .{ .size = 11, .weight = .semibold, .color = th.muted });
+    return hdr.clicked();
+}
+
+fn sidebarRow(c: *ui.Context, icon_name: []const u8, label: []const u8, selected: bool, nested: bool) bool {
+    const th = c.theme;
+    var r = ui.div(c).row().wFull().px(6).py(@as(f32, if (nested) 4 else 5)).gap(8).itemsCenter().rounded(7).control();
+    r = if (selected) r.bg(th.accent.alpha(0.16)) else r.hover(th.surface_hover);
+    defer r.end();
+    const fg = if (selected) th.accent else th.text;
+    ui.icon(c, icon_name, .{ .size = if (nested) 13 else 14, .frame = 16, .color = if (selected) th.accent else th.muted });
+    ui.text(c, label, .{ .size = if (nested) 12.5 else 13.5, .weight = if (selected) .semibold else .regular, .color = fg, .truncate = .ellipsis });
+    return r.clicked();
+}

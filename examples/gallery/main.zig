@@ -131,6 +131,7 @@ const Gallery = struct {
             .height = .fill,
             .padding = .{ .top = 44, .left = 12, .right = 12, .bottom = 12 },
             .gap = 4,
+            .clip = true,
             .background = th.surface.alpha(0.6),
             .border = th.border,
             .border_width = 0,
@@ -139,18 +140,21 @@ const Gallery = struct {
         ui.text(c, "nanoui", .{ .size = 18, .weight = .bold });
         ui.label(c, c.print("Zig 0.17 · {s}", .{c.renderer}));
         _ = c.leaf(.{ .height = .{ .px = 12 } }, .none, null);
-        for (phone.pages, 0..) |p, i| {
-            const selected = g.page == i;
-            // GPUI's way: a box styled by a chain of methods.
-            var item = ui.div(c).row().wFull().px(10).py(7).gap(8).itemsCenter().rounded(7);
-            item = if (selected) item.bg(th.accent) else item.hover(th.surface_hover);
-            defer item.end();
-            if (item.clicked()) g.page = i;
-            const fg = if (selected) th.accent_text else th.text;
-            ui.icon(c, p[1], .{ .size = 14, .frame = 18, .color = fg });
-            ui.text(c, p[0], .{ .weight = .medium, .color = fg });
+        {
+            const nav = ui.div(c).column().wFull().grow().gap(4).scrollY().scrollEdgeFade(12).scrollBarIdle(3.0);
+            defer nav.end();
+            for (phone.pages, 0..) |p, i| {
+                const selected = g.page == i;
+                // GPUI's way: a box styled by a chain of methods.
+                var item = ui.div(c).row().wFull().px(10).py(7).gap(8).itemsCenter().rounded(7);
+                item = if (selected) item.bg(th.accent) else item.hover(th.surface_hover);
+                defer item.end();
+                if (item.clicked()) g.page = i;
+                const fg = if (selected) th.accent_text else th.text;
+                ui.icon(c, p[1], .{ .size = 14, .frame = 18, .color = fg });
+                ui.text(c, p[0], .{ .weight = .medium, .color = fg });
+            }
         }
-        ui.spacer(c);
         ui.label(c, c.print("{d} frames", .{c.frame}));
         ui.label(c, c.print("{d:.0} fps", .{g.fps}));
     }

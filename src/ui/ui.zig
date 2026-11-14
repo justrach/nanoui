@@ -381,6 +381,9 @@ test {
     _ = @import("tests_raster.zig");
     _ = @import("glass.zig");
     _ = @import("tests_glass.zig");
+    _ = @import("scroll_fade.zig");
+    _ = @import("tests_scroll_fade.zig");
+    _ = @import("tests_scroll_polish.zig");
     _ = @import("tests_overlay_bar.zig");
     _ = @import("tests_border.zig");
     _ = @import("tests_scrollbar.zig");

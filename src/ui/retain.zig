@@ -192,7 +192,7 @@ fn clipInView(clip: [4]f32, view: types.Rect) bool {
 
 fn cannotRetain(c: *Context, index: u32) bool {
     const n = c.node(index);
-    if (n.style.scroll and n.rect.h > 0 and (spacer(c, index, n.rect.h) or nestedClip(c, index))) return true;
+    if (n.style.scroll and n.rect.h > 0 and (n.style.scroll_edge_fade > 0 or n.style.scroll_bar_idle > 0 or spacer(c, index, n.rect.h) or nestedClip(c, index))) return true;
     var child = n.first_child;
     while (child != none) : (child = c.node(child).next) {
         if (cannotRetain(c, child)) return true;
