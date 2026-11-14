@@ -105,6 +105,13 @@ test "a window that asks to be above the others is WS_EX_TOPMOST" {
     });
     const h = win.hwnd orelse return error.SkipZigTest;
     try testing.expect(exStyleOf(h) & w.WS_EX_TOPMOST != 0);
+    // And the style can step down and back up again at runtime — a
+    // background process's SetWindowPos ask is demoted, the style bit is
+    // what must change (`setAlwaysOnTop` sets it directly when it didn't).
+    win.setAlwaysOnTop(false);
+    try testing.expect(exStyleOf(h) & w.WS_EX_TOPMOST == 0);
+    win.setAlwaysOnTop(true);
+    try testing.expect(exStyleOf(h) & w.WS_EX_TOPMOST != 0);
 }
 
 const Veto = struct {

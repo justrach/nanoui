@@ -130,6 +130,9 @@ pub const Window = struct {
         var ex: u32 = 0;
         if (options.skip_taskbar) ex |= w.WS_EX_TOOLWINDOW;
         if (options.opacity < 1 or self.transparent) ex |= w.WS_EX_LAYERED;
+        // Topmost at birth: asking for it later (`SetWindowPos`) is demoted
+        // for a background process, a style it was created with never is.
+        if (options.always_on_top) ex |= w.WS_EX_TOPMOST;
         const hwnd = w.CreateWindowExW(ex, class_name, w.wide(&title, options.title), style, w.CW_USEDEFAULT, w.CW_USEDEFAULT, 100, 100, null, null, inst, null) orelse return error.CreateWindow;
         self.hwnd = hwnd;
         // The title bar matches the theme before the window is first shown; a
@@ -438,6 +441,17 @@ pub const Window = struct {
         const h = self.hwnd orelse return;
         const topmost: isize = if (on) -1 else -2;
         _ = w.SetWindowPos(h, @ptrFromInt(@as(usize, @bitCast(topmost))), 0, 0, 0, 0, 0x0001 | 0x0002);
+        // The call only *asks*: Windows demotes a background process — it
+        // succeeds, the window goes as high as it may, and the style stays as
+        // it was. The style itself is set directly: a style change is not a
+        // z-order change, so it is never demoted.
+        const ex = w.GetWindowLongPtrW(h, w.GWL_EXSTYLE);
+        const has = ex & w.WS_EX_TOPMOST != 0;
+        if (has == on) return;
+        const next = if (on) ex | w.WS_EX_TOPMOST else ex & ~@as(isize, w.WS_EX_TOPMOST);
+        _ = w.SetWindowLongPtrW(h, w.GWL_EXSTYLE, next);
+        // A frame changed, nothing moved or reordered: the style above takes.
+        _ = w.SetWindowPos(h, null, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020);
     }
 
     pub fn isFullScreen(self: *Window) bool {
