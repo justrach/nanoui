@@ -14,6 +14,17 @@ permissions:
   contents: read
 
 jobs:
+  lean-proofs:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: leanprover/lean-action@v1
+        with:
+          lake-package-directory: lean-proofs
+          build: "true"
+          test: "false"
+          lint: "false"
+
   macos:
     runs-on: macos-15
     steps:
