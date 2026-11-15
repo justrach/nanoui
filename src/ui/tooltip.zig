@@ -97,6 +97,7 @@ pub fn pointerOver(c: *Context, index: u32) bool {
 }
 
 /// Shows `text` over the box `index` once the pointer has rested on it.
+/// `text` is copied into the frame: it may go when the view returns.
 pub fn tooltip(c: *Context, index: u32, text: []const u8, opts: Options) void {
     ask(c, index, .{ .text = text, .at = .{}, .opts = opts });
 }
@@ -152,6 +153,8 @@ fn ask(c: *Context, index: u32, req_in: Request) void {
     }
     var req = req_in;
     req.at = st.at;
+    // Drawn after the view function returns: the text goes into the frame.
+    req.text = c.alloc().dupe(u8, req.text) catch req.text;
     c.tooltip.request = req;
 }
 
