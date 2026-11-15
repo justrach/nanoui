@@ -185,3 +185,67 @@ test "d3d11: a texture made on the renderer's device draws as the CPU renderer d
     try testing.expect(mean <= 1.0);
     try testing.expect(off * 40 < cpu.len);
 }
+
+/// `w` × `h` RGBA half floats from `f(x, y)`, opaque.
+fn halfFrame(comptime w: usize, comptime h: usize, comptime f: fn (usize, usize) [3]f32) [w * h * 8]u8 {
+    var px: [w * h * 8]u8 = undefined;
+    for (0..h) |y| for (0..w) |x| {
+        const v = f(x, y);
+        for (0..4) |k| std.mem.writeInt(u16, px[(y * w + x) * 8 + k * 2 ..][0..2], @bitCast(@as(f16, if (k < 3) @floatCast(v[k]) else 1)), .little);
+    };
+    return px;
+}
+
+fn rampAt(x: usize, y: usize) [3]f32 {
+    return .{ @as(f32, @floatFromInt(x)) / 7 - 0.2, @as(f32, @floatFromInt(y)) / 3, 0.5 };
+}
+
+/// `slots`' one texture, read back from where its path put it, against the
+/// CPU's reading of `t`, within `limit` steps.
+fn expectSlotMatchesCpu(pair: anytype, slots: *d3d11_texture.Slots, t: gpu.Texture, w: u32, h: u32, limit: u8) !void {
+    var want = video.readBack(testing.allocator, t) orelse return error.NoReadBack;
+    defer want.deinit(testing.allocator);
+    const path = slots.paths.items[0];
+    const e = &slots.entries.items[0];
+    const out_tex = if (path == .gpu_post or path == .gpu_copy) e.target.texture.? else e.texture.?;
+    const got = try readBgra(pair.device, pair.context, out_tex, w, h);
+    defer testing.allocator.free(got);
+    var worst: u8 = 0;
+    for (got, want.bgra.pixels) |x, y| worst = @max(worst, if (x > y) x - y else y - x);
+    std.debug.print("path {t}, worst {d} ", .{ path, worst });
+    try testing.expect(worst <= limit);
+}
+
+test "d3d11: RGBA16F and R10G10B10A2 textures passed through (Texture.encoding) stay on the GPU and match the CPU" {
+    const pair = d3d11_device.create() catch return error.SkipZigTest;
+    defer pair.context.release();
+    defer pair.device.release();
+    const w = 8;
+    const h = 4;
+    const ramp = halfFrame(w, h, rampAt);
+    const f16_tex = makeTexture(pair.device, .{ .width = w, .height = h, .format = video.rgba16f, .bind = api.bind_shader_resource }, &.{.{ .mem = &ramp, .pitch = w * 8 }}) orelse return error.NoTexture;
+    defer f16_tex.release();
+    var packed_px: [w * h * 4]u8 = undefined;
+    for (0..w * h) |i| std.mem.writeInt(u32, packed_px[i * 4 ..][0..4], @as(u32, @intCast(i * 31)) | (@as(u32, @intCast(1023 - i * 20)) << 10) | (512 << 20) | (3 << 30), .little);
+    const packed_tex = makeTexture(pair.device, .{ .width = w, .height = h, .format = video.r10g10b10a2, .bind = api.bind_shader_resource }, &.{.{ .mem = &packed_px, .pitch = w * 4 }}) orelse return error.NoTexture;
+    defer packed_tex.release();
+    var slots: d3d11_texture.Slots = .{ .gpa = testing.allocator };
+    defer slots.deinit();
+    // Packed 10-bit RGB is drawn only when the app says what it is.
+    const auto_packed: gpu.Texture = .{ .width = w, .height = h, .d3d11_texture = packed_tex };
+    slots.prepare(pair.device, pair.context, &.{auto_packed});
+    try testing.expectEqual(d3d11_texture.Path.none, slots.paths.items[0]);
+    const cases = [_]gpu.Texture{
+        .{ .width = w, .height = h, .d3d11_texture = f16_tex, .encoding = .surface_linear },
+        .{ .width = w, .height = h, .d3d11_texture = f16_tex, .encoding = .display_sdr },
+        .{ .width = w, .height = h, .d3d11_texture = packed_tex, .encoding = .display_sdr },
+        .{ .width = w, .height = h, .d3d11_texture = packed_tex, .encoding = .surface_linear },
+    };
+    for (cases) |t| {
+        slots.prepare(pair.device, pair.context, &.{t});
+        const path = slots.paths.items[0];
+        // The CPU only where the colour stage can't be compiled (Wine).
+        try testing.expect(path == .gpu_post or path == .cpu);
+        try expectSlotMatchesCpu(pair, &slots, t, w, h, 1);
+    }
+}

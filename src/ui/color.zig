@@ -19,7 +19,8 @@ pub const Uniforms = extern struct {
     lut_enabled: u32 = 0,
     source_lut_size: f32 = 0,
     source_lut_enabled: u32 = 0,
-    /// 0 RGB as sampled, 1 8-bit Y'CbCr, 2 10-bit Y'CbCr, 3 linear RGB.
+    /// 0 RGB as sampled, 1 8-bit Y'CbCr, 2 10-bit Y'CbCr, 3 linear RGB,
+    /// 4 linear light for the surface on an SDR one (`surfaceLinearToSdr`).
     source_mode: u32 = 0,
     range_mode: u32 = 0,
     matrix_mode: u32 = 0,
@@ -41,7 +42,27 @@ pub fn sourceMode(f: gpu.Format) u32 {
     };
 }
 
-/// The uniforms for `t`, its source read as `mode`.
+/// What the colour stage does with a texture: the source mode it reads it
+/// as, and whether it runs at all (else the frame samples it as it is).
+pub const Stage = struct { mode: u32, run: bool };
+
+/// The stage for `t`, whose planes sample as source mode `sampled`
+/// (`sourceMode` of its format, or 0 or 3 for an app's texture by its pixel
+/// format), on an SDR surface. `srgb_sampled`: its samples are decoded from
+/// sRGB storage (a Metal `_sRGB` pixel format), so they are linear even
+/// when its values are display codes.
+pub fn stage(t: gpu.Texture, sampled: u32, srgb_sampled: bool) Stage {
+    if (sampled == 1 or sampled == 2) return .{ .mode = sampled, .run = true };
+    return switch (t.effectiveEncoding()) {
+        .auto => .{ .mode = sampled, .run = sampled != 0 or t.lut != null or t.source_lut != null },
+        // Decoded by the sampler: encoded again, which gives back the codes.
+        .display_sdr => if (srgb_sampled) .{ .mode = 4, .run = true } else .{ .mode = 0, .run = false },
+        .surface_linear => .{ .mode = 4, .run = true },
+    };
+}
+
+/// The uniforms for `t`, its source read as `mode`. A texture passed
+/// through (`Texture.encoding` other than `.auto`) has no LUT.
 pub fn uniforms(t: gpu.Texture, mode: u32) Uniforms {
     var u: Uniforms = .{
         // A float pixel format does not imply linear light. Decoders can
@@ -53,6 +74,7 @@ pub fn uniforms(t: gpu.Texture, mode: u32) Uniforms {
         .transfer_mode = @backingInt(t.transfer),
         .hdr_tone_map = @intFromBool(t.tone_map),
     };
+    if (t.effectiveEncoding() != .auto) return u;
     if (t.lut) |l| if (l.valid()) {
         u.lut_enabled = 1;
         u.lut_size = @floatFromInt(l.size);
@@ -153,6 +175,13 @@ pub fn linearToDisplay(rgb: [3]f32, u: Uniforms) [3]f32 {
     return out;
 }
 
+/// Linear light for the surface (source mode 4: `Encoding.surface_linear`)
+/// on an SDR surface: clamped to [0, 1] and sRGB encoded. No tone map, no
+/// LUT: values above SDR white clip.
+pub fn surfaceLinearToSdr(rgb: [3]f32) [3]f32 {
+    return .{ linearToSrgb(std.math.clamp(rgb[0], 0, 1)), linearToSrgb(std.math.clamp(rgb[1], 0, 1)), linearToSrgb(std.math.clamp(rgb[2], 0, 1)) };
+}
+
 /// A 3D LUT sampled as Metal's linear, clamped sampler samples its
 /// texture at texel centres (`alc_apply_cube`): trilinear between the
 /// nearest grid points.
@@ -191,8 +220,9 @@ fn lerp(a: f32, b: f32, t: f32) f32 {
 }
 
 /// The stage after the source is decoded: the source LUT, then the
-/// output LUT, as `alc_post_fs` ends.
+/// output LUT, as `alc_post_fs` ends. None for a texture passed through.
 pub fn applyLuts(t: gpu.Texture, rgb: [3]f32) [3]f32 {
+    if (t.effectiveEncoding() != .auto) return rgb;
     var c = rgb;
     if (t.source_lut) |l| c = applyLut(l, c);
     if (t.lut) |l| c = applyLut(l, c);

@@ -137,6 +137,9 @@ pub const Slots = struct {
         const d = video.describe(tex);
         if (!video.usable(t, d)) return null;
         const e = video.effective(t, d);
+        // BGRA needing no stage (display BGRA, or passed through) is copied;
+        // half floats and packed 10-bit RGB passed through as display codes
+        // are sampled raw by the stage (source mode 0) into the BGRA target.
         const copy = d.format == api.bgra8 and !e.needsPost();
         if (!copy and s.post == null) {
             if (s.post_failed) return null;

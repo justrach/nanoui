@@ -2,8 +2,9 @@
 // HLSL, line for line. An app's ID3D11Texture2D that isn't display BGRA, or
 // has a LUT, is made display sRGB at its own size before the frame samples
 // it: source modes 1 and 2 are 8- and 10-bit two-plane Y'CbCr (an NV12 or
-// P010 texture's luma and chroma views), 3 linear half floats; then the
-// source LUT and the output LUT. color.zig computes the same on the CPU.
+// P010 texture's luma and chroma views), 3 linear half floats, 4 linear
+// light for the surface clipped and sRGB encoded (no LUT); then the source
+// LUT and the output LUT. color.zig computes the same on the CPU.
 cbuffer PostUniforms : register(b0) {
     float4 domainMin;
     float4 domainMax;
@@ -99,6 +100,8 @@ float4 alc_post_ps(float4 pos : SV_Position) : SV_Target {
         if (hdrToneMap == 1u) l3 = l3 / (1.0 + l3);
         color = float4(linear_to_srgb(saturate(l3)), 1.0);
     }
+    // Linear light for the surface, on an SDR one: clipped and encoded, no tone map.
+    if (sourceMode == 4u) color = float4(linear_to_srgb(saturate(color.rgb)), color.a);
     if (sourceLutEnabled == 1u) color = float4(apply_cube_source(color.rgb, sourceDomainMin.rgb, sourceDomainMax.rgb, sourceLutSize), color.a);
     if (lutEnabled == 0u) return color;
     return float4(apply_cube_lut(color.rgb, domainMin.rgb, domainMax.rgb, lutSize), color.a);

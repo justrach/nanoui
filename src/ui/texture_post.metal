@@ -4,7 +4,9 @@
 // (packages/media/csrc/macos/avfoundation_shared.h, kAlcPostProcessShaderSource,
 // which apps/editor/src/macos/monitor_host.m runs): source modes 1 and 2
 // are 8- and 10-bit two-plane Y'CbCr, 3 linear half floats; then the
-// source LUT and the output LUT. color.zig computes the same on the CPU.
+// source LUT and the output LUT. Mode 4 is nanoui's own, not the app's: a
+// texture of linear light for the surface (`Encoding.surface_linear`)
+// clipped and sRGB encoded for an SDR one, with no LUT. color.zig computes the same on the CPU.
 // Its own `#include` and `using` lines are the ones shader.metal has. One
 // change: a 10-bit code sits in the top of a 16-bit word, so R16Unorm reads
 // code * 64 / 65535, a thousandth under code / 1023 (white, 940, short of
@@ -54,6 +56,9 @@ fragment float4 alc_post_fs(float4 pos [[position]], constant PostUniforms& u [[
         if (u.hdrToneMap == 1u) lin = lin / (1.0 + lin);
         color = float4(alc_linear_to_srgb(clamp(lin, 0.0, 1.0)), 1.0);
     }
+    // Linear light for the surface, on an SDR one: clipped and encoded, no
+    // tone map. Its alpha is kept (premultiplied, as the app stored it).
+    if (u.sourceMode == 4u) color = float4(alc_linear_to_srgb(clamp(color.rgb, 0.0, 1.0)), color.a);
     if (u.sourceLutEnabled == 1u) color = float4(alc_apply_cube(color.rgb, u.sourceDomainMin.rgb, u.sourceDomainMax.rgb, u.sourceLutSize, sourceLut, lutSampler), color.a);
     if (u.lutEnabled == 0u) return color;
     return float4(alc_apply_cube(color.rgb, u.domainMin.rgb, u.domainMax.rgb, u.lutSize, lut, lutSampler), color.a);

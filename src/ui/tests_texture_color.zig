@@ -295,3 +295,38 @@ test "a linear half-float frame ('RGhA') is encoded for the display, tone mapped
         try expectMatches(tex, Oracle{ .lin = &lin });
     }
 }
+
+test "a Y'CbCr frame ignores an encoding: its range, matrix and transfer say what it is" {
+    if (text.portable) return error.SkipZigTest;
+    const gpa = testing.allocator;
+    const pb = try makeBuffer("420v");
+    defer CFRelease(pb);
+    const ybase = CVPixelBufferGetBaseAddressOfPlane(pb, 0).?;
+    const ystride = CVPixelBufferGetBytesPerRowOfPlane(pb, 0);
+    const cbase = CVPixelBufferGetBaseAddressOfPlane(pb, 1).?;
+    const cstride = CVPixelBufferGetBytesPerRowOfPlane(pb, 1);
+    for (0..n) |y| for (0..n) |x| {
+        ybase[y * ystride + x] = @intCast(16 + (x * 5 + y) % 220);
+    };
+    for (0..32) |y| for (0..32) |x| {
+        cbase[y * cstride + x * 2] = @intCast(40 + (x * 5) % 180);
+        cbase[y * cstride + x * 2 + 1] = @intCast(60 + (y * 3) % 150);
+    };
+    unlock(pb);
+    var frames: [3]gpu.Pixels = undefined;
+    var drawn: usize = 0;
+    defer for (frames[0..drawn]) |f| f.deinit(gpa);
+    for ([_]gpu.Encoding{ .auto, .display_sdr, .surface_linear }, 0..) |e, k| {
+        var tex = pixel_buffer.texture(pb);
+        tex.encoding = e;
+        var s: Scene = .{ .source = tex };
+        var t: ui.Tester = undefined;
+        try t.init(gpa, .init(&s, Scene.view), .{ .width = n, .height = n, .scale = 1 });
+        defer t.deinit();
+        t.settle(0.1);
+        frames[k] = try t.render(gpa);
+        drawn += 1;
+    }
+    try testing.expectEqualSlices(u8, frames[0].bytes, frames[1].bytes);
+    try testing.expectEqualSlices(u8, frames[0].bytes, frames[2].bytes);
+}
