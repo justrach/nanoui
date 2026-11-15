@@ -284,6 +284,10 @@ pub const raster = @import("raster.zig");
 pub const View = struct {
     ptr: *anyopaque,
     build: *const fn (ptr: *anyopaque, c: *Context) void,
+    /// Called once after a completed CPU frame, including retained scroll
+    /// frames. Does not imply GPU completion or presentation; must not
+    /// mutate the UI tree.
+    after_frame: ?*const fn (ptr: *anyopaque, c: *Context) void = null,
 
     /// `View.init(&state, State.view)` where `fn view(s: *State, c: *ui.Context) void`.
     pub fn init(ptr: anytype, comptime build_fn: fn (@TypeOf(ptr), *Context) void) View {
@@ -400,6 +404,7 @@ test {
     _ = @import("gif_decode.zig");
     _ = @import("images.zig");
     _ = @import("tests_images.zig");
+    if (!@import("text.zig").portable) _ = @import("tests_image_orientation.zig");
     _ = @import("pacing.zig");
     _ = @import("svg.zig");
     _ = @import("tests_svg.zig");
@@ -417,10 +422,13 @@ test {
     _ = keys;
     _ = @import("tests_textedit.zig");
     _ = @import("tests_field.zig");
+    _ = @import("text_selection.zig");
+    _ = @import("tests_text_selection.zig");
     _ = @import("tests_input.zig");
     _ = @import("tests_key_up.zig");
     _ = @import("tests_backtab.zig");
     _ = @import("retain.zig");
+    _ = @import("tests_after_frame.zig");
     if (@import("builtin").os.tag == .macos) {
         _ = @import("tests_menu.zig");
         _ = @import("tests_a11y.zig");

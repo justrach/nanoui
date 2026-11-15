@@ -26,6 +26,8 @@ pub const Options = struct {
     /// A menu bar app with no Dock icon, on the Mac.
     activation: enum { regular, accessory } = .regular,
     dock_menu: ?[]const menu_mod.MenuItem = null,
+    /// False vetoes `quit` before it changes state or stops the event loop.
+    should_terminate: ?*const fn (ctx: ?*anyopaque) bool = null,
     on_terminate: ?*const fn (ctx: ?*anyopaque) void = null,
     on_continue_activity: ?*const fn (ctx: ?*anyopaque, url: []const u8) void = null,
     on_active: ?*const fn (ctx: ?*anyopaque, active: bool) void = null,
@@ -139,7 +141,7 @@ pub const App = struct {
     }
 
     pub fn destroyImpl(self: *App) void {
-        while (self.windows.items.len > 0) self.windows.items[self.windows.items.len - 1].close();
+        while (self.windows.items.len > 0) self.windows.items[self.windows.items.len - 1].destroyNow();
         self.windows.deinit(self.gpa);
         while (self.trays.items.len > 0) self.trays.items[self.trays.items.len - 1].destroy();
         self.trays.deinit(self.gpa);
@@ -284,6 +286,7 @@ pub const App = struct {
 
     pub fn quit(self: *App) void {
         if (self.stopping) return;
+        if (self.options.should_terminate) |f| if (!f(self.options.ctx)) return;
         self.stopping = true;
         if (!self.running) return;
         if (gtk.v4) {

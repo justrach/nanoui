@@ -7,6 +7,7 @@ const testing = std.testing;
 const ui = @import("../ui/ui.zig");
 const gtk = @import("gtk.zig");
 const App = @import("app.zig").App;
+const Window = @import("window.zig").Window;
 
 const Page = struct {
     fn view(_: *Page, c: *ui.Context) void {
@@ -83,4 +84,83 @@ test "the view's theme choice draws that theme" {
     p.chosen = null;
     s.frame();
     try testing.expect(p.seen != null);
+}
+
+test "should_close keeps window up until allowed and destroyNow tears down" {
+    const app = try makeApp(testing.allocator);
+    defer app.destroy();
+    const Gate = struct {
+        allow: bool = false,
+        asked: u32 = 0,
+        closed: u32 = 0,
+        fn should(ctx: *anyopaque, _: *Window) bool {
+            const g: *@This() = @ptrCast(@alignCast(ctx));
+            g.asked += 1;
+            return g.allow;
+        }
+        fn onClose(ctx: *anyopaque, _: *Window) void {
+            const g: *@This() = @ptrCast(@alignCast(ctx));
+            g.closed += 1;
+        }
+        fn view(_: *@This(), c: *ui.Context) void {
+            ui.text(c, "veto", .{});
+        }
+    };
+    var g: Gate = .{};
+    const w = try app.newWindow(.{
+        .title = "veto",
+        .width = 160,
+        .height = 100,
+        .visible = false,
+        .should_close = .{ .ctx = &g, .func = Gate.should },
+        .on_close = .{ .ctx = &g, .func = Gate.onClose },
+        .content = .{ .view = .init(&g, Gate.view) },
+    });
+    w.close();
+    try testing.expectEqual(@as(u32, 1), g.asked);
+    try testing.expectEqual(@as(u32, 0), g.closed);
+    try testing.expectEqual(@as(usize, 1), app.windows.items.len);
+    // Final teardown via app.destroy uses destroyNow and bypasses the close veto.
+    const w2 = try app.newWindow(.{
+        .title = "veto-teardown",
+        .width = 160,
+        .height = 100,
+        .visible = false,
+        .should_close = .{ .ctx = &g, .func = Gate.should },
+        .on_close = .{ .ctx = &g, .func = Gate.onClose },
+        .content = .{ .view = .init(&g, Gate.view) },
+    });
+    g.allow = true;
+    w.close();
+    try testing.expectEqual(@as(u32, 2), g.asked);
+    try testing.expectEqual(@as(u32, 1), g.closed);
+    try testing.expectEqual(@as(usize, 1), app.windows.items.len);
+    g.allow = false;
+    _ = w2;
+}
+
+test "should_terminate keeps app running until allowed" {
+    const app = try makeApp(testing.allocator);
+    defer app.destroy();
+    const Gate = struct {
+        allow: bool = false,
+        asked: u32 = 0,
+        fn should(ctx: ?*anyopaque) bool {
+            const g: *@This() = @ptrCast(@alignCast(ctx.?));
+            g.asked += 1;
+            return g.allow;
+        }
+    };
+    var g: Gate = .{};
+    app.options.ctx = &g;
+    app.options.should_terminate = Gate.should;
+    app.quit();
+    try testing.expectEqual(@as(u32, 1), g.asked);
+    try testing.expect(!app.stopping);
+    g.allow = true;
+    app.quit();
+    try testing.expectEqual(@as(u32, 2), g.asked);
+    try testing.expect(app.stopping);
+    app.quit();
+    try testing.expectEqual(@as(u32, 2), g.asked);
 }

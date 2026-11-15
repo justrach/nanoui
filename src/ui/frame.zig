@@ -23,6 +23,7 @@ pub const Result = struct {
 };
 
 pub fn run(c: *Context, view: View, ts: *text.TextSystem, instances: *std.ArrayList(gpu.Instance), size: types.Size, scale: f32, theme: Theme, dt: f32, time: f64) Result {
+    defer if (view.after_frame) |after| after(view.ptr, c);
     if (retain.shift(c, instances, size, scale)) {
         c.stats.retained = true;
         c.stats.build_ms = 0;

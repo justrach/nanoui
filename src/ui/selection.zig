@@ -8,6 +8,7 @@ const std = @import("std");
 const types = @import("types.zig");
 const gpu = @import("gpu.zig");
 const text_mod = @import("text.zig");
+const text_selection = @import("text_selection.zig");
 
 pub const Point = struct { id: u64, at: usize };
 
@@ -110,9 +111,14 @@ pub fn line(c: anytype, out: *std.ArrayList(gpu.Instance), id: u64, index: u32, 
     if (!covered and area.contains(m)) {
         const at = start + indexAt(lay, m.x - x, end - start);
         s.hit = .{ .id = id, .at = at };
-        const te = @import("textedit.zig");
-        const word_at = if (at > start and (at >= end or !te.isWordByte(str[at])) and te.isWordByte(str[at - 1])) at - 1 else at;
-        s.hit_word = .{ te.prevWord(str, word_at), te.nextWord(str, word_at) };
+        // A word click owns the glyph cell under the pointer, not the nearest
+        // insertion caret (which may jump to the preceding/following word on a
+        // wide emoji or combining cluster). Only double-click needs Unicode word
+        // bounds; ordinary hovering/dragging avoids scanning long paragraphs.
+        if (c.input.click_count == 2) {
+            const word_at = start + text_selection.glyphClusterAt(lay.glyphs, lay.width, m.x - x);
+            s.hit_word = text_selection.wordRange(str, word_at);
+        }
         s.hit_line = .{ start, end };
         s.hit_str = str;
         // Over text that selects: the text cursor, as over a text field.
