@@ -112,6 +112,15 @@ pub const Demo = struct {
             kit.avatar(c, .{ .name = "Ada Lovelace" });
             kit.avatarGroup(c, &.{ "Grace Hopper", "Alan Turing", "Margaret Hamilton", "Linus Torvalds", "Barbara Liskov", "Ken Thompson" }, .{});
         }
+        {
+            const r = row(c);
+            defer r.end();
+            ui.text(c, "Keycaps", .{ .size = 12.5, .color = c.theme.muted });
+            kit.kbd(c, ui.keys.label("⌘K"));
+            kit.kbd(c, ui.keys.label("⇧⌘P"));
+            kit.kbd(c, "Esc");
+            kit.kbd(c, "↵");
+        }
         if (d.alert and kit.alert(c, .{ .status = .warning, .title = "Your trial ends in 3 days", .description = "Add a payment method to keep your projects. You can close this.", .closable = true })) d.alert = false;
         _ = kit.alert(c, .{ .status = .success, .title = "Deployed", .description = "nanoui 0.3 is live." });
         {

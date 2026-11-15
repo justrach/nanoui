@@ -77,3 +77,38 @@ test "let go past the threshold refreshes once; short of it, not" {
     t.settle(1.5);
     try testing.expectEqual(@as(u32, 1), s.refreshed);
 }
+
+test "rollText animates middle graphemes on change, settles idle, and honors reduced_motion" {
+    const RollLabel = struct {
+        label: []const u8 = "Opus 4.5 · Fast",
+
+        fn view(self: *@This(), c: *ui.Context) void {
+            const col = ui.div(c).column().p(12);
+            defer col.end();
+            motion.rollText(c, "pill", self.label, .{ .size = 20 }, .{});
+        }
+    };
+    var app: RollLabel = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&app, RollLabel.view), .{ .width = 320, .height = 100 });
+    defer t.deinit();
+    t.frame();
+    try testing.expect(!t.ctx.animating);
+    try testing.expect(t.hasText("Opus 4.5 · Fast"));
+
+    app.label = "Opus 4.6 · Fast";
+    t.frame();
+    try testing.expect(t.ctx.animating);
+    try testing.expect(t.hasText("Opus 4."));
+    try testing.expect(t.hasText(" · Fast"));
+
+    t.settle(1.0);
+    try testing.expect(!t.ctx.animating);
+    try testing.expect(t.hasText("Opus 4.6 · Fast"));
+
+    t.ctx.reduced_motion = true;
+    app.label = "Sonnet 4.6 · Fast";
+    t.frame();
+    try testing.expect(!t.ctx.animating);
+    try testing.expect(t.hasText("Sonnet 4.6 · Fast"));
+}

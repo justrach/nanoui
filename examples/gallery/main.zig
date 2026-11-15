@@ -59,6 +59,7 @@ const Gallery = struct {
     motion: @import("motion.zig").Demo = .{},
     kit: @import("kit.zig").Demo = .{},
     glass: @import("glass.zig").Demo = .{},
+    typography: @import("typography.zig").Demo = .{},
     /// The app, so a page can make a window of its own: the Windows page does,
     /// because a borderless or translucent window is the only way to see what
     /// those options do.
@@ -119,7 +120,7 @@ const Gallery = struct {
         switch (g.page) {
             0 => g.controls(c),
             1 => g.tasks(c),
-            2 => g.typography(c),
+            2 => g.typography.view(c),
             else => g.bigList(c),
         }
     }
@@ -517,22 +518,6 @@ const Gallery = struct {
         ui.text(c, if (g.demo_borderless) "borderless: no title bar, no frame." else "decorated: drag the title bar.", .{});
         ui.text(c, if (g.demo_skip_taskbar) "Out of the taskbar and Alt-Tab." else "In the taskbar and Alt-Tab.", .{});
         ui.textf(c, .{ .color = c.theme.muted }, "opacity {d:.0}%", .{g.demo_opacity * 100});
-    }
-
-    fn typography(_: *Gallery, c: *ui.Context) void {
-        ui.heading(c, "Typography");
-        ui.card(c, .{ .width = .fill, .gap = 10, .max_width = 640, .selectable = true });
-        defer ui.end(c);
-        ui.text(c, "Large Title", .{ .size = 30, .weight = .bold });
-        ui.text(c, "Title, semibold", .{ .size = 20, .weight = .semibold });
-        ui.text(c, "Body text in the system font, at 14 points.", .{});
-        ui.text(c, "const mono = \"monospaced, for code\";", .{ .mono = true, .size = 13 });
-        ui.text(c, "Unicode: naïve café — 日本語 — Ελληνικά — ✓ ★ →", .{});
-        ui.divider(c);
-        ui.text(c, "Text wraps to the width its box gets. Resize the window to watch these lines break " ++
-            "again: layout runs every frame, measured with CoreText, and each line is rasterized once into a " ++
-            "glyph atlas at the display's scale, then drawn as textured quads by one instanced Metal draw " ++
-            "call together with every rectangle, border and shadow on screen.", .{ .wrap = true, .color = c.theme.muted });
     }
 };
 

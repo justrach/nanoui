@@ -24,6 +24,7 @@ pub const Variant = button_mod.Variant;
 const display = @import("display.zig");
 pub const tag = display.tag;
 pub const badge = display.badge;
+pub const kbd = display.kbd;
 pub const avatar = display.avatar;
 pub const avatarGroup = display.avatarGroup;
 pub const alert = display.alert;
