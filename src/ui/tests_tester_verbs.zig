@@ -1,7 +1,8 @@
 //! The Tester's script verbs (`drop:`, `down:`/`move:`/`up`, `mods:`, the
 //! app's own), a frame asked for from another thread waking `pump`, and
 //! keyboard focus: Tab reaching a focusable box, Return and Space
-//! clicking it, the focus ring drawn round it.
+//! clicking it, the focus ring drawn round it; `settle` drawing the frames
+//! a view asks for at once.
 const std = @import("std");
 const testing = std.testing;
 const ui = @import("ui.zig");
@@ -143,4 +144,31 @@ test "focus: Tab reaches focusable boxes; Return and Space click; the ring shows
     t.ctx.input.shift = false;
     t.frame();
     try testing.expect(s.focused[0]);
+}
+
+/// Lays a box out from its own width in the frame before, as views that
+/// measure do: a guess first, then another frame asked for at once.
+const Measured = struct {
+    width: f32 = 0,
+    fn view(m: *Measured, c: *ui.Context) void {
+        ui.column(c, .{ .width = .fill, .padding = .all(10) });
+        defer ui.end(c);
+        const i = c.leaf(.{ .width = .fill, .height = .{ .px = 20 } }, .none, "measured");
+        if (c.rects.get(c.node(i).id)) |r| {
+            m.width = r.w;
+        } else c.frameIn(0);
+    }
+};
+
+test "settle draws the frames a view asks for at once" {
+    var m: Measured = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&m, Measured.view), .{});
+    defer t.deinit();
+    // `init` drew a frame already: back to one with no layout before it.
+    m = .{};
+    t.ctx.rects.clearRetainingCapacity();
+    t.settle(1);
+    try testing.expect(!t.ctx.animating);
+    try testing.expectApproxEqAbs(t.size.w - 20, m.width, 0.01);
 }

@@ -152,11 +152,19 @@ pub const Tester = struct {
         t.time += t.dt;
     }
 
-    /// Runs frames until animations settle (at most `max_seconds` of them).
+    /// Runs frames until animations settle (at most `max_seconds` of them),
+    /// and draws the frames a view asks for at once (`frameIn(0)`), as a
+    /// window would: a few, so a view that always asks can't hold it.
     pub fn settle(t: *Tester, max_seconds: f32) void {
         var elapsed: f32 = 0;
+        var at_once: u8 = 0;
         t.frame();
-        while (t.ctx.animating and elapsed < max_seconds) : (elapsed += t.dt) t.frame();
+        while (elapsed < max_seconds) : (elapsed += t.dt) {
+            const now = t.ctx.frame_in == 0 and at_once < 4;
+            if (!t.ctx.animating and !now) break;
+            if (now) at_once += 1;
+            t.frame();
+        }
     }
 
     /// Advances time by `seconds`, a frame at a time.
