@@ -4,6 +4,7 @@ defaultTargets = ["NanoUI", "nanoui-spec-report"]
 
 [[lean_lib]]
 name = "NanoUI"
+moreLeanArgs = ["-DwarningAsError=true"]
 
 [[lean_exe]]
 name = "nanoui-spec-report"
