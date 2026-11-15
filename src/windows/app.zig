@@ -28,6 +28,8 @@ pub const Options = struct {
     // The macOS app's other hooks, accepted here and not called yet.
     on_reopen: ?*const fn (ctx: ?*anyopaque) void = null,
     dock_menu: ?[]const menu_mod.MenuItem = null,
+    /// False vetoes `quit` before it changes state or stops the event loop.
+    should_terminate: ?*const fn (ctx: ?*anyopaque) bool = null,
     on_terminate: ?*const fn (ctx: ?*anyopaque) void = null,
     on_continue_activity: ?*const fn (ctx: ?*anyopaque, url: []const u8) void = null,
     on_active: ?*const fn (ctx: ?*anyopaque, active: bool) void = null,
@@ -359,6 +361,7 @@ pub const App = struct {
 
     pub fn quit(self: *App) void {
         if (self.stopping) return;
+        if (self.options.should_terminate) |f| if (!f(self.options.ctx)) return;
         self.stopping = true;
         if (self.running) w.PostQuitMessage(0);
     }

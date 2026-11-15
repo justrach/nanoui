@@ -21,6 +21,10 @@ pub const Options = struct {
     on_reopen: ?*const fn (ctx: ?*anyopaque) void = null,
     /// The Dock icon's menu, above the system's items.
     dock_menu: ?[]const menu_mod.MenuItem = null,
+    /// Asked before any quit takes effect (including the native Quit command).
+    /// False leaves the app running; after asynchronous confirmation, call
+    /// `quit` again and return true only once it is safe to terminate.
+    should_terminate: ?*const fn (ctx: ?*anyopaque) bool = null,
     /// The app is about to quit (⌘Q, its last window, `quit`): save what must be saved.
     on_terminate: ?*const fn (ctx: ?*anyopaque) void = null,
     /// Handoff from another device: the page's address.
@@ -312,6 +316,7 @@ pub const App = struct {
     /// Stops the event loop; `run` returns once the current event is handled.
     pub fn quit(self: *App) void {
         if (self.stopping) return;
+        if (self.options.should_terminate) |f| if (!f(self.options.ctx)) return;
         self.stopping = true;
         if (self.options.on_terminate) |f| f(self.options.ctx);
         if (!self.running) return;

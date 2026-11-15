@@ -300,3 +300,58 @@ test "same-window responder transfer releases native held keys without resigning
     try testing.expect(!s.ctx.input.shift and !s.ctx.input.keys_release_pending);
     try testing.expectEqual(@as(u64, 0), s.ctx.focus);
 }
+
+test "native termination veto runs before stopping or termination callbacks" {
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var env: std.process.Environ.Map = .init(testing.allocator);
+    defer env.deinit();
+    const Gate = struct {
+        allow: bool = false,
+        asked: usize = 0,
+        terminated: usize = 0,
+        fn should(ctx: ?*anyopaque) bool {
+            const self: *@This() = @ptrCast(@alignCast(ctx.?));
+            self.asked += 1;
+            return self.allow;
+        }
+        fn done(ctx: ?*anyopaque) void {
+            const self: *@This() = @ptrCast(@alignCast(ctx.?));
+            self.terminated += 1;
+        }
+        fn view(_: *@This(), _: *ui.Context) void {}
+    };
+    var gate: Gate = .{};
+    const app = try App.create(@as(std.process.Init, .{
+        .minimal = .{ .environ = .empty, .args = .{ .vector = &.{ "termination-veto-test", "--nanoui-hidden" } } },
+        .arena = &arena,
+        .gpa = testing.allocator,
+        .io = testing.io,
+        .environ_map = &env,
+        .preopens = .empty,
+    }), .{ .ctx = &gate, .should_terminate = Gate.should, .on_terminate = Gate.done });
+    defer app.destroy();
+    const window = try app.newWindow(.{ .visible = false, .content = .{ .view = .init(&gate, Gate.view) } });
+    try testing.expectEqual(objc.NO, objc.msg(objc.BOOL, window.nswindow, "isVisible", .{}));
+    // Real delegate + real hidden window; keep NSApp itself idle when quit
+    // is finally allowed so App.quit stops short of posting to an unstarted loop.
+    const response = objc.msg(objc.NSUInteger, app.delegate, "applicationShouldTerminate:", .{app.nsapp});
+    try testing.expectEqual(@as(objc.NSUInteger, 0), response);
+    try testing.expect(!app.stopping);
+    try testing.expectEqual(@as(usize, 1), gate.asked);
+    try testing.expectEqual(@as(usize, 0), gate.terminated);
+    app.quit();
+    try testing.expect(!app.stopping);
+    try testing.expectEqual(@as(usize, 2), gate.asked);
+    try testing.expectEqual(@as(usize, 0), gate.terminated);
+    gate.allow = true;
+    _ = objc.msg(objc.NSUInteger, app.delegate, "applicationShouldTerminate:", .{app.nsapp});
+    try testing.expect(app.stopping);
+    try testing.expectEqual(@as(usize, 3), gate.asked);
+    try testing.expectEqual(@as(usize, 1), gate.terminated);
+    app.quit();
+    try testing.expectEqual(@as(usize, 3), gate.asked);
+    try testing.expectEqual(@as(usize, 1), gate.terminated);
+}

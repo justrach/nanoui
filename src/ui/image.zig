@@ -78,9 +78,18 @@ extern "c" const kCGImageSourceThumbnailMaxPixelSize: cf.CFStringRef;
 extern "c" const kCGImageSourceCreateThumbnailWithTransform: cf.CFStringRef;
 extern "c" const kCGImagePropertyPixelWidth: cf.CFStringRef;
 extern "c" const kCGImagePropertyPixelHeight: cf.CFStringRef;
+extern "c" const kCGImagePropertyOrientation: cf.CFStringRef;
 
 pub const Fitted = struct { width: u32, height: u32, w: u32, h: u32, bgra: []u8 };
 pub const Dimensions = struct { width: u32, height: u32 };
+
+/// EXIF quarter turns (including mirrored ones) exchange the displayed axes.
+fn orientedDimensions(width: u32, height: u32, orientation: i32) Dimensions {
+    return if (orientation >= 5 and orientation <= 8)
+        .{ .width = height, .height = width }
+    else
+        .{ .width = width, .height = height };
+}
 
 /// A picture's header dimensions without decoding its pixels.
 pub fn dimensions(bytes: []const u8) ?Dimensions {
@@ -90,10 +99,12 @@ pub fn dimensions(bytes: []const u8) ?Dimensions {
     defer cf.CFRelease(src);
     var width: i32 = 0;
     var height: i32 = 0;
+    var orientation: i32 = 1;
     if (CGImageSourceCopyPropertiesAtIndex(src, 0, null)) |props| {
         defer cf.CFRelease(props);
         if (CFDictionaryGetValue(props, kCGImagePropertyPixelWidth)) |n| _ = CFNumberGetValue(n, 3, &width);
         if (CFDictionaryGetValue(props, kCGImagePropertyPixelHeight)) |n| _ = CFNumberGetValue(n, 3, &height);
+        if (CFDictionaryGetValue(props, kCGImagePropertyOrientation)) |n| _ = CFNumberGetValue(n, 3, &orientation);
     }
     if (width <= 0 or height <= 0) {
         const img = CGImageSourceCreateImageAtIndex(src, 0, null) orelse return null;
@@ -102,7 +113,7 @@ pub fn dimensions(bytes: []const u8) ?Dimensions {
         height = @intCast(CGImageGetHeight(img));
     }
     if (width <= 0 or height <= 0 or @as(u64, @intCast(width)) * @as(u64, @intCast(height)) > 64 * 1024 * 1024) return null;
-    return .{ .width = @intCast(width), .height = @intCast(height) };
+    return orientedDimensions(@intCast(width), @intCast(height), orientation);
 }
 
 /// A picture decoded straight to at most `max_side` pixels (ImageIO scales
@@ -115,15 +126,20 @@ pub fn decodeFit(gpa: std.mem.Allocator, bytes: []const u8, max_side: u32) !Fitt
     // Its own size, from its header.
     var width: i32 = 0;
     var height: i32 = 0;
+    var orientation: i32 = 1;
     if (CGImageSourceCopyPropertiesAtIndex(src, 0, null)) |props| {
         defer cf.CFRelease(props);
         if (CFDictionaryGetValue(props, kCGImagePropertyPixelWidth)) |n| _ = CFNumberGetValue(n, 3, &width);
         if (CFDictionaryGetValue(props, kCGImagePropertyPixelHeight)) |n| _ = CFNumberGetValue(n, 3, &height);
+        if (CFDictionaryGetValue(props, kCGImagePropertyOrientation)) |n| _ = CFNumberGetValue(n, 3, &orientation);
     }
-    const orig_w: u32 = if (width > 0) @intCast(width) else 0;
-    const orig_h: u32 = if (height > 0) @intCast(height) else 0;
+    const original = orientedDimensions(if (width > 0) @intCast(width) else 0, if (height > 0) @intCast(height) else 0, orientation);
+    const orig_w = original.width;
+    const orig_h = original.height;
     const orig_longest: u32 = @max(orig_w, orig_h);
-    if (orig_longest > 0 and (orig_longest <= 256 or orig_longest <= max_side)) {
+    // The direct path does not apply EXIF transforms. Rotated or mirrored
+    // pictures must use the transformed thumbnail path even when small or <= max_side.
+    if (orientation == 1 and orig_longest > 0 and (orig_longest <= 256 or orig_longest <= max_side)) {
         const img = CGImageSourceCreateImageAtIndex(src, 0, null) orelse return error.NotImage;
         defer CGImageRelease(img);
         const iw = CGImageGetWidth(img);
@@ -172,8 +188,8 @@ pub fn decodeFit(gpa: std.mem.Allocator, bytes: []const u8, max_side: u32) !Fitt
     CGContextSetInterpolationQuality(ctx, 3);
     CGContextDrawImage(ctx, .{ .origin = .{ .x = 0, .y = 0 }, .size = .{ .width = @floatFromInt(w), .height = @floatFromInt(h) } }, img);
     return .{
-        .width = if (width > 0) @intCast(width) else @intCast(w),
-        .height = if (height > 0) @intCast(height) else @intCast(h),
+        .width = if (orig_w > 0) orig_w else @intCast(w),
+        .height = if (orig_h > 0) orig_h else @intCast(h),
         .w = @intCast(w),
         .h = @intCast(h),
         .bgra = out,

@@ -3,6 +3,18 @@
 nanoui's own source code is licensed under the MIT License in
 [`LICENSE`](LICENSE). The material below keeps its own copyright and license.
 
+## Unicode Character Database
+
+Pointer word and grapheme selection (`src/ui/text_selection*.zig`) uses
+Unicode 17.0.0 property tables generated from `GraphemeBreakProperty.txt`,
+`emoji-data.txt`, `DerivedCoreProperties.txt` (`Indic_Conjunct_Break`), and
+`UnicodeData.txt`, plus the unmodified Unicode `GraphemeBreakTest.txt`
+conformance vectors (`src/ui/grapheme_break_test_1.txt`,
+`src/ui/grapheme_break_test_2.txt`). Source URLs are recorded in
+`src/ui/text_selection_data.zig`. Unicode data is Copyright © 1991–2026
+Unicode, Inc., under the [Unicode License V3](third_party/licenses/Unicode-3.0.txt).
+These tables and vectors are distributed with that notice intact.
+
 ## mygo
 
 nanoui began as a port of the core of [mygo](https://github.com/egoist/mygo)
