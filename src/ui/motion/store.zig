@@ -35,6 +35,18 @@ pub const State = struct {
     pointer_last: [2]f32 = .{ 0, 0 },
     pointer_time: f64 = 0,
     pointer_vel: [2]f32 = .{ 0, 0 },
+    /// Rolling text morph (`roll_text.zig`): previous vs current label.
+    roll: Roll = .{},
+};
+
+pub const Roll = struct {
+    last_frame: u64 = 0,
+    cur_buf: [64]u8 = undefined,
+    cur_len: u8 = 0,
+    from_buf: [64]u8 = undefined,
+    from_len: u8 = 0,
+    started: f64 = 0,
+    active: bool = false,
 };
 
 pub const Store = struct {

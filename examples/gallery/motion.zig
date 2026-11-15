@@ -20,6 +20,8 @@ pub const Demo = struct {
     seed: u64 = 7,
     /// The shared chip sits on the right.
     chip_right: bool = false,
+    /// Rolling label morph preset index.
+    label_idx: usize = 0,
     /// Replay the letters' entrance.
     letters: u32 = 0,
 
@@ -59,6 +61,7 @@ pub const Demo = struct {
         d.list(c);
         d.dragSnap(c);
         d.shared(c);
+        d.rollLabels(c);
         d.typeIn(c);
         d.easings(c);
     }
@@ -175,6 +178,31 @@ pub const Demo = struct {
                 defer chip.end();
             }
         }
+    }
+
+    fn rollLabels(d: *Demo, c: *ui.Context) void {
+        const th = c.theme;
+        const presets = [_][]const u8{
+            "Opus 4.6 · Fast",
+            "Opus 4.7 · Fast",
+            "Sonnet 4.6 · Fast",
+            "feature/glass",
+            "fix/glass",
+            "nanoui v0.14.6",
+        };
+        const box = ui.div(c).column().wFull().gap(10);
+        defer box.end();
+        {
+            const r = ui.div(c).row().gap(8).itemsCenter();
+            defer r.end();
+            ui.text(c, "Rolling label morph", .{ .weight = .semibold });
+            ui.spacer(c);
+            if (ui.button(c, "Next label", .{}).clicked) d.label_idx = (d.label_idx + 1) % presets.len;
+        }
+        const pill = ui.div(c).row().px(14).py(8).rounded(10).bg(th.surface).border(th.border);
+        motion.rollText(c, "model-pill", presets[d.label_idx], .{ .size = 20, .weight = .semibold, .color = th.text }, .{});
+        pill.end();
+        ui.text(c, "Shared leading and trailing graphemes stay anchored while the changed middle rolls.", .{ .size = 12, .color = th.muted });
     }
 
     fn typeIn(d: *Demo, c: *ui.Context) void {

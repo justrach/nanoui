@@ -59,6 +59,8 @@ pub const TextUnit = @import("text.zig").Unit;
 pub const TextOptions = @import("text.zig").Options;
 pub const roll = @import("roll.zig").roll;
 pub const RollOptions = @import("roll.zig").Options;
+pub const rollText = @import("roll_text.zig").rollText;
+pub const RollTextOptions = @import("roll_text.zig").Options;
 pub const Pull = @import("pull.zig").Pull;
 const Color = types.Color;
 
@@ -225,7 +227,7 @@ pub fn stagger(i: usize, each: f32) f32 {
     return @as(f32, @floatFromInt(i)) * each;
 }
 
-fn scoped(c: *Context, key: []const u8) u64 {
+pub fn scoped(c: *Context, key: []const u8) u64 {
     var h = std.hash.Wyhash.init(c.peekId(null));
     h.update("motion:");
     h.update(key);
@@ -319,5 +321,6 @@ test {
     _ = @import("share.zig");
     _ = @import("text.zig");
     _ = @import("roll.zig");
+    _ = @import("roll_text.zig");
     _ = @import("pull.zig");
 }

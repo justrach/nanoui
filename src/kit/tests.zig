@@ -40,6 +40,7 @@ const App = struct {
             if (m.clicked) a.menu = !a.menu;
             a.menu_anchor = m.rect;
             if (kit.button(c, "Toast", .{ .variant = .ghost }).clicked) a.toaster.push(.{ .status = .success, .title = "Saved", .message = "All good.", .duration = 1 });
+            kit.kbd(c, ui.keys.label("⌘K"));
         }
         _ = kit.tabs(c, &.{ "One", "Two", "Three" }, &a.tab, .{});
         if (kit.collapsible(c, "more", "More", &a.open)) |s| {
@@ -96,6 +97,7 @@ test "buttons, tabs, radios, the number input and pagination" {
     var path_buf: [256]u8 = undefined;
     try t.screenshot(try @import("../temp_path.zig").tempPath(&path_buf, "nanoui-kit.png"));
     try testing.expect(t.hasText("AL"));
+    try testing.expect(t.hasText(ui.keys.label("⌘K")));
 }
 
 /// The opacity of the button labeled `label`.
