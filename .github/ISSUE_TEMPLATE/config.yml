@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 💬 Questions, Debugging & Community Help (Discord)
+    url: https://discord.gg/EmTpv7rmTA
+    about: Ask questions about Native UI, nanoui.kit, Webview IPC, or cross-compiling in the #help forum on Discord.

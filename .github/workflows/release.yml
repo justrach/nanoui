@@ -39,3 +39,43 @@ jobs:
           flags=""
           case "$GITHUB_REF_NAME" in *-*) flags="--prerelease" ;; esac
           gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes --title "nanoui ${GITHUB_REF_NAME#v}" $flags
+      - name: Announce release on Discord
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_ANNOUNCEMENTS_WEBHOOK }}
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess, urllib.request
+
+          webhook = os.environ.get("DISCORD_WEBHOOK", "").strip()
+          if not webhook:
+              raise SystemExit(0)
+          tag = os.environ["GITHUB_REF_NAME"]
+          rel = json.loads(subprocess.check_output(
+              ["gh", "release", "view", tag, "--json", "name,body,url,isPrerelease"],
+              text=True,
+          ))
+          body = (rel.get("body") or f"Released `{tag}` on GitHub.").strip()
+          if len(body) > 3800:
+              body = body[:3797].rstrip() + "..."
+          payload = {
+              "embeds": [{
+                  "title": f"🚀 {rel.get('name') or ('nanoui ' + tag.lstrip('v'))}",
+                  "url": rel["url"],
+                  "description": body,
+                  "color": 16229405,
+              }],
+          }
+          req = urllib.request.Request(
+              webhook + "?wait=true",
+              data=json.dumps(payload).encode("utf-8"),
+              headers={
+                  "Content-Type": "application/json",
+                  "User-Agent": "DiscordBot (https://nanoui.dev, 1.0)",
+              },
+              method="POST",
+          )
+          with urllib.request.urlopen(req) as resp:
+              assert 200 <= resp.status < 300
+          PY
