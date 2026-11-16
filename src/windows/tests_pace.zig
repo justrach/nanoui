@@ -10,6 +10,38 @@ const App = @import("app.zig").App;
 const loop = @import("loop.zig");
 const pace_side = @import("surface_pace.zig");
 
+test "a beat stays outstanding throughout a slow frame so input can run next" {
+    const Slow = struct {
+        surface: ?*@import("surface.zig").Surface = null,
+        observed: bool = false,
+        outstanding: bool = false,
+        fn view(p: *@This(), c: *ui.Context) void {
+            if (p.surface) |s| {
+                p.observed = true;
+                p.outstanding = s.vclock.?.posted.load(.acquire);
+                std.Io.sleep(std.Io.Threaded.global_single_threaded.io(), .fromMilliseconds(40), .awake) catch {};
+            }
+            ui.text(c, "slow animation", .{});
+            c.animating = true;
+        }
+    };
+    const app = try makeApp(testing.allocator);
+    defer app.destroy();
+    var p: Slow = .{};
+    const win = try app.newWindow(.{ .title = "slow beat", .width = 200, .height = 100, .visible = false, .content = .{ .view = .init(&p, Slow.view) } });
+    const s = win.surface.?;
+    const clock = s.vclock orelse return error.SkipZigTest;
+    // Pause the producer: the test controls the outstanding message without
+    // depending on where a real monitor happens to be in its refresh.
+    clock.run(false);
+    clock.posted.store(true, .release);
+    p.surface = s;
+    pace_side.onBeat(s);
+    try testing.expect(p.observed);
+    try testing.expect(p.outstanding);
+    try testing.expect(!clock.posted.load(.acquire));
+}
+
 const Counter = struct {
     builds: usize = 0,
     animate: bool = false,

@@ -72,7 +72,11 @@ pub fn onInput(s: *Surface) void {
 /// when nothing more is coming.
 pub fn onBeat(s: *Surface) void {
     const c = s.vclock orelse return;
-    c.consumed();
+    // Keep the beat outstanding until its frame has finished. Clearing it
+    // first lets a slow build queue another WM_VBLANK before returning to
+    // GetMessage. Posted messages precede hardware input and WM_PAINT, so
+    // continuous animation can then starve both indefinitely.
+    defer c.consumed();
     if (!s.ticking) return;
     const now = clock.now();
     if (s.pace.beat(now, s.ctx.animating or s.hot_moving)) {
