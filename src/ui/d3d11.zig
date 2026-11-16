@@ -13,7 +13,7 @@ const raster = @import("raster.zig");
 const text_blend = @import("text_blend.zig");
 const d3d11_glass = @import("d3d11_glass.zig");
 const d3d11_texture = @import("d3d11_texture.zig");
-const source = @embedFile("shader.hlsl");
+const source = @embedFile("shader.hlsl") ++ @embedFile("corner_sdf.hlsl");
 
 const api = @import("d3d11_glue.zig");
 const Target = api.Target;

@@ -42,17 +42,21 @@ pub fn hasMatrix(i: *const Instance) bool {
 
 /// The clip rectangle's corners rounded by `radius`: those in `corners`
 /// (1 top left, 2 top right, 4 bottom right, 8 bottom left), packed in one
-/// float as the shader reads it.
+/// float as the shader reads it. Negative radius keeps circular corners,
+/// positive radius keeps the continuous corner shape.
 pub fn clipRound(radius: f32, corners: u4) f32 {
-    if (corners == 0 or radius <= 0) return 0;
-    return @as(f32, @floatFromInt(corners)) * 4096 + @min(radius, 4095);
+    if (corners == 0 or radius == 0) return 0;
+    const packed_radius = @as(f32, @floatFromInt(corners)) * 4096 + @min(@abs(radius), 4095);
+    return if (radius < 0) -packed_radius else packed_radius;
 }
 
 /// `clipRound` unpacked: the radius and the corners.
 pub fn clipCorners(v: f32) struct { radius: f32, corners: u4 } {
-    if (v <= 0) return .{ .radius = 0, .corners = 0 };
-    const m = @floor(v / 4096);
-    return .{ .radius = v - m * 4096, .corners = @intFromFloat(m) };
+    if (v == 0) return .{ .radius = 0, .corners = 0 };
+    const magnitude = @abs(v);
+    const m = @floor(magnitude / 4096);
+    const radius = magnitude - m * 4096;
+    return .{ .radius = if (v < 0) -radius else radius, .corners = @intFromFloat(m) };
 }
 
 pub const Kind = struct {
