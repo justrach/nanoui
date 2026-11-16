@@ -37,6 +37,7 @@ pub fn paintGpu(self: *Surface, h: w.HWND) bool {
         };
         // The beat is this swap chain's monitor's from now on.
         @import("surface_pace.zig").updateOutput(self);
+        self.display_info = self.presenter.?.displayInfo();
     }
     const p = &self.presenter.?;
     // The drag state is set before the size is given to the swap chain: a drag
@@ -62,6 +63,15 @@ pub fn paintGpu(self: *Surface, h: w.HWND) bool {
     const bg = self.ctx.theme.background;
     p.setBackground(bg.r, bg.g, bg.b);
     g.sync(self.text.atlas.mask(), self.text.atlas.generation, self.text.images.pictures(), self.text.images.generation);
+    // What the app asked the window to show (`setColour`), at this frame's
+    // boundary: no back buffer is held yet (`ResizeBuffers` needs none).
+    if ((self.colour == .extended_linear) != p.extended) {
+        _ = p.setExtended(self.colour == .extended_linear);
+        self.display_info = p.displayInfo();
+        self.ctx.changed = true;
+    }
+    g.extended = p.extended;
+    g.sdr_white_scale = self.display_info.sdr_white_scale;
     // The back buffer is a COM reference: released before the swap chain may
     // be resized, or ResizeBuffers fails with DXGI_ERROR_INVALID_CALL
     // (0x887A0001) because a reference is still held.
@@ -148,6 +158,8 @@ pub fn present(self: *Surface, h: w.HWND) bool {
         };
     }
     const p = &self.presenter.?;
+    // The CPU's pixels are BGRA8: an scRGB chain goes back first.
+    if (p.extended) _ = p.setExtended(false);
     const bg = self.ctx.theme.background;
     p.setBackground(bg.r, bg.g, bg.b);
     p.upload(self.pixels.bytes, pw, ph) catch |e| {

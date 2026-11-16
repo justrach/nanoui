@@ -426,6 +426,9 @@ test {
     if (@import("builtin").os.tag == .windows) _ = @import("d3d11_device.zig");
     if (@import("builtin").os.tag == .windows) _ = @import("d3d11_video.zig");
     if (@import("builtin").os.tag == .windows) _ = @import("d3d11_texture.zig");
+    // An extended (scRGB) frame: the compose and the plane (Windows only).
+    if (@import("builtin").os.tag == .windows) _ = @import("tests_d3d11_hdr.zig");
+    if (@import("builtin").os.tag == .windows) _ = @import("d3d11_hdr.zig");
     _ = @import("icons.zig");
     _ = @import("frame_pace.zig");
     _ = keys;
