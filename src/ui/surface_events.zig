@@ -43,6 +43,7 @@ pub const methods = [_]objc.Method{
     .{ .name = "viewDidChangeBackingProperties", .imp = &backingChanged, .types = "v@:" },
     .{ .name = "viewDidChangeEffectiveAppearance", .imp = &appearanceChanged, .types = "v@:" },
     .{ .name = "accessibilityChanged:", .imp = &accessibilityChanged, .types = "v@:@" },
+    .{ .name = "nanouiDisplayChanged:", .imp = &displayChanged, .types = "v@:@" },
     .{ .name = "updateTrackingAreas", .imp = &updateTrackingAreas, .types = "v@:" },
     .{ .name = "cursorUpdate:", .imp = &cursorUpdate, .types = "v@:@" },
     .{ .name = "resetCursorRects", .imp = &resetCursorRects, .types = "v@:" },
@@ -358,6 +359,13 @@ fn accessibilityChanged(obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(
     const ws = objc.msg(objc.Object, objc.class("NSWorkspace"), "sharedWorkspace", .{});
     s.reduce_motion = objc.msg(objc.BOOL, ws, "accessibilityDisplayShouldReduceMotion", .{});
     if (s.visible()) s.requestFrame() else s.frame();
+}
+
+/// Another screen, or a screen's parameters changed (`Surface.on_display_change`).
+fn displayChanged(obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
+    const s = surfaceOf(obj) orelse return;
+    if (s.dead) return;
+    s.displayChanged();
 }
 
 fn updateTrackingAreas(obj: objc.Object, _: objc.SEL) callconv(.c) void {

@@ -110,6 +110,13 @@ pub const Context = struct {
     renderer: []const u8 = if (@import("text.zig").portable) "CPU" else "Metal",
     /// Wait for the display's refresh when presenting (Windows' Direct3D 11).
     vsync: bool = true,
+    /// What the display under the surface can show, as of this frame
+    /// (`DisplayInfo`; an SDR display's where the surface can't tell, and
+    /// what the Tester is given).
+    display_info: @import("gpu.zig").DisplayInfo = .{},
+    /// What the surface shows its pixels as, as of this frame
+    /// (`Surface.setColour`).
+    surface_colour: @import("gpu.zig").SurfaceColour = .sdr_srgb,
     /// `dt` is capped and reset after an idle frame, for animations;
     /// `frame_time` is the real gap, which a frame rate is read from.
     dt: f32 = 1.0 / 60.0,

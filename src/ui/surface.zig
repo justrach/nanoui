@@ -25,6 +25,13 @@ const pointer = @import("surface_pointer.zig");
 const frame_log_mod = @import("frame_log.zig");
 pub const FrameLog = frame_log_mod.FrameLog;
 pub const KeysReleased = struct { ctx: ?*anyopaque, func: *const fn (ctx: ?*anyopaque, s: *Surface) void };
+/// Called on the main thread when the display under a surface changes
+/// (`Surface.on_display_change`): it moved to another screen, or a
+/// screen's parameters changed (resolution, arrangement, HDR). The
+/// surface's `displayInfo` is already the new one.
+pub const DisplayChange = struct { ctx: ?*anyopaque, func: *const fn (ctx: ?*anyopaque, s: *Surface) void };
+const gpu = @import("gpu.zig");
+const display = @import("surface_display.zig");
 extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
 const pacing = @import("pacing.zig");
 const link_pace = @import("surface_pacing.zig");
@@ -112,6 +119,10 @@ pub const Surface = struct {
     /// Scrolling gathered for the link's next frame, and main's frame log.
     scroll: pacing.Scroll = .{},
     pacing_log: pacing.FrameLog = .{},
+    /// The display under the window as last read: each frame's `Context.display_info`.
+    display_info: gpu.DisplayInfo = .{},
+    /// The display under the window changed (`DisplayChange`).
+    on_display_change: ?DisplayChange = null,
     pub fn create(window: *Window, view: ui.View, theme_override: ?Theme) !*Surface {
         const gpa = window.app.gpa;
         const self = try gpa.create(Surface);
@@ -180,7 +191,12 @@ pub const Surface = struct {
             self.reduce_motion = objc.msg(objc.BOOL, ws, "accessibilityDisplayShouldReduceMotion", .{});
             const center = objc.msg(objc.Object, ws, "notificationCenter", .{});
             objc.msg(void, center, "addObserver:selector:name:object:", .{ nsview, objc.sel("accessibilityChanged:"), objc.nsString("NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification"), @as(?objc.Object, null) });
+            // The display under the window: another screen, or its parameters.
+            const dc = objc.msg(objc.Object, objc.class("NSNotificationCenter"), "defaultCenter", .{});
+            objc.msg(void, dc, "addObserver:selector:name:object:", .{ nsview, objc.sel("nanouiDisplayChanged:"), objc.nsString("NSApplicationDidChangeScreenParametersNotification"), @as(?objc.Object, null) });
+            objc.msg(void, dc, "addObserver:selector:name:object:", .{ nsview, objc.sel("nanouiDisplayChanged:"), objc.nsString("NSWindowDidChangeScreenNotification"), window.nswindow });
         }
+        self.readDisplay();
         self.refreshAppearance();
         self.is_visible = objc.msg(objc.BOOL, window.nswindow, "isVisible", .{}) and (objc.msg(objc.NSUInteger, window.nswindow, "occlusionState", .{}) & 2 != 0);
         self.updateGeometry();
@@ -209,6 +225,7 @@ pub const Surface = struct {
             objc.setZig(self.nsview, null);
             const ws = objc.msg(objc.Object, objc.class("NSWorkspace"), "sharedWorkspace", .{});
             objc.msg(void, objc.msg(objc.Object, ws, "notificationCenter", .{}), "removeObserver:", .{self.nsview});
+            objc.msg(void, objc.msg(objc.Object, objc.class("NSNotificationCenter"), "defaultCenter", .{}), "removeObserver:", .{self.nsview});
             @import("surface_keys.zig").unwatch(self.nsview);
             if (self.display_link) |link| {
                 if (objc.msg(objc.BOOL, link, "respondsToSelector:", .{objc.sel("setDelegate:")}))
@@ -299,6 +316,12 @@ pub const Surface = struct {
         return t;
     }
 
+    /// The display under the window, and what it shows (`surface_display.zig`).
+    pub const setColour = display.setColour;
+    pub const displayInfo = display.displayInfo;
+    pub const readDisplay = display.readDisplay;
+    pub const displayChanged = display.displayChanged;
+
     pub fn frame(self: *Surface) void {
         if (self.in_frame or self.dead) return;
         self.renderer.given_drawable = null;
@@ -328,6 +351,8 @@ pub const Surface = struct {
         self.frame_kind = kind;
         self.ctx.transparent_root = self.transparent;
         a11y.beforeFrame(self);
+        c.display_info = self.display_info;
+        c.surface_colour = self.renderer.colour;
         c.input.window_active = self.window.isFocused();
         c.window_focused = c.input.window_active;
         self.pacing_log.note(now);

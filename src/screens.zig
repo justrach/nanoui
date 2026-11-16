@@ -24,6 +24,15 @@ pub const Screen = struct {
     /// Pixels per point (2 on a Retina display).
     scale: f64,
     primary: bool,
+    /// Extended dynamic range (EDR): how far above SDR white the screen
+    /// goes now (1 until a window asks for EDR, and with the brightness),
+    /// at most, and in reference mode (0 when the screen has none); 1 on an
+    /// SDR screen.
+    edr_now: f64 = 1,
+    edr_potential: f64 = 1,
+    edr_reference: f64 = 0,
+    /// The screen can show Display P3 (a wider gamut than sRGB).
+    p3: bool = false,
     name_buf: [96]u8 = undefined,
     name_len: u8 = 0,
 
@@ -126,6 +135,7 @@ fn describe(sc: objc.Object, primary_h: f64, is_primary: bool) Screen {
         .scale = objc.msg(f64, sc, "backingScaleFactor", .{}),
         .primary = is_primary,
     };
+    readEdr(sc, &s);
     if (objc.msg(objc.BOOL, sc, "respondsToSelector:", .{objc.sel("localizedName")})) {
         const nm = objc.fromNSString(objc.msg(?objc.Object, sc, "localizedName", .{}));
         const len = @min(nm.len, s.name_buf.len);
@@ -133,6 +143,32 @@ fn describe(sc: objc.Object, primary_h: f64, is_primary: bool) Screen {
         s.name_len = @intCast(len);
     }
     return s;
+}
+
+/// The screen's extended dynamic range and gamut (`Screen.edr_now` …).
+fn readEdr(sc: objc.Object, s: *Screen) void {
+    if (objc.msg(objc.BOOL, sc, "respondsToSelector:", .{objc.sel("maximumExtendedDynamicRangeColorComponentValue")}))
+        s.edr_now = @max(1, objc.msg(f64, sc, "maximumExtendedDynamicRangeColorComponentValue", .{}));
+    if (objc.msg(objc.BOOL, sc, "respondsToSelector:", .{objc.sel("maximumPotentialExtendedDynamicRangeColorComponentValue")}))
+        s.edr_potential = @max(1, objc.msg(f64, sc, "maximumPotentialExtendedDynamicRangeColorComponentValue", .{}));
+    if (objc.msg(objc.BOOL, sc, "respondsToSelector:", .{objc.sel("maximumReferenceExtendedDynamicRangeColorComponentValue")}))
+        s.edr_reference = @max(0, objc.msg(f64, sc, "maximumReferenceExtendedDynamicRangeColorComponentValue", .{}));
+    // NSDisplayGamutP3 is 2.
+    if (objc.msg(objc.BOOL, sc, "respondsToSelector:", .{objc.sel("canRepresentDisplayGamut:")}))
+        s.p3 = objc.msg(objc.BOOL, sc, "canRepresentDisplayGamut:", .{@as(objc.NSInteger, 2)});
+}
+
+/// The screen an NSWindow is on (`[window screen]`), described; null when
+/// it is on none (offscreen, being moved).
+pub fn ofWindow(nswindow: objc.Object) ?Screen {
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    const sc = objc.msg(?objc.Object, nswindow, "screen", .{}) orelse return null;
+    const all = objc.msg(objc.Object, objc.class("NSScreen"), "screens", .{});
+    if (objc.msg(objc.NSUInteger, all, "count", .{}) == 0) return null;
+    const primary_obj = objc.msg(objc.Object, all, "objectAtIndex:", .{@as(objc.NSUInteger, 0)});
+    const primary_h = objc.msg(objc.CGRect, primary_obj, "frame", .{}).size.height;
+    return describe(sc, primary_h, sc == primary_obj);
 }
 
 /// Computes the camera notch rectangle from the screen's top-left `frame`,
@@ -171,6 +207,8 @@ test "screens: one at least, the first the primary, with an id, a size and a sca
         try std.testing.expect(s.frame.width > 0 and s.frame.height > 0);
         try std.testing.expect(s.scale >= 1);
         try std.testing.expect(s.visible.height <= s.frame.height);
+        // EDR headroom is at least SDR white's, now and at most.
+        try std.testing.expect(s.edr_now >= 1 and s.edr_potential >= 1 and s.edr_reference >= 0);
     }
     try std.testing.expectEqual(@as(usize, 1), primaries);
     // The primary's top left is the origin points are measured from.
