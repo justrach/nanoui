@@ -9,6 +9,14 @@ try {
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', e=>errors.push(e.message));
+  await page.addInitScript(() => {
+    const scissor = GPURenderPassEncoder.prototype.setScissorRect;
+    window.damageScissors = 0;
+    GPURenderPassEncoder.prototype.setScissorRect = function (...args) {
+      window.damageScissors++;
+      return scissor.apply(this, args);
+    };
+  });
   await page.goto(host.url+'/index.html');
   await page.waitForFunction(()=>window.nanoui?.exports.nanoui_web_frames()>1);
   const compare = async () => {
@@ -29,10 +37,23 @@ try {
   },png.toString("base64")); };
   { const result=await compare(); console.log(result); assert.ok(result.mean<0.05); }
   assert.equal(await page.evaluate(()=>Number(window.nanoui.exports.counter_value())),0);
+  const scissors = await page.evaluate(()=>window.damageScissors);
+  await page.mouse.move(207,185);
+  await page.waitForFunction(before=>window.damageScissors>before,scissors);
+  await page.waitForTimeout(300);
+  assert.ok((await compare()).mean<0.05, 'damaged hover matches pixels from a full repaint');
   await page.mouse.click(207,185);
   await page.waitForTimeout(500);
   { const result=await compare(); console.log(result); assert.ok(result.mean<0.05); }
   assert.equal(await page.evaluate(()=>Number(window.nanoui.exports.counter_value())),1);
+  const unchanged = await page.evaluate(()=>{
+    const r=window.nanoui;
+    const before={ui:r.exports.nanoui_web_frames(),gpu:r.gpu.stats.frames};
+    r.requestFrame();
+    return before;
+  });
+  await page.waitForFunction(before=>window.nanoui.exports.nanoui_web_frames()>before,unchanged.ui);
+  assert.equal(await page.evaluate(()=>window.nanoui.gpu.stats.frames),unchanged.gpu,'unchanged frame skipped GPU submission');
   const before=await page.evaluate(()=>window.nanoui.host.stats.callbacks);
   await page.waitForTimeout(1000);
   assert.equal(await page.evaluate(()=>window.nanoui.host.stats.callbacks),before,'idle callbacks');

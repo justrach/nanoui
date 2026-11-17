@@ -91,7 +91,7 @@ pub const Surface = struct {
         const width: u32 = @intFromFloat(@round(s.size.w * s.scale));
         const height: u32 = @intFromFloat(@round(s.size.h * s.scale));
         const encode_start = now_ms();
-        s.renderer.draw(s.instances.items, s.size, s.scale, s.ctx.theme.background, .canvas(width, height), time - s.start_time);
+        s.renderer.drawCanvas(s.instances.items, s.size, s.scale, s.ctx.theme.background, width, height, time - s.start_time);
         if (s.frame_log) |*log| s.last_record = @intCast(log.append(.{
             .t = time,
             .kind = .input,

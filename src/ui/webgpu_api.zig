@@ -31,6 +31,7 @@ pub extern "nanoui_gpu" fn texture_format(tex: Handle) Format;
 pub extern "nanoui_gpu" fn texture_srgb(tex: Handle) bool;
 pub extern "nanoui_gpu" fn resource_generation(resource: Handle) u32;
 pub extern "nanoui_gpu" fn resource_serial(resource: Handle) u32;
+pub extern "nanoui_gpu" fn resource_content_serial(resource: Handle) u32;
 pub extern "nanoui_gpu" fn external_import(source: Handle) Handle;
 pub extern "nanoui_gpu" fn external_copy(source: Handle, texture: Handle) u32;
 pub extern "nanoui_gpu" fn sampler_create(filter: u32) Handle;
@@ -45,6 +46,8 @@ pub extern "nanoui_gpu" fn pass_set_bind_group(pass: Handle, index: u32, group: 
 pub extern "nanoui_gpu" fn pass_draw(pass: Handle, vertices: u32, instances: u32, first_instance: u32) void;
 pub extern "nanoui_gpu" fn pass_end(pass: Handle) void;
 pub extern "nanoui_gpu" fn pass_viewport(pass: Handle, width: u32, height: u32) void;
+pub extern "nanoui_gpu" fn pass_scissor(pass: Handle, x: u32, y: u32, width: u32, height: u32) void;
+pub extern "nanoui_gpu" fn encoder_copy_texture(enc: Handle, src: Handle, dst: Handle, width: u32, height: u32) void;
 pub extern "nanoui_gpu" fn encoder_submit(enc: Handle) void;
 pub extern "nanoui_gpu" fn read_begin(tex: Handle, w: u32, h: u32, format: Format, dest: [*]u8, token: u32) void;
 

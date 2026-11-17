@@ -7,7 +7,7 @@ export function createTiming(device, onSample = () => {}) {
     resolve:device.createBuffer({size:2048,usage:GPUBufferUsage.QUERY_RESOLVE|GPUBufferUsage.COPY_SRC}),
     read:device.createBuffer({size:2048,usage:GPUBufferUsage.COPY_DST|GPUBufferUsage.MAP_READ}),busy:false,
   })) : [];
-  let count=0, pending=null, dead=false;
+  let count=0, pending=null, dead=false, copyMarker=null;
   const stats={frames:0,encode_ms:0,gpu_ms:null,draws:0,upload_bytes:0,samples:[]};
   let started=0,draws=0,uploaded=0;
   return {
@@ -19,6 +19,19 @@ export function createTiming(device, onSample = () => {}) {
       if(!pending || count>=256)return undefined;
       const start=count;count+=2;
       return {querySet:query,beginningOfPassWriteIndex:start,endOfPassWriteIndex:start+1};
+    },
+    afterCopy(encoder){
+      const timestampWrites=this.writes();
+      if(!timestampWrites)return;
+      // An empty compute pass can be dropped on Metal. A one-pixel clear
+      // supplies a timestamp after the presentation copy on that backend.
+      if(!copyMarker){
+        const texture=device.createTexture({size:[1,1],format:'rgba8unorm',usage:GPUTextureUsage.RENDER_ATTACHMENT});
+        copyMarker={texture,view:texture.createView()};
+      }
+      encoder.beginRenderPass({timestampWrites,colorAttachments:[
+        {view:copyMarker.view,loadOp:'clear',storeOp:'store',clearValue:[0,0,0,0]},
+      ]}).end();
     },
     resolve(encoder){
       if(!pending || count===0)return;
@@ -34,11 +47,13 @@ export function createTiming(device, onSample = () => {}) {
       slot.busy=true;
       slot.read.mapAsync(GPUMapMode.READ,0,n*8).then(()=>{
         const values=new BigUint64Array(slot.read.getMappedRange(0,n*8));
-        const ms=Number(values[n-1]-values[0])/1e6;
-        if(!dead){stats.gpu_ms=ms;sample.gpu_ms=ms;onSample(sample);}
+        if(!dead && values[n-1]>=values[0]){
+          const ms=Number(values[n-1]-values[0])/1e6;
+          stats.gpu_ms=ms;sample.gpu_ms=ms;onSample(sample);
+        }
         slot.read.unmap();
       }).catch(()=>{}).finally(()=>{slot.busy=false;});
     },
-    destroy(){dead=true;query?.destroy();for(const s of slots){s.resolve.destroy();s.read.destroy();}},
+    destroy(){dead=true;query?.destroy();copyMarker?.texture.destroy();for(const s of slots){s.resolve.destroy();s.read.destroy();}},
   };
 }

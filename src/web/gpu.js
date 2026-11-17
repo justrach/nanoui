@@ -2,7 +2,7 @@ import { createExternalSources } from "./external.js";
 import { createTiming } from "./gpu_timing.js";
 // Thin WebGPU imports. Decisions live in Zig; this module owns references.
 export function createGPU({ device, memory, done, format = "bgra8unorm", generation = 1, asyncPipelines = false }) {
-  const values = [null], generations = [0], serials = [0], free = [], frame = [], diagnostics = [], compilations = [];
+  const values = [null], generations = [0], serials = [0], immutable = [false], free = [], frame = [], diagnostics = [], compilations = [];
   let serial = 0;
   const externalSources=createExternalSources();
   let onTiming = () => {};
@@ -10,11 +10,14 @@ export function createGPU({ device, memory, done, format = "bgra8unorm", generat
   const pipelineJobs=[];
   const formats = ["bgra8unorm", "rgba8unorm", "r8unorm", "rgba16float"];
   const objects = {
-    put(value) {
+    // Pass true only when the stored object's pixels will never be modified.
+    put(value, immutableContents = false) {
       const h = free.pop() ?? values.length;
       values[h] = value;
       generations[h] = generation;
       serials[h] = ++serial;
+      immutable[h] = immutableContents ||
+        (typeof VideoFrame !== "undefined" && value instanceof VideoFrame);
       return h;
     },
     get(h) {
@@ -57,6 +60,7 @@ export function createGPU({ device, memory, done, format = "bgra8unorm", generat
     texture_format: h => get(h).format.endsWith("-srgb") ? 3 : Math.max(0, formats.indexOf(get(h).format)),
     resource_generation: h => values[h] ? generations[h] : 0,
     resource_serial: h => values[h] ? serials[h] : 0,
+    resource_content_serial: h => values[h] && generations[h] === generation && immutable[h] ? serials[h] : 0,
     external_import(h) {
       const source = get(h);
       // A media element can decode on a different graphics backend. Chromium
@@ -137,6 +141,12 @@ export function createGPU({ device, memory, done, format = "bgra8unorm", generat
     pass_draw(pass, vertices, instances, first) { timing.draw(); get(pass).draw(vertices, instances, 0, first); },
     pass_end(pass) { get(pass).end(); },
     pass_viewport(pass, width, height) { get(pass).setViewport(0, 0, width, height, 0, 1); },
+    pass_scissor(pass, x, y, width, height) { get(pass).setScissorRect(x, y, width, height); },
+    encoder_copy_texture(enc, src, dst, width, height) {
+      const encoder = get(enc);
+      encoder.copyTextureToTexture({ texture: get(src) }, { texture: get(dst) }, [width, height]);
+      timing.afterCopy(encoder);
+    },
     encoder_submit(enc) {
       try { timing.resolve(get(enc)); device.queue.submit([get(enc).finish()]); timing.submit(); }
       finally { externalSources.submitted(); for (const h of frame) objects.drop(h); frame.length = 0; }

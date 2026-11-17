@@ -5,6 +5,8 @@ const raster = @import("raster.zig");
 const types = @import("types.zig");
 pub const api = @import("webgpu_api.zig");
 const device = @import("webgpu_device.zig");
+const damage = @import("webgpu_damage.zig");
+const passes = @import("webgpu_passes.zig");
 pub const Target = @import("webgpu_target.zig").Target;
 pub const Params = @import("webgpu_target.zig").Params;
 const source = @embedFile("shader.wgsl") ++ "\n" ++ @embedFile("shader_shapes.wgsl") ++ "\n" ++ @embedFile("glass.wgsl");
@@ -28,6 +30,7 @@ pub const Renderer = struct {
     frame_textures: @import("webgpu_texture.zig").Textures = .{},
     samples: std.AutoHashMapUnmanaged(api.Handle, api.Handle) = .empty,
     extra: @import("webgpu_glass.zig").Glass = .{},
+    retained: damage.Damage = .{},
     layers: std.ArrayList(?Target) = .empty,
     gradients: []const [4]f32 = &.{},
     gradient_buffer: api.Handle,
@@ -47,6 +50,7 @@ pub const Renderer = struct {
     images_view: api.Handle,
     images_size: u32 = 1,
     images_generation: u64 = std.math.maxInt(u64),
+    image_uploads: u64 = 0,
     group: api.Handle = 0,
 
     pub fn init() !Renderer {
@@ -99,6 +103,7 @@ pub const Renderer = struct {
         if (r.generation == 0) return;
         r.frame_textures.deinit();
         r.extra.deinit();
+        r.retained.deinit();
         for (r.layers.items) |layer| if (layer) |target| target.deinit();
         r.layers.deinit(std.heap.wasm_allocator);
         r.clearSamples();
@@ -162,18 +167,50 @@ pub const Renderer = struct {
     pub fn uploadImage(ctx: *anyopaque, x: u32, y: u32, w: u32, h: u32, pixels: []const u8, side: u32) void {
         const r: *Renderer = @ptrCast(@alignCast(ctx));
         if (r.images_size != side) r.replaceAtlas(side, true);
+        r.image_uploads +%= 1;
         api.texture_write(r.images, &.{ .width = w, .height = h, .bytes_per_row = w * 4, .x = x, .y = y }, pixels.ptr, @intCast(pixels.len));
     }
     pub fn draw(r: *Renderer, instances: []const gpu.Instance, size: types.Size, scale: f32, clear: types.Color, target: Target, time: f64) void {
+        const visible, const frame_clear = background(instances, size, clear);
+        r.drawFrame(visible, size, scale, frame_clear, target, time, null, null);
+    }
+
+    pub fn drawCanvas(r: *Renderer, instances: []const gpu.Instance, size: types.Size, scale: f32, clear: types.Color, width: u32, height: u32, time: f64) void {
+        const visible, const frame_clear = background(instances, size, clear);
+        if (r.before_encode == null and frame_clear.a != 0 and damage.Damage.supported(visible)) {
+            if (r.retained.backing(width, height, api.preferred_format())) |target| {
+                const regions = r.retained.update(target, scale, frame_clear, .{ r.atlas_generation, r.images_generation, r.image_uploads }, r.gradients, visible, r.textures);
+                if (regions) |rects| if (rects.len == 0) return;
+                r.drawFrame(visible, size, scale, frame_clear, target, time, regions, Target.canvas(width, height));
+                return;
+            } else |_| {}
+        }
+        r.retained.valid = false;
+        r.drawFrame(visible, size, scale, frame_clear, Target.canvas(width, height), time, null, null);
+    }
+
+    fn background(instances: []const gpu.Instance, size: types.Size, clear: types.Color) struct { []const gpu.Instance, types.Color } {
+        if (gpu.lastCover(instances, size)) |k|
+            return .{ instances[k + 1 ..], .{ .r = instances[k].color[0], .g = instances[k].color[1], .b = instances[k].color[2], .a = 1 } };
+        return .{ instances, clear };
+    }
+
+    fn drawFrame(r: *Renderer, instances: []const gpu.Instance, size: types.Size, scale: f32, clear: types.Color, target: Target, time: f64, regions: ?[]const damage.Rect, canvas: ?Target) void {
         if (r.generation != device.generation()) return;
         const bytes = std.mem.sliceAsBytes(instances);
-        if (bytes.len > r.capacity) {
+        const extra_bytes: usize = if (regions != null) @sizeOf(gpu.Instance) else 0;
+        const used = bytes.len + extra_bytes;
+        if (used > r.capacity) {
             r.invalidate();
             api.release(r.instances);
-            r.capacity = @intCast(@max(bytes.len, r.capacity * 2));
+            r.capacity = @intCast(@max(used, r.capacity * 2));
             r.instances = api.buffer_create(r.capacity, 128 | 8);
         }
         if (bytes.len > 0) api.buffer_write(r.instances, 0, bytes.ptr, @intCast(bytes.len));
+        if (regions != null) {
+            const base: gpu.Instance = .{ .rect = .{ 0, 0, size.w, size.h }, .color = .{ clear.r, clear.g, clear.b, 1 } };
+            api.buffer_write(r.instances, @intCast(bytes.len), std.mem.asBytes(&base), @sizeOf(gpu.Instance));
+        }
         var slot_count: u32 = 1;
         for (instances) |i| if (i.kind == gpu.Kind.glass) {
             slot_count += 4;
@@ -211,9 +248,11 @@ pub const Renderer = struct {
         const encoder = api.encoder_begin();
         if (r.before_encode) |hook| hook.func(hook.ctx, @ptrFromInt(encoder));
         r.frame_textures.prepare(r, encoder, r.textures);
-        const cover = gpu.lastCover(instances, size);
-        const frame_clear: types.Color = if (cover) |k| .{ .r = instances[k].color[0], .g = instances[k].color[1], .b = instances[k].color[2], .a = 1 } else clear;
-        @import("webgpu_passes.zig").encode(r, encoder, instances, target, frame_clear, if (cover) |k| k + 1 else 0);
+        if (regions) |rects|
+            passes.encodeDamage(r, encoder, instances, target, scale, rects)
+        else
+            passes.encode(r, encoder, instances, target, clear, 0);
+        if (canvas) |dest| api.encoder_copy_texture(encoder, target.texture, dest.texture, dest.width, dest.height);
         api.encoder_submit(encoder);
         r.frame_textures.luts.afterSubmit();
     }

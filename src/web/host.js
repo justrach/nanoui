@@ -26,9 +26,10 @@ export function createHost(canvas, options = {}) {
           else runtime.exports.nanoui_web_pointer(...event);
           if (event[0] !== 0 && !(event[0] === "key" && event[1] === 3)) break;
         }
+        const submitted = runtime.gpu.stats.frames;
         const more=runtime.exports.nanoui_web_frame(time);
         const sample=runtime.gpu.stats.samples.at(-1);
-        if(sample)sample.log_index=runtime.exports.nanoui_web_last_record();
+        if(sample && runtime.gpu.stats.frames !== submitted)sample.log_index=runtime.exports.nanoui_web_last_record();
         if(more || inputEvents.length)request();
       }
     });
@@ -82,7 +83,7 @@ export function createHost(canvas, options = {}) {
   }
   function configure() {
     context.configure({ device: runtime.gpu.device, format: options.format,
-      alphaMode: "opaque", usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC });
+      alphaMode: "opaque", usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC | GPUTextureUsage.COPY_DST });
     runtime.gpu.setCanvas(context);
   }
   function watchDevice() {

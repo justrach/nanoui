@@ -41,6 +41,10 @@ readback across memory growth, stale devices and incremental atlas uploads.
 `nanoui.web.run()` unwinds main to the JavaScript event loop. Register fonts
 first. The app's state must outlive the surface. JavaScript drives only
 requested frames; an idle surface registers no animation callback.
+The canvas keeps a GPU backing texture for ordinary axis-aligned scenes.
+It repaints changed tiles and leaves the previous image on screen when an
+update produces identical pixels. Backdrop effects, transformed layers,
+and application-owned passes use a full redraw.
 
 The build helper `@import("nanoui").web.install(b, exe, dependency.path("."))`
 installs a wasm32-wasi command and the browser modules together. Its module
@@ -58,6 +62,9 @@ an owned device. OffscreenCanvas/Workers use the same API (`worker.js`).
 
 `ui.webgpuDevice()` and `ui.webgpuDeviceGeneration()` identify the shared
 GPUDevice. `runtime.gpu.objects.put/get/drop` bridges app objects as handles.
+Pass `true` as the second argument to `put` for textures that will keep the
+same contents for their entire lifetime. Decoded `VideoFrame` objects are
+already treated as immutable.
 `Texture.web_texture` borrows a GPUTexture; `web_external` borrows a VideoFrame
 or video element. Keep them alive until the frame is submitted. Ordinary
 `VideoFrame` sources import directly. Padded frames are cropped, and video
