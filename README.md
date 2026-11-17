@@ -593,3 +593,5 @@ nanoui stands on the shoulders of these projects:
   animation, its exact springs and its easing curves.
 - **[GPUI Kit](https://github.com/longbridge/gpui-component)** by [Longbridge](https://github.com/longbridge): `nanoui.kit` follows its components, their variants and their names.
 <p align="center"><sub>Built in Zig 0.17 · <a href="https://discord.gg/EmTpv7rmTA">Discord</a> · <a href="AGENTS.md">AGENTS.md</a> · <a href="docs/benchmarks.md">benchmarks</a> · <a href="docs/roadmap.md">roadmap</a> · <a href="LICENSE">MIT</a> · <a href="THIRD_PARTY_NOTICES.md">third-party notices</a></sub></p>
+
+The experimental [WebGPU canvas target](tools/web/README.md) builds for wasm32-wasi.

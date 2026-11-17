@@ -220,6 +220,11 @@ pub const Images = struct {
         return .{ .pixels = im.pixels, .size = if (im.pixels.len > 0) im.side else 0 };
     }
 
+    pub fn invalidateAtlas(im: *Images) void {
+        im.empty();
+        im.generation +%= 1;
+    }
+
     pub fn key(name: []const u8) u64 {
         return std.hash.Wyhash.hash(0x1a9e, name);
     }

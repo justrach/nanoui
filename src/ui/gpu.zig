@@ -177,6 +177,9 @@ pub const Texture = struct {
     /// frame is drawn. A float or sRGB one holds linear light and is
     /// encoded for the display; any other is shown as its values are.
     mtl_texture: ?*anyopaque = null,
+    /// Borrowed handles on the shared browser GPUDevice.
+    web_texture: u32 = 0,
+    web_external: u32 = 0,
     /// An app's ID3D11Texture2D, made on `ui.d3d11Device()` (a decoder
     /// bound to it with `IMFDXGIDeviceManager::ResetDevice`), and the
     /// subresource shown: a decoder's surfaces are one texture array, a

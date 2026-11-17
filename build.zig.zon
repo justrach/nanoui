@@ -13,6 +13,7 @@
         },
     },
     .paths = .{
+        "tools/web/build.zig",
         "build.zig",
         "build.zig.zon",
         "src",

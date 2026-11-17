@@ -227,6 +227,9 @@ pub const Input = struct {
     /// The button went down / up in this event.
     pressed: bool = false,
     released: bool = false,
+    /// The pointer stream ended without a release (for example, a drag
+    /// replaced by a pinch). A pending edit can roll back instead of landing.
+    pointer_cancelled: bool = false,
     /// Which button the last press was.
     button: Button = .left,
     /// The secondary button went down in this event: the right one, or a
@@ -329,6 +332,7 @@ pub const Input = struct {
     pub fn clearEdges(i: *Input) void {
         i.pressed = false;
         i.released = false;
+        i.pointer_cancelled = false;
         i.secondary = false;
         i.scroll = .{};
         i.scroll_phase = .none;

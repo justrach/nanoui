@@ -6,6 +6,9 @@ const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const kit = nanoui.kit;
 const phone = @import("phone.zig");
+const web = @import("builtin").os.tag == .wasi;
+const PlatformApp = if (web) void else nanoui.App;
+const PlatformWindow = if (web) void else nanoui.Window;
 
 const Item = struct { title: [64]u8, len: usize, done: bool };
 
@@ -68,10 +71,10 @@ pub const Gallery = struct {
     /// The app, so a page can make a window of its own: the Windows page does,
     /// because a borderless or translucent window is the only way to see what
     /// those options do.
-    app: ?*nanoui.App = null,
+    app: ?*PlatformApp = null,
     /// The gallery's own window, so the demo window can be placed beside it
     /// rather than over the controls that change it.
-    window: ?*nanoui.Window = null,
+    window: ?*PlatformWindow = null,
 
     pub fn deinit(g: *Gallery) void {
         const gpa = std.heap.c_allocator;
@@ -130,7 +133,14 @@ pub const Gallery = struct {
         if (g.page == 5) return g.motion.page(c);
         if (g.page == 6) return g.kit.view(c, &g.appearance);
         if (g.page == 7) return g.studio.view(c, &g.appearance);
-        if (g.page == 8) return g.windows.view(c, g.app, g.window);
+        if (g.page == 8) {
+            if (comptime web) {
+                ui.heading(c, "Windows");
+                ui.text(c, "Native windows are unavailable in this canvas demo.", .{});
+                return;
+            }
+            return g.windows.view(c, g.app, g.window);
+        }
         ui.scroll(c, .{ .grow = 1, .width = .fill, .height = .fill, .padding = .all(if (phone.compact(c)) 24 else 28), .gap = 20 });
         defer ui.end(c);
         switch (g.page) {
@@ -397,16 +407,32 @@ pub const Gallery = struct {
     }
 };
 
+var web_gallery: ?*Gallery = null;
+export fn gallery_page(page: u32) void {
+    if (comptime web) {
+        if (web_gallery) |g| {
+            g.page = @min(page, phone.pages.len - 1);
+            if (nanoui.web.active) |surface| surface.requestFrame();
+        }
+    }
+}
+
 pub fn main(init: std.process.Init) !void {
-    const app = try nanoui.App.create(init, .{ .name = "Gallery" });
-    defer app.destroy();
     var g: Gallery = .{};
-    defer g.deinit();
-    g.app = app;
     g.add("Write a UI toolkit in Zig");
     g.add("Draw it with Metal");
     g.add("Ship it");
     g.items[1].done = true;
+    if (comptime web) {
+        web_gallery = &g;
+        _ = nanoui.web.registerBundledFonts();
+        _ = try nanoui.web.mount(.init(&g, Gallery.view), .{ .width = 900, .height = 640 });
+        nanoui.web.run();
+    }
+    defer g.deinit();
+    const app = try nanoui.App.create(init, .{ .name = "Gallery" });
+    defer app.destroy();
+    g.app = app;
     const win = try app.newWindow(.{
         .title = "Gallery",
         .width = 900,

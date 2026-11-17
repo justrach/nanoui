@@ -18,10 +18,22 @@ const Counter = struct {
     }
 };
 
+// Browser smoke tests also pin the state kept on main's suspended stack.
+var web_counter: ?*Counter = null;
+export fn counter_value() i64 {
+    return if (web_counter) |state| state.n else -1;
+}
+
 pub fn main(init: std.process.Init) !void {
+    var state: Counter = .{};
+    if (comptime @import("builtin").os.tag == .wasi) {
+        web_counter = &state;
+        _ = nanoui.web.registerBundledFonts();
+        _ = try nanoui.web.mount(.init(&state, Counter.view), .{});
+        nanoui.web.run();
+    }
     const app = try nanoui.App.create(init, .{ .name = "Counter" });
     defer app.destroy();
-    var state: Counter = .{};
     _ = try app.newWindow(.{
         .title = "Counter",
         .width = 420,
