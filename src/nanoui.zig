@@ -238,6 +238,8 @@ test {
             _ = @import("windows/tests_keys.zig");
             // Mouse buttons: the middle one, one press at a time, capture lost.
             _ = @import("windows/tests_mouse.zig");
+            // A pen's POINTER_PEN_INFO read into `Input.pen`.
+            _ = @import("windows/surface_win_pen.zig");
             // The window's own: styles, sizes, the close veto, the timers.
             _ = @import("windows/tests_window.zig");
             // Frames on the display's beat, gathered input, the frame log.
