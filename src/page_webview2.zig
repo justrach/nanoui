@@ -406,6 +406,23 @@ pub const Page = struct {
         const filter = wv.utf8LitZ(page.origin ++ "/*");
         _ = wv.WebView.addResourceFilter(v, filter, wv.resource_context_all);
         if (self.queue.dead) return;
+        // `PageOptions.allow_request`: every other request, from every frame,
+        // asks it first (`handlers.ResourceRequested`). A runtime that can
+        // only filter the main frame would let a sandboxed iframe's requests
+        // past, so the page is not loaded there at all.
+        if (self.queue.options.allow_request != null) {
+            const v22 = wv.query(v, &wv.iid_webview2_22) orelse {
+                std.log.warn("nanoui: this WebView2 runtime cannot filter every frame's requests; the page is not loaded", .{});
+                return;
+            };
+            defer v22.release();
+            const fh = wv.WebView22.addResourceFilterKinds(v22, wv.utf8LitZ("*"), wv.resource_context_all, wv.request_source_kinds_all);
+            if (fh < 0) {
+                std.log.warn("nanoui: AddWebResourceRequestedFilterWithRequestSourceKinds failed (0x{x}); the page is not loaded", .{@as(u32, @bitCast(fh))});
+                return;
+            }
+            if (self.queue.dead) return;
+        }
         // Three event handlers, each handed over with its maker reference
         // (released at once below): the runtime holds its own until the
         // `remove_*` in `destroy`.
