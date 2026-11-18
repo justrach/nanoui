@@ -19,6 +19,12 @@ pub const PageOptions = struct {
     label: []const u8 = "",
     /// Web Inspector (right click > Inspect Element).
     inspectable: bool = true,
+    /// Nothing the page stores outlives it: no cookies, storage or cache
+    /// kept, or shared with the app's other pages. macOS: a non-persistent
+    /// `WKWebsiteDataStore` (set before `configure`, which may change it);
+    /// Windows: an InPrivate controller (a runtime without
+    /// `ICoreWebView2Environment10` makes none, and the page stays blank).
+    private: bool = false,
     /// Pages the window can switch between, shown as a bar on every one of
     /// them (the app's own and every remote page): `{ "Local", "/" }`,
     /// `{ "Docs", "https://example.com/" }`. Empty: no bar.

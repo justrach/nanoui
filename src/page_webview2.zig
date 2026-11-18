@@ -344,12 +344,30 @@ pub const Page = struct {
             self.endHiddenShow();
             return;
         };
-        const hr = wv.Environment.createController(env, self.hwnd, handler);
+        const hr = if (self.queue.options.private) privateController(env, self.hwnd, handler) else wv.Environment.createController(env, self.hwnd, handler);
         _ = wv.Com.release(handler); // the maker's reference went with the call
         if (hr < 0) {
             self.endHiddenShow();
             std.log.warn("nanoui: CreateCoreWebView2Controller failed (0x{x})", .{@as(u32, @bitCast(hr))});
         }
+    }
+
+    /// `PageOptions.private`: an InPrivate controller, or none (a runtime
+    /// without `ICoreWebView2Environment10` cannot keep it private).
+    fn privateController(env: *Com, parent: w.HWND, handler: *Com) wv.HRESULT {
+        const env10 = wv.query(env, &wv.iid_environment10) orelse {
+            std.log.warn("nanoui: this WebView2 runtime cannot make a private page; it stays blank", .{});
+            return -1;
+        };
+        defer env10.release();
+        var opts: ?*Com = null;
+        const oh = wv.Environment10.createControllerOptions(env10, &opts);
+        if (oh < 0) return oh;
+        const o = opts orelse return -1;
+        defer o.release();
+        const ph = wv.ControllerOptions.setInPrivate(o, 1);
+        if (ph < 0) return ph;
+        return wv.Environment10.createControllerWithOptions(env10, parent, o, handler);
     }
 
     /// The controller question is settled: a window shown for it goes back
