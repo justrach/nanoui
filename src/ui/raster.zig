@@ -408,12 +408,12 @@ pub fn cornerSdf(px: f32, py: f32, hw: f32, hh: f32, r_in: f32) [2]f32 {
 /// all of it, but in the clip's rounded corners (as the shader's
 /// `clip_cover`).
 pub inline fn clipCover(i: *const gpu.Instance, wx: f32, wy: f32, inv: f32) f32 {
-    if (i.clip_round <= 0) return 1;
+    if (i.clip_round == 0) return 1;
     const round = gpu.clipCorners(i.clip_round);
     const c = i.clip;
     const hw = (c[2] - c[0]) * 0.5;
     const hh = (c[3] - c[1]) * 0.5;
-    const r = @min(round.radius, @min(hw, hh));
+    const r = @min(@abs(round.radius), @min(hw, hh));
     const reach = @min(1.52866495 * r, @max(hw, hh));
     // Between the corners, nothing is cut.
     if ((wx > c[0] + reach and wx < c[2] - reach) or (wy > c[1] + reach and wy < c[3] - reach)) return 1;
@@ -421,7 +421,7 @@ pub inline fn clipCover(i: *const gpu.Instance, wx: f32, wy: f32, inv: f32) f32 
     const qy = wy - c[1] - hh;
     const bit: u4 = if (qy < 0) (if (qx < 0) 1 else 2) else (if (qx < 0) 8 else 4);
     if (round.corners & bit == 0) return 1;
-    const sd = cornerSdf(qx, qy, hw, hh, r);
+    const sd = cornerSdf(qx, qy, hw, hh, if (round.radius < 0) -r else r);
     const aa = @max(sd[1] * inv, 0.0001) * 0.5;
     return 1 - smoothstep(-aa, aa, sd[0]);
 }

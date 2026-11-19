@@ -140,6 +140,30 @@ test "d3d11: shapes match the CPU renderer" {
     try compare(&t, .{ .mean = 1.0, .worst = 240, .off_in = 20 });
 }
 
+test "d3d11: circular and continuous corners match CPU at fractional scales" {
+    const Scene = struct {
+        fn view(_: *@This(), c: *ui.Context) void {
+            for ([_]bool{ false, true }, 0..) |circular, i| {
+                _ = c.open(.{ .absolute = true, .offset = .{ .x = 8 + @as(f32, @floatFromInt(i)) * 100, .y = 8 }, .width = .{ .px = 80 }, .height = .{ .px = 56 }, .radius = 16, .corner_circular = circular, .background = .{ .r = 1, .a = 1 }, .border = .{ .g = 1, .a = 1 }, .border_width = 2 }, null);
+                c.end();
+            }
+            for ([_]bool{ false, true }, 0..) |circular, i| {
+                _ = c.open(.{ .absolute = true, .offset = .{ .x = 8 + @as(f32, @floatFromInt(i)) * 100, .y = 84 }, .width = .{ .px = 80 }, .height = .{ .px = 56 }, .radius = 16, .corner_circular = circular, .clip = true }, null);
+                _ = c.open(.{ .width = .fill, .height = .fill, .background = .{ .b = 1, .a = 1 } }, null);
+                c.end();
+                c.end();
+            }
+        }
+    };
+    for ([_]f32{ 1, 1.25, 2 }) |scale| {
+        var scene: Scene = .{};
+        var t: ui.Tester = undefined;
+        try t.init(testing.allocator, .init(&scene, Scene.view), .{ .width = 240, .height = 160, .scale = scale });
+        defer t.deinit();
+        try compare(&t, .{ .mean = 0.1, .worst = 8, .off_in = 1000 });
+    }
+}
+
 test "d3d11: glass matches the CPU renderer" {
     const Scene = @import("tests_glass.zig").Scene;
     for ([_]ui.Theme{ .light, .dark_theme }) |theme| {

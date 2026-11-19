@@ -438,3 +438,32 @@ test "over a clear of nothing, only the rounded box has alpha (a transparent win
     raster.draw(out, t.instances.items, .{ .pixels = &.{}, .size = 0 }, .{}, t.scale, .white);
     try testing.expectEqual(@as(u8, 255), out.bytes[3]);
 }
+
+test "circular clip radius survives encoding, painting and scaling" {
+    const gpu = @import("gpu.zig");
+    const encoded = gpu.clipRound(-12, 15);
+    const decoded = gpu.clipCorners(encoded);
+    try testing.expectEqual(@as(f32, -12), decoded.radius);
+    try testing.expectEqual(@as(u4, 15), decoded.corners);
+    const SceneCircular = struct {
+        fn view(_: *@This(), c: *ui.Context) void {
+            _ = c.open(.{ .width = .{ .px = 80 }, .height = .{ .px = 60 }, .radius = 12, .corner_circular = true, .clip = true, .scale = 2 }, null);
+            _ = c.open(.{ .width = .fill, .height = .fill, .background = .{ .r = 1, .a = 1 } }, null);
+            c.end();
+            c.end();
+        }
+    };
+    var scene: SceneCircular = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&scene, SceneCircular.view), .{ .width = 200, .height = 160 });
+    defer t.deinit();
+    var found = false;
+    for (t.instances.items) |instance| {
+        if (instance.color[0] != 1 or instance.color[3] != 1) continue;
+        const round = gpu.clipCorners(instance.clip_round);
+        try testing.expectEqual(@as(f32, -24), round.radius);
+        try testing.expectEqual(@as(u4, 15), round.corners);
+        found = true;
+    }
+    try testing.expect(found);
+}

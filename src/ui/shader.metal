@@ -321,9 +321,10 @@ static float clip_coverage(VOut in, Instance i) {
     if (in.screen.x < i.clip.x || in.screen.y < i.clip.y || in.screen.x > i.clip.z || in.screen.y > i.clip.w)
         discard_fragment();
     float clip_cover = 1.0;
-    if (i.clip_round > 0.0) {
-        float corners = floor(i.clip_round / 4096.0);
-        float rad = i.clip_round - corners * 4096.0;
+    if (i.clip_round != 0.0) {
+        float corners = floor(abs(i.clip_round) / 4096.0);
+        float rad = abs(i.clip_round) - corners * 4096.0;
+        if (i.clip_round < 0.0) rad = -rad;
         float2 ch = (i.clip.zw - i.clip.xy) * 0.5;
         float2 q = in.screen - i.clip.xy - ch;
         // Derivatives outside the branch on the corner: it differs by pixel.
