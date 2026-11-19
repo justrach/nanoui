@@ -128,6 +128,7 @@ pub const Tester = struct {
     }
 
     pub fn deinitImpl(t: *Tester) void {
+        @import("raster.zig").freeLayers();
         t.clipboard.deinit(t.gpa);
         t.instances.deinit(t.gpa);
         t.ctx.deinit();

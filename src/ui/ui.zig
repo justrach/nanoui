@@ -383,6 +383,8 @@ test {
     }
     _ = @import("raster.zig");
     _ = @import("tests_raster.zig");
+    _ = @import("tests_raster_groups.zig");
+    _ = @import("raster_group.zig");
     _ = @import("glass.zig");
     _ = @import("tests_glass.zig");
     _ = @import("scroll_fade.zig");

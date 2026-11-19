@@ -39,6 +39,7 @@ pub const Canvas = struct {
     picture_resets: u64 = 0,
 
     pub fn deinit(cv: *Canvas, gpa: std.mem.Allocator) void {
+        raster.freeLayers();
         gpa.free(cv.bytes);
         cv.drawn.deinit(gpa);
     }
