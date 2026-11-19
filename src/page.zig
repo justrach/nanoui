@@ -19,6 +19,21 @@ pub const max_held = 1024;
 /// scheme it knows; WebView2 intercepts every request to this one).
 pub const origin = if (@import("builtin").os.tag == .windows) "https://nanoui.local" else "nanoui://localhost";
 
+/// `url` is for the app's own assets (`origin`, then the end or a path),
+/// not a host that merely starts with its name.
+pub fn ownUrl(url: []const u8) bool {
+    if (!std.mem.startsWith(u8, url, origin)) return false;
+    return url.len == origin.len or url[origin.len] == '/';
+}
+
+test "a page's own URLs are its origin's, not a longer host's" {
+    try std.testing.expect(ownUrl(origin));
+    try std.testing.expect(ownUrl(origin ++ "/index.html"));
+    try std.testing.expect(!ownUrl(origin ++ ".evil.example/"));
+    try std.testing.expect(!ownUrl(origin ++ ":8080/"));
+    try std.testing.expect(!ownUrl("https://example.com/"));
+}
+
 /// A file served to pages: what `serve` answers with.
 pub const Served = struct {
     /// The body: the app's, the asset's, or a static message. Never freed here.

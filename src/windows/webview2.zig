@@ -23,6 +23,7 @@ pub const iid_environment: Guid = .{ .a = 0xb96d755e, .b = 0x0319, .c = 0x4e92, 
 pub const iid_controller: Guid = .{ .a = 0x4d00c0d1, .b = 0x9434, .c = 0x4eb6, .d = .{ 0x80, 0x78, 0x86, 0x97, 0xa5, 0x60, 0x33, 0x4f } };
 pub const iid_webview2: Guid = .{ .a = 0x76eceacd, .b = 0x1167, .c = 0x4b1d, .d = .{ 0x9a, 0x3b, 0xd9, 0xba, 0x0b, 0x6e, 0x6d, 0x3b } };
 pub const iid_webview2_3: Guid = .{ .a = 0xa0d6df20, .b = 0x3b92, .c = 0x416d, .d = .{ 0xaa, 0x0c, 0x43, 0x7a, 0x9c, 0x72, 0x78, 0x57 } };
+pub const iid_webview2_22: Guid = .{ .a = 0xdb75dfc7, .b = 0xa857, .c = 0x4632, .d = .{ 0xa3, 0x98, 0x69, 0x69, 0xdd, 0xe2, 0x6c, 0x0a } };
 pub const iid_texture2d: Guid = .{ .a = 0x6f15aaf2, .b = 0xd208, .c = 0x4e89, .d = .{ 0x9a, 0xb4, 0x48, 0x95, 0x35, 0xd3, 0x4f, 0x9c } };
 
 /// A COM object: its first field points at its vtable. The same shape
@@ -149,6 +150,15 @@ pub const Environment = struct {
     }
 };
 
+/// `QueryInterface` (IUnknown's slot 0): `c` as interface `iid`, its own
+/// reference (release it), or null.
+pub fn query(c: *Com, iid: *const Guid) ?*Com {
+    var out: ?*anyopaque = null;
+    const hr = c.slot(*const fn (*Com, *const Guid, *?*anyopaque) callconv(.winapi) HRESULT, 0)(c, iid, &out);
+    if (hr < 0) return null;
+    return @ptrCast(@alignCast(out orelse return null));
+}
+
 // ---------------------------------------------------------------------------
 // ICoreWebView2Controller
 // ---------------------------------------------------------------------------
@@ -254,6 +264,22 @@ pub const WebView = struct {
 
 /// `COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL`.
 pub const resource_context_all: u32 = 0;
+
+/// `COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL`.
+pub const request_source_kinds_all: u32 = 0xffffffff;
+
+// ---------------------------------------------------------------------------
+// ICoreWebView2_22 (`query(view, &iid_webview2_22)`)
+// ---------------------------------------------------------------------------
+pub const WebView22 = struct {
+    /// 123: `AddWebResourceRequestedFilterWithRequestSourceKinds(uri,
+    /// context, kinds)`: unlike `AddWebResourceRequestedFilter`, raised for
+    /// every frame's requests, not only the main frame's and its
+    /// same-origin iframes'.
+    pub fn addResourceFilterKinds(w: *Com, uri: [*:0]const u16, context: u32, kinds: u32) HRESULT {
+        return w.slot(*const fn (*Com, [*:0]const u16, u32, u32) callconv(.winapi) HRESULT, 123)(w, uri, context, kinds);
+    }
+};
 
 /// `CoTaskMemFree`, for the strings WebView2 hands out.
 pub fn coTaskMemFree(p: ?*anyopaque) void {

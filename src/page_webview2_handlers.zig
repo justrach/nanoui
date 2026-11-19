@@ -188,9 +188,17 @@ pub const ResourceRequested = struct {
         buf.ensureTotalCapacity(gpa, units.len * 3) catch return wv.S_OK;
         const n = std.unicode.utf16LeToUtf8(buf.allocatedSlice(), units) catch return wv.S_OK;
 
-        const served = page_self.queue.serve(page.pathOf(buf.allocatedSlice()[0..n]));
+        const url = buf.allocatedSlice()[0..n];
+        // Not ours (only an `allow_request` page filters every URL): the
+        // app's yes lets it go to the network, its no answers it here.
+        const served: page.Served = if (page.ownUrl(url)) page_self.queue.serve(page.pathOf(url)) else blk: {
+            const allow = page_self.queue.options.allow_request orelse return wv.S_OK;
+            if (allow(page_self.queue.options.allow_request_ctx, url)) return wv.S_OK;
+            if (p.queue.dead) return wv.S_OK;
+            break :blk .{ .data = "", .mime = "text/plain", .status = 403 };
+        };
         if (p.queue.window.app.debug)
-            std.debug.print("nanoui: resource {s} -> {d} {s} ({d} bytes)\n", .{ buf.allocatedSlice()[0..n], served.status, served.mime, served.data.len });
+            std.debug.print("nanoui: resource {s} -> {d} {s} ({d} bytes)\n", .{ url, served.status, served.mime, served.data.len });
         const env = page_self.environment orelse return wv.S_OK;
         var resp: ?*Com = null;
         const cr = serve.makeResponse(env, served, gpa, &resp);
