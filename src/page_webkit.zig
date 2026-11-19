@@ -69,6 +69,10 @@ pub const Page = struct {
             const yes = objc.msg(objc.Object, objc.class("NSNumber"), "numberWithBool:", .{objc.YES});
             objc.msg(void, prefs, "setValue:forKey:", .{ yes, objc.nsString("developerExtrasEnabled") });
         }
+        if (options.private) {
+            const store = objc.msg(objc.Object, objc.class("WKWebsiteDataStore"), "nonPersistentDataStore", .{});
+            objc.msg(void, config, "setWebsiteDataStore:", .{store});
+        }
         if (options.configure) |f| f(options.configure_ctx, @ptrCast(config));
 
         // Docked: in the app's view, placed by `setFrame`; else the window's.

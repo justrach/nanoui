@@ -20,6 +20,7 @@ pub const S_OK: HRESULT = 0;
 
 // The interfaces, by IID.
 pub const iid_environment: Guid = .{ .a = 0xb96d755e, .b = 0x0319, .c = 0x4e92, .d = .{ 0xa2, 0x96, 0x23, 0x43, 0x6f, 0x46, 0xa1, 0xfc } };
+pub const iid_environment10: Guid = .{ .a = 0xee0eb9df, .b = 0x6f12, .c = 0x46ce, .d = .{ 0xb5, 0x3f, 0x3f, 0x47, 0xb9, 0xc9, 0x28, 0xe0 } };
 pub const iid_controller: Guid = .{ .a = 0x4d00c0d1, .b = 0x9434, .c = 0x4eb6, .d = .{ 0x80, 0x78, 0x86, 0x97, 0xa5, 0x60, 0x33, 0x4f } };
 pub const iid_webview2: Guid = .{ .a = 0x76eceacd, .b = 0x1167, .c = 0x4b1d, .d = .{ 0x9a, 0x3b, 0xd9, 0xba, 0x0b, 0x6e, 0x6d, 0x3b } };
 pub const iid_webview2_3: Guid = .{ .a = 0xa0d6df20, .b = 0x3b92, .c = 0x416d, .d = .{ 0xaa, 0x0c, 0x43, 0x7a, 0x9c, 0x72, 0x78, 0x57 } };
@@ -190,6 +191,31 @@ pub const Controller = struct {
 };
 
 pub const Rect = extern struct { left: i32, top: i32, right: i32, bottom: i32 };
+
+// ---------------------------------------------------------------------------
+// ICoreWebView2Environment10 (`query(env, &iid_environment10)`)
+// ---------------------------------------------------------------------------
+pub const Environment10 = struct {
+    /// 20: `CreateCoreWebView2ControllerOptions(options)`.
+    pub fn createControllerOptions(e: *Com, out: *?*Com) HRESULT {
+        return e.slot(*const fn (*Com, *?*Com) callconv(.winapi) HRESULT, 20)(e, out);
+    }
+
+    /// 21: `CreateCoreWebView2ControllerWithOptions(HWND, options, handler)`.
+    pub fn createControllerWithOptions(e: *Com, parent: HWND, options: *Com, handler: *Com) HRESULT {
+        return e.slot(*const fn (*Com, HWND, *Com, *Com) callconv(.winapi) HRESULT, 21)(e, parent, options, handler);
+    }
+};
+
+// ---------------------------------------------------------------------------
+// ICoreWebView2ControllerOptions
+// ---------------------------------------------------------------------------
+pub const ControllerOptions = struct {
+    /// 6: `put_IsInPrivateModeEnabled`.
+    pub fn setInPrivate(o: *Com, on: BOOL) HRESULT {
+        return o.slot(*const fn (*Com, BOOL) callconv(.winapi) HRESULT, 6)(o, on);
+    }
+};
 
 // ---------------------------------------------------------------------------
 // ICoreWebView2
