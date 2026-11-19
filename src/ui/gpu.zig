@@ -200,11 +200,46 @@ pub const Texture = struct {
     /// LUT (`ui.lut`), both on display-encoded colour.
     source_lut: ?Lut = null,
     lut: ?Lut = null,
+    /// What an RGB texture's values already are (`Encoding`). `.auto`, the
+    /// default, draws it as every field above says, as before.
+    encoding: Encoding = .auto,
 
-    /// Whether the colour stage must run before the frame is drawn.
+    /// Whether the colour stage must run before the frame is drawn on an
+    /// SDR surface.
     pub fn needsPost(t: Texture) bool {
-        return t.format != .bgra8 or t.lut != null or t.source_lut != null;
+        return switch (t.effectiveEncoding()) {
+            .auto => t.format != .bgra8 or t.lut != null or t.source_lut != null,
+            .display_sdr => false,
+            .surface_linear => true,
+        };
     }
+
+    /// `encoding`, or `.auto` for a Y'CbCr format: its range, matrix and
+    /// transfer say what its codes are, whatever `encoding` says.
+    pub fn effectiveEncoding(t: Texture) Encoding {
+        return switch (t.format) {
+            .bgra8, .rgba16f => t.encoding,
+            .ycbcr420_8, .ycbcr420_10, .ycbcr422_10, .ycbcr444_10 => .auto,
+        };
+    }
+};
+
+/// What an app's RGB texture holds, for an app that does its own colour
+/// management (`Texture.encoding`). Anything but `.auto` passes the frame
+/// through: `transfer`, `tone_map` and both LUTs are ignored.
+pub const Encoding = enum {
+    /// As `format`, `transfer`, `tone_map` and the LUTs say.
+    auto,
+    /// Already encoded for this surface (display sRGB on an SDR one),
+    /// premultiplied: sampled as stored, alpha included, whatever its pixel
+    /// format (BGRA8, RGBA16F, RGB10A2, or an sRGB one, whose decoded
+    /// samples are encoded again).
+    display_sdr,
+    /// Linear light in Rec. 709 primaries, SDR white at 1.0, values above
+    /// it kept: never tone mapped. An SDR surface shows it clamped to
+    /// [0, 1] and sRGB encoded (the colour stage's source mode 4), its
+    /// alpha kept.
+    surface_linear,
 };
 
 /// What a texture's pixels are: BGRA (display sRGB, premultiplied), two-

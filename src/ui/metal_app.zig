@@ -33,7 +33,9 @@ pub fn isSrgb(pf: objc.NSUInteger) bool {
 }
 
 /// An app's texture's pixels: BGRA8 as stored (`half` false; display
-/// values, `linear` false) or RGBA half floats in linear light.
+/// values, `linear` false; `srgb` when its format is an sRGB one), RGBA
+/// half floats in linear light, or packed 10-bit RGB made half floats
+/// (`half`, not `linear`).
 pub const ReadBack = struct {
     bytes: []u8,
     width: usize,
@@ -41,6 +43,7 @@ pub const ReadBack = struct {
     stride: usize,
     half: bool,
     linear: bool,
+    srgb: bool = false,
 
     pub fn deinit(r: *ReadBack, gpa: std.mem.Allocator) void {
         gpa.free(r.bytes);
@@ -49,8 +52,8 @@ pub const ReadBack = struct {
 
 const Region = extern struct { x: usize, y: usize, z: usize, w: usize, h: usize, d: usize };
 
-/// Reads an app's 2D texture back (BGRA8, RGBA8, their sRGB forms, or
-/// RGBA16Float): one the CPU can't see (private or managed storage) is
+/// Reads an app's 2D texture back (BGRA8, RGBA8, their sRGB forms,
+/// RGBA16Float, RGB10A2Unorm or BGR10A2Unorm): one the CPU can't see (private or managed storage) is
 /// first copied to a shared one on the GPU.
 pub fn readBack(gpa: std.mem.Allocator, mt: *anyopaque) ?ReadBack {
     const pool = objc.Pool.push();
@@ -58,7 +61,7 @@ pub fn readBack(gpa: std.mem.Allocator, mt: *anyopaque) ?ReadBack {
     const tex: objc.Object = @ptrCast(mt);
     const pf = objc.msg(objc.NSUInteger, tex, "pixelFormat", .{});
     const bpp: usize = switch (pf) {
-        80, 81, 70, 71 => 4,
+        80, 81, 70, 71, 90, 94 => 4,
         115 => 8,
         else => return null,
     };
@@ -94,5 +97,11 @@ pub fn readBack(gpa: std.mem.Allocator, mt: *anyopaque) ?ReadBack {
         var i: usize = 0;
         while (i < bytes.len) : (i += 4) std.mem.swap(u8, &bytes[i], &bytes[i + 2]);
     }
-    return .{ .bytes = bytes, .width = w, .height = h, .stride = stride, .half = bpp == 8, .linear = pf == 115 };
+    if (pf == 90 or pf == 94) {
+        defer gpa.free(bytes);
+        const half = gpa.alloc(u8, w * h * 8) catch return null;
+        @import("texture_cpu.zig").rgb10a2ToHalf(bytes.ptr, w, h, stride, pf == 94, half);
+        return .{ .bytes = half, .width = w, .height = h, .stride = w * 8, .half = true, .linear = false };
+    }
+    return .{ .bytes = bytes, .width = w, .height = h, .stride = stride, .half = bpp == 8, .linear = pf == 115, .srgb = isSrgb(pf) };
 }

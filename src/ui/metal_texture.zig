@@ -7,7 +7,10 @@
 //! A frame that isn't display BGRA, or that has a LUT, first runs the
 //! colour stage (`texture_post.metal`, the real app's post-process pass)
 //! into a BGRA texture of its own size kept for its slot, which the frame
-//! then samples as it samples any texture.
+//! then samples as it samples any texture. One the app says is already
+//! display encoded (`Texture.encoding` `.display_sdr`) is sampled as it is,
+//! whatever its pixel format; linear light for the surface is clipped and
+//! encoded by the stage's source mode 4.
 const std = @import("std");
 const objc = @import("../objc.zig");
 const gpu = @import("gpu.zig");
@@ -109,13 +112,17 @@ pub const Textures = struct {
     fn resolve(t: *Textures, device: objc.Object, cmd: objc.Object, tex: gpu.Texture, slot: usize, held: *std.ArrayList(*anyopaque)) ?objc.Object {
         var planes: [2]?objc.Object = .{ null, null };
         var mode = color.sourceMode(tex.format);
+        var srgb = false;
         var u_tex = tex;
         if (tex.mtl_texture) |mt| {
             planes[0] = @ptrCast(mt);
             const pf = objc.msg(objc.NSUInteger, planes[0].?, "pixelFormat", .{});
             mode = if (metal_app.samplesLinear(pf)) 3 else 0;
+            srgb = metal_app.isSrgb(pf);
             // An sRGB texture's values are display light once decoded: no tone map.
-            u_tex.tone_map = tex.tone_map and !metal_app.isSrgb(pf);
+            u_tex.tone_map = tex.tone_map and !srgb;
+            // Its pixel format says what it is, not `format`: RGB either way.
+            if (tex.encoding != .auto) u_tex.format = if (mode == 3) .rgba16f else .bgra8;
         } else if (tex.pixel_buffer) |pb| {
             const formats: [2]objc.NSUInteger = switch (tex.format) {
                 .bgra8 => .{ bgra8, 0 },
@@ -130,9 +137,11 @@ pub const Textures = struct {
         } else {
             planes[0] = t.upload(device, tex, slot) orelse return null;
         }
-        const needs = mode != 0 or tex.lut != null or tex.source_lut != null;
-        if (!needs) return planes[0];
-        return t.colourStage(device, cmd, slot, planes, color.uniforms(u_tex, mode), tex);
+        // A texture passed through (`Texture.encoding`) is sampled as it
+        // is, any pixel format, or made display sRGB by source mode 4.
+        const st = color.stage(u_tex, mode, srgb);
+        if (!st.run) return planes[0];
+        return t.colourStage(device, cmd, slot, planes, color.uniforms(u_tex, st.mode), u_tex);
     }
 
     fn wrap(t: *Textures, device: objc.Object, pb: *anyopaque, format: objc.NSUInteger, w: usize, h: usize, plane: usize, held: *std.ArrayList(*anyopaque)) ?objc.Object {
@@ -234,8 +243,8 @@ pub const Textures = struct {
         const h = objc.msg(objc.NSUInteger, src0, "height", .{});
         const out = t.target(device, slot, w, h) orelse return null;
         var u = u_in;
-        const lut = if (tex.lut) |l| t.lutTexture(device, l) else null;
-        const slut = if (tex.source_lut) |l| t.lutTexture(device, l) else null;
+        const lut = if (u.lut_enabled == 1) t.lutTexture(device, tex.lut.?) else null;
+        const slut = if (u.source_lut_enabled == 1) t.lutTexture(device, tex.source_lut.?) else null;
         if (lut == null) u.lut_enabled = 0;
         if (slut == null) u.source_lut_enabled = 0;
         const desc = objc.msg(objc.Object, objc.class("MTLRenderPassDescriptor"), "renderPassDescriptor", .{});
