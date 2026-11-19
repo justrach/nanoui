@@ -216,6 +216,13 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{.{ .name = "nanoui", .module = nanoui }},
     }) })).step);
+    // The gallery's pages, command palette, dock studio, and phone layout.
+    if (!target.result.abi.isAndroid()) test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("examples/gallery/tests.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "nanoui", .module = nanoui }},
+    }) })).step);
     // The SG bus example's planner, on its real stop lists (prints what it plans).
     const sg_tests = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("examples/sgbus/tests.zig"),

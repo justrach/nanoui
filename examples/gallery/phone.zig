@@ -21,11 +21,12 @@ pub const pages = [_][2][]const u8{
     .{ "Glass", "sparkles" },
     .{ "Motion", "wand.and.stars" },
     .{ "Kit", "square.grid.2x2" },
+    .{ "Studio", "rectangle.split.3x1" },
     .{ "Windows", "macwindow" },
 };
-const tiles = [pages.len]u24{ 0x0a84ff, 0x30d158, 0xff9f0a, 0x5e5ce6, 0x64d2ff, 0xff375f, 0xbf5af2, 0x8e8e93 };
+const tiles = [pages.len]u24{ 0x0a84ff, 0x30d158, 0xff9f0a, 0x5e5ce6, 0x64d2ff, 0xff375f, 0xbf5af2, 0x5ac8fa, 0x8e8e93 };
 /// A line under each page's name.
-const blurbs = [pages.len][]const u8{
+pub const blurbs = [pages.len][]const u8{
     "Buttons, toggles, sliders, fields",
     "A to-do list with checkboxes",
     "System text, weights, wrapping",
@@ -33,11 +34,12 @@ const blurbs = [pages.len][]const u8{
     "Liquid Glass bars, tabs, toasts",
     "Springs, staggers, shared elements",
     "Every nanoui.kit component",
+    "Dockable panes, canvas, transcript",
     "Window options, on Windows",
 };
 /// The chips, and which of them each page is under.
 const chips = [_][]const u8{ "All", "Widgets", "Effects", "Text" };
-const chip_of = [pages.len]usize{ 1, 1, 3, 1, 2, 2, 1, 1 };
+const chip_of = [pages.len]usize{ 1, 1, 3, 1, 2, 2, 1, 1, 1 };
 
 /// The phone's spacing and motion.
 const gutter = 24;
@@ -186,7 +188,7 @@ fn home(g: anytype, c: *ui.Context) void {
 }
 
 /// A count beside a page, in the accent: tasks left, rows, the new page.
-fn badge(g: anytype, i: usize) ?[]const u8 {
+pub fn badge(g: anytype, i: usize) ?[]const u8 {
     const S = struct {
         var buf: [8]u8 = undefined;
     };

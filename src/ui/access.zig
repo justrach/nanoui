@@ -196,7 +196,10 @@ pub fn tree(c: *Context, arena: std.mem.Allocator, out: *std.ArrayList(Element))
             }
             f.claimed = true;
             if (vis.w <= 0 or vis.h <= 0) continue;
-            var label = if (it.label.len > 0) it.label else try textOf(c, arena, @intCast(i));
+            // A text field's child text is its typed value (or password bullets),
+            // never its accessible name; when it has no placeholder, let a caption
+            // before it on the same line name it.
+            var label = if (it.label.len > 0) it.label else if (it.role == .text_field) "" else try textOf(c, arena, @intCast(i));
             if (label.len == 0) label = takeCaption(out, vis);
             try out.append(arena, .{ .id = it.id, .role = it.role, .label = label, .value = it.value, .hint = it.hint, .rect = vis, .selected = it.selected, .enabled = it.enabled, .adjustable = it.adjustable, .header = it.header });
             continue;
