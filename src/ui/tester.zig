@@ -17,6 +17,14 @@ const raster = @import("raster.zig");
 const portable = text.portable;
 const metal = if (portable) struct {
     pub const Renderer = void;
+    pub const LinearPixels = struct {
+        rgba: []f32,
+        width: usize,
+        height: usize,
+        pub fn deinit(p: @This(), gpa: std.mem.Allocator) void {
+            gpa.free(p.rgba);
+        }
+    };
 } else @import("metal.zig");
 const image = if (portable) void else @import("image.zig");
 const frame_mod = @import("frame.zig");
@@ -58,6 +66,12 @@ pub const Tester = struct {
     app_verbs: ?AppVerbs = null,
     /// Another thread asked for a frame (`requestFrameFromAnyThread`).
     woken: std.atomic.Value(bool) = .init(false),
+    /// The display the view is told it is on (`Context.display_info`),
+    /// and what its surface shows (`Context.surface_colour`): an SDR
+    /// display unless a test says otherwise. Snapshots (`render`) are SDR
+    /// frames whatever these say; `renderLinear` draws an extended one.
+    display_info: gpu.DisplayInfo = .{},
+    surface_colour: gpu.SurfaceColour = .sdr_srgb,
 
     /// A script step nanoui doesn't know, offered to the app: true if it
     /// ran it (`op` is before the colon, `arg` after).
@@ -128,6 +142,7 @@ pub const Tester = struct {
     }
 
     pub fn deinitImpl(t: *Tester) void {
+        @import("raster.zig").freeLayers();
         t.clipboard.deinit(t.gpa);
         t.instances.deinit(t.gpa);
         t.ctx.deinit();
@@ -146,6 +161,8 @@ pub const Tester = struct {
     }
 
     pub fn frameImpl(t: *Tester) void {
+        t.ctx.display_info = t.display_info;
+        t.ctx.surface_colour = t.surface_colour;
         _ = frame_mod.run(&t.ctx, t.view, &t.text, &t.instances, t.size, t.scale, t.theme, t.dt, t.time);
         // The simulated clock is the real one here: a view reads its rate off it.
         t.ctx.frame_time = t.dt;
@@ -426,6 +443,21 @@ pub const Tester = struct {
         pictures.gradients = t.ctx.gradients.items;
         raster.draw(out, t.instances.items, t.text.atlas.mask(), pictures, t.scale, t.ctx.theme.background);
         return out;
+    }
+
+    /// The last frame drawn as an extended surface draws it (linear light,
+    /// the UI decoded and scaled by `display_info.sdr_white_scale`, the
+    /// `.surface_linear` textures in its plane): RGBA floats, for HDR
+    /// tests. Metal only (`error.Unsupported` on the CPU renderer).
+    pub fn renderLinear(t: *Tester, gpa: std.mem.Allocator) !metal.LinearPixels {
+        if (comptime portable) return error.Unsupported;
+        t.renderer.syncImages(&t.text.images);
+        t.renderer.textures = t.ctx.textures.items;
+        t.renderer.gradients = t.ctx.gradients.items;
+        const was = t.renderer.sdr_white_scale;
+        defer t.renderer.sdr_white_scale = was;
+        t.renderer.sdr_white_scale = t.display_info.sdr_white_scale;
+        return t.renderer.drawOffscreenLinear(gpa, t.instances.items, t.text.texture(), t.size, t.scale, t.ctx.theme.background);
     }
 
     /// Runs a script of steps separated by `;` (`tester_script.zig` lists

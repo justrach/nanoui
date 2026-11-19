@@ -44,7 +44,7 @@ pub fn resolve(gpa: std.mem.Allocator, t: gpu.Texture) ?Held {
     const bytes: Bgra = .{ .pixels = t.bgra, .width = t.width, .height = t.height, .stride = stride };
     if (!t.needsPost()) return .{ .bgra = bytes };
     var plane: Source = .{ .bytes = t.bgra.ptr, .width = t.width, .height = t.height, .stride = stride, .kind = .bgra8 };
-    const out = convert(gpa, t, color.uniforms(t, 0), &plane, null) orelse return null;
+    const out = convert(gpa, t, color.uniforms(t, color.stage(t, 0, false).mode), &plane, null) orelse return null;
     return .{ .bgra = out, .owned = @constCast(out.pixels) };
 }
 
@@ -121,6 +121,10 @@ fn convert(gpa: std.mem.Allocator, t: gpu.Texture, u: color.Uniforms, src: *cons
         } else if (u.source_mode == 3) {
             const rgb = color.linearToDisplay(.{ c[0], c[1], c[2] }, u);
             c = .{ rgb[0], rgb[1], rgb[2], 1 };
+        } else if (u.source_mode == 4) {
+            // Alpha kept, as the shader keeps it.
+            const rgb = color.surfaceLinearToSdr(.{ c[0], c[1], c[2] });
+            c = .{ rgb[0], rgb[1], rgb[2], c[3] };
         }
         const graded = color.applyLuts(t, .{ c[0], c[1], c[2] });
         const o = out[(y * w + x) * 4 ..][0..4];
@@ -140,9 +144,10 @@ pub const Plane = struct {
 
 /// A frame's planes (`t.format`'s: one for BGRA and half floats, luma then
 /// interleaved chroma for Y'CbCr) converted as the colour stage converts
-/// them, into memory of its own. BGRA that needs no stage is copied.
+/// them, into memory of its own. BGRA that needs no stage is copied; half
+/// floats passed through (`Texture.encoding`) are only made 8-bit.
 pub fn fromPlanes(gpa: std.mem.Allocator, t: gpu.Texture, p0: Plane, p1: ?Plane) ?Held {
-    if (!t.needsPost()) {
+    if (t.format == .bgra8 and !t.needsPost()) {
         const copy = gpa.alloc(u8, p0.width * p0.height * 4) catch return null;
         for (0..p0.height) |y| @memcpy(copy[y * p0.width * 4 ..][0 .. p0.width * 4], p0.bytes[y * p0.stride ..][0 .. p0.width * 4]);
         return .{ .bgra = .{ .pixels = copy, .width = p0.width, .height = p0.height, .stride = p0.width * 4 }, .owned = copy };
@@ -160,7 +165,8 @@ fn convertPlanes(gpa: std.mem.Allocator, t: gpu.Texture, p0: Plane, p1: ?Plane) 
         const c = p1 orelse return null;
         chroma = .{ .bytes = c.bytes, .width = c.width, .height = c.height, .stride = c.stride, .kind = if (ten) .rg16 else .rg8 };
     }
-    return convert(gpa, t, color.uniforms(t, color.sourceMode(t.format)), &luma, if (chroma) |*c| c else null);
+    const mode = color.stage(t, color.sourceMode(t.format), false).mode;
+    return convert(gpa, t, color.uniforms(t, mode), &luma, if (chroma) |*c| c else null);
 }
 
 fn fromPixelBuffer(gpa: std.mem.Allocator, t: gpu.Texture, pb: *anyopaque) ?Held {
@@ -170,7 +176,7 @@ fn fromPixelBuffer(gpa: std.mem.Allocator, t: gpu.Texture, pb: *anyopaque) ?Held
         locked.unlock();
         return null;
     };
-    if (!t.needsPost()) {
+    if (t.format == .bgra8 and !t.needsPost()) {
         held.bgra = .{ .pixels = p0.bytes[0 .. p0.stride * p0.height], .width = p0.width, .height = p0.height, .stride = p0.stride };
         return held;
     }
@@ -190,13 +196,38 @@ fn readBack(gpa: std.mem.Allocator, t: gpu.Texture, mt: *anyopaque) ?Held {
     var rb = metal_app.readBack(gpa, mt) orelse return null;
     defer rb.deinit(gpa);
     const src: Source = .{ .bytes = rb.bytes.ptr, .width = rb.width, .height = rb.height, .stride = rb.stride, .kind = if (rb.half) .rgba16f else .bgra8 };
-    const mode: u32 = if (rb.linear) 3 else 0;
-    if (mode == 0 and t.lut == null and t.source_lut == null) {
+    var mode: u32 = if (rb.linear) 3 else 0;
+    var rt = t;
+    if (t.encoding != .auto) {
+        // Passed through: its pixel format says it is RGB. An sRGB one's
+        // bytes are display codes already, which is what the GPU's stage
+        // makes of its decoded samples, for either encoding.
+        rt.format = if (rb.half) .rgba16f else .bgra8;
+        mode = if (rb.srgb) 0 else color.stage(rt, mode, false).mode;
+    }
+    const luts = rt.effectiveEncoding() == .auto and (t.lut != null or t.source_lut != null);
+    if (mode == 0 and !luts and !rb.half) {
         const copy = gpa.dupe(u8, rb.bytes) catch return null;
         return .{ .bgra = .{ .pixels = copy, .width = rb.width, .height = rb.height, .stride = rb.stride }, .owned = copy };
     }
-    const out = convert(gpa, t, color.uniforms(t, mode), &src, null) orelse return null;
+    const out = convert(gpa, rt, color.uniforms(rt, mode), &src, null) orelse return null;
     return .{ .bgra = out, .owned = @constCast(out.pixels) };
+}
+
+/// Packed 10-bit RGB with 2-bit alpha (DXGI R10G10B10A2, Metal RGB10A2Unorm;
+/// `bgr` for Metal's BGR10A2Unorm: blue in the low bits) as RGBA half
+/// floats, 8 bytes a texel in `out` (`w * 8` a row): how the CPU reads a
+/// texture the GPU samples as unorm floats.
+pub fn rgb10a2ToHalf(src: [*]const u8, w: usize, h: usize, stride: usize, bgr: bool, out: []u8) void {
+    for (0..h) |y| for (0..w) |x| {
+        const v = std.mem.readInt(u32, src[y * stride + x * 4 ..][0..4], .little);
+        const lo: f32 = @floatFromInt(v & 0x3ff);
+        const g: f32 = @floatFromInt((v >> 10) & 0x3ff);
+        const hi: f32 = @floatFromInt((v >> 20) & 0x3ff);
+        const a: f32 = @floatFromInt(v >> 30);
+        const rgba = [4]f32{ (if (bgr) hi else lo) / 1023, g / 1023, (if (bgr) lo else hi) / 1023, a / 3 };
+        for (rgba, 0..) |c, k| std.mem.writeInt(u16, out[(y * w + x) * 8 + k * 2 ..][0..2], @bitCast(@as(f16, @floatCast(c))), .little);
+    };
 }
 
 test "fromPlanes: NV12 white and black, and BGRA copied as it is" {

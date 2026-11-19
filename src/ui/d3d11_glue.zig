@@ -34,6 +34,7 @@ pub const srv_buffer: u32 = 1;
 // D3D11_COMPARISON_ALWAYS, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP.
 pub const fill_solid: u32 = 3;
 pub const cull_none: u32 = 1;
+pub const blend_zero: u32 = 1;
 pub const blend_one: u32 = 2;
 pub const blend_inv_src_alpha: u32 = 6;
 pub const blend_inv_src1_color: u32 = 17;
@@ -351,6 +352,17 @@ pub const Target = struct {
     srv: ?*Com = null,
     w: usize = 0,
     h: usize = 0,
+    /// The DXGI format it is made in (`reserveAs`): BGRA8 unless said.
+    format: u32 = bgra8,
+
+    /// `reserve` in `format`: remade when it was made in another.
+    pub fn reserveAs(t: *Target, device: *Com, w: usize, h: usize, exact: bool, format: u32) void {
+        if (t.format != format) {
+            t.deinit();
+            t.format = format;
+        }
+        t.reserve(device, w, h, exact);
+    }
 
     /// At least `w` × `h` (exactly, when `exact`); a no-op when it already
     /// fits. On failure it stays unusable (`rtv` null, `w` and `h` zero).
@@ -363,6 +375,7 @@ pub const Target = struct {
             const oversized = !exact and w * 4 < t.w and h * 4 < t.h;
             if (fits and !oversized) return;
         }
+        const format = t.format;
         t.deinit();
         // Grown in steps, not to the exact size: a drag resize asks for a few
         // more pixels a frame, and reallocating the texture (with its two views)
@@ -376,7 +389,7 @@ pub const Target = struct {
         const tw: u32 = @intCast(if (exact) want_w else stepSize(want_w, t.w));
         const th: u32 = @intCast(if (exact) want_h else stepSize(want_h, t.h));
         if (tw == 0 or th == 0) return;
-        const tex = texture2D(device, bgra8, tw, th, bind_render_target | bind_shader_resource) orelse return;
+        const tex = texture2D(device, format, tw, th, bind_render_target | bind_shader_resource) orelse return;
         var rtv: ?*Com = null;
         check(device.slot(*const fn (*Com, *Com, ?*const anyopaque, *?*Com) callconv(.winapi) HRESULT, CreateRenderTargetView)(device, tex, null, &rtv)) catch {
             tex.release();
@@ -388,14 +401,15 @@ pub const Target = struct {
             tex.release();
             return;
         };
-        t.* = .{ .texture = tex, .rtv = rtv, .srv = srv, .w = tw, .h = th };
+        t.* = .{ .texture = tex, .rtv = rtv, .srv = srv, .w = tw, .h = th, .format = format };
     }
 
     pub fn deinit(t: *Target) void {
         if (t.srv) |v| v.release();
         if (t.rtv) |v| v.release();
         if (t.texture) |v| v.release();
-        t.* = .{};
+        const format = t.format;
+        t.* = .{ .format = format };
     }
 };
 

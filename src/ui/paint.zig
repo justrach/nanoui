@@ -256,7 +256,7 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip_
             .clip = metal.clip4(child_clip),
         });
     }
-    if ((st.clip or st.scroll or st.scroll_x) and st.radius > 0) roundClip(out.items[first..], r, visible, st.radius, st.clip_corners);
+    if ((st.clip or st.scroll or st.scroll_x) and st.radius > 0) roundClip(out.items[first..], r, visible, rad, st.clip_corners);
 
     if (st.scroll or st.scroll_x) {
         @import("scroll.zig").paintScrollbars(c, out, n.*, visible, opacity);

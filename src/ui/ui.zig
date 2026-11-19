@@ -169,6 +169,13 @@ pub const TextureFormat = @import("gpu.zig").Format;
 pub const VideoRange = @import("gpu.zig").Range;
 pub const VideoMatrix = @import("gpu.zig").Matrix;
 pub const VideoTransfer = @import("gpu.zig").Transfer;
+/// What an app's RGB texture already is (`Texture.encoding`), for apps
+/// that manage colour themselves.
+pub const TextureEncoding = @import("gpu.zig").Encoding;
+/// What a window's surface shows (`Surface.setColour`), and what the display
+/// under it can show (`Context.display_info`).
+pub const SurfaceColour = @import("gpu.zig").SurfaceColour;
+pub const DisplayInfo = @import("gpu.zig").DisplayInfo;
 /// A 3D LUT for a texture's colour stage (`ui.lut`).
 pub const Lut = @import("gpu.zig").Lut;
 pub const lut = @import("ui_gpu.zig").lut;
@@ -330,6 +337,7 @@ test {
     _ = @import("tests_shadow_x.zig");
     _ = @import("tests_text_style.zig");
     _ = @import("tests_text_extras.zig");
+    _ = @import("tests_text_lifetime.zig");
     _ = @import("tests_turn.zig");
     _ = @import("tests_transform.zig");
     _ = @import("tests_settle.zig");
@@ -361,6 +369,8 @@ test {
     _ = @import("tests_texture_affine.zig");
     _ = @import("tests_texture_color.zig");
     _ = @import("tests_lut.zig");
+    _ = @import("tests_texture_encoding.zig");
+    _ = @import("tests_hdr_surface.zig");
     _ = @import("tests_gpu_hook.zig");
     _ = @import("color.zig");
     _ = @import("ui_gpu.zig");
@@ -383,6 +393,8 @@ test {
     }
     _ = @import("raster.zig");
     _ = @import("tests_raster.zig");
+    _ = @import("tests_raster_groups.zig");
+    _ = @import("raster_group.zig");
     _ = @import("glass.zig");
     _ = @import("tests_glass.zig");
     _ = @import("scroll_fade.zig");
@@ -417,6 +429,9 @@ test {
     if (@import("builtin").os.tag == .windows) _ = @import("d3d11_device.zig");
     if (@import("builtin").os.tag == .windows) _ = @import("d3d11_video.zig");
     if (@import("builtin").os.tag == .windows) _ = @import("d3d11_texture.zig");
+    // An extended (scRGB) frame: the compose and the plane (Windows only).
+    if (@import("builtin").os.tag == .windows) _ = @import("tests_d3d11_hdr.zig");
+    if (@import("builtin").os.tag == .windows) _ = @import("d3d11_hdr.zig");
     _ = @import("icons.zig");
     _ = @import("frame_pace.zig");
     _ = keys;

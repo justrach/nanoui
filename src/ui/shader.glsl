@@ -237,9 +237,10 @@ float clip_coverage() {
     if (v_screen.x < i_clip.x || v_screen.y < i_clip.y || v_screen.x > i_clip.z || v_screen.y > i_clip.w) discard;
     float clip_cover = 1.0;
     float clip_round = i_misc.w;
-    if (clip_round > 0.0) {
-        float corners = floor(clip_round / 4096.0);
-        float rad = clip_round - corners * 4096.0;
+    if (clip_round != 0.0) {
+        float corners = floor(abs(clip_round) / 4096.0);
+        float rad = abs(clip_round) - corners * 4096.0;
+        if (clip_round < 0.0) rad = -rad;
         vec2 ch = (i_clip.zw - i_clip.xy) * 0.5;
         vec2 q = v_screen - i_clip.xy - ch;
         vec2 cd = corner_sdf_aa(q, ch, min(rad, min(ch.x, ch.y)));

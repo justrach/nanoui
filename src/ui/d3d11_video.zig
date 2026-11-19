@@ -1,5 +1,6 @@
 //! An app's ID3D11Texture2D in the frame (`Texture.d3d11_texture`: a Media
-//! Foundation decoder's NV12 or P010 surface, a BGRA or half-float one):
+//! Foundation decoder's NV12 or P010 surface, a BGRA or half-float one, or
+//! packed 10-bit RGB passed through by `Texture.encoding`):
 //! what its format makes it, the colour stage that makes it display BGRA on
 //! the GPU (`Post`, running `texture_post.hlsl`: the Metal colour stage's
 //! maths), and the CPU's way in (`readBack`: a staging copy, converted by
@@ -20,6 +21,7 @@ const HRESULT = api.HRESULT;
 pub const nv12: u32 = 103;
 pub const p010: u32 = 104;
 pub const rgba16f: u32 = 10;
+pub const r10g10b10a2: u32 = 24;
 pub const r8g8_unorm: u32 = 49;
 pub const r16_unorm: u32 = 56;
 pub const r16g16_unorm: u32 = 35;
@@ -38,6 +40,14 @@ pub fn formatOf(dxgi: u32) ?gpu.Format {
     };
 }
 
+/// What `t`, a texture of DXGI format `dxgi`, is drawn as: `formatOf`, and
+/// packed 10-bit RGB (R10G10B10A2) when it is passed through
+/// (`Texture.encoding`), sampled as unorm floats as half floats are.
+pub fn appFormat(t: gpu.Texture, dxgi: u32) ?gpu.Format {
+    if (dxgi == r10g10b10a2 and t.encoding != .auto) return .rgba16f;
+    return formatOf(dxgi);
+}
+
 /// `ID3D11Texture2D::GetDesc`.
 pub fn describe(tex: *Com) api.Texture2DDesc {
     var d: api.Texture2DDesc = .{ .width = 0, .height = 0 };
@@ -50,7 +60,7 @@ pub fn describe(tex: *Com) api.Texture2DDesc {
 /// a decoder's surface may be taller than its picture, 1088 for 1080).
 pub fn effective(t: gpu.Texture, d: api.Texture2DDesc) gpu.Texture {
     var e = t;
-    e.format = formatOf(d.format) orelse t.format;
+    e.format = appFormat(t, d.format) orelse t.format;
     e.width = if (t.width > 0) @min(t.width, d.width) else d.width;
     e.height = if (t.height > 0) @min(t.height, d.height) else d.height;
     return e;
@@ -58,7 +68,7 @@ pub fn effective(t: gpu.Texture, d: api.Texture2DDesc) gpu.Texture {
 
 /// Whether the subresource exists and the texture can be drawn at all.
 pub fn usable(t: gpu.Texture, d: api.Texture2DDesc) bool {
-    return formatOf(d.format) != null and t.subresource < d.array * @max(d.mips, 1) and d.sample_count <= 1 and d.width > 0 and d.height > 0;
+    return appFormat(t, d.format) != null and t.subresource < d.array * @max(d.mips, 1) and d.sample_count <= 1 and d.width > 0 and d.height > 0;
 }
 
 /// The copy's box: the shown size, even for the planar formats (their
@@ -100,6 +110,13 @@ pub fn readBack(gpa: std.mem.Allocator, t: gpu.Texture) ?texture_cpu.Held {
     const p0: texture_cpu.Plane = .{ .bytes = mapped.data, .width = e.width, .height = e.height, .stride = pitch };
     // A planar texture's chroma follows its luma, a row pitch apart.
     const p1: ?texture_cpu.Plane = if (d.format == nv12 or d.format == p010) .{ .bytes = mapped.data + pitch * box.bottom, .width = (e.width + 1) / 2, .height = (e.height + 1) / 2, .stride = pitch } else null;
+    if (d.format == r10g10b10a2) {
+        // Unpacked to the half floats `e.format` says, as the GPU samples it.
+        const half = gpa.alloc(u8, @as(usize, e.width) * e.height * 8) catch return null;
+        defer gpa.free(half);
+        texture_cpu.rgb10a2ToHalf(mapped.data, e.width, e.height, pitch, false, half);
+        return texture_cpu.fromPlanes(gpa, e, .{ .bytes = half.ptr, .width = e.width, .height = e.height, .stride = @as(usize, e.width) * 8 }, null);
+    }
     return texture_cpu.fromPlanes(gpa, e, p0, p1);
 }
 
@@ -240,13 +257,13 @@ pub const Post = struct {
 
     /// `t` (its effective format) from `src`'s views into `rtv`, `w` × `h`.
     pub fn run(p: *Post, device: *Com, ctx: *Com, t: gpu.Texture, src: *const Source, rtv: *Com, w: u32, h: u32) void {
-        const u = color.uniforms(t, color.sourceMode(t.format));
+        const u = color.uniforms(t, color.stage(t, color.sourceMode(t.format), false).mode);
         var mapped: api.Mapped = undefined;
         if (ctx.slot(*const fn (*Com, *Com, u32, u32, u32, *api.Mapped) callconv(.winapi) HRESULT, api.Map)(ctx, p.cb, 0, api.map_write_discard, 0, &mapped) < 0) return;
         @memcpy(mapped.data[0..@sizeOf(color.Uniforms)], std.mem.asBytes(&u));
         ctx.slot(*const fn (*Com, *Com, u32) callconv(.winapi) void, api.Unmap)(ctx, p.cb, 0);
-        const lut = if (t.lut) |l| p.lutView(device, l) else null;
-        const src_lut = if (t.source_lut) |l| p.lutView(device, l) else null;
+        const lut = if (u.lut_enabled == 1) p.lutView(device, t.lut.?) else null;
+        const src_lut = if (u.source_lut_enabled == 1) p.lutView(device, t.source_lut.?) else null;
         var vp = [1]api.Viewport{.{ .w = @floatFromInt(w), .h = @floatFromInt(h) }};
         ctx.slot(*const fn (*Com, u32, [*]const api.Viewport) callconv(.winapi) void, api.RSSetViewports)(ctx, 1, &vp);
         var rt = [1]?*Com{rtv};

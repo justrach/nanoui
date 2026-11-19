@@ -83,3 +83,55 @@ pub fn drawOffscreen(self: *Renderer, gpa: std.mem.Allocator, instances: []const
     });
     return .{ .bytes = bytes, .width = w, .height = h };
 }
+
+/// Linear light read back from an extended frame (`drawOffscreenLinear`):
+/// RGBA, `width * 4` floats a row, top row first.
+pub const LinearPixels = struct {
+    rgba: []f32,
+    width: usize,
+    height: usize,
+
+    pub fn deinit(p: LinearPixels, gpa: std.mem.Allocator) void {
+        gpa.free(p.rgba);
+    }
+};
+
+/// Draws a frame as an extended surface draws it (`Renderer.setColour`
+/// `.extended_linear`: the UI decoded and scaled by `sdr_white_scale`, the
+/// `.surface_linear` textures in its plane) into a new RGBA16Float texture
+/// and reads it back as floats: HDR tests without a window. Whatever the
+/// renderer's own surface shows, `drawOffscreen` stays an SDR frame.
+pub fn drawOffscreenLinear(self: *Renderer, gpa: std.mem.Allocator, instances: []const Instance, atlas: objc.Object, size: types.Size, scale: f32, clear: types.Color) !LinearPixels {
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    try self.hdr.ensurePipelines(self.device, self.library, metal.makePlanePipeline);
+    const w: usize = @intFromFloat(@max(1, @round(size.w * scale)));
+    const h: usize = @intFromFloat(@max(1, @round(size.h * scale)));
+    const desc = objc.msg(objc.Object, objc.class("MTLTextureDescriptor"), "texture2DDescriptorWithPixelFormat:width:height:mipmapped:", .{
+        @import("metal_hdr.zig").rgba16f, w, h, objc.NO,
+    });
+    objc.msg(void, desc, "setUsage:", .{@as(objc.NSUInteger, 1 | 4)}); // shader read, render target
+    objc.msg(void, desc, "setStorageMode:", .{@as(objc.NSUInteger, 0)}); // shared
+    const texture = objc.msg(objc.Object, self.device, "newTextureWithDescriptor:", .{desc});
+    defer objc.release(texture);
+    const buffer: ?objc.Object = if (instances.len == 0) null else objc.msg(objc.Object, self.device, "newBufferWithLength:options:", .{
+        @as(objc.NSUInteger, self.packedLen(instances)), @as(objc.NSUInteger, 0),
+    });
+    defer if (buffer) |b| objc.release(b);
+    if (buffer) |b| self.pack(@ptrCast(objc.msg(*anyopaque, b, "contents", .{})), instances);
+    var held: std.ArrayList(*anyopaque) = .empty;
+    defer held.deinit(self.frame_textures.gpa);
+    const cmd = self.encode(texture, buffer, instances, atlas, size, clear, &held);
+    objc.msg(void, cmd, "commit", .{});
+    objc.msg(void, cmd, "waitUntilCompleted", .{});
+    self.frame_textures.release(&held);
+    const halves = try gpa.alloc(f16, w * h * 4);
+    defer gpa.free(halves);
+    const Region = extern struct { x: usize, y: usize, z: usize, w: usize, h: usize, d: usize };
+    objc.msg(void, texture, "getBytes:bytesPerRow:fromRegion:mipmapLevel:", .{
+        @as(*anyopaque, halves.ptr), w * 8, Region{ .x = 0, .y = 0, .z = 0, .w = w, .h = h, .d = 1 }, @as(objc.NSUInteger, 0),
+    });
+    const out = try gpa.alloc(f32, w * h * 4);
+    for (halves, out) |v, *o| o.* = v;
+    return .{ .rgba = out, .width = w, .height = h };
+}

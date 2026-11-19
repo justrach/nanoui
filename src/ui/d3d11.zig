@@ -13,7 +13,8 @@ const raster = @import("raster.zig");
 const text_blend = @import("text_blend.zig");
 const d3d11_glass = @import("d3d11_glass.zig");
 const d3d11_texture = @import("d3d11_texture.zig");
-const source = @embedFile("shader.hlsl");
+const d3d11_hdr = @import("d3d11_hdr.zig");
+pub const source = @embedFile("shader.hlsl") ++ @embedFile("corner_sdf.hlsl") ++ @embedFile("hdr.hlsl");
 
 const api = @import("d3d11_glue.zig");
 const Target = api.Target;
@@ -153,6 +154,15 @@ pub const Renderer = struct {
     bound_texture: ?*Com = null,
     groups: std.ArrayList(Target) = .empty,
     group_depth: usize = 0,
+    /// Draw into an RGBA16F target as an extended (scRGB) surface does
+    /// (`d3d11_hdr.zig`): the UI decoded and scaled by `sdr_white_scale`,
+    /// the `.surface_linear` textures in a plane under it.
+    extended: bool = false,
+    sdr_white_scale: f32 = 1,
+    hdr: d3d11_hdr.Hdr = .{},
+    /// Where the shaders' bytecode is cached, kept for the extended ones.
+    cache_root_buf: [512]u8 = undefined,
+    cache_root_len: usize = 0,
 
     /// A hardware device (WARP when there is none), every shader, and the
     /// state one frame is drawn with.
@@ -206,6 +216,10 @@ pub const Renderer = struct {
             .params = undefined,
             .rgb_text = rgbTextEnabled(),
         };
+        if (cache_root) |dir| if (dir.len <= r.cache_root_buf.len) {
+            @memcpy(r.cache_root_buf[0..dir.len], dir);
+            r.cache_root_len = dir.len;
+        };
         // Every shader now: bytecode from the cache is a millisecond each.
         r.quad_vs = try shader(dev, cache_root, "quad_vs", "vs_5_0", CreateVertexShader);
         errdefer r.quad_vs.release();
@@ -250,6 +264,7 @@ pub const Renderer = struct {
         r.down_ps.release();
         r.blur_ps.release();
         r.slots.deinit();
+        r.hdr.deinit();
         r.frame.deinit();
         for (r.groups.items) |*group| group.deinit();
         r.groups.deinit(std.heap.page_allocator);
@@ -324,6 +339,16 @@ pub const Renderer = struct {
         // The textures first: an app's D3D11 texture may be converted by the
         // colour stage, which draws into its slot's target with a viewport
         // of its own, so the frame's target and viewport are set after it.
+        // An extended frame's own shaders, made the first time; a failure
+        // draws the frame as an SDR one (copied, below).
+        const extended = r.extended and target != null and blk: {
+            r.hdr.ensure(r) catch |err| {
+                std.log.warn("nanoui: the extended surface's shaders failed ({t}): drawing SDR", .{err});
+                break :blk false;
+            };
+            break :blk true;
+        };
+        r.slots.extended = extended;
         r.slots.prepare(r.device, g, r.textures);
 
         setViewport(g, @floatFromInt(w), @floatFromInt(h));
@@ -336,6 +361,7 @@ pub const Renderer = struct {
         r.setState();
 
         r.drawSpan(instances, size, scale, 0, instances.len, 0, false);
+        if (extended) return d3d11_hdr.finish(r, instances, size, scale, target.?, w, h);
         if (target) |t| {
             const src: Box = .{ .right = @intCast(w), .bottom = @intCast(h) };
             g.slot(*const fn (*Com, *Com, u32, u32, u32, u32, *Com, u32, ?*const Box) callconv(.winapi) void, CopySubresourceRegion)(g, t, 0, 0, 0, 0, f.texture.?, 0, &src);
@@ -446,9 +472,15 @@ pub const Renderer = struct {
             if (instances[i].kind != gpu.Kind.texture) continue;
             r.drawRange(false, size, scale, from, i - from, .{});
             from = i + 1;
-            const tex = r.slots.get(@intFromFloat(@max(0, instances[i].border_width))) orelse continue;
+            const slot: usize = @intFromFloat(@max(0, instances[i].border_width));
+            const tex = r.slots.get(slot) orelse continue;
             r.bound_texture = tex;
             defer r.bound_texture = null;
+            // An extended frame's linear texture is drawn in the plane: its
+            // shape is cut out of the UI here (`d3d11_hdr.zig`).
+            const hole = d3d11_hdr.inPlane(r, slot);
+            if (hole) r.context.slot(*const fn (*Com, ?*Com, ?*const [4]f32, u32) callconv(.winapi) void, OMSetBlendState)(r.context, r.hdr.hole_blend, &[4]f32{ 0, 0, 0, 0 }, 0xffffffff);
+            defer if (hole) r.setBlend(true);
             r.drawRange(false, size, scale, i, 1, .{});
         }
         r.drawRange(false, size, scale, from, end - from, .{});
@@ -470,6 +502,20 @@ pub const Renderer = struct {
         g.slot(*const fn (*Com, u32, u32, [*]const ?*Com) callconv(.winapi) void, PSSetShaderResources)(g, 0, 6, &views);
         // The instance offset goes through `Params`: StartInstanceLocation
         // only moves vertex-buffer reads, not this structured buffer's.
+        g.slot(*const fn (*Com, u32, u32, u32, u32) callconv(.winapi) void, DrawInstanced)(g, 4, @intCast(count), 0, 0);
+    }
+
+    /// Instances [first, first + count) with the quad vertex shader and `ps`
+    /// (an extended frame's plane, `d3d11_hdr.zig`).
+    pub fn drawWith(r: *Renderer, ps: *Com, size: types.Size, scale: f32, first: usize, count: usize) void {
+        const g = r.context;
+        r.setParams(size, scale, .{ .start_instance = @intCast(first) });
+        g.slot(*const fn (*Com, ?*Com, ?*const anyopaque, u32) callconv(.winapi) void, VSSetShader)(g, r.quad_vs, null, 0);
+        g.slot(*const fn (*Com, ?*Com, ?*const anyopaque, u32) callconv(.winapi) void, PSSetShader)(g, ps, null, 0);
+        var inst = [1]?*Com{r.instance_srv};
+        g.slot(*const fn (*Com, u32, u32, [*]const ?*Com) callconv(.winapi) void, VSSetShaderResources)(g, 0, 1, &inst);
+        var views = [6]?*Com{ r.instance_srv, r.atlas_srv, r.images_srv, r.a.srv, r.native_atlas_srv, r.bound_texture };
+        g.slot(*const fn (*Com, u32, u32, [*]const ?*Com) callconv(.winapi) void, PSSetShaderResources)(g, 0, 6, &views);
         g.slot(*const fn (*Com, u32, u32, u32, u32) callconv(.winapi) void, DrawInstanced)(g, 4, @intCast(count), 0, 0);
     }
 

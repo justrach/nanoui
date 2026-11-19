@@ -20,9 +20,18 @@ const Guid = extern struct { a: u32, b: u16, c: u16, d: [8]u8 };
 
 const iid_dxgi_device: Guid = .{ .a = 0x54ec77fa, .b = 0x1377, .c = 0x44e6, .d = .{ 0x8c, 0x32, 0x88, 0xfd, 0x5f, 0x44, 0xc8, 0x4c } };
 const iid_dxgi_factory2: Guid = .{ .a = 0x50c83a1c, .b = 0xe072, .c = 0x4c48, .d = .{ 0x87, 0xb0, 0x36, 0x30, 0xfa, 0x36, 0xa6, 0xd0 } };
+/// IDXGISwapChain3 (dxgi1_4.h): `SetColorSpace1` for an scRGB swap chain.
+const iid_swap_chain3: Guid = .{ .a = 0x94d99bdb, .b = 0xf1f8, .c = 0x4ab0, .d = .{ 0xb2, 0x36, 0x7d, 0xa0, 0x17, 0x0e, 0xda, 0xb1 } };
 const iid_texture2d: Guid = .{ .a = 0x6f15aaf2, .b = 0xd208, .c = 0x4e89, .d = .{ 0x9a, 0xb4, 0x48, 0x95, 0x35, 0xd3, 0x4f, 0x9c } };
 
 const format_bgra8: u32 = 87; // DXGI_FORMAT_B8G8R8A8_UNORM, as the renderer writes
+const format_rgba16f: u32 = 10; // DXGI_FORMAT_R16G16B16A16_FLOAT: scRGB
+/// DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709 (sRGB) and
+/// DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709 (scRGB: linear, 1.0 = 80 nits).
+const colour_space_srgb: u32 = 0;
+const colour_space_scrgb: u32 = 1;
+const hdr_output = @import("hdr_output.zig");
+const gpu = @import("../ui/gpu.zig");
 
 const shared_device = @import("../ui/d3d11_device.zig");
 
@@ -120,6 +129,8 @@ pub const Presenter = struct {
     upload_tex: ?*Com = null,
     /// The HRESULT of the last `present` (for `NANOUI_TRACE`).
     last_hr: u32 = 0,
+    /// The back buffers are half floats in scRGB (`setExtended`).
+    extended: bool = false,
 
     /// A flip-sequential swap chain for `hwnd`, `width` × `height` pixels,
     /// on the app's shared device (a reference of its own to it).
@@ -246,6 +257,51 @@ pub const Presenter = struct {
         const buffer = try p.backBuffer();
         defer buffer.release();
         p.context.slot(*const fn (*Com, *Com, *Com) callconv(.winapi) void, 47)(p.context, buffer, target); // CopyResource
+    }
+
+    /// What the display under the swap chain can show (`hdr_output.zig`):
+    /// an SDR display's defaults where DXGI or the display configuration
+    /// can't say.
+    pub fn displayInfo(p: *Presenter) gpu.DisplayInfo {
+        const desc = hdr_output.describe(@ptrCast(p.swap)) orelse return .{};
+        const level = hdr_output.sdrWhiteLevel(&desc.device_name);
+        if (level == null and desc.colour_space == hdr_output.colour_space_hdr10)
+            std.log.info("nanoui: the display's SDR white level is not known: SDR white is drawn at 80 nits", .{});
+        return hdr_output.infoOf(desc, level);
+    }
+
+    /// Makes the back buffers half floats in scRGB (on) or BGRA8 in sRGB
+    /// (off). On only where the output is HDR (`IDXGIOutput6::GetDesc1`'s
+    /// colour space) and the swap chain takes scRGB; else, or on any
+    /// failure (a driver, a remote session), the chain stays or goes back to
+    /// BGRA8. True when the chain is extended after the call. Every
+    /// reference to a back buffer must be released first (`ResizeBuffers`).
+    pub fn setExtended(p: *Presenter, on: bool) bool {
+        if (on == p.extended) return p.extended;
+        if (on) {
+            const desc = hdr_output.describe(@ptrCast(p.swap)) orelse return false;
+            if (desc.colour_space != hdr_output.colour_space_hdr10) return false;
+            if (p.reformat(format_rgba16f, colour_space_scrgb)) {
+                p.extended = true;
+                return true;
+            }
+            std.log.warn("nanoui: the swap chain would not take scRGB: the window stays SDR", .{});
+        }
+        _ = p.reformat(format_bgra8, colour_space_srgb);
+        p.extended = false;
+        return false;
+    }
+
+    /// The back buffers in `format`, presented as `colour_space`.
+    fn reformat(p: *Presenter, format: u32, colour_space: u32) bool {
+        // ResizeBuffers: every buffer, this size, the new format.
+        if (p.swap.slot(*const fn (*Com, u32, u32, u32, u32, u32) callconv(.winapi) HRESULT, 13)(p.swap, 0, p.width, p.height, format, 0) < 0) return false;
+        const sc3 = p.swap.query(&iid_swap_chain3) catch return false;
+        defer sc3.release();
+        var support: u32 = 0;
+        // CheckColorSpaceSupport, then SetColorSpace1: present support is bit 0.
+        if (sc3.slot(*const fn (*Com, u32, *u32) callconv(.winapi) HRESULT, 37)(sc3, colour_space, &support) < 0 or support & 1 == 0) return false;
+        return sc3.slot(*const fn (*Com, u32) callconv(.winapi) HRESULT, 38)(sc3, colour_space) >= 0;
     }
 
     /// Shows the back buffer, waiting for the next vertical blank when

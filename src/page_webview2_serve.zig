@@ -48,6 +48,7 @@ extern "ole32" fn CreateStreamOnHGlobal(mem: ?*anyopaque, delete_on_release: i32
 fn reasonZ(status: u16) [*:0]const u16 {
     return switch (status) {
         200 => std.unicode.utf8ToUtf16LeStringLiteral("OK"),
+        403 => std.unicode.utf8ToUtf16LeStringLiteral("Forbidden"),
         else => std.unicode.utf8ToUtf16LeStringLiteral("Not Found"),
     };
 }
