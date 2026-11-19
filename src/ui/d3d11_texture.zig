@@ -74,12 +74,19 @@ pub const Slots = struct {
     /// once it could not be (the CPU converts from then on).
     post: ?video.Post = null,
     post_failed: bool = false,
+    /// The frame is drawn on an extended (scRGB) surface: an app's
+    /// half-float `.surface_linear` texture is copied as it is, linear
+    /// light kept (`linear`), for the renderer's plane (`d3d11_hdr.zig`).
+    extended: bool = false,
+    /// Which slots hold such a texture this frame.
+    linear: std.ArrayList(bool) = .empty,
 
     pub fn deinit(s: *Slots) void {
         for (s.entries.items) |*e| e.release();
         s.entries.deinit(s.gpa);
         s.ready.deinit(s.gpa);
         s.paths.deinit(s.gpa);
+        s.linear.deinit(s.gpa);
         s.releaseHeld();
         s.held.deinit(s.gpa);
         if (s.post) |*p| p.deinit();
@@ -99,12 +106,20 @@ pub const Slots = struct {
         s.releaseHeld();
         s.ready.clearRetainingCapacity();
         s.paths.clearRetainingCapacity();
+        s.linear.clearRetainingCapacity();
         for (textures, 0..) |t, slot| {
             var path: Path = .none;
-            const v = s.upload(device, context, t, slot, &path);
+            var linear = false;
+            const v = s.upload(device, context, t, slot, &path, &linear);
             s.ready.append(s.gpa, v) catch return;
             s.paths.append(s.gpa, if (v == null) .none else path) catch return;
+            s.linear.append(s.gpa, v != null and linear) catch return;
         }
+    }
+
+    /// Whether slot `slot` holds linear light for the plane this frame.
+    pub fn isLinear(s: *const Slots, slot: usize) bool {
+        return slot < s.linear.items.len and s.linear.items[slot];
     }
 
     /// The view slot `slot` samples this frame.
@@ -117,11 +132,11 @@ pub const Slots = struct {
         return &s.entries.items[slot];
     }
 
-    fn upload(s: *Slots, device: *Com, context: *Com, t: gpu.Texture, slot: usize, path: *Path) ?*Com {
+    fn upload(s: *Slots, device: *Com, context: *Com, t: gpu.Texture, slot: usize, path: *Path, linear: *bool) ?*Com {
         if (t.d3d11_texture) |raw| {
             const tex: *Com = @ptrCast(@alignCast(raw));
             if (d3d11_device.deviceOf(tex) == device) {
-                if (s.uploadGpu(device, context, t, tex, slot, path)) |v| return v;
+                if (s.uploadGpu(device, context, t, tex, slot, path, linear)) |v| return v;
             }
         }
         path.* = .cpu;
@@ -133,14 +148,17 @@ pub const Slots = struct {
     /// the slot's textures are touched, so a frame that always falls back
     /// (no colour stage, a copy that fails) keeps the CPU's dynamic texture
     /// instead of remaking it and the target every frame.
-    fn uploadGpu(s: *Slots, device: *Com, context: *Com, t: gpu.Texture, tex: *Com, slot: usize, path: *Path) ?*Com {
+    fn uploadGpu(s: *Slots, device: *Com, context: *Com, t: gpu.Texture, tex: *Com, slot: usize, path: *Path, linear: *bool) ?*Com {
         const d = video.describe(tex);
         if (!video.usable(t, d)) return null;
         const e = video.effective(t, d);
+        // Linear half floats for an extended surface's plane: copied as
+        // they are, into a half-float target.
+        const keep_linear = s.extended and d.format == video.rgba16f and !e.needsPostOn(.extended_linear);
         // BGRA needing no stage (display BGRA, or passed through) is copied;
         // half floats and packed 10-bit RGB passed through as display codes
         // are sampled raw by the stage (source mode 0) into the BGRA target.
-        const copy = d.format == api.bgra8 and !e.needsPost();
+        const copy = keep_linear or (d.format == api.bgra8 and !e.needsPost());
         if (!copy and s.post == null) {
             if (s.post_failed) return null;
             s.post = video.Post.init(device) catch |err| {
@@ -153,13 +171,14 @@ pub const Slots = struct {
         // The planes into the colour stage's copy first: it is the slot's
         // own texture, so failing here leaves the CPU path's alone.
         if (!copy and !en.source.take(device, context, tex, t.subresource, d.format, video.boxOf(e, d))) return null;
-        en.target.reserve(device, e.width, e.height, true);
+        en.target.reserveAs(device, e.width, e.height, true, if (keep_linear) video.rgba16f else api.bgra8);
         const rtv = en.target.rtv orelse return null;
         en.releaseDynamic();
         s.hold(tex);
         if (copy) {
             video.copyBgra(context, en.target.texture.?, tex, t.subresource, .{ .right = e.width, .bottom = e.height });
             path.* = .gpu_copy;
+            linear.* = keep_linear;
         } else {
             s.post.?.run(device, context, e, &en.source, rtv, e.width, e.height);
             path.* = .gpu_post;

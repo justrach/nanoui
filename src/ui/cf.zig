@@ -53,6 +53,9 @@ pub extern "c" fn CGContextSetAllowsFontSubpixelPositioning(ctx: CGContextRef, v
 pub extern "c" fn CGContextSetShouldSubpixelPositionFonts(ctx: CGContextRef, v: bool) void;
 
 pub extern "c" const kCGColorSpaceSRGB: CFStringRef;
+/// Linear light in sRGB primaries, values outside [0, 1] kept: an extended
+/// (EDR) surface's colour space (`Surface.setColour`).
+pub extern "c" const kCGColorSpaceExtendedLinearSRGB: CFStringRef;
 pub extern "c" fn CGColorSpaceCreateWithName(name: CFStringRef) ?CGColorSpaceRef;
 pub extern "c" fn CGColorSpaceRelease(space: CGColorSpaceRef) void;
 pub extern "c" fn CGColorSpaceCreateDeviceGray() ?CGColorSpaceRef;

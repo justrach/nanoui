@@ -208,6 +208,14 @@ pub const Texture = struct {
     /// default, draws it as every field above says, as before.
     encoding: Encoding = .auto,
 
+    /// Whether the colour stage must run before the frame is drawn on a
+    /// surface showing `colour`: a `.surface_linear` texture is drawn as
+    /// it is on an extended one.
+    pub fn needsPostOn(t: Texture, colour: SurfaceColour) bool {
+        if (colour == .extended_linear and t.effectiveEncoding() == .surface_linear) return false;
+        return t.needsPost();
+    }
+
     /// Whether the colour stage must run before the frame is drawn on an
     /// SDR surface.
     pub fn needsPost(t: Texture) bool {
@@ -244,6 +252,46 @@ pub const Encoding = enum {
     /// [0, 1] and sRGB encoded (the colour stage's source mode 4), its
     /// alpha kept.
     surface_linear,
+};
+
+/// What a window's surface shows its pixels as (`Surface.setColour`):
+/// display sRGB in 8 bits (every surface, by default), or extended-range
+/// linear light in half floats (SDR white at `DisplayInfo.sdr_white_scale`,
+/// brighter values kept, on a display with headroom). An extended surface
+/// still draws the UI in 8-bit sRGB and composites it, decoded, with the
+/// `.surface_linear` textures it shows: nothing else changes for the app.
+pub const SurfaceColour = enum { sdr_srgb, extended_linear };
+
+/// What the display under a surface can show, as the surface last read it.
+/// The defaults describe an SDR display, which is what a surface that can't
+/// tell (offscreen, OpenGL, the CPU renderer) reports.
+pub const DisplayInfo = struct {
+    /// How far above SDR white the display can go now, and at most: 1 on
+    /// an SDR display. On macOS `headroom_now` stays 1 until a surface asks
+    /// for extended range (EDR), and moves with the brightness.
+    headroom_now: f32 = 1,
+    headroom_potential: f32 = 1,
+    /// SDR white and the display's peak, in nits (Windows reports both; on
+    /// macOS SDR white is taken as 100 and the peak as 100 × the potential
+    /// headroom).
+    sdr_white_nits: f32 = 100,
+    max_nits: f32 = 100,
+    /// The output is HDR (macOS: the display has headroom; Windows: the
+    /// output's colour space is HDR10), and the display's gamut is wider
+    /// than sRGB (Display P3 or more).
+    hdr_output: bool = false,
+    wide_gamut: bool = false,
+    /// The value an extended surface draws SDR white at, which the UI is
+    /// scaled by and a `.surface_linear` texture's SDR white should be
+    /// written at: 1 on macOS (EDR's 1.0 is SDR white), SDR white over 80
+    /// nits on Windows (scRGB's 1.0 is 80 nits).
+    sdr_white_scale: f32 = 1,
+
+    /// Whether an extended surface can show anything brighter than SDR
+    /// white here.
+    pub fn hasHeadroom(d: DisplayInfo) bool {
+        return d.hdr_output and d.headroom_potential > 1.0;
+    }
 };
 
 /// What a texture's pixels are: BGRA (display sRGB, premultiplied), two-

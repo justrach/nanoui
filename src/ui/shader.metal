@@ -457,3 +457,67 @@ static float4 shade(VOut in, Instance i, texture2d<float> atlas, texture2d<float
     }
     return c * coverage;
 }
+
+// An extended surface's plane (metal.zig's `encodeExtended`): a
+// `.surface_linear` texture's colour, un-premultiplied and without its
+// edge's coverage, wherever any of it shows. The hole cut in the UI for it
+// carries the coverage and the texture's alpha, so `fs_hdr_compose`'s
+// (1 - ui.a) weighs this colour by both, and by whatever the UI then drew
+// over it.
+fragment float4 fs_plane(VOut in [[stage_in]],
+                         constant Instance *instances [[buffer(0)]],
+                         texture2d<float> atlas [[texture(0)]],
+                         texture2d<float> images [[texture(1)]],
+                         texture2d<float> layer_tex [[texture(2)]],
+                         texture2d<float> frame [[texture(3)]],
+                         constant float4 *grads [[buffer(3)]]) {
+    Instance i = instances[in.inst];
+    float cover = clip_coverage(in, i) * in.pulse_alpha;
+    if ((shade(in, i, atlas, images, layer_tex, frame, grads) * cover).a <= 0.0) discard_fragment();
+    constexpr sampler s(filter::linear, address::clamp_to_edge);
+    float4 px = frame.sample(s, in.uv);
+    return float4(px.a > 0.0 ? px.rgb / px.a : float3(0.0), 1.0);
+}
+
+// An extended surface's last pass (`Surface.setColour`, metal.zig's
+// `encodeExtended`): the UI, drawn in 8-bit display sRGB into a target of
+// its own, decoded to linear light and scaled to SDR white (`scale`), with
+// the frame's `.surface_linear` textures (their plane: linear light, each
+// texture's own colour, `fs_plane`) under it where the UI let them through:
+//   ui_lin = srgbEOTF(ui.rgb / ui.a) * ui.a
+//   out    = scale * ui_lin + (1 - ui.a) * plane
+// The UI is decoded un-premultiplied, so an antialiased edge composites as
+// its coverage says. `plane` 0: no texture this frame, the plane unread.
+struct HdrCompose {
+    float scale;
+    uint plane;
+};
+
+vertex float4 vs_hdr_compose(uint vid [[vertex_id]]) {
+    float2 uv = float2(float((vid << 1) & 2u), float(vid & 2u));
+    return float4(uv * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
+}
+
+static float srgb_eotf(float c) {
+    return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4);
+}
+
+fragment float4 fs_hdr_compose(float4 pos [[position]],
+                               constant HdrCompose &k [[buffer(0)]],
+                               texture2d<float> ui [[texture(0)]],
+                               texture2d<float> plane [[texture(1)]]) {
+    uint2 p = uint2(pos.xy);
+    float4 u = ui.read(p);
+    float3 lin = float3(0.0);
+    if (u.a > 0.0) {
+        float3 c = clamp(u.rgb / u.a, 0.0, 1.0);
+        lin = float3(srgb_eotf(c.r), srgb_eotf(c.g), srgb_eotf(c.b)) * u.a;
+    }
+    float4 out = float4(k.scale * lin, u.a);
+    if (k.plane != 0u) {
+        float4 v = plane.read(p);
+        out.rgb += (1.0 - u.a) * v.rgb;
+        out.a += (1.0 - u.a) * v.a;
+    }
+    return out;
+}

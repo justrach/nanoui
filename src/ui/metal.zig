@@ -10,6 +10,8 @@ const shader_source = @embedFile("shader.metal") ++ @embedFile("glass.metal") ++
 
 const gpu = @import("gpu.zig");
 const metal_glass = @import("metal_glass.zig");
+const metal_hdr = @import("metal_hdr.zig");
+const metal_images = @import("metal_images.zig");
 const metal_texture = @import("metal_texture.zig");
 const offscreen = @import("metal_offscreen.zig");
 pub const Instance = gpu.Instance;
@@ -17,6 +19,7 @@ pub const Kind = gpu.Kind;
 pub const color4 = gpu.color4;
 pub const clip4 = gpu.clip4;
 pub const Pixels = gpu.Pixels;
+pub const LinearPixels = offscreen.LinearPixels;
 
 extern "c" fn dispatch_time(when: u64, delta: i64) u64;
 const FrameLog = @import("frame_log.zig").FrameLog;
@@ -85,6 +88,20 @@ pub const Renderer = struct {
     /// The app's own passes, encoded first into each frame's command
     /// buffer (`Surface.before_encode`).
     before_encode: ?gpu.BeforeEncode = null,
+    /// The library every pipeline came from: an extended surface makes its
+    /// own from it the first time it draws (`metal_hdr.zig`).
+    library: objc.Object,
+    /// What the layer shows (`setColour`): display sRGB in BGRA8, or
+    /// extended-range linear light in RGBA16Float (EDR). A frame is drawn
+    /// for its drawable's pixel format, so one asked for before the switch
+    /// is still drawn as it was.
+    colour: gpu.SurfaceColour = .sdr_srgb,
+    /// The value an extended frame draws the UI's white at.
+    sdr_white_scale: f32 = 1,
+    hdr: metal_hdr.Hdr = .{},
+    /// The frame being encoded is extended: its `.surface_linear` textures
+    /// go to the plane, a hole cut for each in the UI.
+    plane_mode: bool = false,
     pub fn init() !Renderer {
         const pool = objc.Pool.push();
         defer pool.pop();
@@ -101,7 +118,7 @@ pub const Renderer = struct {
             std.log.err("nanoui: shader: {s}", .{objc.fromNSString(desc)});
             return error.ShaderCompile;
         };
-        defer objc.release(library);
+        errdefer objc.release(library);
         const pipeline = try makePipeline(device, library, "fs", 1);
         errdefer objc.release(pipeline);
         // Holes (`ui.hole`) keep what's under them only where they're not.
@@ -138,52 +155,12 @@ pub const Renderer = struct {
             defer cf.CGColorSpaceRelease(srgb);
             objc.msg(void, layer, "setColorspace:", .{srgb});
         };
-        return .{ .device = device, .queue = queue, .pipeline = pipeline, .hole = hole, .glass = glass, .layer = layer, .presents = presents, .in_flight = objc.dispatch_semaphore_create(frames_in_flight), .frame_textures = frame_textures };
+        return .{ .device = device, .queue = queue, .pipeline = pipeline, .hole = hole, .glass = glass, .layer = layer, .presents = presents, .in_flight = objc.dispatch_semaphore_create(frames_in_flight), .frame_textures = frame_textures, .library = library };
     }
 
-    /// Brings the GPU's copy of the image atlas up to date (made on the
-    /// first picture).
-    /// Puts a packed picture straight into the GPU's image atlas (the
-    /// `Images.Sink` of a window): no copy of the atlas stays in memory.
-    pub fn uploadImage(ctx: *anyopaque, x: u32, y: u32, w: u32, h: u32, bgra: []const u8, atlas_side: u32) void {
-        const self: *Renderer = @ptrCast(@alignCast(ctx));
-        if (self.images_texture == null or self.images_side != atlas_side) {
-            self.makeImagesTexture(atlas_side);
-        } else if (x == 0 and y == 0) {
-            self.waitIdle();
-        }
-        const Region = extern struct { x: usize, y: usize, z: usize, w: usize, h: usize, d: usize };
-        objc.msg(void, self.images_texture.?, "replaceRegion:mipmapLevel:withBytes:bytesPerRow:", .{
-            Region{ .x = x, .y = y, .z = 0, .w = w, .h = h, .d = 1 }, @as(objc.NSUInteger, 0), @as(*const anyopaque, bgra.ptr), @as(objc.NSUInteger, w) * 4,
-        });
-    }
-
-    /// The picture atlas's texture at a side, frames using an older one done.
-    fn makeImagesTexture(self: *Renderer, atlas_side: u32) void {
-        if (self.images_texture) |t| {
-            self.waitIdle();
-            objc.release(t);
-        }
-        const side: objc.NSUInteger = atlas_side;
-        const desc = objc.msg(objc.Object, objc.class("MTLTextureDescriptor"), "texture2DDescriptorWithPixelFormat:width:height:mipmapped:", .{ pixel_format, side, side, objc.NO });
-        self.images_texture = objc.msg(objc.Object, self.device, "newTextureWithDescriptor:", .{desc});
-        self.images_side = atlas_side;
-        self.images_generation = std.math.maxInt(u64);
-    }
-
-    pub fn syncImages(self: *Renderer, im: *Images) void {
-        if (im.sink != null or im.pixels.len == 0 or im.generation == self.images_generation) return;
-        const side: objc.NSUInteger = im.side;
-        if (self.images_texture == null or self.images_side != im.side) self.makeImagesTexture(im.side);
-        const Region = extern struct { x: usize, y: usize, z: usize, w: usize, h: usize, d: usize };
-        // Only the rows that changed, unless the texture is new.
-        const rows: [2]u32 = if (self.images_generation == std.math.maxInt(u64)) .{ 0, @intCast(side) } else im.dirty orelse .{ 0, 0 };
-        if (rows[1] > rows[0]) objc.msg(void, self.images_texture.?, "replaceRegion:mipmapLevel:withBytes:bytesPerRow:", .{
-            Region{ .x = 0, .y = rows[0], .z = 0, .w = side, .h = rows[1] - rows[0], .d = 1 }, @as(objc.NSUInteger, 0), @as(*const anyopaque, im.pixels.ptr + @as(usize, rows[0]) * side * 4), side * 4,
-        });
-        im.dirty = null;
-        self.images_generation = im.generation;
-    }
+    /// The picture atlas on the GPU (`metal_images.zig`).
+    pub const uploadImage = metal_images.uploadImage;
+    pub const syncImages = metal_images.syncImages;
 
     pub fn deinit(self: *Renderer) void {
         if (self.images_texture) |t| objc.release(t);
@@ -204,6 +181,8 @@ pub const Renderer = struct {
         self.glass.deinit();
         objc.release(self.pipeline);
         objc.release(self.hole);
+        self.hdr.deinit();
+        objc.release(self.library);
         objc.release(self.queue);
         objc.release(self.device);
     }
@@ -353,6 +332,9 @@ pub const Renderer = struct {
         objc.msg(void, self.layer, "setBackgroundColor:", .{objc.msg(objc.Object, ns, "CGColor", .{})});
     }
 
+    /// Shows the layer's pixels as `c` (`metal_hdr.setColour`).
+    pub const setColour = metal_hdr.setColour;
+
     pub fn setOpaque(self: *Renderer, on: bool) void {
         objc.msg(void, self.layer, "setOpaque:", .{if (on) objc.YES else objc.NO});
     }
@@ -361,6 +343,7 @@ pub const Renderer = struct {
     pub const Timing = offscreen.Timing;
     pub const drawTimed = offscreen.drawTimed;
     pub const drawOffscreen = offscreen.drawOffscreen;
+    pub const drawOffscreenLinear = offscreen.drawOffscreenLinear;
 
     /// A pass drawing into `texture`, cleared to `clear` or keeping it.
     pub fn pass(cmd: objc.Object, texture: objc.Object, clear: ?types.Color) objc.Object {
@@ -400,7 +383,7 @@ pub const Renderer = struct {
     }
 
     /// Draws instances [first, first + count) with `pipeline`.
-    fn drawRange(self: *Renderer, enc: objc.Object, pipeline: objc.Object, buffer: objc.Object, atlas: objc.Object, layer_tex: ?objc.Object, size: types.Size, first: usize, count: usize) void {
+    pub fn drawRange(self: *Renderer, enc: objc.Object, pipeline: objc.Object, buffer: objc.Object, atlas: objc.Object, layer_tex: ?objc.Object, size: types.Size, first: usize, count: usize) void {
         const viewport: [2]f32 = .{ size.w, size.h };
         objc.msg(void, enc, "setRenderPipelineState:", .{pipeline});
         objc.msg(void, enc, "setVertexBuffer:offset:atIndex:", .{ buffer, @as(objc.NSUInteger, 0), @as(objc.NSUInteger, 0) });
@@ -439,18 +422,37 @@ pub const Renderer = struct {
                 self.drawRange(enc, self.hole, buffer, atlas, atlas, size, i, 1);
                 continue;
             }
-            const tex = self.frame_textures.get(@intFromFloat(instances[i].border_width)) orelse continue;
+            const slot: usize = @intFromFloat(instances[i].border_width);
+            const tex = self.frame_textures.get(slot) orelse continue;
             objc.msg(void, enc, "setFragmentTexture:atIndex:", .{ tex, @as(objc.NSUInteger, 3) });
-            self.drawRange(enc, self.pipeline, buffer, atlas, atlas, size, i, 1);
+            // On an extended frame a `.surface_linear` texture is drawn in
+            // the plane: here its shape is cut out of the UI, by its alpha.
+            self.drawRange(enc, if (self.inPlane(slot)) self.hole else self.pipeline, buffer, atlas, atlas, size, i, 1);
         }
         if (end > from) self.drawRange(enc, self.pipeline, buffer, atlas, atlas, size, from, end - from);
+    }
+
+    /// Whether slot `slot`'s texture is drawn in the plane this frame.
+    pub fn inPlane(self: *const Renderer, slot: usize) bool {
+        return self.plane_mode and slot < self.textures.len and self.textures[slot].effectiveEncoding() == .surface_linear;
     }
 
     pub fn encode(self: *Renderer, texture: objc.Object, instance_buffer: ?objc.Object, instances: []const Instance, atlas: objc.Object, size: types.Size, clear: types.Color, held: *std.ArrayList(*anyopaque)) objc.Object {
         const cmd = objc.msg(objc.Object, self.queue, "commandBuffer", .{});
         // The app's own passes first: what they fill, the frame shows.
         if (self.before_encode) |hook| hook.func(hook.ctx, @ptrCast(cmd));
+        // A half-float target is an extended frame (the layer's drawable
+        // after `setColour`, or an HDR capture); anything else draws as
+        // every frame always has.
+        const extended = objc.msg(objc.NSUInteger, texture, "pixelFormat", .{}) == metal_hdr.rgba16f and self.hdr.compose_pipeline != null;
+        self.plane_mode = extended;
+        defer self.plane_mode = false;
+        self.frame_textures.extended = extended;
         self.frame_textures.prepare(self.device, cmd, self.textures, held);
+        if (extended) {
+            metal_hdr.encodeExtended(self, cmd, texture, instance_buffer, instances, atlas, size, clear);
+            return cmd;
+        }
         const buffer = instance_buffer orelse {
             objc.msg(void, pass(cmd, texture, clear), "endEncoding", .{});
             return cmd;
@@ -464,7 +466,7 @@ pub const Renderer = struct {
         return cmd;
     }
 
-    fn encodeRange(self: *Renderer, cmd: objc.Object, texture: objc.Object, buffer: objc.Object, instances: []const Instance, atlas: objc.Object, size: types.Size, begin: usize, last: usize, depth: usize, frame_clear: types.Color, skip_glass: bool) void {
+    pub fn encodeRange(self: *Renderer, cmd: objc.Object, texture: objc.Object, buffer: objc.Object, instances: []const Instance, atlas: objc.Object, size: types.Size, begin: usize, last: usize, depth: usize, frame_clear: types.Color, skip_glass: bool) void {
         const tex_w = objc.msg(objc.NSUInteger, texture, "width", .{});
         const tex_h = objc.msg(objc.NSUInteger, texture, "height", .{});
         const scale: f32 = @as(f32, @floatFromInt(tex_w)) / size.w;
@@ -545,6 +547,15 @@ pub const Renderer = struct {
 /// `src` is the source's blend factor: 1 (one) to lay a color over the
 /// frame, 0 (zero) to cut its shape out of it.
 fn makePipeline(device: objc.Object, library: objc.Object, comptime fragment: []const u8, src: objc.NSUInteger) !objc.Object {
+    return makePipelineFor(device, library, fragment, src, pixel_format);
+}
+
+/// The plane's pipeline (`metal_hdr.zig`): `fs_plane` into RGBA16Float.
+pub fn makePlanePipeline(device: objc.Object, library: objc.Object) anyerror!objc.Object {
+    return makePipelineFor(device, library, "fs_plane", 1, metal_hdr.rgba16f);
+}
+
+fn makePipelineFor(device: objc.Object, library: objc.Object, comptime fragment: []const u8, src: objc.NSUInteger, format: objc.NSUInteger) !objc.Object {
     const vs = objc.msg(objc.Object, library, "newFunctionWithName:", .{objc.nsString("vs")});
     defer objc.release(vs);
     const fs = objc.msg(objc.Object, library, "newFunctionWithName:", .{objc.nsString(fragment)});
@@ -555,7 +566,7 @@ fn makePipeline(device: objc.Object, library: objc.Object, comptime fragment: []
     objc.msg(void, desc, "setFragmentFunction:", .{fs});
     const attachments = objc.msg(objc.Object, desc, "colorAttachments", .{});
     const ca = objc.msg(objc.Object, attachments, "objectAtIndexedSubscript:", .{@as(objc.NSUInteger, 0)});
-    objc.msg(void, ca, "setPixelFormat:", .{pixel_format});
+    objc.msg(void, ca, "setPixelFormat:", .{format});
     objc.msg(void, ca, "setBlendingEnabled:", .{objc.YES});
     // Premultiplied alpha: one, one minus source alpha.
     objc.msg(void, ca, "setSourceRGBBlendFactor:", .{src});

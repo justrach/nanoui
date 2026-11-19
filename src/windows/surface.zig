@@ -27,6 +27,7 @@ const ime = @import("ime.zig");
 const keys = @import("surface_win_keys.zig");
 const mouse = @import("surface_win_mouse.zig");
 const pace_side = @import("surface_pace.zig");
+const display = @import("surface_display.zig");
 const vblank = @import("vblank.zig");
 const frame_log = @import("../ui/frame_log.zig");
 
@@ -35,6 +36,9 @@ pub const WM_FRAME = w.WM_APP + 1;
 const tick_timer = pace_side.tick_timer;
 /// A frame asked for later (`frameIn`).
 const later_timer: usize = 2;
+
+/// Called when the display under a window changes (`Surface.on_display_change`).
+pub const DisplayChange = struct { ctx: ?*anyopaque, func: *const fn (ctx: ?*anyopaque, s: *Surface) void };
 
 pub const Surface = struct {
     gpa: std.mem.Allocator,
@@ -127,6 +131,16 @@ pub const Surface = struct {
     /// native views moved; here they move with the window's next paint.
     after_frame_ctx: ?*anyopaque = null,
     after_frame: ?*const fn (ctx: ?*anyopaque, s: *Surface) bool = null,
+    /// What the app asked the window to show (`setColour`), the display
+    /// under it as last read, the monitor it was on, and who is told when
+    /// that changes (`surface_display.zig`).
+    colour: gpu.SurfaceColour = .sdr_srgb,
+    display_info: gpu.DisplayInfo = .{},
+    monitor: ?*anyopaque = null,
+    on_display_change: ?DisplayChange = null,
+
+    pub const setColour = display.setColour;
+    pub const displayInfo = display.displayInfo;
 
     pub fn create(window: *Window, view: ui.View, theme_override: ?Theme) !*Surface {
         const gpa = window.app.gpa;
@@ -236,6 +250,8 @@ pub const Surface = struct {
         // view that picks a theme has the frame rebuilt with it in this same
         // frame, so a change shows at once and the first frame is right too.
         var drawn_theme = self.theme();
+        c.display_info = self.display_info;
+        c.surface_colour = display.shownColour(self);
         var r = frame_mod.run(c, self.view, &self.text, &self.instances, self.size, self.scale, drawn_theme, dt, now - self.start_time);
         if (!sameChoice(self.theme_chosen, c.theme_chosen)) {
             self.theme_chosen = c.theme_chosen;
@@ -344,7 +360,7 @@ pub const Surface = struct {
             w.WM_SHOWWINDOW => if (wp != 0) self.requestFrame(),
             w.WM_DISPLAYCHANGE => {
                 pace_side.updateOutput(self);
-                self.requestFrame();
+                display.displayChanged(self, h, false);
             },
             w.WM_SETTINGCHANGE => {
                 // The system's appearance may have changed under
@@ -370,6 +386,7 @@ pub const Surface = struct {
                 // One left at the old monitor's would never be painted again,
                 // and a move is not always a resize: read it here too.
                 pace_side.updateOutput(self);
+                display.displayChanged(self, h, true);
                 if (w.IsIconic(h) == 0 and self.updateSize(h)) {
                     self.size_dirty = true;
                     _ = w.InvalidateRect(h, null, 0);

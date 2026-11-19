@@ -52,6 +52,10 @@ pub const Textures = struct {
     /// What each slot of this frame samples (`prepare`).
     resolved: std.ArrayList(?objc.Object) = .empty,
     frame: u64 = 0,
+    /// The frame is drawn on an extended surface (`metal.zig`'s
+    /// `encodeExtended`): a `.surface_linear` texture is sampled as it is,
+    /// into the plane, with no colour stage.
+    extended: bool = false,
 
     /// Makes the colour stage's pipeline from the library holding
     /// `texture_post.metal`.
@@ -138,7 +142,9 @@ pub const Textures = struct {
             planes[0] = t.upload(device, tex, slot) orelse return null;
         }
         // A texture passed through (`Texture.encoding`) is sampled as it
-        // is, any pixel format, or made display sRGB by source mode 4.
+        // is, any pixel format, or made display sRGB by source mode 4; on
+        // an extended surface linear light is drawn as it is.
+        if (!u_tex.needsPostOn(if (t.extended) .extended_linear else .sdr_srgb) and u_tex.effectiveEncoding() == .surface_linear) return planes[0];
         const st = color.stage(u_tex, mode, srgb);
         if (!st.run) return planes[0];
         return t.colourStage(device, cmd, slot, planes, color.uniforms(u_tex, st.mode), u_tex);
