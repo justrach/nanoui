@@ -330,6 +330,7 @@ test {
     _ = @import("tests_shadow_x.zig");
     _ = @import("tests_text_style.zig");
     _ = @import("tests_text_extras.zig");
+    _ = @import("tests_text_lifetime.zig");
     _ = @import("tests_turn.zig");
     _ = @import("tests_transform.zig");
     _ = @import("tests_settle.zig");

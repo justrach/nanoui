@@ -77,27 +77,32 @@ pub fn divider(c: *Context) void {
     _ = c.leaf(.{ .width = .fill, .height = .{ .px = 1 }, .background = c.theme.border }, .none, null);
 }
 
+/// `str` is copied into the frame, which lays it out after the view
+/// function returns: it may be a buffer that goes with the call (a
+/// `bufPrint` into the stack).
 pub fn text(c: *Context, str: []const u8, style: types.TextStyle) void {
-    const color = style.color orelse c.theme.text;
-    const width: types.Length = if (style.wrap) .fill else .auto;
-    _ = c.leaf(.{ .width = width }, .{ .text = .{ .str = str, .style = style, .color = color } }, null);
+    textNode(c, c.alloc().dupe(u8, str) catch str, &.{}, style);
 }
 
 /// Text whose byte ranges `spans` have colors of their own (ANSI output,
 /// syntax highlighting, a search's match).
 ///
-/// `spans` is kept until the frame is laid out, which is after the view
-/// function returns: it has to outlive the call — a comptime literal, or
-/// memory the app holds. An app building spans per frame keeps an arena for
-/// them and resets it as the next frame starts.
+/// `str` and `spans` are copied into the frame, as `text`'s string is (a
+/// span's `family` is not: it names fonts, and is kept as given).
 pub fn richText(c: *Context, str: []const u8, spans: []const types.Span, style: types.TextStyle) void {
-    const color = style.color orelse c.theme.text;
-    const width: types.Length = if (style.wrap) .fill else .auto;
-    _ = c.leaf(.{ .width = width }, .{ .text = .{ .str = str, .style = style, .color = color, .spans = spans } }, null);
+    const a = c.alloc();
+    textNode(c, a.dupe(u8, str) catch str, a.dupe(types.Span, spans) catch spans, style);
 }
 
 pub fn textf(c: *Context, style: types.TextStyle, comptime fmt: []const u8, args: anytype) void {
-    text(c, c.print(fmt, args), style);
+    // Formatted into the frame already.
+    textNode(c, c.print(fmt, args), &.{}, style);
+}
+
+fn textNode(c: *Context, str: []const u8, spans: []const types.Span, style: types.TextStyle) void {
+    const color = style.color orelse c.theme.text;
+    const width: types.Length = if (style.wrap) .fill else .auto;
+    _ = c.leaf(.{ .width = width }, .{ .text = .{ .str = str, .style = style, .color = color, .spans = spans } }, null);
 }
 
 pub const IconOptions = struct {
