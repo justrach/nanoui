@@ -86,6 +86,82 @@ test "the view's theme choice draws that theme" {
     try testing.expect(p.seen != null);
 }
 
+test "IME candidate rectangle follows layout in logical client coordinates" {
+    var ts = @import("../ui/text.zig").TextSystem.init(testing.allocator);
+    defer ts.deinit();
+    var c = ui.Context.init(testing.allocator, &ts);
+    defer c.deinit();
+    c.scale = 2;
+    const field: @import("../ui/input.zig").FocusedText = .{
+        .id = 1,
+        .text = "",
+        .caret = 0,
+        .anchor = 0,
+        .marked = null,
+        .caret_rect = .{ .x = 12.75, .y = 22.5, .w = 0.25, .h = 10.75 },
+    };
+    try c.prev_rects.put(c.gpa, field.id, .{ .x = 10, .y = 20, .h = 20 });
+    try c.rects.put(c.gpa, field.id, .{ .x = 14, .y = 14, .h = 30 });
+    const candidateRect = @import("ime.zig").candidateRect;
+    // A single line follows the field's vertical center in its parent's window.
+    try testing.expectEqual(gtk.Rectangle{ .x = 13, .y = 30, .width = 1, .height = 11 }, candidateRect(&c, field, .{ .x = -3, .y = 9 }));
+    // A multiline caret follows the top edge. Widget coordinates have zero offset.
+    c.focused_multiline = true;
+    try testing.expectEqual(gtk.Rectangle{ .x = 16, .y = 16, .width = 1, .height = 11 }, candidateRect(&c, field, .{}));
+}
+
+test "GTK receives the focused field's caret in logical coordinates" {
+    const Field = struct {
+        buf: ui.TextBuffer = .{},
+        padding: f32 = 20,
+        fn view(self: *@This(), c: *ui.Context) void {
+            ui.column(c, .{ .padding = .all(self.padding) });
+            defer ui.end(c);
+            _ = ui.textField(c, &self.buf, .{ .multiline = true });
+        }
+    };
+    const Capture = struct {
+        var rect: ?gtk.Rectangle = null;
+        fn set(_: *anyopaque, r: *const gtk.Rectangle) callconv(.c) void {
+            rect = r.*;
+        }
+    };
+    const app = try makeApp(testing.allocator);
+    defer app.destroy();
+    var field: Field = .{};
+    defer field.buf.deinit();
+    field.buf.set("one\ntwo");
+    const w = try app.newWindow(.{ .visible = false, .content = .{ .view = .init(&field, Field.view) } });
+    const s = w.surface.?;
+    s.size = .{ .w = 360, .h = 200 };
+    s.scale = 2;
+    const set = gtk.api.gtk_im_context_set_cursor_location;
+    defer gtk.api.gtk_im_context_set_cursor_location = set;
+    gtk.api.gtk_im_context_set_cursor_location = Capture.set;
+    Capture.rect = null;
+    s.frame();
+    try testing.expect(Capture.rect == null);
+
+    field.buf.focus();
+    s.frame();
+    const end = Capture.rect orelse return error.MissingImeLocation;
+    field.buf.want_caret = 0;
+    s.frame();
+    const start = Capture.rect.?;
+    const caret = s.ctx.focused_text.?.caret_rect;
+    try testing.expect(start.x >= 20 and start.y >= 20);
+    try testing.expect(start.x < end.x and start.y < end.y);
+    try testing.expectEqual(@as(c_int, @intFromFloat(@floor(caret.x))), start.x);
+    try testing.expectEqual(@as(c_int, @intFromFloat(@floor(caret.y))), start.y);
+    try testing.expectEqual(@as(c_int, @intFromFloat(@round(caret.h))), start.height);
+    try testing.expect(start.width >= 1);
+
+    field.padding += 40;
+    s.frame();
+    try testing.expectEqual(start.x + 40, Capture.rect.?.x);
+    try testing.expectEqual(start.y + 40, Capture.rect.?.y);
+}
+
 test "should_close keeps window up until allowed and destroyNow tears down" {
     const app = try makeApp(testing.allocator);
     defer app.destroy();

@@ -7,6 +7,7 @@
 //! `surface_keys.zig`.
 const std = @import("std");
 const gtk = @import("gtk.zig");
+const ime = @import("ime.zig");
 const ui = @import("../ui/ui.zig");
 const types = @import("../ui/types.zig");
 const gpu = @import("../ui/gpu.zig");
@@ -157,6 +158,7 @@ pub const Surface = struct {
         self.last_frame_time = now;
         self.in_frame = true;
         const r = theme_side.build(self, dt, now - self.start_time);
+        ime.placeCandidates(self);
         self.in_frame = false;
         if (self.gl) {
             glarea.api.gtk_gl_area_queue_render(self.area);

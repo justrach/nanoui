@@ -120,6 +120,8 @@ pub const Api3 = struct {
     gtk_widget_add_events: *const fn (w: *Widget, mask: c_int) callconv(.c) void,
     gtk_widget_set_can_focus: *const fn (w: *Widget, on: c_int) callconv(.c) void,
     gtk_widget_get_window: *const fn (w: *Widget) callconv(.c) ?*anyopaque,
+    gtk_widget_get_has_window: *const fn (w: *Widget) callconv(.c) c_int,
+    gtk_widget_get_allocation: *const fn (w: *Widget, allocation: *Rectangle) callconv(.c) void,
     gtk_container_add: *const fn (container: *Widget, child: *Widget) callconv(.c) void,
     gtk_im_context_set_client_window: *const fn (im: *anyopaque, window: ?*anyopaque) callconv(.c) void,
     gtk_im_context_filter_keypress: *const fn (im: *anyopaque, event: *Event) callconv(.c) c_int,
