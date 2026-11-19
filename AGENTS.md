@@ -172,6 +172,7 @@ apps/nanocua/         computer use for agents: MCP over a socket, the accessibil
 site/                 the website (its own repo): Next.js on Cloudflare Workers, a gallery
 tools/lines.zig       the 600-line check
 tools/version.sh      set or check the version (build.zig.zon) for a release
+.agents/skills/nanoui-app/  how to build, test and ship a full app on nanoui (from Harness)
 .github/workflows/    CI (tests on macOS and Linux) and releases from v* tags
 ```
 

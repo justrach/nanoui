@@ -185,3 +185,49 @@ test "a password field's text isn't told to a screen reader, a plain field's is"
     try testing.expectEqualStrings("Password", els[1].label);
     try testing.expectEqualStrings("", els[1].value);
 }
+
+const CaptionedLogin = struct {
+    user: ui.TextBuffer = .{},
+    secret: ui.TextBuffer = .{},
+
+    fn view(s: *CaptionedLogin, c: *ui.Context) void {
+        ui.column(c, .{ .gap = 8, .padding = .all(8) });
+        defer ui.end(c);
+        {
+            ui.row(c, .{ .gap = 8, .align_items = .center });
+            defer ui.end(c);
+            ui.text(c, "Username", .{});
+            _ = ui.textField(c, &s.user, .{ .width = .{ .px = 160 } });
+        }
+        {
+            ui.row(c, .{ .gap = 8, .align_items = .center });
+            defer ui.end(c);
+            ui.text(c, "Password", .{});
+            _ = ui.textField(c, &s.secret, .{ .password = true, .width = .{ .px = 160 } });
+        }
+    }
+};
+
+test "text fields without placeholders take their row caption instead of typed text or bullets" {
+    var form: CaptionedLogin = .{};
+    defer {
+        form.user.deinit();
+        form.secret.deinit();
+    }
+    form.user.set("ada");
+    form.secret.set("hunter2");
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&form, CaptionedLogin.view), .{});
+    defer t.deinit();
+    t.frame();
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const els = try elements(&t, arena.allocator());
+    try testing.expectEqual(@as(usize, 2), els.len);
+    try testing.expectEqual(access.Role.text_field, els[0].role);
+    try testing.expectEqualStrings("Username", els[0].label);
+    try testing.expectEqualStrings("ada", els[0].value);
+    try testing.expectEqual(access.Role.text_field, els[1].role);
+    try testing.expectEqualStrings("Password", els[1].label);
+    try testing.expectEqualStrings("", els[1].value);
+}
