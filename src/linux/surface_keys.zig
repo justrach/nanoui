@@ -1,6 +1,7 @@
 //! Keyboard and input-method handling for a Linux surface (extracted from
 //! `surface.zig` to keep both files small and focused).
 const std = @import("std");
+const ime = @import("ime.zig");
 const gtk = @import("gtk.zig");
 const ui = @import("../ui/ui.zig");
 const ctx_mod = @import("../ui/context.zig");
@@ -39,8 +40,14 @@ pub fn onKey(_: *gtk.Widget, e: *gtk.Event, data: ?*anyopaque) callconv(.c) c_in
     return @intFromBool(keyPress(of(data), keyval, state, e));
 }
 
-/// A key pressed; true if it was taken. GTK 3 passes its event for the
-/// input method; GTK 4's sends typed text to `typed` itself.
+pub fn onKeyRelease(_: *gtk.Widget, e: *gtk.Event, data: ?*anyopaque) callconv(.c) c_int {
+    const s = of(data);
+    return if (s.ctx.focused_text != null) gtk.v3.gtk_im_context_filter_keypress(s.im, e) else 0;
+}
+
+/// In GTK 3 a focused text field offers the key to the IM before shortcuts.
+/// Other views get shortcuts and named keys first. In GTK 4 the controller
+/// already filtered the key and passes no native event.
 pub fn keyPress(s: *Surface, keyval: c_uint, state: c_uint, e: ?*gtk.Event) bool {
     const g = &gtk.api;
     const in = &s.ctx.input;
@@ -50,7 +57,9 @@ pub fn keyPress(s: *Surface, keyval: c_uint, state: c_uint, e: ?*gtk.Event) bool
     const alt = state & gtk.alt_mask != 0;
     in.ctrl = ctrl;
     in.alt = alt;
+    const editing = s.ctx.focused_text != null;
     const key = keyOf(keyval);
+    if (ime.keyBefore(s, if (editing) e else null, key == .escape)) return true;
     // Key combinations go to the menus' accelerators, then the view.
     const special: ?u21 = if (key) |k| switch (k) {
         .up => ui.Shortcut.up,
@@ -79,18 +88,8 @@ pub fn keyPress(s: *Surface, keyval: c_uint, state: c_uint, e: ?*gtk.Event) bool
         s.frame();
         return true;
     }
-    if (ctrl) return false;
-    s.committed.clearRetainingCapacity();
-    const ev = e orelse return false;
-    if (gtk.v3.gtk_im_context_filter_keypress(s.im, ev) == 0 and cp >= 0x20 and cp != 0x7f) {
-        var buf: [4]u8 = undefined;
-        const n = std.unicode.utf8Encode(cp, &buf) catch return false;
-        s.committed.appendSlice(s.gpa, buf[0..n]) catch {};
-    }
-    if (s.committed.items.len == 0) return true;
-    in.chars = s.committed.items;
-    s.frame();
-    return true;
+    if (ctrl or e == null) return false;
+    return ime.keyAfter(s, if (editing) null else e, cp);
 }
 
 /// Ctrl+C, X, V and A in a text field: copy, cut, paste, select all.

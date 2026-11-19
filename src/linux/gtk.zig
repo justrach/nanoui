@@ -34,6 +34,7 @@ pub const Api = struct {
     g_object_ref_sink: *const fn (obj: *anyopaque) callconv(.c) *anyopaque,
     g_object_new: *const fn (kind: usize, first_property: ?[*:0]const u8, ...) callconv(.c) ?*anyopaque,
     g_object_get: *const fn (obj: *anyopaque, first_property: [*:0]const u8, ...) callconv(.c) void,
+    g_signal_handlers_disconnect_matched: *const fn (instance: *anyopaque, mask: c_uint, id: c_uint, detail: c_uint, closure: ?*anyopaque, func: ?*anyopaque, data: ?*anyopaque) callconv(.c) c_uint,
     g_signal_handler_disconnect: *const fn (instance: *anyopaque, id: c_ulong) callconv(.c) void,
     g_memory_input_stream_new_from_data: *const fn (data: [*]const u8, len: isize, destroy: ?*anyopaque) callconv(.c) *anyopaque,
     g_slist_free: *const fn (list: ?*anyopaque) callconv(.c) void,
@@ -64,6 +65,7 @@ pub const Api = struct {
     gtk_widget_remove_tick_callback: *const fn (w: *Widget, id: c_uint) callconv(.c) void,
     gtk_drawing_area_new: *const fn () callconv(.c) *Widget,
     gtk_im_multicontext_new: *const fn () callconv(.c) *anyopaque,
+    gtk_im_context_reset: *const fn (im: *anyopaque) callconv(.c) void,
     gtk_im_context_focus_in: *const fn (im: *anyopaque) callconv(.c) void,
     gtk_im_context_focus_out: *const fn (im: *anyopaque) callconv(.c) void,
     gtk_im_context_set_cursor_location: *const fn (im: *anyopaque, rect: *const Rectangle) callconv(.c) void,
@@ -338,6 +340,7 @@ pub const pointer_motion_mask = 1 << 2;
 pub const button_press_mask = 1 << 8;
 pub const button_release_mask = 1 << 9;
 pub const key_press_mask = 1 << 10;
+pub const key_release_mask = 1 << 11;
 pub const leave_notify_mask = 1 << 13;
 pub const focus_change_mask = 1 << 14;
 pub const scroll_mask = 1 << 21;
