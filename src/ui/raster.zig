@@ -48,6 +48,12 @@ pub fn draw(out: gpu.Pixels, instances: []const gpu.Instance, mask: Mask, pictur
 /// `out` is kept. Over the pixels of an earlier frame, with the `damage`
 /// between the two, it makes the same pixels as drawing it all.
 pub fn drawRegion(out: gpu.Pixels, instances: []const gpu.Instance, mask: Mask, pictures: Pictures, scale: f32, clear: types.Color, region: [4]usize) void {
+    drawRegionDepth(out, instances, mask, pictures, scale, clear, region, 0);
+}
+
+/// `drawRegion`, keeping nested group layers at `depth` and deeper so a
+/// masked group does not reuse its own or an ancestor's layer buffer.
+pub fn drawRegionDepth(out: gpu.Pixels, instances: []const gpu.Instance, mask: Mask, pictures: Pictures, scale: f32, clear: types.Color, region: [4]usize, depth: u16) void {
     // Opaque, but on the Mac and for a transparent window (a clear of nothing).
     const alpha = if (mask.native_pixels.len > 0 or clear.a == 0) clear.a else 1;
     const px: [4]u8 = .{ unit(clear.b * alpha), unit(clear.g * alpha), unit(clear.r * alpha), unit(alpha) };
@@ -71,7 +77,7 @@ pub fn drawRegion(out: gpu.Pixels, instances: []const gpu.Instance, mask: Mask, 
         const end_at = gpu.groupEnd(instances, end) orelse instances.len;
         if (end_at > end + 1 and end_at < instances.len) {
             const span = instances[end + 1 .. end_at];
-            group.draw(out, span, &instances[end], &instances[end_at], mask, pictures, scale, region, 0);
+            group.draw(out, span, &instances[end], &instances[end_at], mask, pictures, scale, region, depth);
         }
         start = if (end_at < instances.len) end_at + 1 else instances.len;
     }

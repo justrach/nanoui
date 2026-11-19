@@ -45,10 +45,10 @@ pub fn draw(
     const tmp_bytes = kept orelse (std.heap.page_allocator.alloc(u8, len) catch return);
     defer if (kept == null) std.heap.page_allocator.free(tmp_bytes);
     const tmp: gpu.Pixels = .{ .bytes = tmp_bytes, .width = out.width, .height = out.height };
-    // Masked, `drawRegion` clears the area itself.
+    // Masked, `drawRegionDepth` clears the area itself.
     if (glassy) @memset(tmp_bytes, 0) else if (!masked) clear(tmp, area);
     if (masked) {
-        raster.drawRegion(tmp, span, mask, pictures, scale, types.Color.transparent, area);
+        raster.drawRegionDepth(tmp, span, mask, pictures, scale, types.Color.transparent, area, depth +| 1);
     } else {
         drawLayer(tmp, span, mask, pictures, scale, area, depth);
     }

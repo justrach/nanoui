@@ -109,3 +109,68 @@ test "groups drawn in a region or on threads make the whole frame's pixels" {
     render(&t, whole, .{ 0, 0, w, h });
     try testing.expectEqualSlices(u8, whole.bytes, part.bytes);
 }
+
+const MaskedNestedScene = struct {
+    fn view(_: *@This(), c: *ui.Context) void {
+        const root = ui.div(c).size(160, 160).bg(.white);
+        defer root.end();
+        const scroll = ui.div(c).size(160, 160).scrollY().scrollEdgeFade(24).hideScrollBar();
+        defer scroll.end();
+        const content = ui.div(c).size(160, 320).bg(.hex(0xff0000));
+        defer content.end();
+        const inner = ui.div(c).absolute().offset(20, 40).size(120, 120).scrollY().scrollEdgeFade(16).hideScrollBar();
+        defer inner.end();
+        ui.div(c).size(120, 240).bg(.{ .r = 0, .g = 0, .b = 1, .a = 0.5 }).end();
+    }
+};
+
+test "a group inside a scroll-fade masked group keeps its own layer" {
+    const gpa = testing.allocator;
+    defer raster.freeLayers();
+    var s: MaskedNestedScene = .{};
+    var t: ui.Tester = undefined;
+    try t.init(gpa, .init(&s, MaskedNestedScene.view), .{ .width = 160, .height = 160, .scale = 1 });
+    defer t.deinit();
+    t.scroll(10, 80, -30);
+    t.scroll(80, 80, -30);
+    t.settle(1);
+
+    var begins: usize = 0;
+    for (t.instances.items) |i| begins += @intFromBool(i.kind == gpu.Kind.layer_begin);
+    try testing.expect(begins >= 2);
+
+    const w: usize = 160;
+    const h: usize = 160;
+    const single_bytes = try gpa.alloc(u8, w * h * 4);
+    defer gpa.free(single_bytes);
+    const multi_bytes = try gpa.alloc(u8, w * h * 4);
+    defer gpa.free(multi_bytes);
+    const single: gpu.Pixels = .{ .bytes = single_bytes, .width = w, .height = h };
+    const multi: gpu.Pixels = .{ .bytes = multi_bytes, .width = w, .height = h };
+
+    const saved = raster.threads;
+    defer raster.threads = saved;
+    raster.threads = 1;
+    render(&t, single, .{ 0, 0, w, h });
+    raster.threads = saved;
+    render(&t, multi, .{ 0, 0, w, h });
+    try testing.expectEqualSlices(u8, single.bytes, multi.bytes);
+
+    // Center pixel is inside the semi-transparent blue inner masked group
+    // over the red outer masked scroll content, clear of both edge fades:
+    // BGRA must retain both red and blue channels rather than wiping depth 0.
+    const center = (80 * w + 80) * 4;
+    try testing.expect(single.bytes[center + 0] > 100);
+    try testing.expect(single.bytes[center + 1] < 20);
+    try testing.expect(single.bytes[center + 2] > 100);
+
+    // A partial region cutting through the inner group matches the whole frame.
+    const cut: [4]usize = .{ 40, 40, 120, 120 };
+    @memset(multi.bytes, 0x5a);
+    render(&t, multi, cut);
+    for (cut[1]..cut[3]) |y| {
+        const row = (y * w + cut[0]) * 4;
+        const end = row + (cut[2] - cut[0]) * 4;
+        try testing.expectEqualSlices(u8, single.bytes[row..end], multi.bytes[row..end]);
+    }
+}
