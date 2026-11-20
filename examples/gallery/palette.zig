@@ -163,23 +163,25 @@ pub const Palette = struct {
     pub fn overlay(p: *Palette, g: anytype, c: *ui.Context) void {
         const th = c.theme;
         const tk = kit.tokens(c);
-        const f = motion.present(c, "gallery-palette", p.open, .{
-            .initial = .{ .opacity = 0, .scale = 0.97, .y = -8 },
-            .exit = .{ .opacity = 0, .scale = 0.98, .y = -6 },
-            .transition = .{ .spring = motion.Spring.snappy },
-        }) orelse return;
-        const scrim_f = motion.present(c, "gallery-palette-scrim", p.open, .{
+        // The scrim and the card come and go together: each is asked every
+        // frame, so neither is left behind when the other has gone, and a
+        // closing card fades in the scrim's time rather than on a spring.
+        const leave: motion.Transition = .{ .tween = .{ .duration = 0.14 } };
+        if (motion.present(c, "gallery-palette-scrim", p.open, .{
             .initial = .{ .opacity = 0 },
             .exit = .{ .opacity = 0 },
-            .transition = .{ .tween = .{ .duration = 0.14 } },
-        });
-        {
-            var bd = ui.div(c).fixed().offset(0, 0).w(c.size.w).h(c.size.h).layer(10).bg(tk.overlay);
-            if (scrim_f) |sf| bd = bd.motion(sf);
+            .transition = if (p.open) .{ .tween = .{ .duration = 0.14 } } else leave,
+        })) |sf| {
+            const bd = ui.div(c).fixed().offset(0, 0).w(c.size.w).h(c.size.h).layer(10).bg(tk.overlay).motion(sf);
             const bit = bd.interaction();
             bd.end();
             if (bit.clicked and p.open) p.close(c);
         }
+        const f = motion.present(c, "gallery-palette", p.open, .{
+            .initial = .{ .opacity = 0, .scale = 0.97, .y = -8 },
+            .exit = .{ .opacity = 0, .scale = 0.97, .y = -8 },
+            .transition = if (p.open) .{ .spring = motion.Spring.snappy } else leave,
+        }) orelse return;
 
         const w = @min(480, @max(280, c.size.w - 32));
         const x = (c.size.w - w) / 2;
