@@ -27,6 +27,13 @@ pub const Page = struct {
     nav_delegate: objc.Object,
     last_mouse_down: ?objc.Object = null,
     scope: page_request.ActiveScope = .{},
+    scope_nav: ?objc.Object = null,
+
+    pub fn clearScope(self: *Page) void {
+        if (self.scope_nav) |n| objc.release(n);
+        self.scope_nav = null;
+        self.scope.clear(self.queue.gpa);
+    }
 
     pub fn create(window: *Window, options: window_mod.PageOptions) !*Page {
         const gpa = window.app.gpa;
@@ -117,7 +124,7 @@ pub const Page = struct {
         objc.release(self.nav_delegate);
         objc.release(self.handler);
         if (self.last_mouse_down) |e| objc.release(e);
-        self.scope.clear(self.queue.gpa);
+        self.clearScope();
         self.queue.deinit();
         // A scheduled flush frees the page when it runs, a message being
         // handled when it returns; without either, now.
@@ -172,7 +179,7 @@ pub const Page = struct {
     }
 
     fn loadUrl(self: *Page, url: []const u8) void {
-        self.scope.clear(self.queue.gpa);
+        self.clearScope();
         self.queue.setCurrent(url);
         // An absolute `http(s)://` URL loads as it is, as WebView2's does;
         // only a path is the app's own, served from its assets.

@@ -44,10 +44,13 @@ pub fn load(comptime PageType: type, self: *PageType, req: page_request.PageRequ
     for (req.headers) |h| {
         objc.msg(void, mreq, "setValue:forHTTPHeaderField:", .{ objc.nsString(h.value), objc.nsString(h.name) });
     }
+    self.clearScope();
     self.scope.set(self.queue.gpa, full, req.headers);
     self.queue.setCurrent(req.url);
     self.queue.dom_ready = false;
-    _ = objc.msg(?objc.Object, self.webview, "loadRequest:", .{mreq});
+    if (objc.msg(?objc.Object, self.webview, "loadRequest:", .{mreq})) |nav_obj| {
+        self.scope_nav = objc.retain(nav_obj);
+    }
 }
 
 fn callDecision(handler: objc.Object, policy: objc.NSInteger) void {
@@ -76,7 +79,7 @@ fn decidePolicy(self_obj: objc.Object, _: objc.SEL, _: objc.Object, action: objc
                         // Cross-origin redirect: cancel the request carrying custom headers
                         // and re-issue a clean URL-only request to avoid forwarding creds.
                         const plain = objc.msg(objc.Object, objc.class("NSURLRequest"), "requestWithURL:", .{nsurl});
-                        p.scope.clear(p.queue.gpa);
+                        p.clearScope();
                         callDecision(handler, wk_policy_cancel);
                         _ = objc.msg(?objc.Object, p.webview, "loadRequest:", .{plain});
                         return;
@@ -88,16 +91,22 @@ fn decidePolicy(self_obj: objc.Object, _: objc.SEL, _: objc.Object, action: objc
     callDecision(handler, wk_policy_allow);
 }
 
-fn didFinish(self_obj: objc.Object, _: objc.SEL, _: objc.Object, _: ?objc.Object) callconv(.c) void {
-    const p = pageFromDelegate(self_obj) orelse return;
-    p.scope.clear(p.queue.gpa);
+fn sameNav(p: anytype, nav_obj: ?objc.Object) bool {
+    const active = p.scope_nav orelse return false;
+    const cur = nav_obj orelse return false;
+    return @intFromPtr(cur) == @intFromPtr(active);
 }
 
-fn didFail(self_obj: objc.Object, _: objc.SEL, _: objc.Object, _: ?objc.Object, err_obj: objc.Object) callconv(.c) void {
+fn didFinish(self_obj: objc.Object, _: objc.SEL, _: objc.Object, nav_obj: ?objc.Object) callconv(.c) void {
+    const p = pageFromDelegate(self_obj) orelse return;
+    if (sameNav(p, nav_obj)) p.clearScope();
+}
+
+fn didFail(self_obj: objc.Object, _: objc.SEL, _: objc.Object, nav_obj: ?objc.Object, err_obj: objc.Object) callconv(.c) void {
     const p = pageFromDelegate(self_obj) orelse return;
     const code = objc.msg(objc.NSInteger, err_obj, "code", .{});
     if (code == ns_url_error_cancelled) return;
-    p.scope.clear(p.queue.gpa);
+    if (sameNav(p, nav_obj)) p.clearScope();
     const cb = p.queue.options.on_load_error orelse return;
     const pool = objc.Pool.push();
     defer pool.pop();

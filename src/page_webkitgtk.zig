@@ -25,6 +25,7 @@ pub const Page = struct {
     load_changed_signal: c_ulong = 0,
     load_failed_signal: c_ulong = 0,
     scope: page_request.ActiveScope = .{},
+    scope_started: bool = false,
     /// The turn's flush, while one is waiting; a page closed under it
     /// cancels it, so it never fires into freed memory.
     flush_source: c_uint = 0,
@@ -119,6 +120,7 @@ pub const Page = struct {
     /// Points the view at `url`: a path from the assets, or an absolute one.
     pub fn load(self: *Page, url: []const u8) void {
         self.scope.clear(self.queue.gpa);
+        self.scope_started = false;
         var buf: [2048]u8 = undefined;
         const full = page_request.resolveUrl(&buf, url);
         const gpa = self.queue.gpa;
@@ -153,6 +155,7 @@ pub const Page = struct {
             wk.req_api.soup_message_headers_replace(hdrs, z_name, z_val);
         }
         self.scope.set(gpa, full, req.headers);
+        self.scope_started = false;
         self.queue.setCurrent(req.url);
         self.queue.dom_ready = false;
         wk.req_api.webkit_web_view_load_request(self.view, uri_req);
@@ -262,9 +265,15 @@ fn onDecidePolicy(_: *anyopaque, decision: *anyopaque, decision_type: c_int, dat
 }
 
 fn onLoadChanged(_: *anyopaque, load_event: c_int, data: ?*anyopaque) callconv(.c) void {
-    if (load_event != 3) return;
     const self: *Page = @ptrCast(@alignCast(data));
-    self.scope.clear(self.queue.gpa);
+    if (load_event == 0) {
+        if (self.scope.origin_url != null) self.scope_started = true;
+        return;
+    }
+    if (load_event == 3 and self.scope_started) {
+        self.scope.clear(self.queue.gpa);
+        self.scope_started = false;
+    }
 }
 
 fn onLoadFailed(_: *anyopaque, _: c_int, failing_uri: ?[*:0]const u8, gerr: ?*const GError, data: ?*anyopaque) callconv(.c) c_int {
