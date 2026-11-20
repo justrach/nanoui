@@ -34,7 +34,7 @@ var state: enum { unknown, loaded, missing } = .unknown;
 fn load() bool {
     if (state == .unknown) state = blk: {
         // The GTK that's loaded (gtk.zig): GtkGLArea is the same in 3 and 4.
-        const lib = std.c.dlopen(if (gtk.v4) "libgtk-4.so.1" else "libgtk-3.so.0", .{ .NOW = true }) orelse break :blk .missing;
+        const lib = std.c.dlopen(if (gtk.v4) "libgtk-4.so.1" else "libgtk-3.so.0", .{ .LAZY = true }) orelse break :blk .missing;
         inline for (@typeInfo(Api).@"struct".field_names) |name| {
             const sym = std.c.dlsym(lib, name) orelse break :blk .missing;
             @field(api, name) = @ptrCast(@alignCast(sym));

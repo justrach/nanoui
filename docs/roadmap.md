@@ -25,7 +25,7 @@ See [Benchmarks](benchmarks.md) for current macOS, iOS, iPadOS, CPU-raster, and 
 
 - **Retained / partial-frame UI:** Land `feat/retained-scroll` and partial tree/damage optimizations backed by [`lean-proofs/NanoUI/RetainedScroll.lean`](../lean-proofs/NanoUI/RetainedScroll.lean), reducing `scroll` and `springs` CPU build/layout cost at 120 Hz.
 - **Staged `nanobrowser` landing:** Upstream the `nanobrowser` CSS cascade/invalidation, HTML fast fragment parser, DOM Bloom filters, and ARM64 JIT optimizations onto `main` in reviewable PRs paired with their Lean 4 theorems (`lean-proofs/NanoUI.lean`).
-- **Expanded Lean 4 verification:** Model and prove invariants for Windows VBlank frame pacing (`src/ui/frame_pace.zig`) and CPU raster layer-depth isolation (`src/ui/raster_group.zig`).
+- **Expanded Lean 4 verification:** Added `lean-proofs/NanoUI/LinuxStartup.lean` proving Linux 72-state renderer selection, async D-Bus portal non-blocking, lazy glass shader compilation (`4 -> 1`), frame coalescing, and 4 KB SFNT startup bounds; next model and prove invariants for Windows VBlank frame pacing (`src/ui/frame_pace.zig`) and CPU raster layer-depth isolation (`src/ui/raster_group.zig`).
 - **`nanoui.kit`, Gallery & contributor workflow:** Expand `src/kit/` accessibility coverage and Gallery Studio demos; add a PR security & COM-vtable verification checklist for external contributors.
 
 ---
@@ -81,5 +81,5 @@ See [Benchmarks](benchmarks.md) for current macOS, iOS, iPadOS, CPU-raster, and 
 
 ### Linux & Windows
 
-- **Linux (`src/linux/`, `src/page_webkitgtk.zig`, `src/ui/opengl.zig`):** Shipped GTK 4/3 runtime loading, StatusNotifierItem + dbusmenu trays, OpenGL 3.3 + CPU raster, and bubblewrap fallback messaging. Next: `PageOptions.private` / `allow_request`, OpenGL vs. CPU parity tests for circular clips and nested scroll-fade groups, and Wayland HDR/fractional-scale polish.
+- **Linux (`src/linux/`, `src/page_webkitgtk.zig`, `src/ui/opengl.zig`):** Shipped GTK 4/3 runtime loading, StatusNotifierItem + dbusmenu trays, OpenGL 3.3 + CPU raster, bubblewrap fallback messaging, and Lean-proved startup/memory optimization (`src/linux/renderer.zig`, async D-Bus portal, `.LAZY` `dlopen`, lazy Liquid Glass shaders, 4 KB SFNT headers — reaching `93.0 ms` warm / `112.1 ms` cold first-frame and `74.9 MiB` idle PSS on no-GPU Xvfb). Next: `PageOptions.private` / `allow_request`, OpenGL vs. CPU parity tests for circular clips and nested scroll-fade groups, and Wayland HDR/fractional-scale polish.
 - **Windows (`src/windows/`, `src/ui/d3d11*.zig`, `src/page_webview2*.zig`):** Shipped D3D11 + shader caching, scRGB HDR swap chains (`#204`), VBlank beat starvation fix + circular SDF parity (`#203`), and WebView2 `private` / `allow_request` (`#205`/`#206`). Next: `ResourceRequested` OOM fail-closed hardening, SDR monitor `setExtended` retry gating, and live WebView2 SDK tests in Windows CI.

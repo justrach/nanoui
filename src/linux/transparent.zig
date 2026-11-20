@@ -48,7 +48,7 @@ fn load() bool {
         const libs = [_][*:0]const u8{ "libgtk-3.so.0", "libgdk-3.so.0", "libcairo.so.2" };
         inline for (@typeInfo(Api).@"struct".field_names) |name| {
             const sym = for (libs) |lib| {
-                const h = std.c.dlopen(lib, .{ .NOW = true }) orelse continue;
+                const h = std.c.dlopen(lib, .{ .LAZY = true }) orelse continue;
                 if (std.c.dlsym(h, name)) |s| break s;
             } else break :blk false;
             @field(api, name) = @ptrCast(@alignCast(sym));
@@ -94,7 +94,7 @@ const css_priority = 800;
 fn load4() bool {
     if (loaded4) |l| return l;
     loaded4 = blk: {
-        const lib = std.c.dlopen("libgtk-4.so.1", .{ .NOW = true, .GLOBAL = true }) orelse break :blk false;
+        const lib = std.c.dlopen("libgtk-4.so.1", .{ .LAZY = true, .GLOBAL = true }) orelse break :blk false;
         inline for (@typeInfo(Api4).@"struct".field_names) |name| {
             const sym = std.c.dlsym(lib, name) orelse break :blk false;
             @field(api4, name) = @ptrCast(@alignCast(sym));

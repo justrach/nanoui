@@ -51,6 +51,7 @@ pub const Renderer = struct {
     pane: u32,
     down: u32,
     blur: u32,
+    glass_failed: bool = false,
     vao: u32 = 0,
     /// For passes, which read no instances.
     empty_vao: u32 = 0,
@@ -81,10 +82,9 @@ pub const Renderer = struct {
         const g = &gl.api;
         var r: Renderer = .{ .es = es, .quad = 0, .pane = 0, .down = 0, .blur = 0 };
         errdefer r.deinit();
+        // Compile only the main quad program up front; Liquid Glass programs
+        // are compiled lazily on the first glass pane (`ensureGlass`).
         r.quad = try program(es, "QUAD_VS", "QUAD_FS");
-        r.pane = try program(es, "QUAD_VS", "GLASS_FS");
-        r.down = try program(es, "PASS_VS", "DOWN_FS");
-        r.blur = try program(es, "PASS_VS", "BLUR_FS");
         g.glGenVertexArrays(1, &r.vao);
         g.glGenVertexArrays(1, &r.empty_vao);
         g.glGenBuffers(1, &r.vbo);
@@ -273,8 +273,34 @@ pub const Renderer = struct {
         g.glDrawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, @intCast(count));
     }
 
+    fn ensureGlass(r: *Renderer) bool {
+        if (r.pane != 0) return true;
+        if (r.glass_failed) return false;
+        const g = &gl.api;
+        r.pane = program(r.es, "QUAD_VS", "GLASS_FS") catch {
+            r.glass_failed = true;
+            return false;
+        };
+        r.down = program(r.es, "PASS_VS", "DOWN_FS") catch {
+            g.glDeleteProgram(r.pane);
+            r.pane = 0;
+            r.glass_failed = true;
+            return false;
+        };
+        r.blur = program(r.es, "PASS_VS", "BLUR_FS") catch {
+            g.glDeleteProgram(r.down);
+            g.glDeleteProgram(r.pane);
+            r.down = 0;
+            r.pane = 0;
+            r.glass_failed = true;
+            return false;
+        };
+        return true;
+    }
+
     /// Pane `at`: its backdrop from what was drawn, then the pane.
     fn drawPane(r: *Renderer, instances: []const gpu.Instance, at: usize, size: types.Size, scale: f32, time: f64) void {
+        if (!r.ensureGlass()) return;
         const g = &gl.api;
         const b = glass.backdropFor(instances[at], scale, r.frame.w, r.frame.h) orelse return;
         const w: usize = @intCast(b.w);
