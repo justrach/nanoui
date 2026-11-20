@@ -135,7 +135,7 @@ fn pill(c: *ui.Context, n: []const u8, selected: bool) void {
     const th = c.theme;
     const bg = if (selected) th.accent_text.alpha(0.22) else th.text.alpha(0.07);
     const fg = if (selected) th.accent_text else th.muted;
-    const p = ui.div(c).px(7).h(18).roundedFull().bg(bg).itemsCenter().justifyCenter();
+    const p = ui.div(c).px(7).h(18).roundedFull().circular().bg(bg).itemsCenter().justifyCenter();
     defer p.end();
     ui.text(c, n, .{ .size = 11, .weight = .semibold, .color = fg, .tabular = true });
 }

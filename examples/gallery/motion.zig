@@ -99,7 +99,7 @@ pub const Demo = struct {
         if (ui.button(c, "Reset", .{ .variant = .ghost }).clicked) d.count = 0;
         // A dot breathing forever.
         const pulse = motion.keyframes(c, .{ .values = &.{ .{ .scale = 1, .opacity = 1 }, .{ .scale = 1.6, .opacity = 0.3 }, .{ .scale = 1, .opacity = 1 } }, .duration = 1.6, .repeat = null });
-        const dot = ui.div(c).w(12).h(12).roundedFull().bg(th.danger).motion(pulse);
+        const dot = ui.div(c).w(12).h(12).roundedFull().circular().bg(th.danger).motion(pulse);
         dot.end();
         ui.label(c, "live");
     }
@@ -150,7 +150,7 @@ pub const Demo = struct {
             .elasticity = 0.18,
             .transition = .{ .spring = motion.Spring.snappy },
         });
-        const knob = ui.div(c).absolute().w(32).h(32).roundedFull().bg(th.accent).control().motion(dnd.frame());
+        const knob = ui.div(c).absolute().w(32).h(32).roundedFull().circular().bg(th.accent).control().motion(dnd.frame());
         defer knob.end();
     }
 
@@ -258,7 +258,7 @@ pub const Demo = struct {
             const track = ui.div(c).grow().h(4).rounded(2).bg(th.track);
             defer track.end();
             const f = motion.frame(c, .{ .target = .{ .x = if (d.played) 300 else 0 }, .transition = .{ .tween = .{ .duration = 1, .ease = e[1] } } });
-            const dot = ui.div(c).absolute().offset(0, -5).w(14).h(14).roundedFull().bg(th.accent).motion(f);
+            const dot = ui.div(c).absolute().offset(0, -5).w(14).h(14).roundedFull().circular().bg(th.accent).motion(f);
             dot.end();
         }
     }
