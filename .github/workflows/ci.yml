@@ -62,7 +62,7 @@ jobs:
       - name: GTK, WebKitGTK, Mesa's OpenGL and OpenGL ES (llvmpipe), fonts and a virtual display
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libgtk-3-0t64 libgtk-4-1 libwebkit2gtk-4.1-0 libwebkitgtk-6.0-4 libegl1 libegl-mesa0 libgles2 libgl1-mesa-dri fonts-dejavu-core fonts-noto-core xvfb xauth zsh
+          sudo apt-get install -y --no-install-recommends libgtk-3-0t64 libgtk-4-1 libwebkit2gtk-4.1-0 libwebkitgtk-6.0-4 libegl1 libegl-mesa0 libgles2 libgl1-mesa-dri fonts-dejavu-core fonts-noto-core dbus xvfb xauth zsh
       - run: zig build test-bin --prefix zig-out/linux
       # GTK 4 with WebKitGTK 6.0; the page's test then runs under GTK 3 with 4.1.
       - run: xvfb-run -a zig-out/linux/bin/nanoui-tests
@@ -80,7 +80,7 @@ jobs:
           done
       - name: Linux startup & idle PSS benchmark (Xvfb, ReleaseFast)
         run: |
-          zig build -Doptimize=ReleaseFast --prefix zig-out/bench
+          zig build counter -Doptimize=ReleaseFast --prefix zig-out/bench
           xvfb-run -a python3 tools/linux-startup-bench.py --bin zig-out/bench/bin/counter --runs 9
       # A real page, sandbox as the system leaves it: its client served, a call
       # to Zig and back. In each world 6.0's sandbox can or can't start.

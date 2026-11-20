@@ -2,7 +2,7 @@
 """Measure Linux launch-to-first-drawn-frame latency, idle CPU, and idle PSS.
 
 Intended to run inside a single display session, e.g.:
-    zig build -Doptimize=ReleaseFast --prefix zig-out/bench
+    zig build counter -Doptimize=ReleaseFast --prefix zig-out/bench
     xvfb-run -a python3 tools/linux-startup-bench.py --bin zig-out/bench/bin/counter
 """
 from __future__ import annotations
@@ -12,11 +12,9 @@ import os
 import pathlib
 import select
 import shutil
-import socket
 import statistics
 import subprocess
 import tempfile
-import threading
 import time
 
 
@@ -55,36 +53,9 @@ def read_proc_pss_mib(pid: int) -> float | None:
     return None
 
 
-def start_silent_bus(sock_path: pathlib.Path) -> tuple[socket.socket, threading.Event]:
-    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    srv.bind(str(sock_path))
-    srv.listen(8)
-    srv.settimeout(0.1)
-    stop = threading.Event()
-    conns: list[socket.socket] = []
-
-    def serve() -> None:
-        while not stop.is_set():
-            try:
-                c, _ = srv.accept()
-                conns.append(c)
-            except TimeoutError:
-                continue
-            except OSError:
-                break
-        for c in conns:
-            try:
-                c.close()
-            except OSError:
-                pass
-
-    t = threading.Thread(target=serve, daemon=True)
-    t.start()
-    return srv, stop
-
-
 def measure_once(
-    binary: pathlib.Path,
+    label: str,
+    cmd: list[str],
     env: dict[str, str],
     timeout_s: float,
     idle_s: float,
@@ -92,7 +63,7 @@ def measure_once(
     clk_tck = os.sysconf("SC_CLK_TCK")
     t0 = time.monotonic_ns()
     proc = subprocess.Popen(
-        [str(binary)],
+        cmd,
         env=env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
@@ -126,7 +97,7 @@ def measure_once(
                 break
         if first_frame_ms is None:
             raise RuntimeError(
-                f"timed out waiting for first-frame ({binary}); stderr={stderr_lines}"
+                f"[{label}] timed out waiting for first-frame ({cmd}); stderr={stderr_lines}"
             )
         cpu_before = read_proc_cpu_ticks(proc.pid)
         time.sleep(idle_s)
@@ -149,7 +120,7 @@ def measure_once(
 
 def run_case(
     label: str,
-    binary: pathlib.Path,
+    cmd: list[str],
     base_env: dict[str, str],
     runs: int,
     cold_cache: bool,
@@ -178,7 +149,7 @@ def run_case(
                 "XDG_CACHE_HOME": str(warm_cache),
                 "MESA_SHADER_CACHE_DIR": str(warm_mesa),
             }
-            measure_once(binary, wenv, timeout_s=15.0, idle_s=0.1)
+            measure_once(label, cmd, wenv, timeout_s=20.0, idle_s=0.1)
 
         for i in range(runs):
             if cold_cache:
@@ -197,7 +168,9 @@ def run_case(
                 "XDG_CACHE_HOME": str(cache_dir),
                 "MESA_SHADER_CACHE_DIR": str(mesa_dir),
             }
-            ms, pss, cpu_ms, line = measure_once(binary, env, timeout_s=15.0, idle_s=idle_s)
+            ms, pss, cpu_ms, line = measure_once(
+                label, cmd, env, timeout_s=20.0, idle_s=idle_s
+            )
             latencies.append(ms)
             if pss is not None:
                 pss_samples.append(pss)
@@ -208,7 +181,7 @@ def run_case(
                 shutil.rmtree(cache_dir, ignore_errors=True)
                 shutil.rmtree(mesa_dir, ignore_errors=True)
 
-    return {
+    res = {
         "label": label,
         "median_ms": statistics.median(latencies),
         "min_ms": min(latencies),
@@ -217,6 +190,13 @@ def run_case(
         "idle_cpu_ms": statistics.median(idle_cpus) if idle_cpus else 0.0,
         "renderer": sample_line,
     }
+    print(
+        f"[{label}] median={res['median_ms']:.1f}ms "
+        f"({res['min_ms']:.1f}–{res['max_ms']:.1f}ms) "
+        f"pss={res['pss_mib']:.1f}MiB idle_cpu={res['idle_cpu_ms']:.1f}ms",
+        flush=True,
+    )
+    return res
 
 
 def main() -> None:
@@ -233,31 +213,41 @@ def main() -> None:
         raise SystemExit("set DISPLAY (or run under xvfb-run -a)")
 
     base_env = os.environ.copy()
-    for k in ("NANOUI_RENDERER", "GSK_RENDERER", "GTK_THEME", "LIBGL_ALWAYS_SOFTWARE", "GALLIUM_DRIVER", "DBUS_SESSION_BUS_ADDRESS"):
+    for k in (
+        "NANOUI_RENDERER",
+        "GSK_RENDERER",
+        "GDK_DISABLE",
+        "GTK_THEME",
+        "LIBGL_ALWAYS_SOFTWARE",
+        "GALLIUM_DRIVER",
+        "DBUS_SESSION_BUS_ADDRESS",
+    ):
         base_env.pop(k, None)
 
-    with tempfile.TemporaryDirectory(prefix="nanoui-dbus-") as dt:
-        sock = pathlib.Path(dt) / "stalled-bus"
-        srv, stop = start_silent_bus(sock)
-        stalled_addr = f"unix:path={sock}"
-        try:
-            cases = [
-                ("default (no-GPU warm)", False, {}),
-                ("default (no-GPU cold cache)", True, {}),
-                ("default (headless stalled bus)", False, {"DBUS_SESSION_BUS_ADDRESS": stalled_addr}),
-                ("forced software GL (warm)", False, {"NANOUI_RENDERER": "gl"}),
-                ("forced software GL (cold cache)", True, {"NANOUI_RENDERER": "gl"}),
-            ]
-            results = [
-                run_case(name, binary, base_env, args.runs, cold, extra, args.idle_s)
-                for name, cold, extra in cases
-            ]
-        finally:
-            stop.set()
-            srv.close()
+    cases: list[tuple[str, list[str], bool, dict[str, str]]] = [
+        ("default (no-GPU warm)", [str(binary)], False, {}),
+        ("default (no-GPU cold cache)", [str(binary)], True, {}),
+    ]
+    if dbus_run := shutil.which("dbus-run-session"):
+        cases.append(
+            ("default (headless bus, no portal)", [dbus_run, "--", str(binary)], False, {})
+        )
+    cases.extend(
+        [
+            ("forced software GL (warm)", [str(binary)], False, {"NANOUI_RENDERER": "gl"}),
+            ("forced software GL (cold cache)", [str(binary)], True, {"NANOUI_RENDERER": "gl"}),
+        ]
+    )
+
+    results = [
+        run_case(name, cmd, base_env, args.runs, cold, extra, args.idle_s)
+        for name, cmd, cold, extra in cases
+    ]
 
     size_mb = binary.stat().st_size / (1024 * 1024)
-    print(f"Linux startup & idle PSS benchmark ({binary.name}, {size_mb:.2f} MiB, runs={args.runs}):")
+    print(
+        f"\nLinux startup & idle PSS benchmark ({binary.name}, {size_mb:.2f} MiB, runs={args.runs}):"
+    )
     print("| scenario | median first-frame | range | idle PSS | idle CPU | trace |")
     print("|---|---:|---:|---:|---:|---|")
     for r in results:

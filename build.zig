@@ -165,6 +165,8 @@ pub fn build(b: *std.Build) void {
         b.installArtifact(exe);
         if (std.mem.eql(u8, name, "ruler"))
             b.step("ruler", "Build the native ruler example").dependOn(&b.addInstallArtifact(exe, .{}).step);
+        if (std.mem.eql(u8, name, "counter"))
+            b.step("counter", "Build the native counter example").dependOn(&b.addInstallArtifact(exe, .{}).step);
         const run = b.addRunArtifact(exe);
         run.addPassthruArgs();
         b.step(b.fmt("run-{s}", .{name}), b.fmt("Run the {s} example", .{name})).dependOn(&run.step);

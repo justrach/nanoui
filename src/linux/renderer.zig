@@ -108,11 +108,13 @@ pub fn hasHardwareGpu(io: std.Io) bool {
 
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
 
-/// Sets `GSK_RENDERER=cairo` before GTK initializes without clobbering any
-/// explicit caller setting (`overwrite = 0`).
+/// Sets `GSK_RENDERER=cairo` and `GDK_DISABLE=gl,vulkan` before GTK initializes
+/// so GTK 4 skips EGL/Vulkan probing and Mesa LLVM loads on CPU-only hosts,
+/// without clobbering any explicit caller setting (`overwrite = 0`).
 pub fn configureGskForCpu() void {
     if (comptime builtin.os.tag != .linux) return;
     _ = setenv("GSK_RENDERER", "cairo", 0);
+    _ = setenv("GDK_DISABLE", "gl,vulkan", 0);
 }
 
 test "parseEnv maps cpu, gl and auto" {
