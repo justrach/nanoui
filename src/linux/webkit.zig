@@ -48,6 +48,18 @@ pub const Api = struct {
     jsc_value_to_string: *const fn (value: Obj) callconv(.c) ?[*:0]u8,
 };
 
+/// Optional request-building & policy APIs (`PageRequest` headers + cross-origin redirect stripping).
+pub const RequestApi = struct {
+    webkit_uri_request_new: *const fn (uri: Str) callconv(.c) Obj,
+    webkit_uri_request_get_uri: *const fn (request: Obj) callconv(.c) OptStr,
+    webkit_uri_request_get_http_headers: *const fn (request: Obj) callconv(.c) ?Obj,
+    webkit_web_view_load_request: *const fn (view: Obj, request: Obj) callconv(.c) void,
+    webkit_navigation_policy_decision_get_navigation_action: *const fn (decision: Obj) callconv(.c) ?Obj,
+    webkit_navigation_action_get_request: *const fn (action: Obj) callconv(.c) ?Obj,
+    webkit_policy_decision_ignore: *const fn (decision: Obj) callconv(.c) void,
+    soup_message_headers_replace: *const fn (hdrs: Obj, name: Str, value: Str) callconv(.c) void,
+};
+
 /// WebKitGTK 6.0's own: the profile is a network session.
 pub const Api6 = struct {
     webkit_web_context_new: *const fn () callconv(.c) Obj,
@@ -67,6 +79,8 @@ pub const Api4x = struct {
 pub var api: Api = undefined;
 pub var v6: Api6 = undefined;
 pub var v4x: Api4x = undefined;
+pub var req_api: RequestApi = undefined;
+pub var has_request_api = false;
 /// WebKitGTK 6.0 is loaded (else 4.1 or 4.0).
 pub var six = false;
 /// 6.0 is here, and bubblewrap can't run for it (`sandboxFails`).
@@ -132,7 +146,7 @@ pub fn refuses(file: [*:0]const u8) bool {
 }
 
 fn open(name: [*:0]const u8) ?*anyopaque {
-    return std.c.dlopen(name, .{ .NOW = true });
+    return std.c.dlopen(name, .{ .LAZY = true });
 }
 
 /// Loads the WebKitGTK of the GTK that is loaded; false when there is none,
@@ -153,13 +167,23 @@ pub fn load() bool {
         }
         if (!table(Api, lib, &api) or !table(Api6, lib, &v6)) return false;
         six = true;
+        has_request_api = optionalTable(RequestApi, lib, &req_api);
     } else {
         const lib = for (names4x) |n| {
             if (open(n)) |l| break l;
         } else return false;
         if (!table(Api, lib, &api) or !table(Api4x, lib, &v4x)) return false;
+        has_request_api = optionalTable(RequestApi, lib, &req_api);
     }
     state = .loaded;
+    return true;
+}
+
+fn optionalTable(comptime T: type, lib: *anyopaque, out: *T) bool {
+    inline for (@typeInfo(T).@"struct".field_names) |name| {
+        const sym = std.c.dlsym(lib, name) orelse std.c.dlsym(null, name) orelse return false;
+        @field(out.*, name) = @ptrCast(@alignCast(sym));
+    }
     return true;
 }
 

@@ -92,8 +92,8 @@ pub fn load() bool {
         .unknown => {},
     }
     state = .absent;
-    gio_lib = std.c.dlopen("libgio-2.0.so.0", .{ .NOW = true }) orelse return false;
-    glib_lib = std.c.dlopen("libglib-2.0.so.0", .{ .NOW = true }) orelse return false;
+    gio_lib = std.c.dlopen("libgio-2.0.so.0", .{ .LAZY = true }) orelse return false;
+    glib_lib = std.c.dlopen("libglib-2.0.so.0", .{ .LAZY = true }) orelse return false;
     inline for (@typeInfo(Api).@"struct".field_names) |name| {
         const symbol = find(name) orelse return false;
         @field(api, name) = @ptrCast(@alignCast(symbol));

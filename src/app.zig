@@ -17,7 +17,9 @@ pub const Options = struct {
     ctx: ?*anyopaque = null,
     /// Links the system asks the app to open (the default browser's).
     on_open_urls: ?*const fn (ctx: ?*anyopaque, urls: []const []const u8) void = null,
-    /// The Dock icon was clicked with no window showing.
+    /// The Dock icon was clicked with no non-minimized window on screen; if a
+    /// window is minimized in the Dock, nanoui restores it instead of opening
+    /// a second window and calls `on_reopen` only when no window remains.
     on_reopen: ?*const fn (ctx: ?*anyopaque) void = null,
     /// The Dock icon's menu, above the system's items.
     dock_menu: ?[]const menu_mod.MenuItem = null,
@@ -477,13 +479,43 @@ fn shouldTerminate(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(
     return 0; // NSTerminateCancel
 }
 
+pub const ReopenAction = enum { keep_visible, restore_minimized, call_reopen, appkit_default };
+
+/// Chooses Dock-reopen handling from the app's own windows rather than
+/// AppKit's `hasVisibleWindows:` flag, which is YES even when only a
+/// miniaturized window exists.
+pub fn decideReopen(has_on_screen: bool, has_minimized: bool, has_on_reopen: bool) ReopenAction {
+    if (has_on_screen) return .keep_visible;
+    if (has_minimized) return .restore_minimized;
+    if (has_on_reopen) return .call_reopen;
+    return .appkit_default;
+}
+
 fn shouldReopen(self_obj: objc.Object, _: objc.SEL, _: objc.Object, visible: objc.BOOL) callconv(.c) objc.BOOL {
-    const app = objc.getZig(App, self_obj) orelse return !visible;
-    if (!visible) if (app.options.on_reopen) |f| {
-        f(app.options.ctx);
-        return objc.NO;
+    _ = visible;
+    const app = objc.getZig(App, self_obj) orelse return objc.YES;
+    var has_on_screen = false;
+    var first_minimized: ?*Window = null;
+    for (app.windows.items) |w| {
+        if (w.closed) continue;
+        const mini = objc.msg(objc.BOOL, w.nswindow, "isMiniaturized", .{});
+        const vis = objc.msg(objc.BOOL, w.nswindow, "isVisible", .{});
+        if (vis and !mini) has_on_screen = true;
+        if (mini and first_minimized == null) first_minimized = w;
+    }
+    return switch (decideReopen(has_on_screen, first_minimized != null, app.options.on_reopen != null)) {
+        .keep_visible => objc.YES,
+        .restore_minimized => blk: {
+            objc.msg(void, first_minimized.?.nswindow, "deminiaturize:", .{@as(?objc.Object, null)});
+            first_minimized.?.focus();
+            break :blk objc.NO;
+        },
+        .call_reopen => blk: {
+            app.options.on_reopen.?(app.options.ctx);
+            break :blk objc.NO;
+        },
+        .appkit_default => objc.YES,
     };
-    return !visible;
 }
 
 fn openURLs(self_obj: objc.Object, _: objc.SEL, _: objc.Object, urls: objc.Object) callconv(.c) void {

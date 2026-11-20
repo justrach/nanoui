@@ -5,6 +5,7 @@ const w = @import("win32.zig");
 const App = @import("app.zig").App;
 const Surface = @import("surface.zig").Surface;
 const window_types = @import("../window_types.zig");
+const page_request = @import("../page_request.zig");
 const Page = @import("../page_webview2.zig").Page;
 const drop_files = @import("drop_files.zig");
 const iconFrame = @import("icon.zig").iconFrame;
@@ -34,6 +35,8 @@ const ui = @import("../ui/ui.zig");
 
 pub const Asset = window_types.Asset;
 pub const PageOptions = window_types.PageOptions;
+pub const PageHeader = window_types.PageHeader;
+pub const PageRequest = window_types.PageRequest;
 pub const PageDropDecision = window_types.PageDropDecision;
 pub const PageDropPhase = window_types.PageDropPhase;
 pub const PageDropOffer = window_types.PageDropOffer;
@@ -515,6 +518,13 @@ pub const Window = struct {
     /// absolute `http(s)://` one. No effect on a native-UI window.
     pub fn setPageUrl(self: *Window, url: []const u8) void {
         if (self.page) |p| p.load(url);
+    }
+
+    /// Starts an explicit GET navigation with optional per-request headers.
+    pub fn loadPageRequest(self: *Window, req: PageRequest) page_request.Error!void {
+        if (self.closed) return error.NoPage;
+        const p = self.page orelse return error.NoPage;
+        return p.loadRequest(req);
     }
 
     /// Shows entry `i` of `PageOptions.pages` (the bar's buttons).

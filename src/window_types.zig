@@ -9,11 +9,31 @@ pub const Asset = struct {
     mime: ?[]const u8 = null,
 };
 
+/// One HTTP header attached to an explicit `PageRequest` (`Window.loadPageRequest`).
+pub const PageHeader = struct {
+    name: []const u8,
+    value: []const u8,
+};
+
+/// An HTTP(S) GET navigation (or asset path load) with per-navigation request
+/// headers supplied by the application. Headers are scoped to this request and
+/// stripped on cross-origin redirects; they never apply to subresources or later
+/// unrelated navigations. On Windows WebView2, `Cookie` headers are restricted
+/// by `NavigateWithWebResourceRequest`.
+pub const PageRequest = struct {
+    url: []const u8,
+    headers: []const PageHeader = &.{},
+};
+
 pub const PageOptions = struct {
     /// Relative URLs resolve against `nanoui://localhost/`, served from
     /// `assets`; absolute URLs (`http://localhost:5173`) load as is.
     url: []const u8 = "/",
     assets: []const Asset = &.{},
+    /// Leave the newly created page idle without automatically navigating to
+    /// `url`; the application starts navigation later with `loadPageRequest` or
+    /// `setPageUrl` / `Page.load`.
+    defer_initial_load: bool = false,
     /// A name the app gives the page ("motion-code"), carried by every call
     /// it makes (`Call.label`) so a service can tell its pages apart.
     label: []const u8 = "",
@@ -52,6 +72,11 @@ pub const PageOptions = struct {
     /// `WKContentRuleList` from `configure` instead.
     allow_request: ?*const fn (ctx: ?*anyopaque, url: []const u8) bool = null,
     allow_request_ctx: ?*anyopaque = null,
+    /// Called on the UI thread if a page navigation fails (e.g. network error
+    /// or unsupported custom-header runtime path). Not invoked for intentional
+    /// cancellation caused by replacing a load or closing the window.
+    on_load_error: ?*const fn (ctx: ?*anyopaque, url: []const u8, message: []const u8) void = null,
+    on_load_error_ctx: ?*anyopaque = null,
     /// Opt-in host file-drop callbacks over webview content (`null` preserves
     /// default browser drag/drop behavior).
     file_drop: ?PageFileDrop = null,

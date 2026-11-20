@@ -1,9 +1,10 @@
 //! Native UI on Linux: a GtkGLArea that the OpenGL renderer draws
-//! (`glarea.zig`). `NANOUI_RENDERER=cpu` (and a shaped window, which reads
-//! its shape from pixels) uses a GtkDrawingArea and the CPU renderer instead;
-//! there is no automatic fallback when OpenGL cannot start. Frames run on
-//! input and while something animates (a tick callback); idle, nothing runs.
-//! GTK 3's event signals are here; GTK 4's controllers in surface_gtk4.zig.
+//! (`glarea.zig`), or, on CPU/no-GPU hosts (`NANOUI_RENDERER=cpu`, auto when
+//! no hardware GPU is present, or shaped windows), a GtkDrawingArea and the
+//! CPU renderer (`ui.Canvas` + cairo). Frames run on input and while
+//! something animates (a tick callback); idle, nothing runs.
+//! GTK 3's event signals are here; GTK 4's in `surface_gtk4.zig`, keys in
+//! `surface_keys.zig`.
 const std = @import("std");
 const gtk = @import("gtk.zig");
 const ui = @import("../ui/ui.zig");
@@ -15,6 +16,7 @@ const glarea = @import("glarea.zig");
 const transparent = @import("transparent.zig");
 const opengl = @import("../ui/opengl.zig");
 const text = @import("../ui/text.zig");
+const keys_side = @import("surface_keys.zig");
 const theme_side = @import("surface_theme.zig");
 const ctx_mod = @import("../ui/context.zig");
 const clock = @import("../ui/clock.zig");
@@ -57,6 +59,7 @@ pub const Surface = struct {
     /// A frame is being built, and another was asked for meanwhile.
     in_frame: bool = false,
     pending: bool = false,
+    first_drawn: bool = false,
     active_signal: c_ulong = 0,
     pub fn create(window: *Window, view: ui.View, theme_override: ?Theme) !*Surface {
         const gpa = window.app.gpa;
@@ -82,6 +85,7 @@ pub const Surface = struct {
         };
         if (window.app.gui and !window.app.flags.hidden) self.text.enablePersistence(window.app.options.name);
         self.ctx = .init(gpa, &self.text);
+        self.ctx.renderer = if (self.gl) "OpenGL" else "CPU";
         self.ctx.input.window_active = window.isFocused();
         self.active_signal = g.g_signal_connect_data(window.gtkwindow.?, "notify::is-active", @ptrCast(&onActive), self, null, 0);
         // No theme background under a transparent window's view.
@@ -110,7 +114,7 @@ pub const Surface = struct {
         gtk.connect(area, "motion-notify-event", @ptrCast(&onMotion), self);
         gtk.connect(area, "leave-notify-event", @ptrCast(&onLeave), self);
         gtk.connect(area, "scroll-event", @ptrCast(&onScroll), self);
-        gtk.connect(area, "key-press-event", @ptrCast(&onKey), self);
+        gtk.connect(area, "key-press-event", @ptrCast(&keys_side.onKey), self);
         gtk.connect(area, "focus-in-event", @ptrCast(&onFocusIn), self);
         gtk.connect(area, "focus-out-event", @ptrCast(&onFocusOut), self);
         gtk.connect(area, "realize", @ptrCast(&onRealize), self);
@@ -278,9 +282,17 @@ pub fn glStart(s: *Surface) void {
         if (s.close_idle == 0) s.close_idle = gtk.api.g_idle_add(closeWindow, s);
         return;
     };
-    s.ctx.renderer = if (s.renderer.?.es) "OpenGL ES" else "OpenGL";
-    s.requestFrame();
+    const name = if (s.renderer.?.es) "OpenGL ES" else "OpenGL";
+    const changed = !std.mem.eql(u8, s.ctx.renderer, name);
+    s.ctx.renderer = name;
+    if (s.instances.items.len == 0 or changed) s.requestFrame() else glarea.api.gtk_gl_area_queue_render(s.area);
     if (s.window.app.debug) std.debug.print("nanoui: window {x} draws with {s} on {s}\n", .{ @intFromPtr(s.window), s.ctx.renderer, glarea.gpuName() });
+}
+
+fn noteFirstFrame(s: *Surface) void {
+    if (s.first_drawn) return;
+    s.first_drawn = true;
+    if (s.window.app.debug) std.debug.print("nanoui: first-frame ({s})\n", .{s.ctx.renderer});
 }
 
 fn closeWindow(data: ?*anyopaque) callconv(.c) c_int {
@@ -300,6 +312,7 @@ pub fn glRender(s: *Surface) bool {
         s.text.images.device_side = opengl.Renderer.maxTextureSide();
         r.sync(s.text.atlas.mask(), s.text.atlas.generation, s.text.images.pictures(), s.text.images.generation);
         r.draw(s.instances.items, s.size, s.scale, s.clearColor(), glarea.target(), s.ctx.time);
+        noteFirstFrame(s);
         return true;
     }
     return false;
@@ -323,6 +336,7 @@ pub fn paint(s: *Surface, cr: *anyopaque) bool {
     if (s.window.transparent != .none) transparent.replace(cr);
     g.cairo_paint(cr);
     if (s.window.transparent == .shape) transparent.shapeTo(s.window.gtkwindow.?, surf, s.size.w, s.size.h);
+    noteFirstFrame(s);
     return true;
 }
 
@@ -452,7 +466,9 @@ pub fn scrolled(s: *Surface, delta: f32) void {
 
 fn onActive(_: *gtk.Widget, _: *anyopaque, data: ?*anyopaque) callconv(.c) void {
     const s = of(data);
-    s.ctx.input.window_active = s.window.isFocused();
+    const active = s.window.isFocused();
+    if (active == s.ctx.input.window_active) return;
+    s.ctx.input.window_active = active;
     s.frame();
 }
 fn onFocusIn(_: *gtk.Widget, _: *gtk.Event, data: ?*anyopaque) callconv(.c) c_int {
@@ -476,114 +492,5 @@ fn onCommit(_: *anyopaque, str: [*:0]const u8, data: ?*anyopaque) callconv(.c) v
     s.committed.appendSlice(s.gpa, std.mem.span(str)) catch {};
 }
 
-/// GDK key values of the keys that are not text.
-fn keyOf(keyval: c_uint) ?ctx_mod.Key {
-    return switch (keyval) {
-        0xff08 => .backspace,
-        0xffff => .delete,
-        0xff51 => .left,
-        0xff52 => .up,
-        0xff53 => .right,
-        0xff54 => .down,
-        0xff50 => .home,
-        0xff57 => .end,
-        0xff0d, 0xff8d => .enter,
-        0xff09, 0xfe20 => .tab,
-        0xff1b => .escape,
-        0xff55 => .page_up,
-        0xff56 => .page_down,
-        0xffbe...0xffc9 => @fromBackingInt(@intCast(@backingInt(ctx_mod.Key.f1) + (keyval - 0xffbe))),
-        else => null,
-    };
-}
-
-fn onKey(_: *gtk.Widget, e: *gtk.Event, data: ?*anyopaque) callconv(.c) c_int {
-    var keyval: c_uint = 0;
-    var state: c_uint = 0;
-    _ = gtk.v3.gdk_event_get_keyval(e, &keyval);
-    _ = gtk.v3.gdk_event_get_state(e, &state);
-    return @intFromBool(keyPress(of(data), keyval, state, e));
-}
-
-/// A key pressed; true if it was taken. GTK 3 passes its event for the
-/// input method; GTK 4's sends typed text to `typed` itself.
-pub fn keyPress(s: *Surface, keyval: c_uint, state: c_uint, e: ?*gtk.Event) bool {
-    const g = &gtk.api;
-    const in = &s.ctx.input;
-    in.shift = state & gtk.shift_mask != 0;
-    in.cmd = false;
-    const ctrl = state & gtk.control_mask != 0;
-    const alt = state & gtk.alt_mask != 0;
-    in.ctrl = ctrl;
-    in.alt = alt;
-    const key = keyOf(keyval);
-    // Key combinations go to the menus' accelerators, then the view.
-    const special: ?u21 = if (key) |k| switch (k) {
-        .up => ui.Shortcut.up,
-        .down => ui.Shortcut.down,
-        .left => ui.Shortcut.left,
-        .right => ui.Shortcut.right,
-        .tab => ui.Shortcut.tab,
-        .escape => ui.Shortcut.escape,
-        .enter => ui.Shortcut.enter,
-        else => null,
-    } else null;
-    const cp: u21 = @intCast(g.gdk_keyval_to_unicode(keyval));
-    const base: u21 = special orelse if (cp < 128) std.ascii.toLower(@intCast(cp)) else cp;
-    if (base != 0 and (ctrl or alt or (special != null and (base == ui.Shortcut.up or base == ui.Shortcut.down or base == ui.Shortcut.tab or base == ui.Shortcut.escape)))) {
-        const sc: ui.Shortcut = .{ .key = base, .ctrl = ctrl, .alt = alt, .shift = in.shift };
-        if (s.window.app.accelerator(sc)) return true;
-        if (ctrl and s.ctx.focused_text != null and editShortcut(s, base)) return true;
-        s.ctx.shortcut_taken = false;
-        in.shortcut = sc;
-        s.frame();
-        in.shortcut = null;
-        if (s.ctx.shortcut_taken) return true;
-    }
-    if (key) |k| {
-        in.key = k;
-        s.frame();
-        return true;
-    }
-    if (ctrl) return false;
-    s.committed.clearRetainingCapacity();
-    const ev = e orelse return false;
-    if (gtk.v3.gtk_im_context_filter_keypress(s.im, ev) == 0 and cp >= 0x20 and cp != 0x7f) {
-        var buf: [4]u8 = undefined;
-        const n = std.unicode.utf8Encode(cp, &buf) catch return false;
-        s.committed.appendSlice(s.gpa, buf[0..n]) catch {};
-    }
-    if (s.committed.items.len == 0) return true;
-    in.chars = s.committed.items;
-    s.frame();
-    return true;
-}
-
-/// Ctrl+C, X, V and A in a text field: copy, cut, paste, select all.
-fn editShortcut(s: *Surface, key: u21) bool {
-    const op: ctx_mod.TextOp = switch (key) {
-        'c' => .{ .command = .copy },
-        'x' => .{ .command = .cut },
-        'a' => .{ .command = .select_all },
-        'v' => {
-            const pasted = @import("desktop.zig").clipboard.readText(s.gpa) catch return true;
-            // No text: the view may take Ctrl+V for something else (an image).
-            const t = pasted orelse return false;
-            defer s.gpa.free(t);
-            for (t) |*ch| if (ch.* == '\n' or ch.* == '\r') {
-                ch.* = ' ';
-            };
-            var ops = [1]ctx_mod.TextOp{.{ .insert = t }};
-            s.ctx.input.ops = &ops;
-            s.frame();
-            s.ctx.input.ops = &.{};
-            return true;
-        },
-        else => return false,
-    };
-    var ops = [1]ctx_mod.TextOp{op};
-    s.ctx.input.ops = &ops;
-    s.frame();
-    s.ctx.input.ops = &.{};
-    return true;
-}
+/// Key events delegated to `surface_keys.zig` (`surface_gtk4.zig` calls this).
+pub const keyPress = keys_side.keyPress;

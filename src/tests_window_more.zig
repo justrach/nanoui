@@ -355,3 +355,53 @@ test "native termination veto runs before stopping or termination callbacks" {
     try testing.expectEqual(@as(usize, 3), gate.asked);
     try testing.expectEqual(@as(usize, 1), gate.terminated);
 }
+
+test "Dock reopen policy restores minimized windows and ignores spurious visible flag" {
+    const app_mod = @import("app.zig");
+    try testing.expectEqual(app_mod.ReopenAction.keep_visible, app_mod.decideReopen(true, false, false));
+    try testing.expectEqual(app_mod.ReopenAction.keep_visible, app_mod.decideReopen(true, false, true));
+    try testing.expectEqual(app_mod.ReopenAction.keep_visible, app_mod.decideReopen(true, true, false));
+    try testing.expectEqual(app_mod.ReopenAction.keep_visible, app_mod.decideReopen(true, true, true));
+    try testing.expectEqual(app_mod.ReopenAction.restore_minimized, app_mod.decideReopen(false, true, false));
+    try testing.expectEqual(app_mod.ReopenAction.restore_minimized, app_mod.decideReopen(false, true, true));
+    try testing.expectEqual(app_mod.ReopenAction.call_reopen, app_mod.decideReopen(false, false, true));
+    try testing.expectEqual(app_mod.ReopenAction.appkit_default, app_mod.decideReopen(false, false, false));
+
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var env: std.process.Environ.Map = .init(testing.allocator);
+    defer env.deinit();
+    const Counter = struct {
+        reopened: usize = 0,
+        fn reopen(ctx: ?*anyopaque) void {
+            const self: *@This() = @ptrCast(@alignCast(ctx.?));
+            self.reopened += 1;
+        }
+        fn view(_: *@This(), _: *ui.Context) void {}
+    };
+    var state: Counter = .{};
+    const app = try App.create(@as(std.process.Init, .{
+        .minimal = .{ .environ = .empty, .args = .{ .vector = &.{ "dock-reopen-test", "--nanoui-hidden" } } },
+        .arena = &arena,
+        .gpa = testing.allocator,
+        .io = testing.io,
+        .environ_map = &env,
+        .preopens = .empty,
+    }), .{ .ctx = &state, .on_reopen = Counter.reopen });
+    defer app.destroy();
+    const w = try app.newWindow(.{ .visible = false, .content = .{ .view = .init(&state, Counter.view) } });
+    try testing.expectEqual(objc.NO, objc.msg(objc.BOOL, w.nswindow, "isVisible", .{}));
+
+    // AppKit can pass hasVisibleWindows = YES even with nothing on screen;
+    // `on_reopen` must still run and suppress duplicate AppKit handling.
+    const ret_hook = objc.msg(objc.BOOL, app.delegate, "applicationShouldHandleReopen:hasVisibleWindows:", .{ app.nsapp, objc.YES });
+    try testing.expectEqual(objc.NO, ret_hook);
+    try testing.expectEqual(@as(usize, 1), state.reopened);
+
+    // Without `on_reopen`, return YES so AppKit can perform default restoration.
+    app.options.on_reopen = null;
+    const ret_default = objc.msg(objc.BOOL, app.delegate, "applicationShouldHandleReopen:hasVisibleWindows:", .{ app.nsapp, objc.YES });
+    try testing.expectEqual(objc.YES, ret_default);
+}

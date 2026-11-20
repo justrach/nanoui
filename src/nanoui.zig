@@ -103,7 +103,10 @@ pub const App = plat.app.App;
 pub const AppOptions = plat.app.Options;
 pub const Window = plat.window.Window;
 pub const WindowOptions = plat.window.Options;
-pub const PageOptions = plat.window.PageOptions;
+pub const PageOptions = @import("window_types.zig").PageOptions;
+pub const PageHeader = @import("window_types.zig").PageHeader;
+pub const PageRequest = @import("window_types.zig").PageRequest;
+pub const page_request = @import("page_request.zig");
 pub const PageDropDecision = @import("window_types.zig").PageDropDecision;
 pub const PageDropPhase = @import("window_types.zig").PageDropPhase;
 pub const PageDropOffer = @import("window_types.zig").PageDropOffer;
@@ -182,6 +185,7 @@ test {
     _ = kit;
     // A page's platform-free parts: the asset table, the origin, the bridge.
     _ = @import("tests_page.zig");
+    _ = @import("page_request.zig");
     _ = @import("page_drop.zig");
     std.testing.refAllDecls(kit);
     _ = @import("menu_types.zig");
@@ -206,6 +210,8 @@ test {
     if (builtin.os.tag != .ios) _ = @import("windows/key_names.zig");
     // An HDR output's display info, worked out on any host.
     if (builtin.os.tag != .ios) _ = @import("windows/hdr_output.zig");
+    // Linux renderer selection policy, platform-free model & tests.
+    _ = @import("linux/renderer.zig");
     if (is_android) {
         inline for (.{ plat.app, plat.window, plat.dialog, plat.desktop, plat.fdwatch, @import("android/surface.zig"), @import("android/keys.zig"), @import("android/touch.zig"), @import("android/activity.zig"), @import("android/bars.zig"), @import("android/egl.zig"), @import("android/jni.zig") }) |m| std.testing.refAllDecls(m);
         inline for (.{ plat.app.App, plat.window.Window, plat.desktop.clipboard, plat.desktop.shell, @import("android/surface.zig").Surface }) |T| std.testing.refAllDecls(T);
@@ -264,6 +270,7 @@ test {
         if (builtin.os.tag == .linux) _ = @import("linux/tests_tray.zig");
         // A page in WebKitGTK, end to end, where one is installed.
         if (builtin.os.tag == .linux) _ = @import("linux/tests_page.zig");
+        if (builtin.os.tag == .linux) _ = @import("tests_page_request.zig");
         return;
     }
     // Analyze every declaration, used by an example or not.
@@ -286,5 +293,8 @@ test {
     _ = @import("tests_window_more.zig");
     // The mouse buttons: the middle one, one press at a time.
     _ = @import("tests_window_mouse.zig");
+    // Deferred page loading, custom headers, and cross-origin redirect stripping.
+    _ = @import("tests_page_request.zig");
+    // Opt-in native file-drop callbacks over webview content.
     _ = @import("tests_page_drop.zig");
 }

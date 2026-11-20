@@ -12,10 +12,13 @@ const Surface = @import("surface.zig").Surface;
 const window_types = @import("../window_types.zig");
 const ui = @import("../ui/ui.zig");
 const Page = @import("../page_webkit.zig").Page;
+const page_request = @import("../page_request.zig");
 const scenes = @import("scenes.zig");
 
 pub const Asset = window_types.Asset;
 pub const PageOptions = window_types.PageOptions;
+pub const PageHeader = window_types.PageHeader;
+pub const PageRequest = window_types.PageRequest;
 pub const PageDropDecision = window_types.PageDropDecision;
 pub const PageDropPhase = window_types.PageDropPhase;
 pub const PageDropOffer = window_types.PageDropOffer;
@@ -45,6 +48,7 @@ pub const Window = struct {
     page_options: ?PageOptions = null,
     page: ?*Page = null,
     page_host: ?objc.Object = null,
+    pending_req: page_request.PendingState = .{},
     theme: ?ui.Theme = null,
     full_bleed: bool = false,
     /// In a scene of its own on an iPad, beside the app's stack (`scenes.zig`).
@@ -70,6 +74,7 @@ pub const Window = struct {
             .app = app,
             .view = if (options.content == .view) options.content.view else null,
             .page_options = if (options.content == .page) options.content.page else null,
+            .pending_req = page_request.PendingState.init(if (options.content == .page) options.content.page.defer_initial_load else false),
             .theme = options.theme,
             .full_bleed = options.full_bleed,
             .own_scene = options.own_scene,
@@ -106,24 +111,54 @@ pub const Window = struct {
         const host = objc.msg(objc.Object, objc.alloc("UIView"), "initWithFrame:", .{objc.msg(objc.CGRect, screen, "bounds", .{})});
         objc.msg(void, host, "setBackgroundColor:", .{objc.msg(objc.Object, objc.class("UIColor"), "systemBackgroundColor", .{})});
         self.page_host = host;
-        self.page = Page.create(self, self.page_options.?) catch |err| {
+        var opts = self.page_options.?;
+        // Drain pending/default startup request after creation so queued
+        // requests before `realizePage` are never overwritten by `opts.url`.
+        opts.defer_initial_load = true;
+        self.page = Page.create(self, opts) catch |err| {
             std.log.err("nanoui: page: {s}", .{@errorName(err)});
             return;
         };
+        const p = self.page.?;
+        switch (self.pending_req.takeReadyAction(self.app.gpa, self.page_options.?.url)) {
+            .none => {},
+            .default_url => |url| p.load(url),
+            .request => |owned_init| {
+                var owned = owned_init;
+                defer owned.deinit(self.app.gpa);
+                const hdrs = owned.asRequest(self.app.gpa) catch null;
+                defer if (hdrs) |h| self.app.gpa.free(h);
+                if (hdrs) |h| p.loadRequest(.{ .url = owned.url, .headers = h }) catch |err| {
+                    if (self.page_options.?.on_load_error) |cb| cb(self.page_options.?.on_load_error_ctx, owned.url, @errorName(err));
+                };
+            },
+        }
         objc.msg(void, vc, "setView:", .{host});
     }
 
     /// Points a page's window at `url`: a path from the app's assets, or an
     /// absolute `http(s)://` one. No effect on a native-UI window.
     pub fn setPageUrl(self: *Window, url: []const u8) void {
-        if (self.page) |p| p.load(url);
+        if (self.page) |p| {
+            p.load(url);
+        } else if (self.page_options != null) {
+            self.pending_req.submitUrl(self.app.gpa, url) catch {};
+        }
+    }
+
+    /// Starts an explicit GET navigation with optional per-request headers.
+    /// Queued if called before UIKit creates the underlying page view.
+    pub fn loadPageRequest(self: *Window, req: PageRequest) page_request.Error!void {
+        if (self.closed or self.page_options == null) return error.NoPage;
+        if (self.page) |p| return p.loadRequest(req);
+        return self.pending_req.submitRequest(self.app.gpa, req);
     }
 
     /// Shows entry `i` of `PageOptions.pages` (the bar's buttons).
     pub fn showPage(self: *Window, i: usize) void {
-        const p = self.page orelse return;
-        if (i >= p.queue.options.pages.len) return;
-        p.load(p.queue.options.pages[i].url);
+        const opts = self.page_options orelse return;
+        if (i >= opts.pages.len) return;
+        self.setPageUrl(opts.pages[i].url);
     }
 
     /// Queues an encoded message for the page and takes ownership of it.
@@ -173,6 +208,7 @@ pub const Window = struct {
         self.surface = null;
         if (self.page) |p| p.destroy();
         self.page = null;
+        self.pending_req.close(self.app.gpa);
         if (self.page_host) |h| objc.release(h);
         self.page_host = null;
         if (self.controller) |vc| {

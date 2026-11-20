@@ -11,9 +11,11 @@ const ios = builtin.os.tag == .ios;
 const app_mod = if (ios) @import("ios/app.zig") else @import("app.zig");
 const window_mod = if (ios) @import("ios/window.zig") else @import("window.zig");
 const ipc = @import("ipc.zig").ipc(window_mod.Window, app_mod.App);
+const nav = @import("page_webkit_nav.zig");
 const nav_drop = @import("page_webkit_drop.zig");
 const page = @import("page.zig");
 const page_drop = @import("page_drop.zig");
+const page_request = @import("page_request.zig");
 
 const Window = window_mod.Window;
 const bridge_js = page.bridge_js;
@@ -24,10 +26,19 @@ pub const Page = struct {
     queue: page.Queue(Window),
     webview: objc.Object,
     handler: objc.Object,
+    nav_delegate: objc.Object,
     last_mouse_down: ?objc.Object = null,
+    scope: page_request.ActiveScope = .{},
+    scope_nav: ?objc.Object = null,
     drop_session: page_drop.Session = .{},
     drop_busy: usize = 0,
     last_drop_webview: bool = true,
+
+    pub fn clearScope(self: *Page) void {
+        if (self.scope_nav) |n| objc.release(n);
+        self.scope_nav = null;
+        self.scope.clear(self.queue.gpa);
+    }
 
     pub fn enterDrop(self: *Page) void {
         self.drop_busy += 1;
@@ -48,6 +59,7 @@ pub const Page = struct {
             .queue = page.Queue(Window).init(window, options),
             .webview = undefined,
             .handler = undefined,
+            .nav_delegate = undefined,
             .drop_session = page_drop.Session.init(if (ios) null else options.file_drop),
         };
         self.queue.send = &sendJs;
@@ -110,10 +122,16 @@ pub const Page = struct {
         // The web view is not the content view: WebKit docks the inspector in its superview.
         objc.msg(void, content_view, "addSubview:", .{webview});
 
+        const nav_delegate = objc.msg(objc.Object, nav.delegateClass(), "new", .{});
+        errdefer objc.release(nav_delegate);
+        objc.setZig(nav_delegate, self);
+        objc.msg(void, webview, "setNavigationDelegate:", .{nav_delegate});
+
         self.webview = webview;
         self.handler = handler;
+        self.nav_delegate = nav_delegate;
         if (!ios) nav_drop.registerTypes(webview, options.file_drop != null);
-        self.loadUrl(options.url);
+        if (!options.defer_initial_load) self.loadUrl(options.url);
         return self;
     }
 
@@ -121,12 +139,17 @@ pub const Page = struct {
         self.drop_session.onClose();
         const ucc = objc.msg(objc.Object, objc.msg(objc.Object, self.webview, "configuration", .{}), "userContentController", .{});
         objc.msg(void, ucc, "removeScriptMessageHandlerForName:", .{objc.nsString("nanoui")});
+        objc.msg(void, self.webview, "stopLoading", .{});
+        objc.msg(void, self.webview, "setNavigationDelegate:", .{@as(?objc.Object, null)});
+        objc.setZig(self.nav_delegate, null);
         objc.setZig(self.handler, null);
         objc.setZig(self.webview, null);
         objc.msg(void, self.webview, "removeFromSuperview", .{});
         objc.release(self.webview);
+        objc.release(self.nav_delegate);
         objc.release(self.handler);
         if (self.last_mouse_down) |e| objc.release(e);
+        self.clearScope();
         self.queue.deinit();
         // A scheduled flush frees the page when it runs, a message or drop
         // being handled when it returns; without any of them, now.
@@ -182,10 +205,11 @@ pub const Page = struct {
 
     fn loadUrl(self: *Page, url: []const u8) void {
         self.drop_session.onNavigate();
+        self.clearScope();
         self.queue.setCurrent(url);
         // An absolute `http(s)://` URL loads as it is, as WebView2's does;
         // only a path is the app's own, served from its assets.
-        const full = page.fullUrl(&stackBuf, url);
+        const full = page_request.resolveUrl(&stackBuf, url);
         const nsurl = objc.msg(?objc.Object, objc.class("NSURL"), "URLWithString:", .{objc.nsString(full)}) orelse return;
         const req = objc.msg(objc.Object, objc.class("NSURLRequest"), "requestWithURL:", .{nsurl});
         self.queue.dom_ready = false;
@@ -195,6 +219,13 @@ pub const Page = struct {
     /// `Page.load`, for the window's `.page` content.
     pub fn load(self: *Page, url: []const u8) void {
         self.loadUrl(url);
+    }
+
+    /// Starts a GET navigation with per-request HTTP headers scoped to `req.url`'s origin.
+    pub fn loadRequest(self: *Page, req: window_mod.PageRequest) page_request.Error!void {
+        try page_request.validate(req);
+        self.drop_session.onNavigate();
+        return nav.load(Page, self, req);
     }
 
     /// Places a docked page in its parent view (points, the parent's

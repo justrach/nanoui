@@ -226,7 +226,7 @@ fn layerShellLib() ?*anyopaque {
         layer_shell_lib_tried = true;
         const libs = [_][*:0]const u8{ "libgtk4-layer-shell.so.0", "libgtk4-layer-shell.so.1", "libgtk4-layer-shell.so" };
         layer_shell_lib = for (libs) |name| {
-            if (std.c.dlopen(name, .{ .NOW = true, .GLOBAL = true })) |h| break h;
+            if (std.c.dlopen(name, .{ .LAZY = true, .GLOBAL = true })) |h| break h;
         } else null;
     }
     return layer_shell_lib;
@@ -292,7 +292,7 @@ pub fn load() bool {
     if (!wantsThree() and !force3) {
         // Ahead of GTK 4, when a layer surface is coming: see `layerShellLib`.
         if (wants_layer_shell) _ = layerShellLib();
-        if (std.c.dlopen("libgtk-4.so.1", .{ .NOW = true, .GLOBAL = true })) |lib| {
+        if (std.c.dlopen("libgtk-4.so.1", .{ .LAZY = true, .GLOBAL = true })) |lib| {
             if (table(Api, lib, &api) and table(Api4, lib, &v4api)) {
                 v4 = true;
                 loaded = true;
@@ -300,7 +300,7 @@ pub fn load() bool {
             }
         }
     }
-    const lib = std.c.dlopen("libgtk-3.so.0", .{ .NOW = true, .GLOBAL = true }) orelse return false;
+    const lib = std.c.dlopen("libgtk-3.so.0", .{ .LAZY = true, .GLOBAL = true }) orelse return false;
     if (!table(Api, lib, &api) or !table(Api3, lib, &v3)) return false;
     loaded = true;
     return true;

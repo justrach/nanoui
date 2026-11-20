@@ -153,9 +153,25 @@ Live Android devices with a GPU draw through OpenGL ES 3 (`src/android/egl.zig` 
 
 ---
 
-## Linux (x86_64, CPU Raster)
+## Linux (x86_64, CPU Raster & Startup)
 
 See [docs/linux-perf.md](linux-perf.md) and `bench/frameworks.json` for full Linux x86_64 CPU-raster measurements (Ubuntu 24.04, `900×640 @ 2×`) and framework comparisons: nanoui leads GPUI 0.2.2 across every scene's frame CPU (`0.074` vs `1.444 ms` on `boxes`, `0.205` vs `2.285 ms` on `text`, `0.510` vs `14.601 ms` on `scroll`, `0.571` vs `5.562 ms` on `springs`) and outperforms egui on `boxes`, `text`, and `scroll`.
+
+### Linux Startup Latency & Idle PSS (Xvfb, no-GPU, `ReleaseFast`)
+
+Measured on GitHub Actions `ubuntu-24.04` (Xvfb + Mesa llvmpipe, no hardware GPU) with `examples/counter` (`10.34 MiB`, `runs=9`, `tools/linux-startup-bench.py`), guided by Lean 4 theorems in [`lean-proofs/NanoUI/LinuxStartup.lean`](../lean-proofs/NanoUI/LinuxStartup.lean):
+
+| scenario | median first-frame | range | idle PSS | idle CPU | trace |
+|---|---:|---:|---:|---:|---|
+| default (no-GPU warm) | 93.0 ms | 90.5–94.8 ms | 74.9 MiB | 0.0 ms | `nanoui: first-frame (CPU)` |
+| default (no-GPU cold cache) | 112.1 ms | 111.8–115.7 ms | 85.4 MiB | 0.0 ms | `nanoui: first-frame (CPU)` |
+| default (headless bus, no portal) | 82.9 ms | 82.1–88.0 ms | —¹ | 0.0 ms | `nanoui: first-frame (CPU)` |
+| forced software GL (`NANOUI_RENDERER=gl`, warm) | 210.8 ms | 208.4–212.4 ms | 116.1 MiB | 20.0 ms | `nanoui: first-frame (OpenGL ES)` |
+| forced software GL (`NANOUI_RENDERER=gl`, cold cache) | 936.9 ms | 929.8–940.4 ms | 180.6 MiB | 90.0 ms | `nanoui: first-frame (OpenGL ES)` |
+
+¹ Run `44668614282` sampled the `dbus-run-session` wrapper PID (`0.3 MiB`) in that scenario; `tools/linux-startup-bench.py` now resolves the child `counter` PID for future runs.
+
+Versus forced software GL under Xvfb/llvmpipe: **-56%** warm first-frame (`93.0 ms` vs `210.8 ms`), **-88%** (`8.4×` faster) cold-cache first-frame (`112.1 ms` vs `936.9 ms`), **-35%** to **-53%** idle PSS (`74.9–85.4 MiB` vs `116.1–180.6 MiB`), and **0.0 ms** idle CPU.
 
 ---
 

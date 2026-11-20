@@ -8,6 +8,7 @@ const dev = @import("../dev.zig");
 const gtk = @import("gtk.zig");
 const ipc = @import("../ipc.zig").ipc(window_mod.Window, App);
 const menu_mod = @import("../menu_accel.zig");
+const renderer = @import("renderer.zig");
 const tray_mod = @import("tray.zig");
 const tsgen = @import("../tsgen.zig");
 const ui = @import("../ui/ui.zig");
@@ -60,8 +61,11 @@ pub const App = struct {
     running: bool = false,
     stopping: bool = false,
     debug: bool = false,
-    /// `NANOUI_RENDERER=cpu`: draw native UI on the CPU even where OpenGL is.
+    /// Draw native UI on the CPU (auto-detected without hardware GPU, or
+    /// `NANOUI_RENDERER=cpu`).
     cpu_only: bool = false,
+    /// Set `GSK_RENDERER=cairo` before loading GTK when using CPU rendering.
+    set_gsk_cairo: bool = false,
 
     pub fn create(init: anytype, options: Options) !*App {
         if (@TypeOf(init) == std.process.Init.Minimal) {
@@ -91,16 +95,21 @@ pub const App = struct {
         const self = try gpa.create(App);
         errdefer gpa.destroy(self);
         const flags = try dev.Flags.parse(init);
+        const headless = flags.snapshot != null or flags.generate_dir != null;
+        const env_renderer = renderer.parseEnv(init.environ_map.get("NANOUI_RENDERER"));
+        const sw_hint = renderer.softwareHint(init.environ_map.get("LIBGL_ALWAYS_SOFTWARE"), init.environ_map.get("GALLIUM_DRIVER"));
+        const has_gpu = if (headless) false else if (env_renderer == .auto and !sw_hint) renderer.hasHardwareGpu(init.io) else false;
+        const decision = renderer.decide(env_renderer, has_gpu, sw_hint, false, init.environ_map.get("GSK_RENDERER") != null);
         self.* = .{
             .gpa = gpa,
             .io = init.io,
             .options = options,
             .flags = flags,
             .debug = init.environ_map.get("NANOUI_DEBUG") != null,
-            .cpu_only = std.mem.eql(u8, init.environ_map.get("NANOUI_RENDERER") orelse "", "cpu"),
-            .headless = flags.snapshot != null or flags.generate_dir != null,
+            .cpu_only = decision.backend == .cpu,
+            .set_gsk_cairo = decision.set_gsk_cairo,
+            .headless = headless,
         };
-        const headless = self.headless;
         // `kv.standard()` kept between launches, in the app's data
         // directory; never for headless runs (tests, snapshots).
         if (!headless and !flags.hidden) if (@import("desktop.zig").path(gpa, .data, options.name)) |dir| {
@@ -124,9 +133,10 @@ pub const App = struct {
     pub fn startGtk(self: *App, for_page: bool) !void {
         if (self.gui or self.headless) return;
         if (for_page) @import("webkit.zig").prepare();
+        if (self.set_gsk_cairo and !for_page) renderer.configureGskForCpu();
         if (!gtk.load()) return error.GtkMissing;
         if (!gtk.ready()) return error.NoDisplay;
-        if (self.debug) std.debug.print("nanoui: GTK {d}\n", .{@as(u8, if (gtk.v4) 4 else 3)});
+        if (self.debug) std.debug.print("nanoui: GTK {d} ({s})\n", .{ @as(u8, if (gtk.v4) 4 else 3), if (self.cpu_only) "cpu" else "gl" });
         self.gui = true;
     }
 

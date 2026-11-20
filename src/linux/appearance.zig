@@ -9,8 +9,10 @@ const gtk = @import("gtk.zig");
 const Scheme = enum { unset, dark, light };
 
 const Api = struct {
-    g_bus_get_sync: *const fn (bus: c_int, cancellable: ?*anyopaque, err: ?*anyopaque) callconv(.c) ?*anyopaque,
-    g_dbus_connection_call_sync: *const fn (conn: ?*anyopaque, bus_name: [*:0]const u8, path: [*:0]const u8, iface: [*:0]const u8, method: [*:0]const u8, params: ?*anyopaque, reply: ?[*:0]const u8, flags: c_int, timeout: c_int, cancellable: ?*anyopaque, err: ?*anyopaque) callconv(.c) ?*anyopaque,
+    g_bus_get: *const fn (bus: c_int, cancellable: ?*anyopaque, callback: *const anyopaque, user_data: ?*anyopaque) callconv(.c) void,
+    g_bus_get_finish: *const fn (res: *anyopaque, err: ?*anyopaque) callconv(.c) ?*anyopaque,
+    g_dbus_connection_call: *const fn (conn: ?*anyopaque, bus_name: [*:0]const u8, path: [*:0]const u8, iface: [*:0]const u8, method: [*:0]const u8, params: ?*anyopaque, reply: ?[*:0]const u8, flags: c_int, timeout: c_int, cancellable: ?*anyopaque, callback: ?*const anyopaque, user_data: ?*anyopaque) callconv(.c) void,
+    g_dbus_connection_call_finish: *const fn (conn: ?*anyopaque, res: *anyopaque, err: ?*anyopaque) callconv(.c) ?*anyopaque,
     g_dbus_connection_signal_subscribe: *const fn (conn: ?*anyopaque, sender: [*:0]const u8, iface: [*:0]const u8, member: [*:0]const u8, path: [*:0]const u8, arg0: ?[*:0]const u8, flags: c_int, callback: *const anyopaque, data: ?*anyopaque, destroy: ?*anyopaque) callconv(.c) c_uint,
     g_variant_new: *const fn (format: [*:0]const u8, ...) callconv(.c) ?*anyopaque,
     g_variant_get_child_value: *const fn (value: *anyopaque, index: usize) callconv(.c) ?*anyopaque,
@@ -21,6 +23,8 @@ const Api = struct {
 };
 
 const session_bus: c_int = 2;
+/// `G_DBUS_CALL_FLAGS_NO_AUTO_START`: never ask D-Bus to spawn an unstarted portal daemon.
+const no_auto_start: c_int = 1;
 
 var api: Api = undefined;
 var state: enum { unknown, ready, absent } = .unknown;
@@ -36,6 +40,10 @@ var watchers: ?*Watch = null;
 pub fn dark(gtk_theme: ?[]const u8) bool {
     if (gtk_theme) |theme| return containsDark(theme);
     ensure();
+    return effectiveDark();
+}
+
+fn effectiveDark() bool {
     switch (scheme_cache) {
         .dark => return true,
         .light => return false,
@@ -107,6 +115,40 @@ test "theme names say dark" {
     try std.testing.expect(!containsDark(""));
 }
 
+test "applyScheme is quiescent when matching and safe after Watch.stop" {
+    const saved_scheme = scheme_cache;
+    const saved_settings = settings_dark;
+    const saved_watchers = watchers;
+    defer {
+        scheme_cache = saved_scheme;
+        settings_dark = saved_settings;
+        watchers = saved_watchers;
+    }
+
+    var hits: usize = 0;
+    const cb = struct {
+        fn hit(ctx: ?*anyopaque) void {
+            const p: *usize = @ptrCast(@alignCast(ctx.?));
+            p.* += 1;
+        }
+    }.hit;
+
+    scheme_cache = .unset;
+    settings_dark = false;
+    var w: Watch = .{ .ctx = &hits, .notify = cb, .next = null };
+    watchers = &w;
+
+    applyScheme(.light);
+    try std.testing.expectEqual(@as(usize, 0), hits);
+
+    applyScheme(.dark);
+    try std.testing.expectEqual(@as(usize, 1), hits);
+
+    w.stop();
+    applyScheme(.light);
+    try std.testing.expectEqual(@as(usize, 1), hits);
+}
+
 /// A window that follows the system's appearance: `notify` is called (with
 /// `ctx`) when the portal or GTK says it changed.
 pub const Watch = struct {
@@ -142,18 +184,40 @@ pub const Watch = struct {
     }
 };
 
+fn hasSessionBus() bool {
+    if (std.c.getenv("GTK_THEME")) |v| if (std.mem.span(v).len > 0) return false;
+    if (std.c.getenv("DBUS_SESSION_BUS_ADDRESS")) |v| if (std.mem.span(v).len > 0) return true;
+    const xdg = if (std.c.getenv("XDG_RUNTIME_DIR")) |v| std.mem.span(v) else return false;
+    if (xdg.len == 0) return false;
+    var buf: [512]u8 = undefined;
+    const bus_path = std.fmt.bufPrint(&buf, "{s}/bus", .{xdg}) catch return false;
+    std.Io.Dir.cwd().access(std.Io.Threaded.global_single_threaded.io(), bus_path, .{}) catch return false;
+    return true;
+}
+
 fn ensure() void {
     if (tried) return;
     tried = true;
+    if (!hasSessionBus()) return;
     if (!load()) return;
-    connection = api.g_bus_get_sync(session_bus, null, null) orelse return;
-    read();
-    _ = api.g_dbus_connection_signal_subscribe(connection, "org.freedesktop.portal.Desktop", "org.freedesktop.portal.Settings", "SettingChanged", "/org/freedesktop/portal/desktop", "org.freedesktop.appearance", 0, @ptrCast(&onSettingChanged), null, null);
+    api.g_bus_get(session_bus, null, @ptrCast(&onBusReady), null);
 }
 
-fn read() void {
+fn onBusReady(_: ?*anyopaque, res: *anyopaque, _: ?*anyopaque) callconv(.c) void {
+    connection = api.g_bus_get_finish(res, null) orelse return;
+    _ = api.g_dbus_connection_signal_subscribe(connection, "org.freedesktop.portal.Desktop", "org.freedesktop.portal.Settings", "SettingChanged", "/org/freedesktop/portal/desktop", "org.freedesktop.appearance", 0, @ptrCast(&onSettingChanged), null, null);
+    readAsync();
+}
+
+fn readAsync() void {
     const conn = connection orelse return;
-    const reply = api.g_dbus_connection_call_sync(conn, "org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop", "org.freedesktop.portal.Settings", "Read", api.g_variant_new("(ss)", "org.freedesktop.appearance", "color-scheme"), null, 0, 500, null, null) orelse return;
+    const params = api.g_variant_new("(ss)", "org.freedesktop.appearance", "color-scheme") orelse return;
+    api.g_dbus_connection_call(conn, "org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop", "org.freedesktop.portal.Settings", "Read", params, null, no_auto_start, 500, null, @ptrCast(&onReadDone), null);
+}
+
+fn onReadDone(source: ?*anyopaque, res: *anyopaque, _: ?*anyopaque) callconv(.c) void {
+    const conn = source orelse connection orelse return;
+    const reply = api.g_dbus_connection_call_finish(conn, res, null) orelse return;
     defer api.g_variant_unref(reply);
     var value = api.g_variant_get_child_value(reply, 0) orelse return;
     defer api.g_variant_unref(value);
@@ -164,8 +228,16 @@ fn read() void {
         value = inner;
     }
     if (!std.mem.eql(u8, std.mem.span(api.g_variant_get_type_string(value)), "u")) return;
-    scheme_cache = schemeOf(api.g_variant_get_uint32(value));
-    settings_dark = null;
+    applyScheme(schemeOf(api.g_variant_get_uint32(value)));
+}
+
+fn applyScheme(next: Scheme) void {
+    const before = effectiveDark();
+    scheme_cache = next;
+    if (next != .unset) settings_dark = null;
+    if (effectiveDark() == before) return;
+    var watch = watchers;
+    while (watch) |w| : (watch = w.next) w.notify(w.ctx);
 }
 
 /// The portal's `color-scheme`: 0 has no preference, 1 prefers dark, 2 light.
@@ -178,9 +250,7 @@ fn schemeOf(value: u32) Scheme {
 }
 
 fn onSettingChanged(_: ?*anyopaque, _: ?[*:0]const u8, _: ?[*:0]const u8, _: ?[*:0]const u8, _: ?[*:0]const u8, _: ?*anyopaque, _: ?*anyopaque) callconv(.c) void {
-    read();
-    var watch = watchers;
-    while (watch) |w| : (watch = w.next) w.notify(w.ctx);
+    readAsync();
 }
 
 fn onSettingsChanged(_: ?*anyopaque, _: ?*anyopaque, data: ?*anyopaque) callconv(.c) void {
@@ -196,8 +266,8 @@ fn load() bool {
         .unknown => {},
     }
     state = .absent;
-    const gio = std.c.dlopen("libgio-2.0.so.0", .{ .NOW = true }) orelse return false;
-    const glib = std.c.dlopen("libglib-2.0.so.0", .{ .NOW = true }) orelse return false;
+    const gio = std.c.dlopen("libgio-2.0.so.0", .{ .LAZY = true }) orelse return false;
+    const glib = std.c.dlopen("libglib-2.0.so.0", .{ .LAZY = true }) orelse return false;
     inline for (@typeInfo(Api).@"struct".field_names) |name| {
         var symbol: ?*anyopaque = null;
         for ([_]*anyopaque{ gio, glib }) |lib| {

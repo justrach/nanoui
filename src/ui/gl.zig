@@ -73,8 +73,8 @@ var loaded: enum { none, gl, es } = .none;
 /// Loads OpenGL's functions; false when it is not installed.
 pub fn load() bool {
     if (loaded == .gl) return true;
-    const lib = std.c.dlopen("libOpenGL.so.0", .{ .NOW = true }) orelse
-        std.c.dlopen("libGL.so.1", .{ .NOW = true }) orelse return false;
+    const lib = std.c.dlopen("libOpenGL.so.0", .{ .LAZY = true }) orelse
+        std.c.dlopen("libGL.so.1", .{ .LAZY = true }) orelse return false;
     if (!from(lib)) return false;
     loaded = .gl;
     return true;
@@ -84,7 +84,7 @@ pub fn load() bool {
 pub fn loadEs() bool {
     if (loaded == .es) return true;
     const name = if (builtin.abi.isAndroid()) "libGLESv3.so" else "libGLESv2.so.2";
-    const lib = std.c.dlopen(name, .{ .NOW = true }) orelse return false;
+    const lib = std.c.dlopen(name, .{ .LAZY = true }) orelse return false;
     if (!from(lib)) return false;
     loaded = .es;
     return true;
