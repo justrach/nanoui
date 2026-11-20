@@ -12,7 +12,9 @@ const app_mod = if (ios) @import("ios/app.zig") else @import("app.zig");
 const window_mod = if (ios) @import("ios/window.zig") else @import("window.zig");
 const ipc = @import("ipc.zig").ipc(window_mod.Window, app_mod.App);
 const nav = @import("page_webkit_nav.zig");
+const nav_drop = @import("page_webkit_drop.zig");
 const page = @import("page.zig");
+const page_drop = @import("page_drop.zig");
 const page_request = @import("page_request.zig");
 
 const Window = window_mod.Window;
@@ -28,6 +30,9 @@ pub const Page = struct {
     last_mouse_down: ?objc.Object = null,
     scope: page_request.ActiveScope = .{},
     scope_nav: ?objc.Object = null,
+    drop_session: page_drop.Session = .{},
+    drop_busy: usize = 0,
+    last_drop_webview: bool = true,
 
     pub fn clearScope(self: *Page) void {
         if (self.scope_nav) |n| objc.release(n);
@@ -35,11 +40,28 @@ pub const Page = struct {
         self.scope.clear(self.queue.gpa);
     }
 
+    pub fn enterDrop(self: *Page) void {
+        self.drop_busy += 1;
+    }
+
+    pub fn leaveDrop(self: *Page) void {
+        self.drop_busy -= 1;
+        if (self.drop_busy == 0 and self.queue.dead and !self.queue.flush_scheduled and !self.queue.dispatching) {
+            self.queue.gpa.destroy(self);
+        }
+    }
+
     pub fn create(window: *Window, options: window_mod.PageOptions) !*Page {
         const gpa = window.app.gpa;
         const self = try gpa.create(Page);
         errdefer gpa.destroy(self);
-        self.* = .{ .queue = page.Queue(Window).init(window, options), .webview = undefined, .handler = undefined, .nav_delegate = undefined };
+        self.* = .{
+            .queue = page.Queue(Window).init(window, options),
+            .webview = undefined,
+            .handler = undefined,
+            .nav_delegate = undefined,
+            .drop_session = page_drop.Session.init(if (ios) null else options.file_drop),
+        };
         self.queue.send = &sendJs;
         self.queue.ctx = self;
         if (ios and dlopen("/System/Library/Frameworks/WebKit.framework/WebKit", 1) == null) return error.NoWebKit;
@@ -53,12 +75,13 @@ pub const Page = struct {
                 .{ .name = "webView:stopURLSchemeTask:", .imp = &stopURLSchemeTask, .types = "v@:@@" },
             },
         });
+        const mac_methods = [_]objc.Method{
+            .{ .name = "mouseDown:", .imp = &webViewMouseDown, .types = "v@:@" },
+        } ++ nav_drop.methods;
         const webview_class = objc.defineClass(.{
             .name = "NanoUIWebView",
             .superclass = "WKWebView",
-            .methods = if (ios) &.{} else &.{
-                .{ .name = "mouseDown:", .imp = &webViewMouseDown, .types = "v@:@" },
-            },
+            .methods = if (ios) &.{} else &mac_methods,
         });
 
         const handler = objc.msg(objc.Object, handler_class, "new", .{});
@@ -107,11 +130,13 @@ pub const Page = struct {
         self.webview = webview;
         self.handler = handler;
         self.nav_delegate = nav_delegate;
+        if (!ios) nav_drop.registerTypes(webview, options.file_drop != null);
         if (!options.defer_initial_load) self.loadUrl(options.url);
         return self;
     }
 
     pub fn destroy(self: *Page) void {
+        self.drop_session.onClose();
         const ucc = objc.msg(objc.Object, objc.msg(objc.Object, self.webview, "configuration", .{}), "userContentController", .{});
         objc.msg(void, ucc, "removeScriptMessageHandlerForName:", .{objc.nsString("nanoui")});
         objc.msg(void, self.webview, "stopLoading", .{});
@@ -126,9 +151,9 @@ pub const Page = struct {
         if (self.last_mouse_down) |e| objc.release(e);
         self.clearScope();
         self.queue.deinit();
-        // A scheduled flush frees the page when it runs, a message being
-        // handled when it returns; without either, now.
-        if (self.queue.flush_scheduled or self.queue.dispatching) return;
+        // A scheduled flush frees the page when it runs, a message or drop
+        // being handled when it returns; without any of them, now.
+        if (self.queue.flush_scheduled or self.queue.dispatching or self.drop_busy > 0) return;
         self.queue.gpa.destroy(self);
     }
 
@@ -179,6 +204,7 @@ pub const Page = struct {
     }
 
     fn loadUrl(self: *Page, url: []const u8) void {
+        self.drop_session.onNavigate();
         self.clearScope();
         self.queue.setCurrent(url);
         // An absolute `http(s)://` URL loads as it is, as WebView2's does;
@@ -197,6 +223,8 @@ pub const Page = struct {
 
     /// Starts a GET navigation with per-request HTTP headers scoped to `req.url`'s origin.
     pub fn loadRequest(self: *Page, req: window_mod.PageRequest) page_request.Error!void {
+        try page_request.validate(req);
+        self.drop_session.onNavigate();
         return nav.load(Page, self, req);
     }
 
