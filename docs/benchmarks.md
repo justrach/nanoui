@@ -1,11 +1,11 @@
 # nanoui Benchmarks
 
-Baseline: **[`v0.14.7`](https://github.com/justrach/nanoui/releases/tag/v0.14.7)** (2026-11-19).
+Baseline: **[`v0.14.8`](https://github.com/justrach/nanoui/releases/tag/v0.14.8)** (2026-11-20).
 See [Roadmap](roadmap.md) for upcoming performance work, [hillclimb/README.md](../hillclimb/README.md) for scene definitions, and [docs/linux-perf.md](linux-perf.md) for Linux x86_64 framework comparisons against GPUI, egui, iced, Slint, and Clay.
 
 ## Method
 
-All `v0.14.7` runs below use `hillclimb` in `ReleaseFast`, rendering **30 warm-up frames followed by 300 measured frames**, keeping the best of 3 runs per scene, headless and offscreen (no window opens).
+All `hillclimb` frame and binary-size tables below were captured on the `v0.14.7` baseline in `ReleaseFast`, rendering **30 warm-up frames followed by 300 measured frames**, keeping the best of 3 runs per scene, headless and offscreen (no window opens). The Linux startup and idle-PSS table below reflects `v0.14.8` ([PR #214](https://github.com/justrach/nanoui/pull/214)).
 
 - **frame CPU:** `build + layout + paint` per frame in milliseconds (median and p95).
 - **encode CPU:** CPU time uploading instances and encoding Metal command buffers (or CPU rasterizing on the portable backend).
@@ -159,19 +159,17 @@ See [docs/linux-perf.md](linux-perf.md) and `bench/frameworks.json` for full Lin
 
 ### Linux Startup Latency & Idle PSS (Xvfb, no-GPU, `ReleaseFast`)
 
-Measured on GitHub Actions `ubuntu-24.04` (Xvfb + Mesa llvmpipe, no hardware GPU) with `examples/counter` (`10.34 MiB`, `runs=9`, `tools/linux-startup-bench.py`), guided by Lean 4 theorems in [`lean-proofs/NanoUI/LinuxStartup.lean`](../lean-proofs/NanoUI/LinuxStartup.lean):
+Measured on GitHub Actions `ubuntu-24.04` (Xvfb + Mesa llvmpipe, no hardware GPU, job `136069081683`) with `examples/counter` (`10.43 MiB`, `runs=9`, `tools/linux-startup-bench.py`), guided by Lean 4 theorems in [`lean-proofs/NanoUI/LinuxStartup.lean`](../lean-proofs/NanoUI/LinuxStartup.lean):
 
 | scenario | median first-frame | range | idle PSS | idle CPU | trace |
 |---|---:|---:|---:|---:|---|
-| default (no-GPU warm) | 93.0 ms | 90.5–94.8 ms | 74.9 MiB | 0.0 ms | `nanoui: first-frame (CPU)` |
-| default (no-GPU cold cache) | 112.1 ms | 111.8–115.7 ms | 85.4 MiB | 0.0 ms | `nanoui: first-frame (CPU)` |
-| default (headless bus, no portal) | 82.9 ms | 82.1–88.0 ms | —¹ | 0.0 ms | `nanoui: first-frame (CPU)` |
-| forced software GL (`NANOUI_RENDERER=gl`, warm) | 210.8 ms | 208.4–212.4 ms | 116.1 MiB | 20.0 ms | `nanoui: first-frame (OpenGL ES)` |
-| forced software GL (`NANOUI_RENDERER=gl`, cold cache) | 936.9 ms | 929.8–940.4 ms | 180.6 MiB | 90.0 ms | `nanoui: first-frame (OpenGL ES)` |
+| default (no-GPU warm) | 74.3 ms | 70.9–75.3 ms | 74.3 MiB | 0.0 ms | `nanoui: first-frame (CPU)` |
+| default (no-GPU cold cache) | 90.3 ms | 88.1–92.6 ms | 84.8 MiB | 0.0 ms | `nanoui: first-frame (CPU)` |
+| default (headless bus, no portal) | 68.4 ms | 66.6–69.0 ms | 40.7 MiB | 0.0 ms | `nanoui: first-frame (CPU)` |
+| forced software GL (`NANOUI_RENDERER=gl`, warm) | 172.0 ms | 170.8–174.2 ms | 116.2 MiB | 10.0 ms | `nanoui: first-frame (OpenGL ES)` |
+| forced software GL (`NANOUI_RENDERER=gl`, cold cache) | 723.7 ms | 718.1–726.1 ms | 180.0 MiB | 70.0 ms | `nanoui: first-frame (OpenGL ES)` |
 
-¹ Run `44668614282` sampled the `dbus-run-session` wrapper PID (`0.3 MiB`) in that scenario; `tools/linux-startup-bench.py` now resolves the child `counter` PID for future runs.
-
-Versus forced software GL under Xvfb/llvmpipe: **-56%** warm first-frame (`93.0 ms` vs `210.8 ms`), **-88%** (`8.4×` faster) cold-cache first-frame (`112.1 ms` vs `936.9 ms`), **-35%** to **-53%** idle PSS (`74.9–85.4 MiB` vs `116.1–180.6 MiB`), and **0.0 ms** idle CPU.
+Versus forced software GL under Xvfb/llvmpipe: **-57%** warm first-frame (`74.3 ms` vs `172.0 ms`), **-88%** (`8.0×` faster) cold-cache first-frame (`90.3 ms` vs `723.7 ms`), **-36%** to **-53%** idle PSS (`74.3–84.8 MiB`, or `40.7 MiB` without portal, vs `116.2–180.0 MiB`), and **0.0 ms** idle CPU.
 
 ---
 
