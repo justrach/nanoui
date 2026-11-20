@@ -16,7 +16,9 @@ export function createHost(canvas, options = {}) {
     frame = raf(time => {
       frame = null;
       stats.callbacks++;
-      if (!stopped && !lost) {
+      // A device replacement pauses until its pipelines compile; a frame
+      // queued before it must not draw with the placeholders.
+      if (!stopped && !lost && !paused) {
         // Preserve button transitions across frames. A quick down/up in
         // one browser task must still produce a pressed frame for drags.
         while (inputEvents.length) {
@@ -107,6 +109,8 @@ export function createHost(canvas, options = {}) {
   async function setDevice(device) {
     if (stopped) return;
     paused = true;
+    if (frame !== null) { caf(frame); frame = null; }
+    if (timer !== null) { clearTimeout(timer); timer = null; }
     runtime.gpu.setDevice(device);
     configure();
     if (runtime.exports.nanoui_web_device()) throw new Error("Could not recreate WebGPU renderer");
@@ -160,6 +164,12 @@ export function createHost(canvas, options = {}) {
             e.preventDefault();
           });
         }
+        // Off the canvas with no button held: move the UI pointer outside,
+        // as the native mouse-exit paths do, so nothing stays hovered. A
+        // held button keeps the capture, and its release reports the exit.
+        on(canvas, "pointerleave", e => {
+          if (e.pointerType !== "touch" && e.buttons === 0) pointer(0, -1e6, -1e6, 0, 0, 1);
+        });
         on(canvas, "lostpointercapture", e => {
           if (e.pointerType === "touch") touches.event(3, e.pointerId, ...coords(e));
         });

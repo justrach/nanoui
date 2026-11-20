@@ -38,10 +38,16 @@ try {
   { const result=await compare(); console.log(result); assert.ok(result.mean<0.05); }
   assert.equal(await page.evaluate(()=>Number(window.nanoui.exports.counter_value())),0);
   const scissors = await page.evaluate(()=>window.damageScissors);
+  const unhovered = await page.screenshot({scale:"device"});
   await page.mouse.move(207,185);
   await page.waitForFunction(before=>window.damageScissors>before,scissors);
   await page.waitForTimeout(300);
   assert.ok((await compare()).mean<0.05, 'damaged hover matches pixels from a full repaint');
+  assert.ok(!unhovered.equals(await page.screenshot({scale:"device"})), 'hover changes pixels');
+  // Leaving the canvas with no button held clears the hover.
+  await page.evaluate(()=>document.querySelector('canvas').dispatchEvent(new PointerEvent('pointerleave',{pointerType:'mouse',buttons:0})));
+  await page.waitForTimeout(300);
+  assert.ok(unhovered.equals(await page.screenshot({scale:"device"})), 'pointer leave clears hover');
   await page.mouse.click(207,185);
   await page.waitForTimeout(500);
   { const result=await compare(); console.log(result); assert.ok(result.mean<0.05); }
@@ -77,6 +83,9 @@ try {
   await page.evaluate(async()=>{
     const r=window.nanoui;const old=r.device;
     const adapter=await navigator.gpu.requestAdapter();const next=await adapter.requestDevice();
+    // A frame queued before the replacement must not draw while its
+    // pipelines compile.
+    r.requestFrame();
     await r.setDevice(next);if(r.device!==next||r.gpu.generation!==2)throw Error('Injected replacement failed');
     old.destroy();
   });
