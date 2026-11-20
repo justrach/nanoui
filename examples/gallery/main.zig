@@ -58,6 +58,14 @@ pub const Gallery = struct {
     /// Wait for the display's refresh when presenting. Off, the frame rate is
     /// the renderer's own.
     vsync: bool = true,
+    scroll_probe_x: f32 = 0,
+    scroll_probe_y: f32 = 0,
+    scroll_received_x: f32 = 0,
+    scroll_received_y: f32 = 0,
+    scroll_consumed_x: f32 = 0,
+    scroll_consumed_y: f32 = 0,
+    scroll_precise: bool = false,
+    scroll_phase: []const u8 = "none",
     motion: @import("motion.zig").Demo = .{},
     kit: @import("kit.zig").Demo = .{},
     glass: @import("glass.zig").Demo = .{},
@@ -252,6 +260,7 @@ pub const Gallery = struct {
             ui.textf(c, .{ .mono = true, .size = 12 }, "{d:.1}×", .{g.speed});
             ui.end(c);
         }
+        g.scrollDiagnostic(c);
         ui.card(c, .{ .width = .fill, .gap = 12 });
         {
             defer ui.end(c);
@@ -293,6 +302,49 @@ pub const Gallery = struct {
                 if (newlines == 0) "" else "s",
             });
         }
+    }
+
+    fn scrollDiagnostic(g: *Gallery, c: *ui.Context) void {
+        const th = c.theme;
+        ui.card(c, .{ .width = .fill, .gap = 10 });
+        defer ui.end(c);
+        ui.text(c, "Scroll input", .{ .weight = .semibold });
+        ui.text(c, "Scroll here. Input is normalized; used is this pad's movement.", .{ .size = 12, .color = th.muted });
+        const pad = ui.div(c).column().wFull().h(112).p(10).gap(5).rounded(8).clip().bg(th.background.alpha(0.7)).border(th.border).wheel();
+        defer pad.end();
+        if (pad.hovered()) {
+            c.wants_wheel = true;
+            const delta = c.input.scroll;
+            if (delta.x != 0 or delta.y != 0) {
+                const before_x = g.scroll_probe_x;
+                const before_y = g.scroll_probe_y;
+                g.scroll_probe_x = std.math.clamp(before_x - delta.x, 0, 180);
+                g.scroll_probe_y = std.math.clamp(before_y - delta.y, 0, 180);
+                g.scroll_received_x = delta.x;
+                g.scroll_received_y = delta.y;
+                g.scroll_consumed_x = g.scroll_probe_x - before_x;
+                g.scroll_consumed_y = g.scroll_probe_y - before_y;
+                g.scroll_precise = c.input.precise;
+                g.scroll_phase = @tagName(c.input.scroll_phase);
+            }
+        }
+        ui.textf(c, .{ .size = 11, .mono = true }, "Input x {d:.1} y {d:.1}", .{
+            g.scroll_received_x,
+            g.scroll_received_y,
+        });
+        ui.textf(c, .{ .size = 11, .mono = true }, "Mode {s} | phase {s}", .{
+            if (g.scroll_precise) "precise" else "wheel",
+            g.scroll_phase,
+        });
+        ui.textf(c, .{ .size = 11, .mono = true }, "Used x {d:.1} y {d:.1}", .{
+            g.scroll_consumed_x,
+            g.scroll_consumed_y,
+        });
+        ui.textf(c, .{ .size = 11, .mono = true }, "Position x {d:.0} y {d:.0} of 180", .{
+            g.scroll_probe_x,
+            g.scroll_probe_y,
+        });
+        ui.text(c, "Mouse wheel or two-finger trackpad.", .{ .size = 11, .color = th.muted });
     }
 
     fn tasks(g: *Gallery, c: *ui.Context) void {
