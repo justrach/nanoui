@@ -52,6 +52,40 @@ pub const PageOptions = struct {
     /// `WKContentRuleList` from `configure` instead.
     allow_request: ?*const fn (ctx: ?*anyopaque, url: []const u8) bool = null,
     allow_request_ctx: ?*anyopaque = null,
+    /// Opt-in host file-drop callbacks over webview content (`null` preserves
+    /// default browser drag/drop behavior).
+    file_drop: ?PageFileDrop = null,
+};
+
+/// Host routing decision returned from `PageFileDrop.on_offer`.
+pub const PageDropDecision = enum { webview, host, reject };
+
+/// Hover phase reported to `PageFileDrop.on_offer`.
+pub const PageDropPhase = enum { enter, update };
+
+/// Hover offer passed to `PageFileDrop.on_offer`. `urls` is valid only until
+/// the callback returns and contains normalized `file://` URLs.
+pub const PageDropOffer = struct {
+    phase: PageDropPhase,
+    x: f64,
+    y: f64,
+    urls: []const []const u8,
+};
+
+/// Committed file drop delivered to `PageFileDrop.on_drop`. `urls` is valid only
+/// until the callback returns; copy any strings retained beyond return.
+pub const PageDropEvent = struct {
+    x: f64,
+    y: f64,
+    urls: []const []const u8,
+};
+
+/// Host file-drop interception configuration for `PageOptions.file_drop`.
+pub const PageFileDrop = struct {
+    ctx: ?*anyopaque = null,
+    on_offer: ?*const fn (ctx: ?*anyopaque, offer: PageDropOffer) PageDropDecision = null,
+    on_drop: *const fn (ctx: ?*anyopaque, event: PageDropEvent) bool,
+    on_cancel: ?*const fn (ctx: ?*anyopaque) void = null,
 };
 
 /// One entry of `PageOptions.pages`.

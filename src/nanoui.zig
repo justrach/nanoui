@@ -104,6 +104,11 @@ pub const AppOptions = plat.app.Options;
 pub const Window = plat.window.Window;
 pub const WindowOptions = plat.window.Options;
 pub const PageOptions = plat.window.PageOptions;
+pub const PageDropDecision = @import("window_types.zig").PageDropDecision;
+pub const PageDropPhase = @import("window_types.zig").PageDropPhase;
+pub const PageDropOffer = @import("window_types.zig").PageDropOffer;
+pub const PageDropEvent = @import("window_types.zig").PageDropEvent;
+pub const PageFileDrop = @import("window_types.zig").PageFileDrop;
 /// How high a window stacks (`WindowOptions.level`, `Window.setLevel`).
 pub const WindowLevel = @import("window_types.zig").Level;
 /// A connected screen (`App.screens`), the About panel's options
@@ -177,6 +182,7 @@ test {
     _ = kit;
     // A page's platform-free parts: the asset table, the origin, the bridge.
     _ = @import("tests_page.zig");
+    _ = @import("page_drop.zig");
     std.testing.refAllDecls(kit);
     _ = @import("menu_types.zig");
     _ = @import("update.zig");
@@ -280,4 +286,5 @@ test {
     _ = @import("tests_window_more.zig");
     // The mouse buttons: the middle one, one press at a time.
     _ = @import("tests_window_mouse.zig");
+    _ = @import("tests_page_drop.zig");
 }

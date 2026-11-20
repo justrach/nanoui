@@ -6,6 +6,8 @@ const std = @import("std");
 const gtk = @import("linux/gtk.zig");
 const wk = @import("linux/webkit.zig");
 const page = @import("page.zig");
+const page_drop = @import("page_drop.zig");
+const linux_drop = @import("linux/page_drop.zig");
 const window_mod = @import("linux/window.zig");
 const app_mod = @import("linux/app.zig");
 const ipc = @import("ipc.zig").ipc(window_mod.Window, app_mod.App);
@@ -20,9 +22,23 @@ pub const Page = struct {
     manager: *anyopaque,
     message_signal: c_ulong = 0,
     crash_signal: c_ulong = 0,
+    drop_session: page_drop.Session = .{},
+    drop_gtk: linux_drop.State(Page) = .{},
+    drop_busy: usize = 0,
     /// The turn's flush, while one is waiting; a page closed under it
     /// cancels it, so it never fires into freed memory.
     flush_source: c_uint = 0,
+
+    pub fn enterDrop(self: *Page) void {
+        self.drop_busy += 1;
+    }
+
+    pub fn leaveDrop(self: *Page) void {
+        self.drop_busy -= 1;
+        if (self.drop_busy == 0 and self.queue.dead and !self.queue.dispatching) {
+            self.queue.gpa.destroy(self);
+        }
+    }
 
     pub fn create(window: *Window, options: window_mod.PageOptions) !*Page {
         if (!wk.load()) return error.WebKitMissing;
@@ -33,7 +49,12 @@ pub const Page = struct {
 
         const view = try newView(app);
         const manager = wk.api.webkit_web_view_get_user_content_manager(view);
-        self.* = .{ .queue = page.Queue(Window).init(window, options), .view = view, .manager = manager };
+        self.* = .{
+            .queue = page.Queue(Window).init(window, options),
+            .view = view,
+            .manager = manager,
+            .drop_session = page_drop.Session.init(options.file_drop),
+        };
         self.queue.send = &sendJs;
         self.queue.ctx = self;
 
@@ -44,12 +65,15 @@ pub const Page = struct {
         _ = wk.api.webkit_user_content_manager_register_script_message_handler(manager, "nanoui", null);
         self.message_signal = gtk.api.g_signal_connect_data(manager, "script-message-received::nanoui", @ptrCast(&onMessage), self, null, 0);
         self.crash_signal = gtk.api.g_signal_connect_data(view, "web-process-terminated", @ptrCast(&onTerminated), self, null, 0);
+        self.drop_gtk.attach(self, view);
 
         self.load(options.url);
         return self;
     }
 
     pub fn destroy(self: *Page) void {
+        self.drop_session.onClose();
+        self.drop_gtk.detach();
         if (self.flush_source != 0) _ = gtk.api.g_source_remove(self.flush_source);
         // The manager can outlive the view for a moment: it must not call
         // into a page that is gone.
@@ -57,15 +81,16 @@ pub const Page = struct {
         gtk.api.g_signal_handler_disconnect(self.view, self.crash_signal);
         gtk.api.g_object_unref(self.view);
         self.queue.deinit();
-        // Closed by a call it is still answering: `ipc` frees it when the
-        // call returns (`freeClosed`).
-        if (self.queue.dispatching) return;
+        // Closed by a call or drop callback it is still answering: `freeClosed` /
+        // `leaveDrop` frees it when unwinding returns.
+        if (self.queue.dispatching or self.drop_busy > 0) return;
         self.queue.gpa.destroy(self);
     }
 
     /// After `destroy`, once the call that closed the page has returned
     /// (its flush source is already gone).
     pub fn freeClosed(self: *Page) void {
+        if (self.drop_busy > 0) return;
         self.queue.gpa.destroy(self);
     }
 
@@ -106,6 +131,7 @@ pub const Page = struct {
 
     /// Points the view at `url`: a path from the assets, or an absolute one.
     pub fn load(self: *Page, url: []const u8) void {
+        self.drop_session.onNavigate();
         var buf: [2048]u8 = undefined;
         const full = page.fullUrl(&buf, url);
         const gpa = self.queue.gpa;

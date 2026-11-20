@@ -11,7 +11,9 @@ const ios = builtin.os.tag == .ios;
 const app_mod = if (ios) @import("ios/app.zig") else @import("app.zig");
 const window_mod = if (ios) @import("ios/window.zig") else @import("window.zig");
 const ipc = @import("ipc.zig").ipc(window_mod.Window, app_mod.App);
+const nav_drop = @import("page_webkit_drop.zig");
 const page = @import("page.zig");
+const page_drop = @import("page_drop.zig");
 
 const Window = window_mod.Window;
 const bridge_js = page.bridge_js;
@@ -23,12 +25,31 @@ pub const Page = struct {
     webview: objc.Object,
     handler: objc.Object,
     last_mouse_down: ?objc.Object = null,
+    drop_session: page_drop.Session = .{},
+    drop_busy: usize = 0,
+    last_drop_webview: bool = true,
+
+    pub fn enterDrop(self: *Page) void {
+        self.drop_busy += 1;
+    }
+
+    pub fn leaveDrop(self: *Page) void {
+        self.drop_busy -= 1;
+        if (self.drop_busy == 0 and self.queue.dead and !self.queue.flush_scheduled and !self.queue.dispatching) {
+            self.queue.gpa.destroy(self);
+        }
+    }
 
     pub fn create(window: *Window, options: window_mod.PageOptions) !*Page {
         const gpa = window.app.gpa;
         const self = try gpa.create(Page);
         errdefer gpa.destroy(self);
-        self.* = .{ .queue = page.Queue(Window).init(window, options), .webview = undefined, .handler = undefined };
+        self.* = .{
+            .queue = page.Queue(Window).init(window, options),
+            .webview = undefined,
+            .handler = undefined,
+            .drop_session = page_drop.Session.init(if (ios) null else options.file_drop),
+        };
         self.queue.send = &sendJs;
         self.queue.ctx = self;
         if (ios and dlopen("/System/Library/Frameworks/WebKit.framework/WebKit", 1) == null) return error.NoWebKit;
@@ -42,12 +63,13 @@ pub const Page = struct {
                 .{ .name = "webView:stopURLSchemeTask:", .imp = &stopURLSchemeTask, .types = "v@:@@" },
             },
         });
+        const mac_methods = [_]objc.Method{
+            .{ .name = "mouseDown:", .imp = &webViewMouseDown, .types = "v@:@" },
+        } ++ nav_drop.methods;
         const webview_class = objc.defineClass(.{
             .name = "NanoUIWebView",
             .superclass = "WKWebView",
-            .methods = if (ios) &.{} else &.{
-                .{ .name = "mouseDown:", .imp = &webViewMouseDown, .types = "v@:@" },
-            },
+            .methods = if (ios) &.{} else &mac_methods,
         });
 
         const handler = objc.msg(objc.Object, handler_class, "new", .{});
@@ -90,11 +112,13 @@ pub const Page = struct {
 
         self.webview = webview;
         self.handler = handler;
+        if (!ios) nav_drop.registerTypes(webview, options.file_drop != null);
         self.loadUrl(options.url);
         return self;
     }
 
     pub fn destroy(self: *Page) void {
+        self.drop_session.onClose();
         const ucc = objc.msg(objc.Object, objc.msg(objc.Object, self.webview, "configuration", .{}), "userContentController", .{});
         objc.msg(void, ucc, "removeScriptMessageHandlerForName:", .{objc.nsString("nanoui")});
         objc.setZig(self.handler, null);
@@ -104,9 +128,9 @@ pub const Page = struct {
         objc.release(self.handler);
         if (self.last_mouse_down) |e| objc.release(e);
         self.queue.deinit();
-        // A scheduled flush frees the page when it runs, a message being
-        // handled when it returns; without either, now.
-        if (self.queue.flush_scheduled or self.queue.dispatching) return;
+        // A scheduled flush frees the page when it runs, a message or drop
+        // being handled when it returns; without any of them, now.
+        if (self.queue.flush_scheduled or self.queue.dispatching or self.drop_busy > 0) return;
         self.queue.gpa.destroy(self);
     }
 
@@ -157,6 +181,7 @@ pub const Page = struct {
     }
 
     fn loadUrl(self: *Page, url: []const u8) void {
+        self.drop_session.onNavigate();
         self.queue.setCurrent(url);
         // An absolute `http(s)://` URL loads as it is, as WebView2's does;
         // only a path is the app's own, served from its assets.
