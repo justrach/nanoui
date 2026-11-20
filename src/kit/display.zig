@@ -46,15 +46,6 @@ pub fn badge(c: *ui.Context, count: u32, opts: struct { dot: bool = false, max: 
     ui.text(c, label, .{ .size = 10, .weight = .bold, .color = .white });
 }
 
-/// A keyboard key or shortcut (`kit.kbd(c, ui.keys.label("⌘K"))`), drawn as a
-/// compact keycap.
-pub fn kbd(c: *ui.Context, label: []const u8) void {
-    const t = kit.tokens(c);
-    const d = ui.div(c).row().h(20).px(6).rounded(5).bg(t.surface_hover).border(t.border).itemsCenter();
-    defer d.end();
-    ui.text(c, label, .{ .size = 11, .mono = true, .weight = .medium, .color = t.muted });
-}
-
 /// A person: their picture, else their initials on a color their name
 /// picks, in a circle `size` points across.
 pub fn avatar(c: *ui.Context, opts: struct { name: []const u8 = "", image: ?[]const u8 = null, size: f32 = 32, ring: ?Color = null }) void {

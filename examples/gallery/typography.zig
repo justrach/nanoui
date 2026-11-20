@@ -23,7 +23,7 @@ pub const Demo = struct {
 
     pub fn view(d: *Demo, c: *ui.Context) void {
         const th = c.theme;
-        ui.heading(c, "Typography");
+        @import("page.zig").demoTitle(c, "Typography");
 
         ui.card(c, .{ .width = .fill, .gap = 10, .max_width = 640, .selectable = true });
         {

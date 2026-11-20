@@ -36,7 +36,7 @@ pub const Demo = struct {
             .exit = .{ .y = 24, .opacity = 0 },
             .transition = .{ .spring = motion.Spring.snappy },
         })) |f| {
-            const t = ui.div(c).absolute().offset(28, c.size.h - 84).row().gap(10).itemsCenter().px(16).py(12).rounded(12).bg(th.text).shadow(.{ .color = .{ .a = 0.25 }, .blur = 18, .y = 6 }).motion(f);
+            const t = ui.div(c).absolute().offset(28, @import("page.zig").bodySize(c).h - 84).row().gap(10).itemsCenter().px(16).py(12).rounded(12).bg(th.text).shadow(.{ .color = .{ .a = 0.25 }, .blur = 18, .y = 6 }).motion(f);
             defer t.end();
             ui.icon(c, "checkmark.circle.fill", .{ .size = 15, .color = th.success });
             ui.text(c, "Saved. Click the button again to hide me.", .{ .color = th.background });
@@ -46,9 +46,9 @@ pub const Demo = struct {
     fn content(d: *Demo, c: *ui.Context) void {
         const sc = ui.div(c).column().sizeFull().scrollY().p(if (@import("phone.zig").compact(c)) 24 else 28).gap(20);
         defer sc.end();
-        const bar = motion.scroll.value(c, "read", sc.id(), .{ 8, @max(24, c.size.w - 56) }, .instant);
+        const bar = motion.scroll.value(c, "read", sc.id(), .{ 8, @max(24, @import("page.zig").bodySize(c).w - 56) }, .instant);
         _ = c.leaf(.{ .width = .{ .px = bar }, .height = .{ .px = 3 }, .radius = 2, .background = c.theme.accent }, .none, null);
-        ui.heading(c, "Motion");
+        @import("page.zig").demoTitle(c, "Motion");
         ui.text(c, "Springs and tweens, interruptible: click twice quickly and watch it turn.", .{ .wrap = true, .color = c.theme.muted });
         {
             // Side by side, or stacked on a phone.

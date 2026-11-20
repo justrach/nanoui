@@ -36,7 +36,7 @@ pub const Demo = struct {
     /// window, so the page makes a second one and changes it live.
     fn pageCard(d: *Demo, c: *ui.Context, app: ?*nanoui.App, host_window: ?*nanoui.Window) void {
         const th = c.theme;
-        ui.heading(c, "Windows");
+        @import("page.zig").demoTitle(c, "Windows");
         ui.text(c, "A second window, made with the options below.", .{ .color = th.muted });
         ui.card(c, .{ .width = .fill, .gap = 12 });
         defer ui.end(c);

@@ -97,7 +97,8 @@ test "buttons, tabs, radios, the number input and pagination" {
     var path_buf: [256]u8 = undefined;
     try t.screenshot(try @import("../temp_path.zig").tempPath(&path_buf, "nanoui-kit.png"));
     try testing.expect(t.hasText("AL"));
-    try testing.expect(t.hasText(ui.keys.label("⌘K")));
+    // One cap per key: ⌘ and K, or Ctrl and K.
+    try testing.expect(t.hasText(if (ui.keys.mac) "⌘" else "Ctrl") and t.hasText("K"));
 }
 
 /// The opacity of the button labeled `label`.

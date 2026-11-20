@@ -46,6 +46,8 @@ pub const A11yItem = ctx_mod.A11yItem;
 pub const access = @import("access.zig");
 /// Key combinations as the platform writes them: `ui.keys.label("⌘P")`.
 pub const keys = @import("keys.zig");
+/// The line icons drawn where there are no SF Symbols, by name.
+pub const icons = @import("icons.zig");
 /// A monotonic clock in seconds.
 pub const clock = @import("clock.zig");
 /// PNG files from pixels (and back, `png_decode`).
