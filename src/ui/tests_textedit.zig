@@ -300,6 +300,96 @@ test "focused textField keeps focus, caret, and undo when wrapped in a row" {
     try testing.expectEqualStrings("hello", s.buf.text());
 }
 
+test "composition survives a field rebuild and commits as one undo step" {
+    var s: WrappedField = .{};
+    defer s.buf.deinit();
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&s, WrappedField.view), .{});
+    defer t.deinit();
+    try t.clickText("Name");
+
+    t.textOps(&.{.{ .set_marked = .{ .text = "\xE3\x81\xAB\xE3\x81\xBB", .sel_start = 6, .sel_len = 0 } }});
+    try testing.expectEqualStrings("\xE3\x81\xAB\xE3\x81\xBB", t.ctx.focused_text.?.text);
+    try testing.expectEqual([2]usize{ 0, 6 }, t.ctx.focused_text.?.marked.?);
+
+    // A structural change rebuilds the same field under a new parent.
+    s.wrapped = true;
+    t.frame();
+    try testing.expectEqualStrings("\xE3\x81\xAB\xE3\x81\xBB", t.ctx.focused_text.?.text);
+    try testing.expectEqual([2]usize{ 0, 6 }, t.ctx.focused_text.?.marked.?);
+
+    // Updating marked text replaces the old composition; commit replaces it
+    // once, and one undo restores the text from before composition began.
+    t.textOps(&.{.{ .set_marked = .{ .text = "\xE6\x97\xA5\xE6\x9C\xAC", .sel_start = 6, .sel_len = 0 } }});
+    t.textOps(&.{.{ .insert = "\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E" }});
+    try testing.expectEqualStrings("\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E", s.buf.text());
+    try testing.expect(t.ctx.focused_text.?.marked == null);
+    try testing.expect(t.shortcut(.{ .key = 'z', .cmd = true }));
+    try testing.expectEqualStrings("", s.buf.text());
+}
+
+test "moving focus during composition sends later text only to the new field" {
+    var s: ThreeFields = .{};
+    defer s.deinit();
+    s.a.set("alpha");
+    s.b.set("beta");
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&s, ThreeFields.view), .{});
+    defer t.deinit();
+
+    try t.clickText("alpha");
+    t.textOps(&.{.{ .set_marked = .{ .text = "\xE4\xBB\xAE", .sel_start = 3, .sel_len = 0 } }});
+    try testing.expect(t.ctx.focused_text.?.marked != null);
+    const first_after_composition = s.a.text();
+
+    try t.clickText("beta");
+    try testing.expectEqualStrings("beta", t.ctx.focused_text.?.text);
+    try testing.expect(t.ctx.focused_text.?.marked == null);
+    try testing.expect(t.ctx.edits.get(s.a.last_id).?.marked == null);
+    t.textOps(&.{.{ .insert = "X" }});
+    try testing.expectEqualStrings(first_after_composition, s.a.text());
+    try testing.expectEqual("beta".len + 1, s.b.text().len);
+    try testing.expect(std.mem.indexOfScalar(u8, s.b.text(), 'X') != null);
+}
+
+const CandidateField = struct {
+    buf: ui.TextBuffer = .{},
+    zoom: f32 = 1,
+    fn view(s: *CandidateField, c: *ui.Context) void {
+        c.setZoom(s.zoom);
+        ui.column(c, .{ .padding = .all(20) });
+        defer ui.end(c);
+        _ = ui.textField(c, &s.buf, .{ .placeholder = "Input", .width = .{ .px = 150 } });
+    }
+};
+
+test "composition candidate rectangle stays with a scrolled and zoomed field" {
+    var s: CandidateField = .{};
+    defer s.buf.deinit();
+    s.buf.set("A narrow field with enough text to scroll horizontally before composing");
+    s.buf.focus();
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&s, CandidateField.view), .{});
+    defer t.deinit();
+
+    t.textOps(&.{.{ .set_marked = .{ .text = "\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E", .sel_start = 9, .sel_len = 0 } }});
+    const before_focused = t.ctx.focused_text.?;
+    const before = before_focused.clause_rect.?;
+    try testing.expect(t.ctx.edits.get(before_focused.id).?.scroll_x > 0);
+    try testing.expect(before.x >= 20);
+    try testing.expect(before.x <= 170);
+
+    s.zoom = 1.5;
+    t.frame();
+    const focused = t.ctx.focused_text.?;
+    const after = focused.clause_rect.?;
+    try testing.expect(focused.marked != null);
+    try testing.expect(t.ctx.edits.get(focused.id).?.scroll_x > 0);
+    try testing.expect(after.x >= 20);
+    try testing.expect(after.x <= 170);
+    try testing.expect(after.y >= 20);
+}
+
 test "stale focus dropped when field vanishes" {
     const Vanish = struct {
         buf: ui.TextBuffer = .{},
@@ -317,9 +407,18 @@ test "stale focus dropped when field vanishes" {
     defer t.deinit();
     try t.clickText("Name");
     try testing.expect(t.ctx.focus != 0);
+    t.textOps(&.{.{ .set_marked = .{ .text = "\xE4\xBB\xAE", .sel_start = 3, .sel_len = 0 } }});
+    const text_at_removal = s.buf.text();
     s.show = false;
     t.frame();
     try testing.expectEqual(@as(u64, 0), t.ctx.focus);
+    t.textOps(&.{.{ .insert = "\xE5\xBE\x8C" }});
+    try testing.expectEqualStrings(text_at_removal, s.buf.text());
+    s.show = true;
+    t.frame();
+    s.buf.focus();
+    t.frame();
+    try testing.expect(t.ctx.focused_text.?.marked == null);
 }
 
 test "double-click selects a word in a selectable box and copies even when a textField is focused" {
