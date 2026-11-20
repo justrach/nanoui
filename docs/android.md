@@ -26,7 +26,4 @@ and `--nanoui-snapshot` works on a device too, into a path of the app's
 as glibc does and looks host names up in /etc/resolv.conf, neither of which
 fits Android: nanoui translates the one and asks Android's resolver instead.
 
-Not yet: pages, file pickers (`dialog.open` answers null), input methods
-that compose text (a software keyboard types keys: what Android's key maps
-have, no Chinese or Japanese), more than three buttons in a message, and
-predictive Back's animation.
+Not yet: pages, file pickers (`dialog.open` answers null), TalkBack accessibility, more than three buttons in a message, and predictive Back's animation. See the [Android roadmap](roadmap.md#android) and [benchmarks](benchmarks.md#android).

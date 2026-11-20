@@ -13,7 +13,6 @@ const c = @import("clay");
 const main = @import("main.zig");
 const scenes = @import("scenes.zig");
 
-
 /// What Clay's measure function reads: nanoui's text system.
 const TextSystem = @FieldType(ui.Tester, "text");
 var text_system: *TextSystem = undefined;
@@ -106,7 +105,7 @@ fn declare(arena: std.mem.Allocator, scene: scenes.Scene, frame: usize, t: f32) 
             // Virtualized as nanoui's list is: only the rows in view.
             const first = (frame * 3) % (100_000 - 40);
             open(.{ .layout = .{ .sizing = .{ .width = grow(), .height = grow() }, .layoutDirection = c.CLAY_TOP_TO_BOTTOM }, .clip = .{ .vertical = true } });
-            for (first..first + main.height / 28 + 1) |i| row(arena, i);
+            for (first..first + @as(usize, @intFromFloat(main.height)) / 28 + 1) |i| row(arena, i);
             close();
         },
         .springs, .letters => {},

@@ -530,6 +530,8 @@ Performance is measured headless with [`hillclimb/`](hillclimb/README.md): the s
 
 Release binaries are about 0.7 MB for nanoui and 11.8 MB for mygo. IPC (5000 sequential calls from the page to native code) took 493 ms with nanoui and 528 ms with mygo.
 
+Multi-platform `v0.14.7` measurements (macOS, iOS, iPadOS, CPU/Android, and Linux) and upcoming work are in [docs/benchmarks.md](docs/benchmarks.md) and [docs/roadmap.md](docs/roadmap.md).
+
 ### Build times
 
 A counter app each, from empty build caches, on the same M3 Ultra (`sh tools/buildperf.sh` measures it again: mygo's `examples/counter-native` with Go 1.27.1, nanoui's from `nui start` with Zig 0.17.0; network fetches aren't timed):
@@ -590,4 +592,4 @@ nanoui stands on the shoulders of these projects:
   That covers interruptible targets, presence, keyframes, stagger, layout
   animation, its exact springs and its easing curves.
 - **[GPUI Kit](https://github.com/longbridge/gpui-component)** by [Longbridge](https://github.com/longbridge): `nanoui.kit` follows its components, their variants and their names.
-<p align="center"><sub>Built in Zig 0.17 · <a href="https://discord.gg/EmTpv7rmTA">Discord</a> · <a href="AGENTS.md">AGENTS.md</a> · <a href="hillclimb/README.md">benchmarks</a> · <a href="LICENSE">MIT</a> · <a href="THIRD_PARTY_NOTICES.md">third-party notices</a></sub></p>
+<p align="center"><sub>Built in Zig 0.17 · <a href="https://discord.gg/EmTpv7rmTA">Discord</a> · <a href="AGENTS.md">AGENTS.md</a> · <a href="docs/benchmarks.md">benchmarks</a> · <a href="docs/roadmap.md">roadmap</a> · <a href="LICENSE">MIT</a> · <a href="THIRD_PARTY_NOTICES.md">third-party notices</a></sub></p>

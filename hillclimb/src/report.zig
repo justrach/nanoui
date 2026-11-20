@@ -5,7 +5,6 @@
 const std = @import("std");
 const main = @import("main.zig");
 
-
 const history_path = "history.jsonl";
 
 const Entry = struct {
@@ -21,7 +20,7 @@ const bold = "\x1b[1m";
 const reset = "\x1b[0m";
 
 pub fn header(frames: usize) void {
-    std.debug.print("\n{s}nanoui hill-climb{s} {s}· {d} frames after {d} of warm-up · {d}×{d} at {d}x · offscreen, no window{s}\n\n", .{
+    std.debug.print("\n{s}nanoui hill-climb{s} {s}· {d} frames after {d} of warm-up · {d:.0}×{d:.0} at {d}x · offscreen, no window{s}\n\n", .{
         bold, reset, dim, frames, 30, main.width, main.height, main.scale, reset,
     });
 }

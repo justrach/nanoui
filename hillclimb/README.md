@@ -13,11 +13,23 @@ zig build run -- --label "what changed"        # name the run in history.jsonl
 zig build run -- --scene text,list --only nanoui --frames 600 --repeat 5
 zig build run -- --only clay                   # one framework (nanoui, mygo, clay)
 zig build run -- --cheap-shadow --scene boxes,dashboard --only nanoui
+zig build -Dportable=true && zig-out/bin/hillclimb --only nanoui --no-history
+
+# iOS & iPadOS Simulator (Metal + CoreText, headless):
+zig build $(sh ../tools/ios/zig-lib.sh) -Dtarget=aarch64-ios-simulator --prefix zig-out/ios-sim
+codesign --force --sign - --timestamp=none zig-out/ios-sim/bin/hillclimb
+xcrun simctl spawn booted "$PWD/zig-out/ios-sim/bin/hillclimb" --only nanoui --no-history --width 393 --height 852 --scale 3
+
+# Android device / headless emulator (CPU raster):
+zig build -Dtarget=aarch64-linux-android --prefix zig-out/android
+adb push zig-out/android/bin/hillclimb /data/local/tmp/ && adb shell /data/local/tmp/hillclimb --only nanoui --no-history --width 412 --height 915 --scale 3
 ```
 
 `--cheap-shadow` uses one Y-sample for CPU Gaussian shadows (faster
 encode; does not match the Metal raster tests). Default is eight, as
-`shader.metal`.
+`shader.metal`. `--width`, `--height` and `--scale` set the offscreen
+surface geometry in points and scale factor; `--no-history` skips reading
+and appending `history.jsonl`.
 
 Each scene runs 30 frames of warm-up, then 300 measured, three times; the
 run with the lowest median frame is kept. The table shows, per scene:

@@ -8,18 +8,33 @@
 //!   zig build run -- --scene text --frames 600 --only nanoui
 const std = @import("std");
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const scenes = @import("scenes.zig");
 const report = @import("report.zig");
-const mygo = @import("mygo.zig");
-const clay = @import("clay.zig");
+const has_mygo = builtin.os.tag == .macos;
+const has_clay = build_options.has_clay;
+const mygo = if (has_mygo) @import("mygo.zig") else struct {
+    pub var ready = false;
+    pub fn build(_: std.process.Init) !void {
+        return error.Unsupported;
+    }
+    pub fn run(_: std.process.Init, _: scenes.Scene, _: usize) !Result {
+        return error.Unsupported;
+    }
+};
+const clay = if (has_clay) @import("clay.zig") else struct {
+    pub fn run(_: std.mem.Allocator, _: scenes.Scene, _: usize) !Result {
+        return error.Unsupported;
+    }
+};
 const cpu = @import("cpu.zig");
-const nanoui_run = if (builtin.os.tag == .macos) @import("metal_run.zig") else cpu;
+const nanoui_run = if ((builtin.os.tag == .macos or builtin.os.tag == .ios) and !build_options.portable) @import("metal_run.zig") else cpu;
 
-pub const width = 900;
-pub const height = 640;
-pub const scale = 2;
+pub var width: f32 = 900;
+pub var height: f32 = 640;
+pub var scale: f32 = 2;
 pub const warmup = 30;
 
 pub const Result = struct {
@@ -57,6 +72,7 @@ const Options = struct {
     label: []const u8 = "",
     /// 1 Y-sample CPU shadows (faster encode; does not match Metal).
     cheap_shadow: bool = false,
+    no_history: bool = false,
 };
 
 pub fn cpuSeconds() f64 {
@@ -121,8 +137,22 @@ fn parseArgs(init: std.process.Init) !Options {
             i += 1;
         } else if (std.mem.eql(u8, a, "--cheap-shadow")) {
             o.cheap_shadow = true;
+        } else if (std.mem.eql(u8, a, "--no-history")) {
+            o.no_history = true;
+        } else if (std.mem.eql(u8, a, "--width")) {
+            width = try std.fmt.parseFloat(f32, next);
+            if (!(width > 0)) return error.InvalidArgument;
+            i += 1;
+        } else if (std.mem.eql(u8, a, "--height")) {
+            height = try std.fmt.parseFloat(f32, next);
+            if (!(height > 0)) return error.InvalidArgument;
+            i += 1;
+        } else if (std.mem.eql(u8, a, "--scale")) {
+            scale = try std.fmt.parseFloat(f32, next);
+            if (!(scale > 0)) return error.InvalidArgument;
+            i += 1;
         } else if (std.mem.eql(u8, a, "--help") or std.mem.eql(u8, a, "-h")) {
-            std.debug.print("usage: hillclimb [--scene boxes,text,scroll,list,dashboard,springs,letters] [--frames N] [--only nanoui|mygo|clay] [--label NAME] [--cheap-shadow]\n", .{});
+            std.debug.print("usage: hillclimb [--scene boxes,text,scroll,list,dashboard,springs,letters] [--frames N] [--repeat N] [--only nanoui|mygo|clay] [--width N] [--height N] [--scale F] [--label NAME] [--cheap-shadow] [--no-history]\n", .{});
             std.process.exit(0);
         } else return error.UnknownArgument;
     }
@@ -143,7 +173,7 @@ pub fn main(init: std.process.Init) !void {
     report.header(opts.frames);
     var results: std.ArrayList(Result) = .empty;
     var mygo_error: ?anyerror = null;
-    if (want(opts, "mygo")) {
+    if (want(opts, "mygo") and has_mygo) {
         report.status("building mygo's twin (go test -c)…");
         mygo.build(init) catch |err| {
             report.status("");
@@ -160,13 +190,13 @@ pub fn main(init: std.process.Init) !void {
                 report.status(try std.fmt.allocPrint(arena, "nanoui · {s} · run {d}/{d}…", .{ @tagName(scene), rep + 1, opts.repeat }));
                 n_best = better(n_best, try runNanoui(gpa, scene, opts.frames));
             }
-            if (want(opts, "mygo") and mygo.ready) {
+            if (want(opts, "mygo") and has_mygo and mygo.ready) {
                 report.status(try std.fmt.allocPrint(arena, "mygo · {s} · run {d}/{d}…", .{ @tagName(scene), rep + 1, opts.repeat }));
                 if (mygo.run(init, scene, opts.frames)) |r| {
                     m_best = better(m_best, r);
                 } else |err| std.debug.print("mygo {s}: {s}\n", .{ @tagName(scene), @errorName(err) });
             }
-            if (want(opts, "clay")) {
+            if (want(opts, "clay") and has_clay) {
                 report.status(try std.fmt.allocPrint(arena, "clay · {s} · run {d}/{d}…", .{ @tagName(scene), rep + 1, opts.repeat }));
                 c_best = better(c_best, try clay.run(gpa, scene, opts.frames));
             }
@@ -176,8 +206,8 @@ pub fn main(init: std.process.Init) !void {
         if (c_best) |r| try results.append(arena, r);
     }
     report.status("");
-    const history = report.loadHistory(init) catch &.{};
+    const history = if (opts.no_history) &.{} else (report.loadHistory(init) catch &.{});
     report.table(results.items, history);
     if (mygo_error) |err| std.debug.print("\x1b[31mmygo's twin did not build ({s}): its columns are empty.\x1b[0m\n", .{@errorName(err)});
-    try report.appendHistory(init, opts.label, results.items);
+    if (!opts.no_history) try report.appendHistory(init, opts.label, results.items);
 }
