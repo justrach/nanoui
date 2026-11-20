@@ -147,6 +147,9 @@ pub const Surface = struct {
         const self = try gpa.create(Surface);
         self.* = .{ .gpa = gpa, .window = window, .text = .init(gpa), .ctx = undefined, .view = view, .theme_override = theme_override, .start_time = clock.now() };
         if (window.app.gui and !window.app.flags.hidden) self.text.enablePersistence(window.app.options.name);
+        // Text defaults to 2x, but the DPI update skips setScale at 96 DPI
+        // because the surface is already at 1x.
+        self.text.setScale(self.scale);
         self.ctx = .init(gpa, &self.text);
         self.ctx.input.window_active = window.isFocused();
         // WM_KEYUP and WM_SYSKEYUP reach the view (surface_win_keys.zig).
