@@ -49,6 +49,8 @@ pub const Palette = struct {
     open: bool = false,
     query: ui.TextBuffer = .{},
     selected: usize = 0,
+    /// Counts the opens, keying the list, so each opens scrolled to the top.
+    opens: u32 = 0,
 
     pub fn deinit(p: *Palette) void {
         p.query.deinit();
@@ -60,6 +62,7 @@ pub const Palette = struct {
             return;
         }
         p.open = true;
+        p.opens +%= 1;
         p.query.clear();
         p.selected = 0;
         p.query.focus();
@@ -212,6 +215,7 @@ pub const Palette = struct {
         }
         kit.separator(c, .{});
         {
+            ui.key(c, c.print("pal-list-{d}", .{p.opens}));
             const list = ui.div(c).column().wFull().maxH(280).scrollY().p(6).gap(2);
             defer list.end();
             for (matches[0..count], 0..) |idx, rank| {
