@@ -1,8 +1,8 @@
 # WebGPU target
 
 The browser renderer and minimal canvas host build for single-threaded
-`wasm32-wasi` with Zig 0.17. This branch is based on `alchemist` at `e14261c`
-(nanoui 0.14.6), ported from the earlier 0.11 WebGPU experiment.
+`wasm32-wasi` with Zig 0.17. They began as a port of the earlier 0.11
+WebGPU experiment to the current renderer.
 
 The renderer consumes the current **192-byte** `gpu.Instance`, including
 subtree matrices, and respects `Texture.encoding` (`auto`, `display_sdr`,
