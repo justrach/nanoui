@@ -127,36 +127,92 @@ pub fn zoneRect(r: Rect, zone: dock.DropZone) Rect {
     };
 }
 
-/// Moves a divider by `delta` points: growing the child before it shrinks
-/// the one after, stopping at the first of their limits.
+/// Moves a divider by `delta` points (`moveDivider`, the distance it
+/// went discarded).
 pub fn adjustDivider(t: *Tree, l: *const Layout, d: DividerItem, delta_in: f32) void {
-    if (!std.math.isFinite(delta_in) or d.split >= t.node_count) return;
-    const sp = &t.nodes[d.split];
-    if (sp.kind != .split or sp.axis != d.axis or d.index + 1 >= sp.child_count) return;
-    const a = subtreeRect(t, l, sp.children[d.index]) orelse return;
-    const b = subtreeRect(t, l, sp.children[d.index + 1]) orelse return;
-    const cur_a = extent(a, sp.axis);
-    const cur_b = extent(b, sp.axis);
-    const min_a = sizeOn(nodeMin(t, sp.children[d.index]), sp.axis);
-    const min_b = sizeOn(nodeMin(t, sp.children[d.index + 1]), sp.axis);
-    const max_a = sizeOn(nodeMax(t, sp.children[d.index]), sp.axis);
-    const max_b = sizeOn(nodeMax(t, sp.children[d.index + 1]), sp.axis);
-    const lower = @max(min_a - cur_a, cur_b - max_b);
-    const upper = @min(max_a - cur_a, cur_b - min_b);
-    var delta = std.math.clamp(delta_in, lower, upper);
-    if (lower > upper) delta = 0;
-    var total: f32 = 0;
-    for (0..sp.child_count) |i| {
-        const r = subtreeRect(t, l, sp.children[i]) orelse return;
-        total += extent(r, sp.axis);
-    }
-    if (total <= 0) return;
-    const dw = delta / total;
-    if (sp.weights[d.index] + dw < 0 or sp.weights[d.index + 1] - dw < 0) return;
-    sp.weights[d.index] += dw;
-    sp.weights[d.index + 1] -= dw;
-    dock.normalize(sp);
+    _ = moveDivider(t, l, d, delta_in);
 }
+
+/// Moves a divider by `delta` points and returns how far it went. The
+/// side it moves into gives up the room, nearest child first: each holds
+/// at its minimum and pushes the next one, and the divider stops when
+/// every child on that side is at its minimum. The side it moves away
+/// from takes the room the same way, nearest first, each up to its
+/// maximum. Sizes are read from `l`, which must be the tree's layout as
+/// it stands.
+pub fn moveDivider(t: *Tree, l: *const Layout, d: DividerItem, delta_in: f32) f32 {
+    if (!std.math.isFinite(delta_in) or delta_in == 0 or d.split >= t.node_count) return 0;
+    const sp = &t.nodes[d.split];
+    if (sp.kind != .split or sp.axis != d.axis or d.index + 1 >= sp.child_count) return 0;
+    const n: usize = sp.child_count;
+    var sizes: [max_children]f32 = @splat(0);
+    var mins: [max_children]f32 = @splat(0);
+    var maxs: [max_children]f32 = @splat(unbounded);
+    var total: f32 = 0;
+    for (0..n) |i| {
+        const r = subtreeRect(t, l, sp.children[i]) orelse return 0;
+        sizes[i] = extent(r, sp.axis);
+        mins[i] = sizeOn(nodeMin(t, sp.children[i]), sp.axis);
+        maxs[i] = sizeOn(nodeMax(t, sp.children[i]), sp.axis);
+        total += sizes[i];
+    }
+    if (total <= 0) return 0;
+    // Toward the end (delta > 0) the children after the divider give and
+    // those before it take; toward the start, the other way round. Both
+    // sides are walked outward from the divider.
+    const before = Side{ .first = d.index, .last = 0 };
+    const after = Side{ .first = d.index + 1, .last = @intCast(n - 1) };
+    const giver = if (delta_in > 0) after else before;
+    const taker = if (delta_in > 0) before else after;
+    var give_room: f32 = 0;
+    var take_room: f32 = 0;
+    var it = giver.iter();
+    while (it.next()) |i| give_room += @max(sizes[i] - mins[i], 0);
+    it = taker.iter();
+    while (it.next()) |i| take_room += @max(maxs[i] - sizes[i], 0);
+    const amount = @min(@abs(delta_in), @min(give_room, take_room));
+    if (!(amount > 0)) return 0;
+    var left = amount;
+    it = giver.iter();
+    while (it.next()) |i| {
+        const g = @min(left, @max(sizes[i] - mins[i], 0));
+        sizes[i] -= g;
+        left -= g;
+    }
+    left = amount;
+    it = taker.iter();
+    while (it.next()) |i| {
+        const g = @min(left, @max(maxs[i] - sizes[i], 0));
+        sizes[i] += g;
+        left -= g;
+    }
+    for (0..n) |i| sp.weights[i] = sizes[i] / total;
+    dock.normalize(sp);
+    return if (delta_in > 0) amount else -amount;
+}
+
+/// A run of a split's children, walked from `first` to `last` (either
+/// way round).
+const Side = struct {
+    first: u8,
+    last: u8,
+
+    const Iter = struct {
+        at: i16,
+        last: i16,
+        step: i16,
+        fn next(s: *Iter) ?usize {
+            if ((s.step > 0 and s.at > s.last) or (s.step < 0 and s.at < s.last)) return null;
+            const i: usize = @intCast(s.at);
+            s.at += s.step;
+            return i;
+        }
+    };
+
+    fn iter(s: Side) Iter {
+        return .{ .at = s.first, .last = s.last, .step = if (s.last >= s.first) 1 else -1 };
+    }
+};
 
 pub fn nodeMin(t: *const Tree, index: u8) Size {
     const node = t.nodes[index];
@@ -357,4 +413,54 @@ test "a row of three tiles its bounds and a divider drag respects minima" {
     try std.testing.expectApproxEqAbs(@as(f32, 100), l.group(t.groupOf(0).?).?.rect.w, 0.5);
     const drop = t.dropTarget(&l, 990, 300).?;
     try std.testing.expectEqual(dock.DropZone.right, drop.zone);
+}
+
+test "a divider pushed past a panel's minimum pushes the next panel, then holds" {
+    const catalog = [_]dock.PanelInfo{ .{ .title = "A", .min_w = 100 }, .{ .title = "B", .min_w = 100 }, .{ .title = "C", .min_w = 100 } };
+    var t = Tree.init(&catalog);
+    try std.testing.expect(t.insert(0, null));
+    try std.testing.expect(t.split(1, 0, .right));
+    try std.testing.expect(t.split(2, 1, .right));
+    t.metrics.divider = 4;
+    const bounds: Rect = .{ .w = 1000, .h = 500 };
+    var l = t.layout(bounds);
+    const a0 = l.group(t.groupOf(0).?).?.rect.w;
+    // B sits beside the divider and gives first; at its minimum, C gives.
+    const moved = t.moveDivider(&l, l.dividers[0], 10000);
+    l = t.layout(bounds);
+    try std.testing.expectApproxEqAbs(@as(f32, 100), l.group(t.groupOf(1).?).?.rect.w, 0.5);
+    try std.testing.expectApproxEqAbs(@as(f32, 100), l.group(t.groupOf(2).?).?.rect.w, 0.5);
+    try std.testing.expectApproxEqAbs(@as(f32, 792), l.group(t.groupOf(0).?).?.rect.w, 0.5);
+    // It went only as far as the room the two had.
+    try std.testing.expectApproxEqAbs(792 - a0, moved, 0.5);
+    // Held: further in the same direction it goes nowhere.
+    try std.testing.expectEqual(@as(f32, 0), t.moveDivider(&l, l.dividers[0], 50));
+    // The other divider, leftward: B is at its minimum, so A gives.
+    const back = t.moveDivider(&l, l.dividers[1], -200);
+    try std.testing.expectApproxEqAbs(@as(f32, -200), back, 0.01);
+    l = t.layout(bounds);
+    try std.testing.expectApproxEqAbs(@as(f32, 592), l.group(t.groupOf(0).?).?.rect.w, 0.5);
+    try std.testing.expectApproxEqAbs(@as(f32, 100), l.group(t.groupOf(1).?).?.rect.w, 0.5);
+    try std.testing.expectApproxEqAbs(@as(f32, 300), l.group(t.groupOf(2).?).?.rect.w, 0.5);
+    try std.testing.expect(t.validate());
+}
+
+test "a panel at its maximum passes the room on to the next one" {
+    const catalog = [_]dock.PanelInfo{ .{ .title = "A", .min_w = 100 }, .{ .title = "B", .min_w = 100, .max_w = 300 }, .{ .title = "C", .min_w = 100 } };
+    var t = Tree.init(&catalog);
+    try std.testing.expect(t.insert(0, null));
+    try std.testing.expect(t.split(1, 0, .right));
+    try std.testing.expect(t.split(2, 1, .right));
+    t.metrics.divider = 4;
+    const bounds: Rect = .{ .w = 1000, .h = 500 };
+    var l = t.layout(bounds);
+    const b0 = l.group(t.groupOf(1).?).?.rect.w;
+    const a0 = l.group(t.groupOf(0).?).?.rect.w;
+    // C gives up to its minimum; B takes up to its ceiling, A the rest.
+    _ = t.moveDivider(&l, l.dividers[1], 10000);
+    l = t.layout(bounds);
+    try std.testing.expectApproxEqAbs(@as(f32, 100), l.group(t.groupOf(2).?).?.rect.w, 0.5);
+    try std.testing.expectApproxEqAbs(@as(f32, 300), l.group(t.groupOf(1).?).?.rect.w, 0.5);
+    try std.testing.expect(l.group(t.groupOf(0).?).?.rect.w > a0);
+    try std.testing.expect(b0 < 300);
 }

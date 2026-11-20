@@ -265,6 +265,7 @@ pub const Tree = struct {
     pub const layout = layout_mod.layout;
     pub const dropTarget = layout_mod.dropTarget;
     pub const adjustDivider = layout_mod.adjustDivider;
+    pub const moveDivider = layout_mod.moveDivider;
     pub const nodeMin = layout_mod.nodeMin;
     /// Resizing by the app (`dock_resize.zig`).
     pub const groupSize = resize.groupSize;
