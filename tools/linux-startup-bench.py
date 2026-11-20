@@ -53,9 +53,46 @@ def read_proc_pss_mib(pid: int) -> float | None:
     return None
 
 
+def find_target_pid(root_pid: int, binary_name: str) -> int:
+    """Resolve the launched app PID when `cmd` wraps it (e.g. `dbus-run-session`)."""
+    children: dict[int, list[int]] = {}
+    comms: dict[int, str] = {}
+    for entry in pathlib.Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        pid = int(entry.name)
+        try:
+            stat = (entry / "stat").read_text()
+            lp = stat.find("(")
+            rp = stat.rfind(")")
+            if lp < 0 or rp <= lp:
+                continue
+            comm = stat[lp + 1 : rp]
+            fields = stat[rp + 2 :].split()
+            ppid = int(fields[1])
+        except (OSError, ValueError, IndexError):
+            continue
+        comms[pid] = comm
+        children.setdefault(ppid, []).append(pid)
+
+    target_comm = binary_name[:15]
+    stack = [root_pid]
+    seen: set[int] = set()
+    while stack:
+        cur = stack.pop()
+        if cur in seen:
+            continue
+        seen.add(cur)
+        if cur != root_pid and comms.get(cur) == target_comm:
+            return cur
+        stack.extend(children.get(cur, ()))
+    return root_pid
+
+
 def measure_once(
     label: str,
     cmd: list[str],
+    binary_name: str,
     env: dict[str, str],
     timeout_s: float,
     idle_s: float,
@@ -99,10 +136,15 @@ def measure_once(
             raise RuntimeError(
                 f"[{label}] timed out waiting for first-frame ({cmd}); stderr={stderr_lines}"
             )
-        cpu_before = read_proc_cpu_ticks(proc.pid)
+        target_pid = (
+            find_target_pid(proc.pid, binary_name)
+            if pathlib.Path(cmd[0]).name == "dbus-run-session"
+            else proc.pid
+        )
+        cpu_before = read_proc_cpu_ticks(target_pid)
         time.sleep(idle_s)
-        cpu_after = read_proc_cpu_ticks(proc.pid)
-        pss_mib = read_proc_pss_mib(proc.pid)
+        cpu_after = read_proc_cpu_ticks(target_pid)
+        pss_mib = read_proc_pss_mib(target_pid)
         idle_cpu_ms = (
             ((cpu_after - cpu_before) * 1000.0 / clk_tck)
             if cpu_before is not None and cpu_after is not None
@@ -121,6 +163,7 @@ def measure_once(
 def run_case(
     label: str,
     cmd: list[str],
+    binary_name: str,
     base_env: dict[str, str],
     runs: int,
     cold_cache: bool,
@@ -149,7 +192,7 @@ def run_case(
                 "XDG_CACHE_HOME": str(warm_cache),
                 "MESA_SHADER_CACHE_DIR": str(warm_mesa),
             }
-            measure_once(label, cmd, wenv, timeout_s=20.0, idle_s=0.1)
+            measure_once(label, cmd, binary_name, wenv, timeout_s=20.0, idle_s=0.1)
 
         for i in range(runs):
             if cold_cache:
@@ -169,7 +212,7 @@ def run_case(
                 "MESA_SHADER_CACHE_DIR": str(mesa_dir),
             }
             ms, pss, cpu_ms, line = measure_once(
-                label, cmd, env, timeout_s=20.0, idle_s=idle_s
+                label, cmd, binary_name, env, timeout_s=20.0, idle_s=idle_s
             )
             latencies.append(ms)
             if pss is not None:
@@ -240,7 +283,7 @@ def main() -> None:
     )
 
     results = [
-        run_case(name, cmd, base_env, args.runs, cold, extra, args.idle_s)
+        run_case(name, cmd, binary.name, base_env, args.runs, cold, extra, args.idle_s)
         for name, cmd, cold, extra in cases
     ]
 
