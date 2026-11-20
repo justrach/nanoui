@@ -20,9 +20,11 @@ pub const S_OK: HRESULT = 0;
 
 // The interfaces, by IID.
 pub const iid_environment: Guid = .{ .a = 0xb96d755e, .b = 0x0319, .c = 0x4e92, .d = .{ 0xa2, 0x96, 0x23, 0x43, 0x6f, 0x46, 0xa1, 0xfc } };
+pub const iid_environment2: Guid = .{ .a = 0x41f3632b, .b = 0x5ef4, .c = 0x404f, .d = .{ 0xad, 0x82, 0x2d, 0x60, 0x6c, 0x5a, 0x9a, 0x21 } };
 pub const iid_environment10: Guid = .{ .a = 0xee0eb9df, .b = 0x6f12, .c = 0x46ce, .d = .{ 0xb5, 0x3f, 0x3f, 0x47, 0xb9, 0xc9, 0x28, 0xe0 } };
 pub const iid_controller: Guid = .{ .a = 0x4d00c0d1, .b = 0x9434, .c = 0x4eb6, .d = .{ 0x80, 0x78, 0x86, 0x97, 0xa5, 0x60, 0x33, 0x4f } };
 pub const iid_webview2: Guid = .{ .a = 0x76eceacd, .b = 0x1167, .c = 0x4b1d, .d = .{ 0x9a, 0x3b, 0xd9, 0xba, 0x0b, 0x6e, 0x6d, 0x3b } };
+pub const iid_webview2_2: Guid = .{ .a = 0x9e8f0cf8, .b = 0xe670, .c = 0x4b5e, .d = .{ 0xb2, 0xbc, 0x73, 0xe0, 0x61, 0xe3, 0x18, 0x4c } };
 pub const iid_webview2_3: Guid = .{ .a = 0xa0d6df20, .b = 0x3b92, .c = 0x416d, .d = .{ 0xaa, 0x0c, 0x43, 0x7a, 0x9c, 0x72, 0x78, 0x57 } };
 pub const iid_webview2_22: Guid = .{ .a = 0xdb75dfc7, .b = 0xa857, .c = 0x4632, .d = .{ 0xa3, 0x98, 0x69, 0x69, 0xdd, 0xe2, 0x6c, 0x0a } };
 pub const iid_texture2d: Guid = .{ .a = 0x6f15aaf2, .b = 0xd208, .c = 0x4e89, .d = .{ 0x9a, 0xb4, 0x48, 0x95, 0x35, 0xd3, 0x4f, 0x9c } };
@@ -193,6 +195,16 @@ pub const Controller = struct {
 pub const Rect = extern struct { left: i32, top: i32, right: i32, bottom: i32 };
 
 // ---------------------------------------------------------------------------
+// ICoreWebView2Environment2 (`query(env, &iid_environment2)`)
+// ---------------------------------------------------------------------------
+pub const Environment2 = struct {
+    /// 8: `CreateWebResourceRequest(uri, method, postData, headers, request)`.
+    pub fn createWebResourceRequest(e: *Com, uri: [*:0]const u16, method: [*:0]const u16, post_data: ?*Com, headers: [*:0]const u16, out: *?*Com) HRESULT {
+        return e.slot(*const fn (*Com, [*:0]const u16, [*:0]const u16, ?*Com, [*:0]const u16, *?*Com) callconv(.winapi) HRESULT, 8)(e, uri, method, post_data, headers, out);
+    }
+};
+
+// ---------------------------------------------------------------------------
 // ICoreWebView2Environment10 (`query(env, &iid_environment10)`)
 // ---------------------------------------------------------------------------
 pub const Environment10 = struct {
@@ -234,6 +246,16 @@ pub const WebView = struct {
     /// 5: `Navigate(uri)`.
     pub fn navigate(w: *Com, uri: [*:0]const u16) HRESULT {
         return w.slot(*const fn (*Com, [*:0]const u16) callconv(.winapi) HRESULT, 5)(w, uri);
+    }
+
+    /// 7: `add_NavigationStarting(handler, token)`.
+    pub fn addNavigationStarting(w: *Com, handler: *Com, token: ?*i64) HRESULT {
+        return w.slot(*const fn (*Com, *Com, ?*i64) callconv(.winapi) HRESULT, 7)(w, handler, token);
+    }
+
+    /// 8: `remove_NavigationStarting(token)`.
+    pub fn removeNavigationStarting(w: *Com, token: i64) HRESULT {
+        return w.slot(*const fn (*Com, i64) callconv(.winapi) HRESULT, 8)(w, token);
     }
 
     /// 27: `AddScriptToExecuteOnDocumentCreated(js, handler)`.
@@ -295,6 +317,16 @@ pub const resource_context_all: u32 = 0;
 pub const request_source_kinds_all: u32 = 0xffffffff;
 
 // ---------------------------------------------------------------------------
+// ICoreWebView2_2 (`query(view, &iid_webview2_2)`)
+// ---------------------------------------------------------------------------
+pub const WebView2 = struct {
+    /// 63: `NavigateWithWebResourceRequest(request)`.
+    pub fn navigateWithWebResourceRequest(w: *Com, request: *Com) HRESULT {
+        return w.slot(*const fn (*Com, *Com) callconv(.winapi) HRESULT, 63)(w, request);
+    }
+};
+
+// ---------------------------------------------------------------------------
 // ICoreWebView2_22 (`query(view, &iid_webview2_22)`)
 // ---------------------------------------------------------------------------
 pub const WebView22 = struct {
@@ -346,6 +378,34 @@ pub const ResourceArgs = struct {
 
     pub fn setResponse(a: *Com, response: *Com) HRESULT {
         return a.slot(*const fn (*Com, *Com) callconv(.winapi) HRESULT, 5)(a, response);
+    }
+};
+
+/// `ICoreWebView2NavigationStartingEventArgs`:
+/// 3 = `get_Uri`, 5 = `get_IsRedirected`, 8 = `put_Cancel`.
+pub const NavigationStartingArgs = struct {
+    pub fn uri(a: *Com, out: *PWSTR) HRESULT {
+        return a.slot(*const fn (*Com, *PWSTR) callconv(.winapi) HRESULT, 3)(a, out);
+    }
+
+    pub fn isRedirected(a: *Com, out: *BOOL) HRESULT {
+        return a.slot(*const fn (*Com, *BOOL) callconv(.winapi) HRESULT, 5)(a, out);
+    }
+
+    pub fn setCancel(a: *Com, cancel: BOOL) HRESULT {
+        return a.slot(*const fn (*Com, BOOL) callconv(.winapi) HRESULT, 8)(a, cancel);
+    }
+};
+
+/// `ICoreWebView2NavigationCompletedEventArgs`:
+/// 3 = `get_IsSuccess`, 4 = `get_WebErrorStatus`.
+pub const NavigationCompletedArgs = struct {
+    pub fn isSuccess(a: *Com, out: *BOOL) HRESULT {
+        return a.slot(*const fn (*Com, *BOOL) callconv(.winapi) HRESULT, 3)(a, out);
+    }
+
+    pub fn webErrorStatus(a: *Com, out: *u32) HRESULT {
+        return a.slot(*const fn (*Com, *u32) callconv(.winapi) HRESULT, 4)(a, out);
     }
 };
 
