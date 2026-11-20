@@ -2,6 +2,7 @@
 const std = @import("std");
 const wv = @import("windows/webview2.zig");
 const serve = @import("page_webview2_serve.zig");
+const nav = @import("page_webview2_nav.zig");
 const page = @import("page.zig");
 const Page = @import("page_webview2.zig").Page;
 const Window = @import("windows/window.zig").Window;
@@ -73,7 +74,12 @@ pub const ScriptDone = struct {
 pub const EnvCreated = struct {
     pub fn invoke(p: *Page, err: HRESULT, result: ?*Com) callconv(.winapi) HRESULT {
         if (p.queue.window.app.debug) std.debug.print("nanoui: webview2 environment callback 0x{x}\n", .{@as(u32, @bitCast(err))});
-        if (err >= 0) if (result) |env| p.environmentReady(env);
+        if (err >= 0) {
+            if (result) |env| p.environmentReady(env);
+        } else {
+            p.pending_req.close(p.queue.gpa);
+            nav.reportError(p, p.queue.current_url, "WebView2 environment creation failed");
+        }
         // `result` is WebView2's only for the length of this call: the page
         // took its own reference (`environmentReady`), so none is released here.
         return wv.S_OK;
@@ -97,7 +103,20 @@ pub const CtlCreated = struct {
             cancel(err, result);
             return wv.S_OK;
         }
-        if (err >= 0) if (result) |ctl| p.controllerReady(ctl);
+        if (err >= 0) {
+            if (result) |ctl| p.controllerReady(ctl);
+        } else {
+            p.pending_req.close(p.queue.gpa);
+            nav.reportError(p, p.queue.current_url, "WebView2 controller creation failed");
+        }
+        return wv.S_OK;
+    }
+};
+
+pub const NavigationStarting = struct {
+    pub fn invoke(p: *Page, sender: ?*Com, args: ?*Com) callconv(.winapi) HRESULT {
+        _ = sender;
+        nav.onNavigationStarting(Page, p, args);
         return wv.S_OK;
     }
 };
@@ -105,7 +124,6 @@ pub const CtlCreated = struct {
 pub const NavigationCompleted = struct {
     pub fn invoke(p: *Page, sender: ?*Com, args: ?*Com) callconv(.winapi) HRESULT {
         _ = sender;
-        _ = args;
         if (p.queue.window.app.debug) {
             // What the view is showing, and what is in it: a document that
             // is not the app's page shows here as `about:blank` or an error.
@@ -121,6 +139,8 @@ pub const NavigationCompleted = struct {
                 }
             };
         }
+        if (p.queue.dead) return wv.S_OK;
+        nav.onNavigationCompleted(Page, p, args);
         if (p.queue.dead) return wv.S_OK;
         // With a document to run in, the app's `--nanoui-eval` goes now:
         // `dom-ready` (the bridge's) comes before the document is there.

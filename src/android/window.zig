@@ -8,10 +8,13 @@ const std = @import("std");
 const App = @import("app.zig").App;
 const Surface = @import("surface.zig").Surface;
 const window_types = @import("../window_types.zig");
+const page_request = @import("../page_request.zig");
 const ui = @import("../ui/ui.zig");
 
 pub const Asset = window_types.Asset;
 pub const PageOptions = window_types.PageOptions;
+pub const PageHeader = window_types.PageHeader;
+pub const PageRequest = window_types.PageRequest;
 pub const Content = window_types.Content;
 pub const TitleBar = window_types.TitleBar;
 pub const Callback = window_types.Callback(Window);
@@ -146,6 +149,11 @@ pub const Window = struct {
 
     pub fn redraw(self: *Window) void {
         if (self.surface) |s| s.requestFrame();
+    }
+
+    /// Points a page's window at `url`. Pages are not supported on Android yet.
+    pub fn loadPageRequest(_: *Window, _: PageRequest) page_request.Error!void {
+        return error.PagesUnsupported;
     }
 
     pub fn setTitle(self: *Window, title: []const u8) void {

@@ -103,7 +103,10 @@ pub const App = plat.app.App;
 pub const AppOptions = plat.app.Options;
 pub const Window = plat.window.Window;
 pub const WindowOptions = plat.window.Options;
-pub const PageOptions = plat.window.PageOptions;
+pub const PageOptions = @import("window_types.zig").PageOptions;
+pub const PageHeader = @import("window_types.zig").PageHeader;
+pub const PageRequest = @import("window_types.zig").PageRequest;
+pub const page_request = @import("page_request.zig");
 /// How high a window stacks (`WindowOptions.level`, `Window.setLevel`).
 pub const WindowLevel = @import("window_types.zig").Level;
 /// A connected screen (`App.screens`), the About panel's options
@@ -177,6 +180,7 @@ test {
     _ = kit;
     // A page's platform-free parts: the asset table, the origin, the bridge.
     _ = @import("tests_page.zig");
+    _ = @import("page_request.zig");
     std.testing.refAllDecls(kit);
     _ = @import("menu_types.zig");
     _ = @import("update.zig");
@@ -260,6 +264,7 @@ test {
         if (builtin.os.tag == .linux) _ = @import("linux/tests_tray.zig");
         // A page in WebKitGTK, end to end, where one is installed.
         if (builtin.os.tag == .linux) _ = @import("linux/tests_page.zig");
+        if (builtin.os.tag == .linux) _ = @import("tests_page_request.zig");
         return;
     }
     // Analyze every declaration, used by an example or not.
@@ -282,4 +287,6 @@ test {
     _ = @import("tests_window_more.zig");
     // The mouse buttons: the middle one, one press at a time.
     _ = @import("tests_window_mouse.zig");
+    // Deferred page loading, custom headers, and cross-origin redirect stripping.
+    _ = @import("tests_page_request.zig");
 }

@@ -6,6 +6,7 @@ const std = @import("std");
 const gtk = @import("linux/gtk.zig");
 const wk = @import("linux/webkit.zig");
 const page = @import("page.zig");
+const page_request = @import("page_request.zig");
 const window_mod = @import("linux/window.zig");
 const app_mod = @import("linux/app.zig");
 const ipc = @import("ipc.zig").ipc(window_mod.Window, app_mod.App);
@@ -20,6 +21,11 @@ pub const Page = struct {
     manager: *anyopaque,
     message_signal: c_ulong = 0,
     crash_signal: c_ulong = 0,
+    policy_signal: c_ulong = 0,
+    load_changed_signal: c_ulong = 0,
+    load_failed_signal: c_ulong = 0,
+    scope: page_request.ActiveScope = .{},
+    scope_started: bool = false,
     /// The turn's flush, while one is waiting; a page closed under it
     /// cancels it, so it never fires into freed memory.
     flush_source: c_uint = 0,
@@ -44,8 +50,11 @@ pub const Page = struct {
         _ = wk.api.webkit_user_content_manager_register_script_message_handler(manager, "nanoui", null);
         self.message_signal = gtk.api.g_signal_connect_data(manager, "script-message-received::nanoui", @ptrCast(&onMessage), self, null, 0);
         self.crash_signal = gtk.api.g_signal_connect_data(view, "web-process-terminated", @ptrCast(&onTerminated), self, null, 0);
+        self.policy_signal = gtk.api.g_signal_connect_data(view, "decide-policy", @ptrCast(&onDecidePolicy), self, null, 0);
+        self.load_changed_signal = gtk.api.g_signal_connect_data(view, "load-changed", @ptrCast(&onLoadChanged), self, null, 0);
+        self.load_failed_signal = gtk.api.g_signal_connect_data(view, "load-failed", @ptrCast(&onLoadFailed), self, null, 0);
 
-        self.load(options.url);
+        if (!options.defer_initial_load) self.load(options.url);
         return self;
     }
 
@@ -55,7 +64,11 @@ pub const Page = struct {
         // into a page that is gone.
         gtk.api.g_signal_handler_disconnect(self.manager, self.message_signal);
         gtk.api.g_signal_handler_disconnect(self.view, self.crash_signal);
+        gtk.api.g_signal_handler_disconnect(self.view, self.policy_signal);
+        gtk.api.g_signal_handler_disconnect(self.view, self.load_changed_signal);
+        gtk.api.g_signal_handler_disconnect(self.view, self.load_failed_signal);
         gtk.api.g_object_unref(self.view);
+        self.scope.clear(self.queue.gpa);
         self.queue.deinit();
         // Closed by a call it is still answering: `ipc` frees it when the
         // call returns (`freeClosed`).
@@ -106,14 +119,46 @@ pub const Page = struct {
 
     /// Points the view at `url`: a path from the assets, or an absolute one.
     pub fn load(self: *Page, url: []const u8) void {
+        self.scope.clear(self.queue.gpa);
+        self.scope_started = false;
         var buf: [2048]u8 = undefined;
-        const full = page.fullUrl(&buf, url);
+        const full = page_request.resolveUrl(&buf, url);
         const gpa = self.queue.gpa;
         const z = gpa.dupeSentinel(u8, full, 0) catch return;
         defer gpa.free(z);
         self.queue.setCurrent(url);
         self.queue.dom_ready = false;
         wk.api.webkit_web_view_load_uri(self.view, z);
+    }
+
+    /// Starts a GET navigation with per-request HTTP headers scoped to `req.url`'s origin.
+    pub fn loadRequest(self: *Page, req: window_mod.PageRequest) page_request.Error!void {
+        try page_request.validate(req);
+        if (req.headers.len == 0) {
+            self.load(req.url);
+            return;
+        }
+        if (!wk.has_request_api) return error.Unsupported;
+        var buf: [2048]u8 = undefined;
+        const full = page_request.resolveUrl(&buf, req.url);
+        const gpa = self.queue.gpa;
+        const z_url = try gpa.dupeSentinel(u8, full, 0);
+        defer gpa.free(z_url);
+        const uri_req = wk.req_api.webkit_uri_request_new(z_url);
+        defer gtk.api.g_object_unref(uri_req);
+        const hdrs = wk.req_api.webkit_uri_request_get_http_headers(uri_req) orelse return error.Unsupported;
+        for (req.headers) |h| {
+            const z_name = try gpa.dupeSentinel(u8, h.name, 0);
+            defer gpa.free(z_name);
+            const z_val = try gpa.dupeSentinel(u8, h.value, 0);
+            defer gpa.free(z_val);
+            wk.req_api.soup_message_headers_replace(hdrs, z_name, z_val);
+        }
+        self.scope.set(gpa, full, req.headers);
+        self.scope_started = false;
+        self.queue.setCurrent(req.url);
+        self.queue.dom_ready = false;
+        wk.req_api.webkit_web_view_load_request(self.view, uri_req);
     }
 };
 
@@ -197,6 +242,50 @@ fn onMessage(_: *anyopaque, value: *anyopaque, data: ?*anyopaque) callconv(.c) v
 /// is blank: say so, where nothing else would. 2 is us, closing the view.
 fn onTerminated(_: *anyopaque, reason: c_int, _: ?*anyopaque) callconv(.c) void {
     if (reason != 2) std.log.warn("nanoui: the page's web process stopped ({s})", .{if (reason == 1) "out of memory" else "crashed"});
+}
+
+const GError = extern struct { domain: u32, code: c_int, message: ?[*:0]const u8 };
+
+fn onDecidePolicy(_: *anyopaque, decision: *anyopaque, decision_type: c_int, data: ?*anyopaque) callconv(.c) c_int {
+    if (decision_type != 0 or !wk.has_request_api) return 0;
+    const self: *Page = @ptrCast(@alignCast(data));
+    if (self.queue.dead or self.scope.origin_url == null) return 0;
+    const action = wk.req_api.webkit_navigation_policy_decision_get_navigation_action(decision) orelse return 0;
+    const req = wk.req_api.webkit_navigation_action_get_request(action) orelse return 0;
+    const uri_z = wk.req_api.webkit_uri_request_get_uri(req) orelse return 0;
+    const uri = std.mem.span(uri_z);
+    if (self.scope.allowsHeadersFor(uri)) return 0;
+    const gpa = self.queue.gpa;
+    const copy = gpa.dupe(u8, uri) catch uri;
+    defer if (copy.ptr != uri.ptr) gpa.free(copy);
+    wk.req_api.webkit_policy_decision_ignore(decision);
+    self.scope.clear(gpa);
+    self.load(copy);
+    return 1;
+}
+
+fn onLoadChanged(_: *anyopaque, load_event: c_int, data: ?*anyopaque) callconv(.c) void {
+    const self: *Page = @ptrCast(@alignCast(data));
+    if (load_event == 0) {
+        if (self.scope.origin_url != null) self.scope_started = true;
+        return;
+    }
+    if (load_event == 3 and self.scope_started) {
+        self.scope.clear(self.queue.gpa);
+        self.scope_started = false;
+    }
+}
+
+fn onLoadFailed(_: *anyopaque, _: c_int, failing_uri: ?[*:0]const u8, gerr: ?*const GError, data: ?*anyopaque) callconv(.c) c_int {
+    const self: *Page = @ptrCast(@alignCast(data));
+    if (gerr) |e| if (e.code == 102 or e.code == 302) return 0;
+    self.scope.clear(self.queue.gpa);
+    if (self.queue.dead) return 0;
+    const cb = self.queue.options.on_load_error orelse return 0;
+    const url = if (failing_uri) |u| std.mem.span(u) else self.queue.current_url;
+    const msg = if (gerr) |e| if (e.message) |m| std.mem.span(m) else "Navigation failed" else "Navigation failed";
+    cb(self.queue.options.on_load_error_ctx, url, msg);
+    return 0;
 }
 
 /// One context serves every window, so the view says whose page it is.
