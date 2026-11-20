@@ -132,7 +132,7 @@ pub fn refuses(file: [*:0]const u8) bool {
 }
 
 fn open(name: [*:0]const u8) ?*anyopaque {
-    return std.c.dlopen(name, .{ .NOW = true });
+    return std.c.dlopen(name, .{ .LAZY = true });
 }
 
 /// Loads the WebKitGTK of the GTK that is loaded; false when there is none,

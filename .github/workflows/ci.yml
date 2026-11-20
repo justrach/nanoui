@@ -67,14 +67,21 @@ jobs:
       # GTK 4 with WebKitGTK 6.0; the page's test then runs under GTK 3 with 4.1.
       - run: xvfb-run -a zig-out/linux/bin/nanoui-tests
       - run: NANOUI_GTK=3 xvfb-run -a zig-out/linux/bin/nanoui-tests
-      # A live window under each GTK: GTK 4 where it's installed, GTK 3 when asked.
+      # A live window under each GTK and renderer mode: default (auto CPU on
+      # llvmpipe/Xvfb) and explicit NANOUI_RENDERER=gl under both GTK 4 and GTK 3.
       - name: The counter under GTK 4 and GTK 3
         run: |
           zig build
           for v in 4 3; do
-            NANOUI_GTK=$v NANOUI_DEBUG=1 timeout 4 xvfb-run -a zig-out/bin/counter > gtk$v.txt 2>&1 || true
-            grep -q "nanoui: GTK $v" gtk$v.txt && ! grep -qi "panic\|exception" gtk$v.txt || { cat gtk$v.txt; exit 1; }
+            for mode in auto gl; do
+              NANOUI_GTK=$v NANOUI_RENDERER=$mode NANOUI_DEBUG=1 timeout 4 xvfb-run -a zig-out/bin/counter > gtk${v}_${mode}.txt 2>&1 || true
+              grep -q "nanoui: GTK $v" gtk${v}_${mode}.txt && grep -q "nanoui: first-frame" gtk${v}_${mode}.txt && ! grep -qi "panic\|exception" gtk${v}_${mode}.txt || { cat gtk${v}_${mode}.txt; exit 1; }
+            done
           done
+      - name: Linux startup & idle PSS benchmark (Xvfb, ReleaseFast)
+        run: |
+          zig build -Doptimize=ReleaseFast --prefix zig-out/bench
+          xvfb-run -a python3 tools/linux-startup-bench.py --bin zig-out/bench/bin/counter --runs 9
       # A real page, sandbox as the system leaves it: its client served, a call
       # to Zig and back. In each world 6.0's sandbox can or can't start.
       - name: The hello page where bubblewrap can and can't run

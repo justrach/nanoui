@@ -346,17 +346,30 @@ pub const Db = struct {
         };
         const len = stat.size;
         if (len < 12 or len > 256 << 20) return;
-        // Untouched pages of an anonymous mapping cost nothing: the
-        // tables read land at their offsets, the rest stays unread.
+        // Untouched pages of an anonymous mapping cost nothing: read a 4 KB
+        // initial window (sufficient for single-face SFNT directories and most
+        // early metadata tables) and expand to 64 KB only for TTC collections
+        // or unusually large table directories.
         const data = std.heap.page_allocator.alloc(u8, len) catch return;
         defer std.heap.page_allocator.free(data);
-        _ = file.readPositionalAll(db.io, data[0..@min(len, 64 * 1024)], 0) catch return;
+        var header_len: usize = @min(len, 4096);
+        _ = file.readPositionalAll(db.io, data[0..header_len], 0) catch return;
+        const is_ttc = header_len >= 4 and std.mem.eql(u8, data[0..4], "ttcf");
+        const sfnt_tables = if (!is_ttc and header_len >= 6) std.mem.readInt(u16, data[4..6], .big) else 0;
+        if ((is_ttc or 12 + @as(usize, sfnt_tables) * 16 > header_len) and len > header_len) {
+            const wide = @min(len, 64 * 1024);
+            _ = file.readPositionalAll(db.io, data[header_len..wide], header_len) catch return;
+            header_len = wide;
+        }
         for (0..font.faces(data)) |i| {
             const t = font.Tables.read(data, i) catch continue;
             inline for (.{ "head", "os2", "name" }) |name| {
                 const off = @field(t, name);
                 const want: usize = if (std.mem.eql(u8, name, "name")) t.name_len else 100;
-                if (off != 0 and off < len) _ = file.readPositionalAll(db.io, data[off..@min(len, off + want)], off) catch {};
+                const end = @min(len, off + want);
+                if (off != 0 and off < len and end > header_len) {
+                    _ = file.readPositionalAll(db.io, data[off..end], off) catch {};
+                }
             }
             const style = font.Style.read(data, t);
             if (style.family_len == 0) continue;

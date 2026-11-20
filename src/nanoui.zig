@@ -200,6 +200,8 @@ test {
     if (builtin.os.tag != .ios) _ = @import("windows/key_names.zig");
     // An HDR output's display info, worked out on any host.
     if (builtin.os.tag != .ios) _ = @import("windows/hdr_output.zig");
+    // Linux renderer selection policy, platform-free model & tests.
+    _ = @import("linux/renderer.zig");
     if (is_android) {
         inline for (.{ plat.app, plat.window, plat.dialog, plat.desktop, plat.fdwatch, @import("android/surface.zig"), @import("android/keys.zig"), @import("android/touch.zig"), @import("android/activity.zig"), @import("android/bars.zig"), @import("android/egl.zig"), @import("android/jni.zig") }) |m| std.testing.refAllDecls(m);
         inline for (.{ plat.app.App, plat.window.Window, plat.desktop.clipboard, plat.desktop.shell, @import("android/surface.zig").Surface }) |T| std.testing.refAllDecls(T);

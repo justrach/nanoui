@@ -16,4 +16,5 @@ def main : IO Unit := do
   IO.println "  [OK] NanoUI.IosTouchScroll (scrollStartDelta_monotone, nested_row_routes_horizontal_drag_to_x, promotion_120hz_matches_60hz_decel)"
   IO.println "  [OK] NanoUI.NanomonRankings (query_correct, arbitrary_trace_query_correct, trace_valid, bounded_query_correct; 11 cache-protocol theorems)"
   IO.println "  [OK] NanoUI.NanomonTemperatures (filtered_fold_equivalent, publication_is_whole, pause_preserves_display, running_worker_needs_join, teardown_permits_free, retired_wake_has_no_target)"
+  IO.println "  [OK] NanoUI.LinuxStartup     (renderer_cube=72, async_zero_startup_blocking, startup_shaders_cut_4x, unchanged_active_zero_frame, wave2_strictly_improves_all_default_metrics)"
   NanoUI.Speedometer3Model.printPredictions
