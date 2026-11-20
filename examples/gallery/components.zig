@@ -142,7 +142,7 @@ fn iconButton(s: *State, c: *ui.Context) void {
         defer r.end();
         for ([_]kit.Variant{ .default, .primary, .secondary, .ghost, .outline, .danger }) |v| {
             ui.key(c, @tagName(v));
-            _ = kit.iconButton(c, "heart", .{ .variant = v, .tooltip = @tagName(v) });
+            _ = kit.iconButton(c, "bookmark", .{ .variant = v, .tooltip = @tagName(v) });
         }
     }
     {
