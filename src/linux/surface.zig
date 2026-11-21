@@ -7,6 +7,7 @@
 //! `surface_keys.zig`.
 const std = @import("std");
 const gtk = @import("gtk.zig");
+const ime = @import("ime.zig");
 const ui = @import("../ui/ui.zig");
 const types = @import("../ui/types.zig");
 const gpu = @import("../ui/gpu.zig");
@@ -52,8 +53,7 @@ pub const Surface = struct {
     /// Follows the system's appearance (`appearance.zig`).
     watches: appearance.Watch = .{},
     cursor: ctx_mod.Cursor = .arrow,
-    /// Text the input method committed during this key event.
-    committed: std.ArrayList(u8) = .empty,
+    ime_state: ime.State = .{},
     /// The press that started a double or triple click was already sent.
     pressed: bool = false,
     /// A frame is being built, and another was asked for meanwhile.
@@ -71,6 +71,8 @@ pub const Surface = struct {
         const use_cpu = window.app.cpu_only or window.transparent == .shape;
         const gl_area = if (use_cpu) null else (glarea.new(window.transparent == .alpha) orelse return error.OpenGLUnavailable);
         const area = gl_area orelse g.gtk_drawing_area_new();
+        // Keep the area alive through removal of its tick and IM callbacks.
+        _ = g.g_object_ref_sink(area);
         self.* = .{
             .gpa = gpa,
             .window = window,
@@ -91,12 +93,12 @@ pub const Surface = struct {
         // No theme background under a transparent window's view.
         self.ctx.transparent_root = window.transparent != .none;
         self.watches.start(self, &appearanceChanged);
+        ime.connect(self);
         if (gtk.v4) {
-            @import("surface_gtk4.zig").attach(self);
+            @import("surface_gtk4.zig").attachArea(self);
             return self;
         }
         self.attach(area);
-        gtk.connect(self.im, "commit", @ptrCast(&onCommit), self);
         gtk.v3.gtk_container_add(window.gtkwindow.?, area);
         return self;
     }
@@ -104,7 +106,7 @@ pub const Surface = struct {
     /// Feeds `area`'s events to the surface, and draws it (GTK 3).
     fn attach(self: *Surface, area: *gtk.Widget) void {
         gtk.v3.gtk_widget_set_can_focus(area, 1);
-        gtk.v3.gtk_widget_add_events(area, gtk.pointer_motion_mask | gtk.button_press_mask | gtk.button_release_mask | gtk.key_press_mask | gtk.leave_notify_mask | gtk.focus_change_mask | gtk.scroll_mask | gtk.smooth_scroll_mask);
+        gtk.v3.gtk_widget_add_events(area, gtk.pointer_motion_mask | gtk.button_press_mask | gtk.button_release_mask | gtk.key_press_mask | gtk.key_release_mask | gtk.leave_notify_mask | gtk.focus_change_mask | gtk.scroll_mask | gtk.smooth_scroll_mask);
         if (self.gl) {
             gtk.connect(area, "render", @ptrCast(&onRender), self);
         } else gtk.connect(area, "draw", @ptrCast(&onDraw), self);
@@ -115,6 +117,7 @@ pub const Surface = struct {
         gtk.connect(area, "leave-notify-event", @ptrCast(&onLeave), self);
         gtk.connect(area, "scroll-event", @ptrCast(&onScroll), self);
         gtk.connect(area, "key-press-event", @ptrCast(&keys_side.onKey), self);
+        gtk.connect(area, "key-release-event", @ptrCast(&keys_side.onKeyRelease), self);
         gtk.connect(area, "focus-in-event", @ptrCast(&onFocusIn), self);
         gtk.connect(area, "focus-out-event", @ptrCast(&onFocusOut), self);
         gtk.connect(area, "realize", @ptrCast(&onRealize), self);
@@ -129,9 +132,10 @@ pub const Surface = struct {
         if (self.close_idle != 0) _ = g.g_source_remove(self.close_idle);
         if (self.later != 0) _ = g.g_source_remove(self.later);
         self.renderer = null;
+        ime.disconnect(self);
+        g.g_object_unref(self.area);
         g.g_object_unref(self.im);
         self.instances.deinit(self.gpa);
-        self.committed.deinit(self.gpa);
         self.pixels.deinit(self.gpa);
         self.ctx.deinit();
         self.text.deinit();
@@ -141,10 +145,9 @@ pub const Surface = struct {
     /// Builds, lays out and paints a frame; what it changed is drawn when
     /// GTK draws.
     pub fn frame(self: *Surface) void {
-        // Asked for while a frame is being built (a dialog run from the
-        // view runs an event loop inside it, which draws): building again
-        // would reuse what the frame is laying out. It waits for that
-        // frame, which asks for it as it ends.
+        // A dialog can run a nested GTK loop. Defer its redraw until this
+        // frame has finished using the layout.
+        if (self.window.closed) return;
         if (self.in_frame) {
             self.pending = true;
             return;
@@ -156,7 +159,9 @@ pub const Surface = struct {
         const dt: f32 = if (self.last_frame_time > 0) @floatCast(@min(now - self.last_frame_time, 0.1)) else 1.0 / 60.0;
         self.last_frame_time = now;
         self.in_frame = true;
+        ime.beforeBuild(self);
         const r = theme_side.build(self, dt, now - self.start_time);
+        ime.afterBuild(self);
         self.in_frame = false;
         if (self.gl) {
             glarea.api.gtk_gl_area_queue_render(self.area);
@@ -382,7 +387,6 @@ fn onPress(w: *gtk.Widget, e: *gtk.Event, data: ?*anyopaque) callconv(.c) c_int 
         s.frame();
         return 1;
     }
-    s.ctx.updateHot();
     s.ctx.pointerDown();
     s.frame();
     return 1;
@@ -481,15 +485,10 @@ fn onFocusIn(_: *gtk.Widget, _: *gtk.Event, data: ?*anyopaque) callconv(.c) c_in
 
 fn onFocusOut(_: *gtk.Widget, _: *gtk.Event, data: ?*anyopaque) callconv(.c) c_int {
     const s = of(data);
-    gtk.api.gtk_im_context_focus_out(s.im);
+    ime.focusOut(s);
     s.ctx.input.window_active = false;
     s.frame();
     return 0;
-}
-
-fn onCommit(_: *anyopaque, str: [*:0]const u8, data: ?*anyopaque) callconv(.c) void {
-    const s = of(data);
-    s.committed.appendSlice(s.gpa, std.mem.span(str)) catch {};
 }
 
 /// Key events delegated to `surface_keys.zig` (`surface_gtk4.zig` calls this).

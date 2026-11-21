@@ -64,7 +64,7 @@ pub fn button(c: *ui.Context, label: []const u8, opts: Options) ui.Interaction {
     const h = opts.size.height();
     const plain = opts.variant == .link or opts.variant == .text;
     var d = ui.div(c).row().itemsCenter().justifyCenter().gap(size * 0.45).control();
-    d = if (plain) d.px(2) else d.h(h).px(if (label.len == 0) (h - size) / 2 else size * 0.95);
+    d = if (plain) d.px(2) else d.h(h).px(if (label.len == 0) 0 else size * 0.95);
     if (label.len == 0 and !plain) d = d.w(h);
     if (opts.full_width) d = d.wFull();
     d = d.rounded(if (opts.pill) h / 2 else t.radius);
@@ -114,7 +114,12 @@ pub fn button(c: *ui.Context, label: []const u8, opts: Options) ui.Interaction {
     if (plain) fg = fg.mix(t.muted, hover * 0.35);
     if (opts.loading) {
         kit.spinner(c, .{ .size = size, .color = fg });
-    } else if (opts.icon.len > 0) ui.icon(c, opts.icon, .{ .size = size, .weight = .medium, .color = fg });
+    } else if (opts.icon.len > 0) {
+        // Alone, the symbol is centered in the whole square, by its drawn
+        // bounds rather than its advance and baseline.
+        const alone = label.len == 0 and opts.icon_after.len == 0 and !plain;
+        ui.icon(c, opts.icon, .{ .size = size, .weight = .medium, .color = fg, .frame = if (alone) h else null });
+    }
     if (label.len > 0) ui.text(c, label, .{ .size = size, .weight = .medium, .color = fg });
     if (opts.icon_after.len > 0) ui.icon(c, opts.icon_after, .{ .size = size * 0.85, .weight = .medium, .color = fg });
     if (l.underline and hover > 0.01) {

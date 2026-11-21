@@ -67,14 +67,9 @@ pub const Demo = struct {
         {
             const head = ui.div(c).row().wFull().itemsCenter().gap(8);
             defer head.end();
-            {
-                const title_col = ui.div(c).column().grow().gap(2);
-                defer title_col.end();
-                ui.heading(c, "Studio");
-                if (!compact) {
-                    ui.text(c, "Dockable panes, folded tool timeline, vector canvas.", .{ .color = th.muted });
-                }
-            }
+            // Beside the sidebar the page's heading names it.
+            if (compact) ui.heading(c, "Studio");
+            ui.spacer(c);
             if (!compact) {
                 if (kit.button(c, if (s.solo) "Exit solo" else "Solo pane", .{
                     .variant = if (s.solo) .primary else .outline,

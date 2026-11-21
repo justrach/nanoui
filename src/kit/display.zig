@@ -36,30 +36,21 @@ pub fn badge(c: *ui.Context, count: u32, opts: struct { dot: bool = false, max: 
     const t = kit.tokens(c);
     const col = opts.color orelse t.danger;
     if (opts.dot or count == 0) {
-        const dot = ui.div(c).absolute().offset(opts.x - 3, opts.y - 3).w(9).h(9).roundedFull().bg(col).border(t.background).borderW(1.5);
+        const dot = ui.div(c).absolute().offset(opts.x - 3, opts.y - 3).w(9).h(9).roundedFull().circular().bg(col).border(t.background).borderW(1.5);
         dot.end();
         return;
     }
     const label = if (count > opts.max) c.print("{d}+", .{opts.max}) else c.print("{d}", .{count});
-    const d = ui.div(c).absolute().offset(opts.x - 8, opts.y - 8).h(17).px(5).roundedFull().bg(col).border(t.background).borderW(1.5).center();
+    const d = ui.div(c).absolute().offset(opts.x - 8, opts.y - 8).h(17).px(5).roundedFull().circular().bg(col).border(t.background).borderW(1.5).center();
     defer d.end();
     ui.text(c, label, .{ .size = 10, .weight = .bold, .color = .white });
-}
-
-/// A keyboard key or shortcut (`kit.kbd(c, ui.keys.label("⌘K"))`), drawn as a
-/// compact keycap.
-pub fn kbd(c: *ui.Context, label: []const u8) void {
-    const t = kit.tokens(c);
-    const d = ui.div(c).row().h(20).px(6).rounded(5).bg(t.surface_hover).border(t.border).itemsCenter();
-    defer d.end();
-    ui.text(c, label, .{ .size = 11, .mono = true, .weight = .medium, .color = t.muted });
 }
 
 /// A person: their picture, else their initials on a color their name
 /// picks, in a circle `size` points across.
 pub fn avatar(c: *ui.Context, opts: struct { name: []const u8 = "", image: ?[]const u8 = null, size: f32 = 32, ring: ?Color = null }) void {
     const t = kit.tokens(c);
-    var d = ui.div(c).w(opts.size).h(opts.size).roundedFull().center().clip();
+    var d = ui.div(c).w(opts.size).h(opts.size).roundedFull().circular().center().clip();
     if (opts.ring) |r| d = d.border(r).borderW(2);
     defer d.end();
     if (opts.image) |png| {
@@ -103,7 +94,7 @@ pub fn avatarGroup(c: *ui.Context, names: []const []const u8, opts: struct { siz
         avatar(c, .{ .name = name, .size = opts.size, .ring = t.background });
     }
     if (names.len > shown) {
-        const more = ui.div(c).offset(-@as(f32, @floatFromInt(shown)) * opts.size * 0.22, 0).w(opts.size).h(opts.size).roundedFull().center().bg(t.surface_hover).border(t.background).borderW(2);
+        const more = ui.div(c).offset(-@as(f32, @floatFromInt(shown)) * opts.size * 0.22, 0).w(opts.size).h(opts.size).roundedFull().circular().center().bg(t.surface_hover).border(t.background).borderW(2);
         defer more.end();
         ui.text(c, c.print("+{d}", .{names.len - shown}), .{ .size = opts.size * 0.36, .weight = .semibold, .color = t.muted });
     }

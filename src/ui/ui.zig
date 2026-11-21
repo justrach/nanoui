@@ -46,6 +46,8 @@ pub const A11yItem = ctx_mod.A11yItem;
 pub const access = @import("access.zig");
 /// Key combinations as the platform writes them: `ui.keys.label("⌘P")`.
 pub const keys = @import("keys.zig");
+/// The line icons drawn where there are no SF Symbols, by name.
+pub const icons = @import("icons.zig");
 /// A monotonic clock in seconds.
 pub const clock = @import("clock.zig");
 /// PNG files from pixels (and back, `png_decode`).
@@ -282,6 +284,8 @@ pub const markdown = @import("markdown.zig");
 pub const Drop = @import("input.zig").Drop;
 pub const MouseButton = @import("input.zig").Button;
 pub const ScrollPhase = @import("input.zig").ScrollPhase;
+/// A pen's pressure, tilt and buttons (`Input.pen`, `pen.zig`).
+pub const Pen = @import("pen.zig").Pen;
 /// Offscreen pixels a CPU window reuses (`canvas.zig`).
 pub const PixelCanvas = @import("canvas.zig").Canvas;
 /// CPU raster (Linux/Windows). `raster.shapes.shadow_samples` is 8 to match Metal.
@@ -314,6 +318,7 @@ test {
     _ = @import("tests_ruler.zig");
     // The one press in flight: a second button ignored, a stale press replaced.
     _ = @import("pointer_press.zig");
+    _ = @import("pen.zig");
     _ = @import("tests_caret_activity.zig");
     _ = @import("tests_motion.zig");
     _ = @import("motion/tests_catalog.zig");

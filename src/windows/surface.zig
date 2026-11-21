@@ -26,6 +26,7 @@ const gpu_side = @import("surface_gpu.zig");
 const ime = @import("ime.zig");
 const keys = @import("surface_win_keys.zig");
 const mouse = @import("surface_win_mouse.zig");
+const pen_side = @import("surface_win_pen.zig");
 const pace_side = @import("surface_pace.zig");
 const display = @import("surface_display.zig");
 const vblank = @import("vblank.zig");
@@ -147,6 +148,9 @@ pub const Surface = struct {
         const self = try gpa.create(Surface);
         self.* = .{ .gpa = gpa, .window = window, .text = .init(gpa), .ctx = undefined, .view = view, .theme_override = theme_override, .start_time = clock.now() };
         if (window.app.gui and !window.app.flags.hidden) self.text.enablePersistence(window.app.options.name);
+        // Text defaults to 2x, but the DPI update skips setScale at 96 DPI
+        // because the surface is already at 1x.
+        self.text.setScale(self.scale);
         self.ctx = .init(gpa, &self.text);
         self.ctx.input.window_active = window.isFocused();
         // WM_KEYUP and WM_SYSKEYUP reach the view (surface_win_keys.zig).
@@ -446,7 +450,10 @@ pub const Surface = struct {
                 self.setCursor();
                 return 1;
             },
+            // A pen's pressure and tilt, before the mouse message it becomes.
+            pen_side.WM_POINTERUPDATE, pen_side.WM_POINTERDOWN, pen_side.WM_POINTERUP, pen_side.WM_POINTERENTER, pen_side.WM_POINTERLEAVE => return pen_side.pointerMessage(self, msg, wp),
             w.WM_MOUSEMOVE => {
+                pen_side.mouseMessage(self);
                 if (!self.tracking) {
                     var t: w.TRACKMOUSEEVENT = .{ .dwFlags = 2, .hwndTrack = h };
                     _ = w.TrackMouseEvent(&t);
@@ -473,8 +480,11 @@ pub const Surface = struct {
                 }
             },
             // The buttons, and the capture lost mid-press: `surface_win_mouse.zig`.
-            w.WM_LBUTTONDOWN, w.WM_LBUTTONDBLCLK, w.WM_LBUTTONUP, w.WM_RBUTTONDOWN, w.WM_RBUTTONDBLCLK, w.WM_RBUTTONUP => return mouse.message(self, h, msg, wp, lp),
-            w.WM_MBUTTONDOWN, w.WM_MBUTTONDBLCLK, w.WM_MBUTTONUP, w.WM_CAPTURECHANGED => return mouse.message(self, h, msg, wp, lp),
+            w.WM_LBUTTONDOWN, w.WM_LBUTTONDBLCLK, w.WM_LBUTTONUP, w.WM_RBUTTONDOWN, w.WM_RBUTTONDBLCLK, w.WM_RBUTTONUP, w.WM_MBUTTONDOWN, w.WM_MBUTTONDBLCLK, w.WM_MBUTTONUP => {
+                pen_side.mouseMessage(self);
+                return mouse.message(self, h, msg, wp, lp);
+            },
+            w.WM_CAPTURECHANGED => return mouse.message(self, h, msg, wp, lp),
             w.WM_MOUSEWHEEL => {
                 var p: w.POINT = .{ .x = @as(i16, @truncate(lp)), .y = @as(i16, @truncate(lp >> 16)) };
                 _ = w.ScreenToClient(h, &p);

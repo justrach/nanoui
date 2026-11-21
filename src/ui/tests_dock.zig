@@ -110,3 +110,44 @@ test "dock: a divider under the pointer glows there, fading up and out" {
     t.settle(1);
     try testing.expectEqual(@as(f32, 0), s.st.glow);
 }
+
+test "dock: a panel dragged to its minimum holds, pushes its neighbour, and both come back" {
+    var s: Scene = .{};
+    try testing.expect(s.tree.insert(0, null));
+    try testing.expect(s.tree.split(1, 0, .right));
+    try testing.expect(s.tree.split(2, 1, .right));
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&s, Scene.view), .{ .width = 400, .height = 300, .scale = 1 });
+    defer t.deinit();
+    t.settle(0.1);
+    t.frame();
+    const width = struct {
+        fn of(sc: *Scene, p: ui.dock.PanelId) f32 {
+            return sc.st.layout.group(sc.tree.groupOf(p).?).?.rect.w;
+        }
+    }.of;
+    const a0 = width(&s, 0);
+    const c0 = width(&s, 2);
+    const d = s.st.layout.dividers[0].rect;
+    const x = d.x + d.w / 2;
+    t.down(x, 150);
+    // Far past Beta's minimum: Beta holds at 60, then Gamma is pushed to 60.
+    t.move(x + 300, 150);
+    t.frame();
+    try testing.expectApproxEqAbs(@as(f32, 60), width(&s, 1), 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 60), width(&s, 2), 0.5);
+    const held = width(&s, 0);
+    // Coming back, but not yet past where it stopped: nothing moves.
+    t.move(x + 250, 150);
+    t.frame();
+    try testing.expectEqual(held, width(&s, 0));
+    // Back where it was pressed: every panel as it was, Gamma included.
+    t.move(x, 150);
+    t.frame();
+    try testing.expectApproxEqAbs(a0, width(&s, 0), 0.5);
+    try testing.expectApproxEqAbs(c0, width(&s, 2), 0.5);
+    t.up();
+    t.frame();
+    try testing.expect(s.st.divider == null);
+    try testing.expect(s.tree.validate());
+}

@@ -49,6 +49,8 @@ pub const Palette = struct {
     open: bool = false,
     query: ui.TextBuffer = .{},
     selected: usize = 0,
+    /// Counts the opens, keying the list, so each opens scrolled to the top.
+    opens: u32 = 0,
 
     pub fn deinit(p: *Palette) void {
         p.query.deinit();
@@ -60,6 +62,7 @@ pub const Palette = struct {
             return;
         }
         p.open = true;
+        p.opens +%= 1;
         p.query.clear();
         p.selected = 0;
         p.query.focus();
@@ -163,23 +166,25 @@ pub const Palette = struct {
     pub fn overlay(p: *Palette, g: anytype, c: *ui.Context) void {
         const th = c.theme;
         const tk = kit.tokens(c);
-        const f = motion.present(c, "gallery-palette", p.open, .{
-            .initial = .{ .opacity = 0, .scale = 0.97, .y = -8 },
-            .exit = .{ .opacity = 0, .scale = 0.98, .y = -6 },
-            .transition = .{ .spring = motion.Spring.snappy },
-        }) orelse return;
-        const scrim_f = motion.present(c, "gallery-palette-scrim", p.open, .{
+        // The scrim and the card come and go together: each is asked every
+        // frame, so neither is left behind when the other has gone, and a
+        // closing card fades in the scrim's time rather than on a spring.
+        const leave: motion.Transition = .{ .tween = .{ .duration = 0.14 } };
+        if (motion.present(c, "gallery-palette-scrim", p.open, .{
             .initial = .{ .opacity = 0 },
             .exit = .{ .opacity = 0 },
-            .transition = .{ .tween = .{ .duration = 0.14 } },
-        });
-        {
-            var bd = ui.div(c).fixed().offset(0, 0).w(c.size.w).h(c.size.h).layer(10).bg(tk.overlay);
-            if (scrim_f) |sf| bd = bd.motion(sf);
+            .transition = if (p.open) .{ .tween = .{ .duration = 0.14 } } else leave,
+        })) |sf| {
+            const bd = ui.div(c).fixed().offset(0, 0).w(c.size.w).h(c.size.h).layer(10).bg(tk.overlay).motion(sf);
             const bit = bd.interaction();
             bd.end();
             if (bit.clicked and p.open) p.close(c);
         }
+        const f = motion.present(c, "gallery-palette", p.open, .{
+            .initial = .{ .opacity = 0, .scale = 0.97, .y = -8 },
+            .exit = .{ .opacity = 0, .scale = 0.97, .y = -8 },
+            .transition = if (p.open) .{ .spring = motion.Spring.snappy } else leave,
+        }) orelse return;
 
         const w = @min(480, @max(280, c.size.w - 32));
         const x = (c.size.w - w) / 2;
@@ -210,6 +215,7 @@ pub const Palette = struct {
         }
         kit.separator(c, .{});
         {
+            ui.key(c, c.print("pal-list-{d}", .{p.opens}));
             const list = ui.div(c).column().wFull().maxH(280).scrollY().p(6).gap(2);
             defer list.end();
             for (matches[0..count], 0..) |idx, rank| {

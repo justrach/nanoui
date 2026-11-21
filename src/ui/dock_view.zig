@@ -88,6 +88,13 @@ pub const State = struct {
     dragging: bool = false,
     divider: ?dl.DividerItem = null,
     divider_last: f32 = 0,
+    /// Where the divider drag began, and its split's weights then: each
+    /// move is laid out afresh from those, so a panel held at its
+    /// minimum stays put until the pointer comes back past where it
+    /// stopped, and a neighbour it pushed comes back with it.
+    divider_press: f32 = 0,
+    divider_weights: [dock.max_children]f32 = @splat(0),
+    divider_children: u8 = 0,
     /// The divider being dragged changed its split's weights.
     divider_moved: bool = false,
     /// The glow (`Style.glow`): how lit, on which divider, where along it.
@@ -132,7 +139,7 @@ pub fn view(c: *Context, t: *dock.Tree, st: *State, style: Style, ctx: anytype, 
     for (l.groups[0..l.group_count]) |g| group(c, t, st, style, g, bounds, ctx, Hooks);
     var hot: ?dl.DividerItem = null;
     for (l.dividers[0..l.divider_count]) |d| {
-        if (divider(c, t, st, style, &l, d)) hot = d;
+        if (divider(c, t, st, style, &l, d, .{ .w = bounds.w, .h = bounds.h })) hot = d;
     }
     if (st.press_panel != null) hot = null;
     glow.update(c, st, style, hot);
@@ -205,7 +212,7 @@ fn translate(r: Rect, bounds: Rect) Rect {
 }
 
 /// Whether the pointer is on the divider or dragging it.
-fn divider(c: *Context, t: *dock.Tree, st: *State, style: Style, l: *const dl.Layout, d: dl.DividerItem) bool {
+fn divider(c: *Context, t: *dock.Tree, st: *State, style: Style, l: *const dl.Layout, d: dl.DividerItem, area: Rect) bool {
     const slop = t.metrics.grab_slop;
     var r = d.rect;
     if (d.axis == .row) {
@@ -224,6 +231,9 @@ fn divider(c: *Context, t: *dock.Tree, st: *State, style: Style, l: *const dl.La
     if (it.pressed and !mine and st.divider == null) {
         st.divider = d;
         st.divider_last = along;
+        st.divider_press = along;
+        st.divider_weights = t.nodes[d.split].weights;
+        st.divider_children = t.nodes[d.split].child_count;
         st.divider_moved = false;
     } else if (mine) {
         if (!c.input.down) {
@@ -231,7 +241,7 @@ fn divider(c: *Context, t: *dock.Tree, st: *State, style: Style, l: *const dl.La
             if (st.divider_moved) st.resized += 1;
             st.divider_moved = false;
         } else if (along != st.divider_last) {
-            if (adjust(t, l, d, along - st.divider_last)) st.divider_moved = true;
+            dragTo(t, st, d, along - st.divider_press, area);
             st.divider_last = along;
             c.changed = true;
         }
@@ -242,6 +252,24 @@ fn divider(c: *Context, t: *dock.Tree, st: *State, style: Style, l: *const dl.La
     }
     c.end();
     return (it.hovered and st.divider == null) or mine;
+}
+
+/// The dragged divider `offset` points from where it was pressed: the
+/// split's weights as they were at the press, moved by the whole offset
+/// over a layout of them (`moveDivider`, which holds each panel at its
+/// limits and pushes the next).
+fn dragTo(t: *dock.Tree, st: *State, d: dl.DividerItem, offset: f32, area: Rect) void {
+    // The tree changed shape under the drag (the app moved a panel): the
+    // weights kept at the press are no longer this split's.
+    if (d.split >= t.node_count or t.nodes[d.split].kind != .split or t.nodes[d.split].child_count != st.divider_children) return;
+    const sp = &t.nodes[d.split];
+    const n = sp.child_count;
+    sp.weights = st.divider_weights;
+    if (offset != 0) {
+        const start = t.layout(area);
+        _ = t.moveDivider(&start, d, offset);
+    }
+    st.divider_moved = !std.mem.eql(f32, st.divider_weights[0..n], sp.weights[0..n]);
 }
 
 /// Moves the divider; whether its split's weights changed.
