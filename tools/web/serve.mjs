@@ -1,26 +1,67 @@
 // Loopback-only static host; WebGPU requires a secure context (localhost).
 import { createServer } from "node:http";
-import { readFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import { resolve, sep, extname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+const MIME = {
+  ".wasm": "application/wasm",
+  ".js": "text/javascript",
+  ".mjs": "text/javascript",
+  ".html": "text/html",
+  ".css": "text/css",
+  ".json": "application/json",
+};
+
 export async function serve(root = fileURLToPath(new URL("../../zig-out/web", import.meta.url)), port = 0) {
-  root = resolve(root);
+  const rootReal = await realpath(resolve(root));
   const server = createServer(async (req, res) => {
     try {
-      const pathname = decodeURIComponent(new URL(req.url, "http://localhost").pathname);
-      if (pathname === "/favicon.ico") { res.writeHead(204); res.end(); return; }
-      if (pathname === "/") {
-        res.setHeader("Content-Type", "text/html");
-        res.end("<!doctype html><title>nanoui WebGPU parity</title><body>nanoui WebGPU test host</body>");
+      const method = req.method ?? "GET";
+      if (method !== "GET" && method !== "HEAD") {
+        res.writeHead(405, { Allow: "GET, HEAD" });
+        res.end();
         return;
       }
-      const path = resolve(root, `.${pathname}`);
-      if (!path.startsWith(root + sep)) { res.writeHead(403); res.end(); return; }
-      const body = await readFile(path);
-      res.setHeader("Content-Type", ({ ".wasm": "application/wasm", ".js": "text/javascript", ".html": "text/html" })[extname(path)] ?? "application/octet-stream");
-      res.end(body);
-    } catch { res.writeHead(404); res.end(); }
+      const pathname = decodeURIComponent(new URL(req.url, "http://127.0.0.1").pathname);
+      if (pathname.includes("\0")) {
+        res.writeHead(403);
+        res.end();
+        return;
+      }
+      if (pathname === "/favicon.ico") {
+        res.writeHead(204);
+        res.end();
+        return;
+      }
+      if (pathname === "/") {
+        res.setHeader("Content-Type", "text/html; charset=utf-8");
+        res.setHeader("X-Content-Type-Options", "nosniff");
+        res.setHeader("Cache-Control", "no-store");
+        res.end(method === "HEAD" ? undefined : "<!doctype html><title>nanoui WebGPU parity</title><body>nanoui WebGPU test host</body>");
+        return;
+      }
+      const candidate = resolve(rootReal, `.${pathname}`);
+      if (!candidate.startsWith(rootReal + sep)) {
+        res.writeHead(403);
+        res.end();
+        return;
+      }
+      const target = await realpath(candidate);
+      if (!target.startsWith(rootReal + sep)) {
+        res.writeHead(403);
+        res.end();
+        return;
+      }
+      const body = await readFile(target);
+      res.setHeader("Content-Type", MIME[extname(target)] ?? "application/octet-stream");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("Cache-Control", "no-store");
+      res.end(method === "HEAD" ? undefined : body);
+    } catch {
+      res.writeHead(404);
+      res.end();
+    }
   });
   await new Promise(resolve => server.listen(port, "127.0.0.1", resolve));
   return { url: `http://127.0.0.1:${server.address().port}`, close: () => new Promise(resolve => server.close(resolve)) };
