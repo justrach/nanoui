@@ -88,7 +88,7 @@ test "the view's theme choice draws that theme" {
 
 fn emit(obj: *anyopaque, signal: [*:0]const u8, args: anytype) void {
     const emit_signal: *const fn (*anyopaque, [*:0]const u8, ...) callconv(.c) void =
-        @ptrCast(std.c.dlsym(null, "g_signal_emit_by_name").?);
+        @ptrCast(@alignCast(std.c.dlsym(null, "g_signal_emit_by_name").?));
     @call(.auto, emit_signal, .{ obj, signal } ++ args);
 }
 
@@ -204,7 +204,7 @@ test "GTK updates the preedit cursor, cancels and commits marked text" {
         var text: [*:0]const u8 = "";
         var cursor_pos: c_int = 1;
         fn get(_: *anyopaque, str: *?[*:0]u8, _: ?*anyopaque, cursor_chars: *c_int) callconv(.c) void {
-            const dup: *const fn ([*:0]const u8) callconv(.c) ?[*:0]u8 = @ptrCast(std.c.dlsym(null, "g_strdup").?);
+            const dup: *const fn ([*:0]const u8) callconv(.c) ?[*:0]u8 = @ptrCast(@alignCast(std.c.dlsym(null, "g_strdup").?));
             str.* = dup(text);
             cursor_chars.* = cursor_pos;
         }
