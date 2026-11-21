@@ -127,3 +127,54 @@ test "controls password field has caption label and redacts value in accessibili
     }
     try testing.expect(found_password);
 }
+
+test "controls scroll probe reports received and consumed deltas" {
+    var g: Gallery = .{};
+    defer g.deinit();
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&g, Gallery.view), .{ .width = 960, .height = 1200 });
+    defer t.deinit();
+    t.settle(1);
+
+    const prompt = t.findText("Mouse wheel or two-finger trackpad.").?;
+    const x = prompt.x + prompt.w / 2;
+    const y = prompt.y + prompt.h / 2;
+    t.moveTo(x, y);
+    t.ctx.input.precise = true;
+    t.ctx.input.scroll_phase = .began;
+    t.scroll(x, y, -32);
+    try testing.expectEqual(@as(f32, -32), g.scroll_received_y);
+    try testing.expectEqual(@as(f32, 32), g.scroll_consumed_y);
+    try testing.expect(g.scroll_precise);
+    try testing.expectEqualStrings("began", g.scroll_phase);
+    try testing.expect(t.hasText("Input x 0.0 y -32.0"));
+    try testing.expect(t.hasText("Mode precise | phase began"));
+
+    t.scroll(x, y, -300);
+    try testing.expectEqual(@as(f32, -300), g.scroll_received_y);
+    try testing.expectEqual(@as(f32, 148), g.scroll_consumed_y);
+    try testing.expectEqual(@as(f32, 180), g.scroll_probe_y);
+    t.scroll(x, y, -40);
+    try testing.expectEqual(@as(f32, -40), g.scroll_received_y);
+    try testing.expectEqual(@as(f32, 0), g.scroll_consumed_y);
+
+    t.hscroll(x, y, -18);
+    try testing.expectEqual(@as(f32, -18), g.scroll_received_x);
+    try testing.expectEqual(@as(f32, 18), g.scroll_consumed_x);
+    try testing.expectEqual(@as(f32, 18), g.scroll_probe_x);
+
+    t.ctx.input.precise = false;
+    t.ctx.input.scroll_phase = .none;
+    t.scroll(x, y, 15);
+    try testing.expectEqual(@as(f32, 15), g.scroll_received_y);
+    try testing.expectEqual(@as(f32, -15), g.scroll_consumed_y);
+    try testing.expectEqual(@as(f32, 165), g.scroll_probe_y);
+    try testing.expect(!g.scroll_precise);
+    try testing.expectEqualStrings("none", g.scroll_phase);
+
+    g.page = 0;
+    g.open = true;
+    t.resize(390, 844);
+    t.settle(2);
+    try testing.expect(t.hasText("Scroll input"));
+}
