@@ -1,19 +1,13 @@
 //! The surface's GTK 4 side (issue #4): GTK 4 draws a drawing area through
 //! a draw function and sends input through event controllers (a click
 //! gesture, motion, scroll, keys, focus) instead of GTK 3's event
-//! signals. The input method is the key controller's: it takes typed
-//! text first and commits it (`onCommit`), so `key-pressed` only sees the
-//! keys that aren't text. What each does is surface.zig's, shared with GTK 3.
-const std = @import("std");
+//! signals. The key controller offers each event to the IM first. Its
+//! commit and preedit signals go to ime.zig, and unhandled presses go to
+//! the same keyPress as GTK 3.
 const gtk = @import("gtk.zig");
+const ime = @import("ime.zig");
 const surface = @import("surface.zig");
 const Surface = surface.Surface;
-
-/// Draws `s` in its window and feeds it GTK 4's input.
-pub fn attach(s: *Surface) void {
-    gtk.connect(s.im, "commit", @ptrCast(&onCommit), s);
-    attachArea(s);
-}
 
 /// Puts `s.area` in the window (replacing what was there), drawn and fed
 /// input: a GL area draws in "render" and starts OpenGL when realized; a
@@ -83,7 +77,6 @@ fn onPressed(gesture: *anyopaque, n_press: c_int, x: f64, y: f64, data: ?*anyopa
     at(s, gesture, x, y);
     // GTK 4 counts the clicks itself: a double click's second press says 2.
     s.ctx.input.click_count = @intCast(@max(1, n_press));
-    s.ctx.updateHot();
     s.ctx.pointerDown();
     s.frame();
 }
@@ -123,17 +116,7 @@ fn onFocusIn(_: *anyopaque, data: ?*anyopaque) callconv(.c) void {
 
 fn onFocusOut(_: *anyopaque, data: ?*anyopaque) callconv(.c) void {
     const s = of(data);
-    gtk.api.gtk_im_context_focus_out(s.im);
+    ime.focusOut(s);
     s.ctx.input.window_active = false;
-    s.frame();
-}
-
-/// Text typed (or composed by an input method): straight to the view.
-fn onCommit(_: *anyopaque, str: [*:0]const u8, data: ?*anyopaque) callconv(.c) void {
-    const s = of(data);
-    s.committed.clearRetainingCapacity();
-    s.committed.appendSlice(s.gpa, std.mem.span(str)) catch return;
-    if (s.committed.items.len == 0) return;
-    s.ctx.input.chars = s.committed.items;
     s.frame();
 }
