@@ -28,7 +28,8 @@ pub const Demo = struct {
         const th = c.theme;
         // The page's width: beside the sidebar, or all of a phone's.
         const compact = @import("phone.zig").compact(c);
-        const w = if (compact) c.size.w else c.size.w - 200;
+        const body = @import("page.zig").bodySize(c);
+        const w = body.w;
         const page = ui.div(c).grow().hFull().clip();
         defer page.end();
         {
@@ -49,8 +50,8 @@ pub const Demo = struct {
         if (!compact) {
             // Cards were painted first and extend beneath this pane. Their
             // scrolling drives the live backdrop and its right-edge reflection.
-            const side_top: f32 = if (c.size.h < 360) 92 else 104;
-            const side_h: f32 = @max(80, c.size.h - side_top - 16);
+            const side_top: f32 = if (body.h < 360) 92 else 104;
+            const side_h: f32 = @max(80, body.h - side_top - 16);
             const sidebar = ui.div(c).absolute().offset(20, side_top).w(196).h(side_h).column().px(12).py(12).gap(8).rounded(20).clip().glass(.{ .style = .sidebar, .tint = th.surface.alpha(0.75) });
             defer sidebar.end();
             {

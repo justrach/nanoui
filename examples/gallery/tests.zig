@@ -8,6 +8,7 @@ const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const main_mod = @import("main.zig");
 const phone = @import("phone.zig");
+const catalog = @import("catalog.zig");
 const Gallery = main_mod.Gallery;
 
 fn initGallery(g: *Gallery) void {
@@ -25,12 +26,17 @@ test "every gallery page builds and settles at desktop and phone sizes" {
     try t.init(testing.allocator, .init(&g, Gallery.view), .{ .width = 960, .height = 640 });
     defer t.deinit();
 
-    for (0..phone.pages.len) |i| {
+    for (0..catalog.page_count) |i| {
         g.page = i;
         t.settle(2);
         try testing.expect(t.ctx.nodes.items.len > 4);
-        // Pages 4 (Glass), 5 (Motion), and 6 (Kit) run continuous keyframe showcases.
-        if (i != 4 and i != 5 and i != 6) {
+        // The desktop shows the Kit demo as its components' pages.
+        if (i == catalog.kit_demo) try testing.expectEqual(@as(usize, catalog.first_component), g.page);
+        // Glass, Motion and the components that move on their own (a
+        // spinner, a skeleton's breath, an indeterminate bar) keep drawing.
+        const id = if (catalog.component(g.page)) |comp| comp.id else "";
+        const moving = i == 4 or i == 5 or std.mem.eql(u8, id, "spinner") or std.mem.eql(u8, id, "skeleton") or std.mem.eql(u8, id, "progress");
+        if (!moving) {
             try testing.expect(!t.ctx.animating);
             try testing.expect(t.ctx.frame_in == null);
         }
@@ -177,4 +183,55 @@ test "controls scroll probe reports received and consumed deltas" {
     t.resize(390, 844);
     t.settle(2);
     try testing.expect(t.hasText("Scroll input"));
+}
+
+test "the sidebar files components in groups that open, and a jump opens the group it lands in" {
+    var g: Gallery = .{};
+    defer g.deinit();
+    initGallery(&g);
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&g, Gallery.view), .{ .width = 1040, .height = 760 });
+    defer t.deinit();
+    t.settle(2);
+    try testing.expect(t.hasText("FOUNDATIONS") and t.hasText("COMPONENTS") and t.hasText("DEMOS"));
+    // Shut, a group's members are not drawn.
+    try testing.expect(!t.hasText("Icon button"));
+    try t.clickText("Buttons");
+    t.settle(30);
+    try t.clickText("Icon button");
+    t.settle(2);
+    try testing.expectEqual(catalog.find("icon-button"), g.page);
+    try testing.expect(t.containsText("src/kit/button.zig"));
+    // A page reached another way (the palette, the command line) opens its group.
+    g.page = catalog.find("dialog").?;
+    t.settle(30);
+    try testing.expect(t.hasText("Sheet"));
+}
+
+test "the foundations list the theme's colors and filter the icons" {
+    var g: Gallery = .{ .page = catalog.colors };
+    defer g.deinit();
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&g, Gallery.view), .{ .width = 1040, .height = 760 });
+    defer t.deinit();
+    t.settle(2);
+    try testing.expect(t.hasText("accent") and t.hasText("#0a84ff"));
+    g.page = catalog.icons;
+    t.settle(2);
+    try testing.expect(t.containsText(c_count(&g)));
+    g.foundations.icon_search.set("chevron");
+    t.settle(2);
+    try testing.expect(t.hasText("chevron.down"));
+    try testing.expect(!t.hasText("trash"));
+}
+
+fn c_count(_: *Gallery) []const u8 {
+    const S = struct {
+        var buf: [32]u8 = undefined;
+    };
+    return std.fmt.bufPrint(&S.buf, "{d} icons", .{ui.icons.all.len}) catch "";
+}
+
+test {
+    _ = catalog;
 }

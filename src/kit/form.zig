@@ -24,7 +24,7 @@ pub fn radioGroup(c: *ui.Context, options: []const []const u8, selected: *usize,
             changed = true;
             c.changed = true;
         }
-        const ring = ui.div(c).w(16).h(16).roundedFull().center().border(if (on) t.primary else t.border).borderW(if (on) 5 else 1.5).bg(t.surface);
+        const ring = ui.div(c).w(16).h(16).roundedFull().circular().center().border(if (on) t.primary else t.border).borderW(if (on) 5 else 1.5).bg(t.surface);
         ring.end();
         ui.text(c, label, .{ .size = 13, .color = t.foreground });
     }

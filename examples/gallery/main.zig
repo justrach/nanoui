@@ -6,6 +6,12 @@ const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const kit = nanoui.kit;
 const phone = @import("phone.zig");
+const catalog = @import("catalog.zig");
+const sidebar = @import("sidebar.zig");
+const page = @import("page.zig");
+
+/// Each demo's source, for its heading.
+const demo_files = [phone.pages.len][]const u8{ "main.zig", "main.zig", "typography.zig", "main.zig", "glass.zig", "motion.zig", "kit.zig", "studio.zig", "windows.zig" };
 
 const Item = struct { title: [64]u8, len: usize, done: bool };
 
@@ -73,6 +79,12 @@ pub const Gallery = struct {
     studio: @import("studio.zig").Demo = .{},
     palette: @import("palette.zig").Palette = .{},
     windows: @import("windows.zig").Demo = .{},
+    foundations: @import("foundations.zig").Demo = .{},
+    components: @import("components.zig").State = .{},
+    sidebar: sidebar.State = .{},
+    /// The page the sidebar last revealed, so a jump to another (the
+    /// palette's, a link's) opens the group holding it.
+    revealed: ?usize = null,
     /// The app, so a page can make a window of its own: the Windows page does,
     /// because a borderless or translucent window is the only way to see what
     /// those options do.
@@ -93,6 +105,8 @@ pub const Gallery = struct {
         g.filter.deinit();
         g.palette.deinit();
         g.studio.deinit();
+        g.foundations.deinit();
+        g.components.deinit();
     }
 
     pub fn add(g: *Gallery, title: []const u8) void {
@@ -123,9 +137,15 @@ pub const Gallery = struct {
         if (phone.compact(c)) {
             phone.view(g, c);
         } else {
+            // The desktop shows the Kit demo as a page per component.
+            if (g.page == catalog.kit_demo) g.page = catalog.first_component;
+            if (g.revealed != g.page) {
+                g.sidebar.reveal(g.page);
+                g.revealed = g.page;
+            }
             ui.row(c, .{ .width = .fill, .height = .fill });
             defer ui.end(c);
-            g.sidebar(c);
+            sidebar.view(g, c);
             g.content(c);
         }
         g.palette.overlay(g, c);
@@ -133,12 +153,26 @@ pub const Gallery = struct {
 
     /// The page shown, beside the sidebar or pushed on a phone.
     pub fn content(g: *Gallery, c: *ui.Context) void {
+        // Beside the sidebar, a demo sits under the same fixed heading as the
+        // reference pages.
+        if (!phone.compact(c) and g.page < phone.pages.len) {
+            page.beginDemo(c, phone.pages[g.page][0], c.print("{s}  ·  examples/gallery/{s}", .{ phone.blurbs[g.page], demo_files[g.page] }));
+            defer page.end(c);
+            return g.demo(c);
+        }
+        return g.demo(c);
+    }
+
+    fn demo(g: *Gallery, c: *ui.Context) void {
         if (g.page == 3) return g.bigList(c);
         if (g.page == 4) return g.glass.view(c);
         if (g.page == 5) return g.motion.page(c);
         if (g.page == 6) return g.kit.view(c, &g.appearance);
         if (g.page == 7) return g.studio.view(c, &g.appearance);
         if (g.page == 8) return g.windows.view(c, g.app, g.window);
+        if (g.page == catalog.colors) return g.foundations.colors(c);
+        if (g.page == catalog.icons) return g.foundations.icons(c, if (phone.compact(c)) 0 else sidebar.width);
+        if (catalog.component(g.page)) |comp| return @import("components.zig").view(&g.components, c, comp);
         ui.scroll(c, .{ .grow = 1, .width = .fill, .height = .fill, .padding = .all(if (phone.compact(c)) 24 else 28), .gap = 20 });
         defer ui.end(c);
         switch (g.page) {
@@ -149,64 +183,8 @@ pub const Gallery = struct {
         }
     }
 
-    fn sidebar(g: *Gallery, c: *ui.Context) void {
-        const th = c.theme;
-        c.title_bar_height = 40;
-        ui.column(c, .{
-            .width = .{ .px = 200 },
-            .height = .fill,
-            .padding = .{ .top = 44, .left = 12, .right = 12, .bottom = 12 },
-            .gap = 6,
-            .clip = true,
-            .background = th.surface.alpha(0.6),
-            .border = th.border,
-            .border_width = 0,
-        });
-        defer ui.end(c);
-        {
-            const head = ui.div(c).column().px(2).gap(4);
-            defer head.end();
-            ui.text(c, "nanoui", .{ .size = 18, .weight = .bold });
-            ui.label(c, c.print("Zig 0.17 · {s}", .{c.renderer}));
-        }
-        {
-            const trigger = ui.div(c).row().wFull().px(10).py(6).gap(6).itemsCenter().rounded(7).bg(th.background.alpha(0.65)).border(th.border).hover(th.surface_hover).control();
-            defer trigger.end();
-            if (trigger.clicked()) g.palette.toggle(c);
-            ui.icon(c, "magnifyingglass", .{ .size = 12, .color = th.muted });
-            ui.text(c, "Search…", .{ .size = 12.5, .color = th.muted });
-            ui.spacer(c);
-            kit.kbd(c, ui.keys.label("⌘K"));
-        }
-        {
-            const nav = ui.div(c).column().wFull().grow().gap(4).scrollY().scrollEdgeFade(12).scrollBarIdle(3.0);
-            defer nav.end();
-            for (phone.pages, 0..) |p, i| {
-                const selected = g.page == i;
-                // GPUI's way: a box styled by a chain of methods.
-                var item = ui.div(c).row().wFull().px(10).py(7).gap(8).itemsCenter().rounded(7);
-                item = if (selected) item.bg(th.accent) else item.hover(th.surface_hover);
-                defer item.end();
-                if (item.clicked()) g.page = i;
-                const fg = if (selected) th.accent_text else th.text;
-                ui.icon(c, p[1], .{ .size = 14, .frame = 18, .color = fg });
-                ui.text(c, p[0], .{ .weight = .medium, .color = fg });
-                if (phone.badge(g, i)) |n| {
-                    ui.spacer(c);
-                    const b_bg = if (selected) th.accent_text.alpha(0.22) else th.accent.alpha(0.14);
-                    const b_fg = if (selected) th.accent_text else th.accent;
-                    const pill = ui.div(c).px(7).h(18).roundedFull().bg(b_bg).itemsCenter().justifyCenter();
-                    defer pill.end();
-                    ui.text(c, n, .{ .size = 11, .weight = .semibold, .color = b_fg, .tabular = true });
-                }
-            }
-        }
-        ui.label(c, c.print("{d} frames", .{c.frame}));
-        ui.label(c, c.print("{d:.0} fps", .{g.fps}));
-    }
-
     fn controls(g: *Gallery, c: *ui.Context) void {
-        ui.heading(c, "Controls");
+        page.demoTitle(c, "Controls");
         ui.card(c, .{ .width = .fill, .gap = 14 });
         {
             defer ui.end(c);
@@ -348,7 +326,7 @@ pub const Gallery = struct {
     }
 
     fn tasks(g: *Gallery, c: *ui.Context) void {
-        ui.heading(c, "Tasks");
+        page.demoTitle(c, "Tasks");
         ui.row(c, .{ .gap = 8, .align_items = .center });
         const r = ui.textField(c, &g.task, .{ .placeholder = "Something to do", .width = .{ .px = if (phone.compact(c)) 240 else 300 } });
         const add_clicked = ui.button(c, "Add", .{ .variant = .primary }).clicked;
@@ -428,7 +406,7 @@ pub const Gallery = struct {
         const pad: f32 = if (phone.compact(c)) 24 else 28;
         ui.column(c, .{ .grow = 1, .height = .fill, .padding = .{ .top = pad, .left = pad, .right = pad }, .gap = 12 });
         defer ui.end(c);
-        ui.heading(c, "List");
+        page.demoTitle(c, "List");
         ui.row(c, .{ .gap = 8, .align_items = .center });
         ui.icon(c, "magnifyingglass", .{ .color = th.muted });
         _ = ui.textField(c, &g.filter, .{ .placeholder = "Filter 100 000 rows", .width = .{ .px = 280 } });
@@ -449,20 +427,38 @@ pub const Gallery = struct {
     }
 };
 
+/// `gallery` opens the window; `gallery PAGE` opens it at a page (`colors`,
+/// `icons`, a component such as `button`, or a demo such as `studio`);
+/// `gallery --shot PAGE OUT.png [WIDTH [HEIGHT]]` draws that page offscreen
+/// into a PNG at twice the size and quits, with no window.
 pub fn main(init: std.process.Init) !void {
-    const app = try nanoui.App.create(init, .{ .name = "Gallery" });
-    defer app.destroy();
+    const args = try init.minimal.args.toSlice(init.arena.allocator());
     var g: Gallery = .{};
     defer g.deinit();
-    g.app = app;
     g.add("Write a UI toolkit in Zig");
     g.add("Draw it with Metal");
     g.add("Ship it");
     g.items[1].done = true;
+    if (args.len > 1 and std.mem.eql(u8, args[1], "--shot")) {
+        if (args.len < 4) return usage();
+        g.page = catalog.find(args[2]) orelse return usage();
+        const w = if (args.len > 4) try std.fmt.parseFloat(f32, args[4]) else 1040;
+        const h = if (args.len > 5) try std.fmt.parseFloat(f32, args[5]) else 700;
+        var t: ui.Tester = undefined;
+        try t.init(init.gpa, .init(&g, Gallery.view), .{ .width = w, .height = h });
+        defer t.deinit();
+        t.settle(4);
+        try t.screenshot(args[3]);
+        return;
+    }
+    if (args.len > 1) g.page = catalog.find(args[1]) orelse return usage();
+    const app = try nanoui.App.create(init, .{ .name = "Gallery" });
+    defer app.destroy();
+    g.app = app;
     const win = try app.newWindow(.{
         .title = "Gallery",
-        .width = 900,
-        .height = 640,
+        .width = 1040,
+        .height = 700,
         .min_width = 600,
         .min_height = 400,
         .title_bar = .hidden,
@@ -470,4 +466,12 @@ pub fn main(init: std.process.Init) !void {
     });
     g.window = win;
     try app.run();
+}
+
+fn usage() error{UnknownPage} {
+    var buf: [32]u8 = undefined;
+    std.debug.print("usage: gallery [PAGE] | gallery --shot PAGE OUT.png [WIDTH [HEIGHT]]\npages:", .{});
+    for (0..catalog.page_count) |i| std.debug.print(" {s}", .{catalog.slug(&buf, i)});
+    std.debug.print("\n", .{});
+    return error.UnknownPage;
 }
