@@ -451,7 +451,11 @@ pub fn main(init: std.process.Init) !void {
         try t.screenshot(args[3]);
         return;
     }
-    if (args.len > 1) g.page = catalog.find(args[1]) orelse return usage();
+    for (args[1..]) |arg| {
+        if (std.mem.startsWith(u8, arg, "--nanoui-") or std.mem.startsWith(u8, arg, "-psn_")) continue;
+        g.page = catalog.find(arg) orelse return usage();
+        break;
+    }
     const app = try nanoui.App.create(init, .{ .name = "Gallery" });
     defer app.destroy();
     g.app = app;
