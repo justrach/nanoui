@@ -134,6 +134,16 @@ test "controls password field has caption label and redacts value in accessibili
     try testing.expect(found_password);
 }
 
+test "controls notes label counts UTF-8 bytes and lines" {
+    var g: Gallery = .{};
+    defer g.deinit();
+    g.notes.set("e\u{301}\u{1f469}\u{200d}\u{1f4bb}\n\u{65e5}");
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&g, Gallery.view), .{ .width = 960, .height = 1200 });
+    defer t.deinit();
+    try testing.expect(t.hasText("18 UTF-8 bytes, 2 lines."));
+}
+
 test "controls scroll probe reports received and consumed deltas" {
     var g: Gallery = .{};
     defer g.deinit();

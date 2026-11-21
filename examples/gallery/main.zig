@@ -285,8 +285,9 @@ pub const Gallery = struct {
             for (notes) |ch| if (ch == '\n') {
                 newlines += 1;
             };
-            ui.textf(c, .{ .color = c.theme.muted }, "{d} characters, {d} line{s}.", .{
+            ui.textf(c, .{ .color = c.theme.muted }, "{d} UTF-8 byte{s}, {d} line{s}.", .{
                 notes.len,
+                if (notes.len == 1) "" else "s",
                 newlines + 1,
                 if (newlines == 0) "" else "s",
             });

@@ -1,5 +1,16 @@
 //! UTF-8 helpers every platform shares.
 
+/// Clamp a byte offset to the text and round down to a scalar boundary.
+/// Only a lead byte whose sequence covers the offset moves it, so stray
+/// continuation bytes in invalid text keep their own offsets.
+pub fn floorBoundary(s: []const u8, offset: usize) usize {
+    const at = @min(offset, s.len);
+    if (at == s.len) return at;
+    var lead = at;
+    while (lead > 0 and at - lead < 3 and (s[lead] & 0xc0) == 0x80) lead -= 1;
+    return if ((s[lead] & 0xc0) != 0x80 and lead + seqLen(s[lead]) > at) lead else at;
+}
+
 /// The length of the UTF-8 sequence starting with `b` (1 for a stray byte).
 pub fn seqLen(b: u8) usize {
     if (b < 0x80) return 1;

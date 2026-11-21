@@ -7,6 +7,7 @@ const Context = ctx_mod.Context;
 const EditState = ctx_mod.EditState;
 const tf = @import("textfield.zig");
 const keymap = @import("keymap.zig");
+const utf8 = @import("utf8.zig");
 
 pub const Granularity = enum { char, word, line };
 pub const UndoOp = enum { none, undo, redo };
@@ -148,7 +149,8 @@ pub fn rehome(c: *Context, buffer: *tf.TextBuffer, id: u64) void {
 }
 
 pub fn editState(c: *Context, id: u64, buffer: *tf.TextBuffer) ?*EditState {
-    const len = buffer.text().len;
+    const text = buffer.text();
+    const len = text.len;
     const entry = c.edits.getOrPut(c.gpa, id) catch return null;
     if (!entry.found_existing) entry.value_ptr.* = .{ .caret = len, .anchor = len };
     const e = entry.value_ptr;
@@ -165,8 +167,8 @@ pub fn editState(c: *Context, id: u64, buffer: *tf.TextBuffer) ?*EditState {
         e.marked = null;
         buffer.want_selection = null;
     }
-    e.caret = @min(e.caret, len);
-    e.anchor = @min(e.anchor, len);
+    e.caret = utf8.floorBoundary(text, e.caret);
+    e.anchor = utf8.floorBoundary(text, e.anchor);
     return e;
 }
 
