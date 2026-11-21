@@ -186,6 +186,8 @@ pub const lut = @import("ui_gpu.zig").lut;
 pub const pixelBufferTexture = @import("pixel_buffer.zig").texture;
 /// The app's own GPU passes before each frame's (`Surface.before_encode`).
 pub const BeforeEncode = @import("gpu.zig").BeforeEncode;
+pub const webgpuDevice = @import("ui_gpu.zig").webgpuDevice;
+pub const webgpuDeviceGeneration = @import("ui_gpu.zig").webgpuDeviceGeneration;
 pub const metalDevice = @import("ui_gpu.zig").metalDevice;
 pub const d3d11Device = @import("ui_gpu.zig").d3d11Device;
 pub const d3d11DeviceGeneration = @import("ui_gpu.zig").d3d11DeviceGeneration;
@@ -315,6 +317,7 @@ pub const View = struct {
 };
 
 test {
+    _ = @import("tests_shader_sync.zig");
     _ = @import("tests_ruler.zig");
     // The one press in flight: a second button ignored, a stale press replaced.
     _ = @import("pointer_press.zig");

@@ -1,0 +1,12 @@
+{
+  "name": "nanoui-web-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node parity.mjs",
+    "serve": "node serve.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.63.0"
+  }
+}

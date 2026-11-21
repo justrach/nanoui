@@ -137,6 +137,7 @@ const Band = struct {
 
     /// Draws the region's rows, shared among threads when there are many.
     fn share(job: Band) void {
+        if (@import("builtin").single_threaded) return job.rows(job.region[1], job.region[3]);
         const height = job.region[3] - job.region[1];
         const cpus = std.Thread.getCpuCount() catch 1;
         const n = @max(1, @min(threads, thread_limit, cpus, job.work() / min_pixels));

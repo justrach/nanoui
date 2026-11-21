@@ -129,3 +129,8 @@ and isn't shipped in any program. Copyright (c) 2010-2014 by tyPoland Lukasz
 Dziedzic with Reserved Font Name "Lato", licensed under the SIL Open Font License
 1.1, kept verbatim in
 [`third_party/licenses/Lato-OFL.txt`](third_party/licenses/Lato-OFL.txt).
+
+## DejaVu fonts
+
+The optional browser example fonts are DejaVu Sans Regular and Bold, version
+2.37. Their verbatim license is [DejaVu.txt](third_party/licenses/DejaVu.txt).
