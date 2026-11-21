@@ -9,6 +9,18 @@ const Context = ctx_mod.Context;
 
 const apple = builtin.os.tag == .macos or builtin.os.tag == .ios;
 
+/// Handle for the host's shared GPUDevice, resolved by JavaScript's object table.
+pub fn webgpuDevice() u32 {
+    if (comptime builtin.os.tag != .wasi) return 0;
+    return @import("webgpu_device.zig").get() orelse 0;
+}
+
+/// Changes whenever the host replaces the shared GPUDevice.
+pub fn webgpuDeviceGeneration() u64 {
+    if (comptime builtin.os.tag != .wasi) return 0;
+    return @import("webgpu_device.zig").generation();
+}
+
 /// A 3D LUT for `Texture.lut` or `Texture.source_lut`: `size`³ RGBA half
 /// floats (2 to 65 a side), red fastest as a .cube lists them. The GPU's
 /// copy is made the first time `key` is seen and kept by it: a changed

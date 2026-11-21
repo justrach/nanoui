@@ -10,6 +10,10 @@ const catalog = @import("catalog.zig");
 const sidebar = @import("sidebar.zig");
 const page = @import("page.zig");
 
+const web = @import("builtin").os.tag == .wasi;
+const PlatformApp = if (web) void else nanoui.App;
+const PlatformWindow = if (web) void else nanoui.Window;
+
 /// Each demo's source, for its heading.
 const demo_files = [phone.pages.len][]const u8{ "main.zig", "main.zig", "typography.zig", "main.zig", "glass.zig", "motion.zig", "kit.zig", "studio.zig", "windows.zig" };
 
@@ -88,10 +92,10 @@ pub const Gallery = struct {
     /// The app, so a page can make a window of its own: the Windows page does,
     /// because a borderless or translucent window is the only way to see what
     /// those options do.
-    app: ?*nanoui.App = null,
+    app: ?*PlatformApp = null,
     /// The gallery's own window, so the demo window can be placed beside it
     /// rather than over the controls that change it.
-    window: ?*nanoui.Window = null,
+    window: ?*PlatformWindow = null,
 
     pub fn deinit(g: *Gallery) void {
         const gpa = std.heap.c_allocator;
@@ -169,7 +173,14 @@ pub const Gallery = struct {
         if (g.page == 5) return g.motion.page(c);
         if (g.page == 6) return g.kit.view(c, &g.appearance);
         if (g.page == 7) return g.studio.view(c, &g.appearance);
-        if (g.page == 8) return g.windows.view(c, g.app, g.window);
+        if (g.page == 8) {
+            if (comptime web) {
+                ui.heading(c, "Windows");
+                ui.text(c, "Native windows are unavailable in this canvas demo.", .{});
+                return;
+            }
+            return g.windows.view(c, g.app, g.window);
+        }
         if (g.page == catalog.colors) return g.foundations.colors(c);
         if (g.page == catalog.icons) return g.foundations.icons(c, if (phone.compact(c)) 0 else sidebar.width);
         if (catalog.component(g.page)) |comp| return @import("components.zig").view(&g.components, c, comp);
@@ -427,18 +438,34 @@ pub const Gallery = struct {
     }
 };
 
+var web_gallery: ?*Gallery = null;
+export fn gallery_page(index: u32) void {
+    if (comptime web) {
+        if (web_gallery) |g| {
+            g.page = @min(index, phone.pages.len - 1);
+            if (nanoui.web.active) |surface| surface.requestFrame();
+        }
+    }
+}
+
 /// `gallery` opens the window; `gallery PAGE` opens it at a page (`colors`,
 /// `icons`, a component such as `button`, or a demo such as `studio`);
 /// `gallery --shot PAGE OUT.png [WIDTH [HEIGHT]]` draws that page offscreen
 /// into a PNG at twice the size and quits, with no window.
 pub fn main(init: std.process.Init) !void {
-    const args = try init.minimal.args.toSlice(init.arena.allocator());
     var g: Gallery = .{};
     defer g.deinit();
     g.add("Write a UI toolkit in Zig");
     g.add("Draw it with Metal");
     g.add("Ship it");
     g.items[1].done = true;
+    if (comptime web) {
+        web_gallery = &g;
+        _ = nanoui.web.registerBundledFonts();
+        _ = try nanoui.web.mount(.init(&g, Gallery.view), .{ .width = 900, .height = 640 });
+        nanoui.web.run();
+    }
+    const args = try init.minimal.args.toSlice(init.arena.allocator());
     if (args.len > 1 and std.mem.eql(u8, args[1], "--shot")) {
         if (args.len < 4) return usage();
         g.page = catalog.find(args[2]) orelse return usage();

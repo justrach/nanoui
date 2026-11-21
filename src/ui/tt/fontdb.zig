@@ -350,7 +350,7 @@ pub const Db = struct {
         // initial window (sufficient for single-face SFNT directories and most
         // early metadata tables) and expand to 64 KB only for TTC collections
         // or unusually large table directories.
-        const data = std.heap.page_allocator.alloc(u8, len) catch return;
+        const data = std.heap.page_allocator.alloc(u8, @intCast(len)) catch return;
         defer std.heap.page_allocator.free(data);
         var header_len: usize = @min(len, 4096);
         _ = file.readPositionalAll(db.io, data[0..header_len], 0) catch return;

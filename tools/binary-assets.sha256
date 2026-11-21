@@ -1,0 +1,10 @@
+# Verified SHA-256 digests of binary assets tracked in src/ and tools/.
+# Only add or modify entries after verifying upstream provenance.
+6ed7215615ddd8bd290ae1ecd0e8678241279e0c59fa7e675eab72783abd8d56  src/ui/fixtures/image_orientation/large-rotate-270.png
+dd4bb0455feda437f503b9e6be3e7de542e3d8c99bc273867fabcf0df79f6b9c  src/ui/fixtures/image_orientation/small-rotate-270.png
+20e42eb1b511c21806d4d227d07e5dd06877d8ce7b3a817f378f313653f35c70  src/ui/tt/data/brotli-dictionary.bin
+374010b0538877dd7568368075de57efa080978a9e4db885dce5754556e0bed5  src/ui/tt/data/brotli-fixtures.bin
+3f9b27e106e0deccad69040e53c290e1164e1d664f081a84724e16c88f44e80d  src/ui/tt/data/lato-subset.woff2
+e6476c1b80502924294eed40894c5b18e06c181444ca953e5334262df9c27724  src/ui/web_fonts/DejaVuSans-Bold.ttf
+7da195a74c55bef988d0d48f9508bd5d849425c1770dba5d7bfc6ce9ed848954  src/ui/web_fonts/DejaVuSans.ttf
+af8b6839a52899bd363b0ba5e8fa0914efdc0a03f69c0eb76b4dfe93c62007e4  tools/ios/fixture/Assets.xcassets/AppIcon.appiconset/icon.png

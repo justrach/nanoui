@@ -59,7 +59,7 @@ pub fn avatar(c: *ui.Context, opts: struct { name: []const u8 = "", image: ?[]co
     }
     const hues = [_]u24{ 0xe8453c, 0xe8833c, 0xc9a227, 0x3fae5a, 0x16a3a3, 0x2f6fd0, 0x6d4fd0, 0xb447a8 };
     const pick = std.hash.Wyhash.hash(0, opts.name) % hues.len;
-    c.node(d.index).style.background = if (opts.name.len == 0) t.surface_hover else Color.hex(hues[pick]);
+    c.node(d.index).style.background = if (opts.name.len == 0) t.surface_hover else Color.hex(hues[@intCast(pick)]);
     var buf: [8]u8 = undefined;
     // Into the frame's memory: text is drawn after this returns.
     ui.text(c, c.print("{s}", .{initials(&buf, opts.name)}), .{ .size = opts.size * 0.4, .weight = .semibold, .color = if (opts.name.len == 0) t.muted else .white });

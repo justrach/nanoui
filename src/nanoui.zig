@@ -74,6 +74,7 @@ const plat = switch (builtin.os.tag) {
 
 /// Android's entry and panic handler, for an app's library's root
 /// (`android.library` in build.zig makes it).
+pub const web = if (builtin.os.tag == .wasi) @import("web/web.zig") else struct {};
 pub const android = if (is_android) @import("android/main.zig") else struct {};
 
 /// The Objective-C runtime (macOS and iOS).
@@ -99,9 +100,9 @@ pub const tsgen = @import("tsgen.zig");
 pub const Surface = if (mac) @import("ui/surface.zig").Surface else if (builtin.os.tag == .windows) @import("windows/surface.zig").Surface else void;
 pub const a11y = if (mac) @import("ui/a11y.zig") else struct {};
 
-pub const App = plat.app.App;
+pub const App = if (builtin.os.tag == .wasi) opaque {} else plat.app.App;
 pub const AppOptions = plat.app.Options;
-pub const Window = plat.window.Window;
+pub const Window = if (builtin.os.tag == .wasi) opaque {} else plat.window.Window;
 pub const WindowOptions = plat.window.Options;
 pub const PageOptions = @import("window_types.zig").PageOptions;
 pub const PageHeader = @import("window_types.zig").PageHeader;
@@ -124,23 +125,23 @@ pub const Presentation = if (mac) @import("app_extras.zig").Presentation else vo
 /// A page docked in a native-UI window (`Window.dockPage`): WKWebView on
 /// macOS, WebView2 on Windows.
 pub const Page = if (mac) @import("page_webkit.zig").Page else if (builtin.os.tag == .windows) @import("page_webview2.zig").Page else void;
-pub const Asset = plat.window.Asset;
+pub const Asset = @import("window_types.zig").Asset;
 /// Typed IPC for pages: wherever a webview draws them (macOS, iOS, Windows, Linux).
 const has_pages = mac or builtin.os.tag == .ios or builtin.os.tag == .windows or (builtin.os.tag == .linux and !is_android);
 const page_ipc = if (has_pages) @import("ipc.zig").ipc(plat.window.Window, plat.app.App) else struct {};
 pub const Call = if (has_pages) page_ipc.Call else void;
 pub const Event = if (has_pages) page_ipc.Event else void;
 
-pub const menu = plat.menu;
-pub const MenuItem = plat.menu.MenuItem;
-pub const MenuRole = plat.menu.Role;
-pub const Menu = plat.menu.Menu;
-pub const MenuClick = plat.menu.Click;
+pub const menu = if (builtin.os.tag == .wasi) @import("menu_accel.zig") else plat.menu;
+pub const MenuItem = menu.MenuItem;
+pub const MenuRole = menu.Role;
+pub const Menu = menu.Menu;
+pub const MenuClick = menu.Click;
 pub const Tray = plat.tray.Tray;
 pub const TrayOptions = plat.tray.Options;
 pub const TrayClick = plat.tray.Click;
 pub const TrayAnchor = plat.tray.Anchor;
-pub const dialog = plat.dialog;
+pub const dialog = if (builtin.os.tag == .wasi) @import("dialog_types.zig") else plat.dialog;
 pub const fdwatch = plat.fdwatch;
 pub const clipboard = plat.desktop.clipboard;
 pub const shell = plat.desktop.shell;
@@ -252,6 +253,7 @@ test {
             _ = @import("windows/cursor.zig");
             _ = @import("page_webview2_dock.zig");
             _ = @import("windows/tests_webview2_lifetime.zig");
+            _ = @import("windows/tests_webview2_security.zig");
             _ = @import("windows/app.zig");
             // The notification area's icon: the shell calls and the popup.
             std.testing.refAllDecls(@import("windows/tray.zig").Tray);

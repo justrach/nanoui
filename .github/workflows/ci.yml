@@ -14,6 +14,32 @@ permissions:
   contents: read
 
 jobs:
+  security:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sh tools/check-security.sh
+
+  web:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: zig build web-check -j1
+      - run: node tools/web/check.mjs
+      - run: zig test src/ui/tests_shader_sync.zig
+      - run: npm ci --ignore-scripts --prefix tools/web
+      - run: tools/web/node_modules/.bin/playwright install --with-deps --only-shell chromium
+      - run: zig build web-parity -j1
+      - run: node tools/web/parity.mjs
+      - run: zig build web-demo -j1
+      - run: node tools/web/browser.mjs
+
   lean-proofs:
     runs-on: ubuntu-24.04
     steps:
