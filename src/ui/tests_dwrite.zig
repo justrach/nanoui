@@ -99,6 +99,49 @@ test "Windows small physical ems use GDI Classic and integer positions, large em
     try std.testing.expect(native.mode(large_face, large_rf.size, t.scale).rendering >= 4);
 }
 
+extern "gdi32" fn CreateFontW(height: i32, width: i32, escapement: i32, orientation: i32, weight: i32, italic: u32, underline: u32, strike_out: u32, charset: u32, out_precision: u32, clip_precision: u32, quality: u32, pitch_and_family: u32, face: [*:0]const u16) callconv(.winapi) ?*anyopaque;
+extern "gdi32" fn GetCharWidth32W(dc: *anyopaque, first: u32, last: u32, widths: [*]i32) callconv(.winapi) i32;
+
+test "Windows GDI Classic text moves by the widths GDI measures, not design advances" {
+    var sample: Sample = .{};
+    var t: ui.Tester = undefined;
+    try init(&t, &sample, 1, .white);
+    defer t.deinit();
+    if (t.text.atlas.native.aliased) return error.SkipZigTest;
+    const words = "jumps matters internationalization";
+    const style: ui.TextStyle = .{ .size = 15 };
+    const f = t.text.font(style);
+    const rf = t.text.run_fonts.items[f.id];
+    if (t.text.atlas.positions(f.id, rf) != 1) return error.SkipZigTest;
+    const layout = t.text.layout(words, style);
+
+    // GDI's own widths for the same face at the same em, in pixels.
+    const dc = CreateCompatibleDC(null) orelse return error.SkipZigTest;
+    defer _ = DeleteDC(dc);
+    const segoe = std.unicode.utf8ToUtf16LeStringLiteral("Segoe UI");
+    const gdi_font = CreateFontW(-15, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, segoe) orelse return error.SkipZigTest;
+    defer _ = DeleteObject(gdi_font);
+    const old = SelectObject(dc, gdi_font) orelse return error.SkipZigTest;
+    defer _ = SelectObject(dc, old);
+
+    // Grid-fitted glyphs are drawn at whole pixels; each must advance by
+    // GDI's width plus its kerning rounded to a pixel, or letters drift
+    // apart unevenly ("ju mps", "m atters").
+    const k = 15 / rf.font.units_per_em;
+    var design_drift = false;
+    for (layout.glyphs[0 .. layout.glyphs.len - 1], layout.glyphs[1..]) |glyph, next| {
+        const char = words[glyph.index];
+        var width: [1]i32 = undefined;
+        if (GetCharWidth32W(dc, char, char, &width) == 0) return error.GdiWidth;
+        const kern = @round(rf.font.kerning(glyph.glyph, next.glyph) * k);
+        const step = next.x - glyph.x;
+        try std.testing.expectApproxEqAbs(@as(f32, @floatFromInt(width[0])) + kern, step, 0.001);
+        if (@abs(rf.font.advance(glyph.glyph) * k - @as(f32, @floatFromInt(width[0]))) > 0.05) design_drift = true;
+    }
+    // The sample is one where design advances differ from GDI's widths.
+    try std.testing.expect(design_drift);
+}
+
 test "Windows grayscale and aliased coverage match native rendering" {
     for ([_]f32{ 12, 20 }) |size| for ([_]bool{ false, true }) |aliased| {
         // Exercise both Classic and Natural with ClearType disabled locally.

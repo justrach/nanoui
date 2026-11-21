@@ -15,6 +15,8 @@ const cjk_break = @import("cjk_break.zig");
 const stacks = @import("text_stack_tt.zig");
 const registry = @import("font_registry.zig");
 pub const rich = @import("rich_tt.zig");
+/// Windows draws glyphs with DirectWrite (`dwrite.zig`).
+const native_windows = @import("dwrite.zig").enabled;
 
 pub const Atlas = atlas_mod.Atlas;
 pub const Sprite = atlas_mod.Sprite;
@@ -124,8 +126,15 @@ pub const TextSystem = struct {
     }
 
     pub fn setScale(self: *TextSystem, scale: f32) void {
+        const changed = scale != self.scale;
         self.scale = scale;
         self.atlas.setScale(scale);
+        // Grid-fitted advances are whole device pixels at one scale.
+        if (native_windows and changed) {
+            freeLayouts(self.gpa, &self.layouts);
+            freeLayouts(self.gpa, &self.previous);
+            self.wraps.clear(self.gpa);
+        }
     }
 
     pub fn setFamilies(self: *TextSystem, family: ?[]const u8, mono_family: ?[]const u8) void {
@@ -366,15 +375,18 @@ pub const TextSystem = struct {
                 }
             }
             const k = size / rf.font.units_per_em;
+            const grid = self.gridded(id, rf);
             // Tabular digits: each in a cell as wide as the widest, unkerned.
             const digit = style.tabular and cp >= '0' and cp <= '9';
             if (prev) |p| if (p.id == id and !digit and !p.digit) {
-                x += rf.font.kerning(p.g, g) * k;
+                const kern = rf.font.kerning(p.g, g) * k;
+                // Grid-fitted glyphs keep to whole pixels, kerned too.
+                x += if (grid) @round(kern * self.scale) / self.scale else kern;
             };
-            const adv = rf.font.advance(g) * k;
+            const adv = self.advanceOf(rf, g, k, grid);
             var cell = adv;
             if (digit) for ("0123456789") |d| {
-                cell = @max(cell, rf.font.advance(rf.font.glyphIndex(d)) * k);
+                cell = @max(cell, self.advanceOf(rf, rf.font.glyphIndex(d), k, grid));
             };
             if (cp >= 0x20 or cp == '\t') try out.append(self.gpa, .{ .font = id, .glyph = g, .x = x + (cell - adv) / 2, .y = 0, .index = @intCast(offset + i) });
             x += (cell + rf.embolden * size) * @as(f32, if (cp == '\t') 4 else 1);
@@ -382,6 +394,21 @@ pub const TextSystem = struct {
             i += n;
         }
         return x;
+    }
+
+    /// Whether `rf` is drawn in a GDI mode on Windows: grid-fitted at one
+    /// position per pixel (`positions`), so its pen moves by GDI's widths.
+    /// Emboldened faces keep design advances plus their own widening.
+    fn gridded(self: *TextSystem, id: u16, rf: atlas_mod.RunFont) bool {
+        if (!native_windows or rf.embolden > 0) return false;
+        return self.atlas.positions(id, rf) == 1;
+    }
+
+    /// A glyph's advance in points: GDI's whole-pixel width when `grid`,
+    /// else its design advance.
+    fn advanceOf(self: *TextSystem, rf: atlas_mod.RunFont, g: u16, k: f32, grid: bool) f32 {
+        if (grid) if (self.atlas.native.gridAdvance(self.gpa, rf, g, self.scale) catch null) |px| return px / self.scale;
+        return rf.font.advance(g) * k;
     }
 
     /// Strokes aren't thickened here: `dilation` is for macOS's look.

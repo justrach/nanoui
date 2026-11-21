@@ -37,6 +37,16 @@ const GlyphRun = extern struct {
     bidi_level: u32 = 0,
 };
 const Key = struct { face: usize, simulations: u32 };
+const AdvanceKey = struct { face: usize, simulations: u32, size_bits: u32, scale_bits: u32, glyph: u16 };
+const GlyphMetrics = extern struct {
+    left_side_bearing: i32,
+    advance_width: u32,
+    right_side_bearing: i32,
+    top_side_bearing: i32,
+    advance_height: u32,
+    bottom_side_bearing: i32,
+    vertical_origin_y: i32,
+};
 pub const Bitmap = struct { bytes: []const u8, rgb: []const u8, w: u32, h: u32, stride: u32, x: f32, y: f32 };
 
 /// A non-null owner makes DirectWrite borrow the database's bytes instead of
@@ -85,6 +95,8 @@ pub const Cache = struct {
     bgr: bool = false,
     clear_level: f32 = 1,
     fonts: std.AutoHashMapUnmanaged(Key, *Com) = .empty,
+    /// GDI-measured advances in device pixels (`gridAdvance`).
+    grid_advances: std.AutoHashMapUnmanaged(AdvanceKey, f32) = .empty,
     bytes: std.ArrayList(u8) = .empty,
     rgb: std.ArrayList(u8) = .empty,
     scratch: std.ArrayList(u8) = .empty,
@@ -105,6 +117,7 @@ pub const Cache = struct {
             if (self.factory) |factory| factory.release();
         }
         self.fonts.deinit(gpa);
+        self.grid_advances.deinit(gpa);
         self.bytes.deinit(gpa);
         self.rgb.deinit(gpa);
         self.scratch.deinit(gpa);
@@ -153,10 +166,37 @@ pub const Cache = struct {
         self.loader = l;
     }
 
+    /// The advance of `glyph`, in whole device pixels, as GDI measures it
+    /// when its run font is drawn in a GDI mode (GDI Classic, GDI Natural or
+    /// aliased); null in a Natural mode. A GDI mode grid-fits each glyph's
+    /// stems and width and draws it at a whole pixel, so the pen has to move
+    /// by these widths: moved by design advances instead, letters drift up to
+    /// half a pixel apart ("ju mps", "m atters").
+    pub fn gridAdvance(self: *Cache, gpa: std.mem.Allocator, rf: anytype, glyph: u16, scale: f32) !?f32 {
+        if (!enabled) return null;
+        const key: AdvanceKey = .{ .face = @intFromPtr(rf.font), .simulations = simulationsOf(rf), .size_bits = @bitCast(rf.size), .scale_bits = @bitCast(scale), .glyph = glyph };
+        if (self.grid_advances.get(key)) |px| return px;
+        const f = try self.face(gpa, rf);
+        const m = self.mode(f, rf.size, scale);
+        if (m.rendering > 3) return null;
+        var metrics: GlyphMetrics = undefined;
+        const indices = [1]u16{glyph};
+        // IDWriteFontFace::GetGdiCompatibleGlyphMetrics: design units that
+        // come to whole pixels at this size; GDI Natural (3) asks for its own.
+        if (f.method(17, *const fn (*Com, f32, f32, ?*const anyopaque, i32, [*]const u16, u32, *GlyphMetrics, i32) callconv(.winapi) i32)(f, rf.size, scale, null, @intFromBool(m.rendering == 3), &indices, 1, &metrics, 0) < 0) return error.DirectWriteGlyphMetrics;
+        const px = @round(@as(f32, @floatFromInt(metrics.advance_width)) * rf.size * scale / rf.font.units_per_em);
+        try self.grid_advances.put(gpa, key, px);
+        return px;
+    }
+
+    fn simulationsOf(rf: anytype) u32 {
+        return @as(u32, if (rf.embolden > 0) 1 else 0) | @as(u32, if (rf.skew != 0) 2 else 0);
+    }
+
     fn face(self: *Cache, gpa: std.mem.Allocator, rf: anytype) !*Com {
         const key: Key = .{
             .face = @intFromPtr(rf.font),
-            .simulations = @as(u32, if (rf.embolden > 0) 1 else 0) | @as(u32, if (rf.skew != 0) 2 else 0),
+            .simulations = simulationsOf(rf),
         };
         if (self.fonts.get(key)) |f| return f;
         try self.initialize();
