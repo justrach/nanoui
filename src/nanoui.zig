@@ -267,6 +267,10 @@ test {
             _ = @import("windows/tests_ime.zig");
             // The open dialog, made and asked what it is, never shown.
             _ = @import("windows/tests_dialog.zig");
+            // Message boxes: the task dialog asked for, and one driven on a
+            // desktop of its own.
+            _ = @import("windows/task_dialog.zig");
+            _ = @import("windows/tests_task_dialog.zig");
         }
         // The GTK window's: decorations, the taskbar hint, opacity.
         if (builtin.os.tag == .linux) _ = @import("linux/tests_window.zig");
