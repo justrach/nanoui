@@ -4,6 +4,7 @@
 //! asks about it, where copied text goes, a field's editing state, and the
 //! pointer and keys of this event.
 const std = @import("std");
+pub const Pen = @import("pen.zig").Pen;
 const types = @import("types.zig");
 
 pub const Key = enum { backspace, delete, left, right, up, down, home, end, enter, tab, escape, page_up, page_down, f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12 };
@@ -229,6 +230,15 @@ pub const Input = struct {
     released: bool = false,
     /// Which button the last press was.
     button: Button = .left,
+    /// The pointer is a pen (a tablet's, a pen display's, a browser's
+    /// pen pointer): its pressure, tilt and buttons at `mouse`. Null for a
+    /// mouse, a trackpad or a finger. State, not an edge: it holds until
+    /// the next pointer event says otherwise. Filled on macOS, Windows and
+    /// the web.
+    pen: ?Pen = null,
+    /// Host state: the pen in proximity is its eraser end (macOS reports
+    /// it once, as the pen comes near).
+    pen_eraser_near: bool = false,
     /// The secondary button went down in this event: the right one, or a
     /// Control-click on the Mac. It isn't a press (`pressed` stays false):
     /// it asks for a box's context menu (`Div.secondaryClicked`).

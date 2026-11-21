@@ -1,7 +1,8 @@
 //! A hidden Windows surface's mouse buttons: the middle button's press,
 //! drag and release as the left's, the second-button guard, a left press
 //! after a middle drag being the left's, the capture lost mid-press, and
-//! the right button's press asking for a context menu.
+//! the right button's press asking for a context menu, and the pen
+//! cleared by a mouse.
 const std = @import("std");
 const testing = std.testing;
 const ui = @import("../ui/ui.zig");
@@ -160,4 +161,26 @@ test "mouse buttons: a right press is a secondary click, not a left one" {
     try testing.expectEqual(@as(u32, 1), seen.clicks);
     try testing.expectEqual(@as(u32, 2), seen.right_clicks);
     try testing.expectEqual(@as(u32, 2), seen.secondary_clicks);
+}
+
+test "a pen: pointer messages from no pen clear it, and so does a mouse's move" {
+    const gpa = testing.allocator;
+    const app = try hiddenApp(gpa);
+    defer app.destroy();
+    var seen: Seen = .{};
+    const win = try app.newWindow(.{ .title = "pen", .width = 200, .height = 120, .visible = false, .content = .{ .view = .init(&seen, Seen.view) } });
+    const h = win.hwnd orelse return error.SkipZigTest;
+    const s = win.surface.?;
+    const in = &s.ctx.input;
+    const pen_side = @import("surface_win_pen.zig");
+
+    // A pointer id no pen holds reads as no pen, and the message is left
+    // to DefWindowProc so it becomes the mouse's.
+    in.pen = .{ .pressure = 0.5 };
+    try testing.expectEqual(@as(?w.LRESULT, null), s.handle(h, pen_side.WM_POINTERUPDATE, 0xfff0, at(20, 20)));
+    try testing.expect(in.pen == null);
+    // A mouse message carries no pen signature: a real mouse moved.
+    in.pen = .{ .pressure = 0.5 };
+    _ = s.handle(h, w.WM_MOUSEMOVE, 0, at(30, 30));
+    try testing.expect(in.pen == null);
 }
