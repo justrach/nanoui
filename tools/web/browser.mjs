@@ -1,5 +1,6 @@
 import { chromium } from 'playwright';
 import assert from 'node:assert/strict';
+import { checkGalleryKeyboard } from './gallery_keyboard.mjs';
 import { serve } from './serve.mjs';
 import { chromiumOptions } from './browser_options.mjs';
 const host = await serve();
@@ -126,6 +127,10 @@ try {
   });
   assert.deepEqual(dimensions,[420,300]);
   await low.evaluate(()=>window.nanoui.destroy());await scaleOne.close();
+  const gallery = await context.newPage();
+  gallery.on('pageerror', e => errors.push(e.message));
+  await checkGalleryKeyboard(gallery, host.url);
+  await gallery.close();
   assert.deepEqual(errors,[]);
-  console.log('PASS canvas, click, idle, resize/DPR, device loss, disposal, Worker input and idle');
+  console.log('PASS canvas, click, idle, resize/DPR, device loss, disposal, Worker input and idle, Gallery keyboard');
 } finally { await browser.close(); await host.close(); }

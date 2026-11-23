@@ -1,5 +1,16 @@
 // Canvas lifecycle and event delivery. Applications opt in to keyboard
 // events so they can keep the browser's own shortcuts where appropriate.
+const namedKeys = {
+  ArrowUp: 0xf700, ArrowDown: 0xf701, ArrowLeft: 0xf702, ArrowRight: 0xf703,
+  Escape: 27, Tab: 9, Enter: 13, Backspace: 127, Delete: 0xf728,
+  Home: 0xf729, End: 0xf72b, PageUp: 0xf72c, PageDown: 0xf72d,
+};
+
+function keyCode(name) {
+  if (Object.hasOwn(namedKeys, name)) return namedKeys[name];
+  if (/^F(?:[1-9]|1[0-2])$/.test(name)) return 0xf703 + Number(name.slice(1));
+  return Array.from(name).length === 1 ? name.codePointAt(0) : 0;
+}
 export function createHost(canvas, options = {}) {
   let runtime, context, frame = null, timer = null, observer, media;
   let stopped = false, lost = false, paused = true, generation = 0, forceRecovery = false;
@@ -136,6 +147,31 @@ export function createHost(canvas, options = {}) {
       paused = false;
       resize(options.width, options.height, options.scale);
       if (canvas.getBoundingClientRect) {
+        if (options.keyboard) {
+          const forwarded = new Map();
+          const mods = e => Number(e.shiftKey) | (Number(e.ctrlKey) << 1) |
+            (Number(e.altKey) << 2) | (Number(e.metaKey) << 3) | (Number(e.repeat) << 4);
+          on(canvas, "keydown", e => {
+            if (e.defaultPrevented || e.isComposing || !options.keyboard(e)) return;
+            const code = keyCode(e.key);
+            if (!code) return;
+            const typed = Array.from(e.key).length === 1 && !e.ctrlKey && !e.metaKey ? code : 0;
+            forwarded.set(e.code, code);
+            key(0, code, mods(e), typed);
+            e.preventDefault();
+          });
+          on(canvas, "keyup", e => {
+            const code = forwarded.get(e.code);
+            if (code === undefined) return;
+            forwarded.delete(e.code);
+            key(1, code, mods(e));
+            e.preventDefault();
+          });
+          on(canvas, "blur", () => {
+            forwarded.clear();
+            key(2, 0, 0);
+          });
+        }
         const coords = e => { const r = canvas.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
         const touches = touchInput(pointer, pinch);
         let pressed, lastClick;
@@ -146,7 +182,10 @@ export function createHost(canvas, options = {}) {
         for (const [event, kind] of [["pointermove", 0], ["pointerdown", 1], ["pointerup", 2], ["pointercancel", 3]]) {
           on(canvas, event, e => {
             const mods = Number(e.shiftKey) | (Number(e.ctrlKey) << 1) | (Number(e.altKey) << 2) | (Number(e.metaKey) << 3);
-            if (kind === 1) canvas.setPointerCapture(e.pointerId);
+            if (kind === 1) {
+              canvas.setPointerCapture(e.pointerId);
+              if (options.keyboard) canvas.focus({ preventScroll: true });
+            }
             const [x, y] = coords(e);
             if (e.pointerType === "touch") touches.event(kind, e.pointerId, x, y);
             else {

@@ -1,6 +1,7 @@
 // Headless engine capability probe; unavailable adapters are reported explicitly.
 import { firefox, webkit } from 'playwright';
 import { serve } from './serve.mjs';
+import { checkGalleryKeyboard } from './gallery_keyboard.mjs';
 const host=await serve();
 try{
   for(const [name,type,options]of[
@@ -20,6 +21,8 @@ try{
       const result=await page.evaluate(async()=>{await window.nanoui.gpu.check();return{frames:window.nanoui.exports.nanoui_web_frames(),value:Number(window.nanoui.exports.counter_value())};});
       console.log(name,JSON.stringify({...support,...result}));
       if(result.value!==1)process.exitCode=1;
+      await checkGalleryKeyboard(await browser.newPage({viewport:{width:420,height:300}}), host.url);
+      console.log(name, 'Gallery keyboard passed');
     }catch(error){console.log(name,JSON.stringify({error:error.message}));process.exitCode=1;}
     finally{await browser?.close();}
   }

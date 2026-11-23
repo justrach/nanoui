@@ -6,7 +6,22 @@
 <script type="module">
 import { start } from './nanoui.js';
 try {
-  window.nanoui = await start({ canvas: document.querySelector('canvas'), url:`./${new URLSearchParams(location.search).get('app') === 'gallery' ? 'gallery' : 'counter'}.wasm`, onError: console.error });
+  const canvas = document.querySelector('canvas');
+  const gallery = new URLSearchParams(location.search).get('app') === 'gallery';
+  if (gallery) {
+    document.title = 'nanoui · WebGPU Gallery';
+    canvas.tabIndex = 0;
+    canvas.setAttribute('aria-label', 'nanoui Gallery');
+  }
+  const keyboard = gallery ? e => {
+    if (e.key === 'Tab' || e.altKey) return false;
+    if (e.ctrlKey || e.metaKey) return e.key.toLowerCase() === 'k';
+    return !e.key.startsWith('F') || e.key.length === 1;
+  } : undefined;
+  window.nanoui = await start({
+    canvas, url: gallery ? './gallery.wasm' : './counter.wasm',
+    keyboard, onError: console.error,
+  });
 } catch (error) {
   document.body.replaceChildren(Object.assign(document.createElement('p'),{textContent:error.message}));
   console.error(error);

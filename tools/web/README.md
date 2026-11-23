@@ -84,7 +84,11 @@ device recovery. The canvas delivers pinch scale and midpoint through
 `Context.input.zoom` and `mouse`, and two-finger translation through `pan`.
 A pinch cancels any active touch pointer drag rather than releasing it.
 Workers can forward a pinch through `runtime.host.pinch(x, y, scale, dx, dy)`.
-Keyboard/IME, clipboard, dialogs, filesystem, multi-window and a complete
+On a focusable DOM canvas, pass a `keyboard(event)` predicate to `start` to
+forward selected key events. The Gallery demo uses this for its Zig command
+palette. The predicate leaves browser-owned shortcuts and Tab available.
+Apps still need IME, clipboard, dialogs, filesystem, semantic accessibility,
+multi-window and a complete
 App/Window platform remain separate work. Opaque desktop handle types let
 shared app state compile without creating desktop windows in the browser.
 

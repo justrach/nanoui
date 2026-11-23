@@ -439,6 +439,14 @@ pub const Gallery = struct {
 };
 
 var web_gallery: ?*Gallery = null;
+/// State read by the browser acceptance fixture.
+export fn gallery_palette_query_bytes() i32 {
+    if (web_gallery) |g| {
+        if (g.palette.open) return @intCast(g.palette.query.text().len);
+    }
+    return -1;
+}
+
 export fn gallery_page(index: u32) void {
     if (comptime web) {
         if (web_gallery) |g| {
