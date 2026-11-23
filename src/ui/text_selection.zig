@@ -87,6 +87,76 @@ pub fn graphemeEnd(s: []const u8, start: usize) usize {
     return s.len;
 }
 
+/// Cluster containing the byte at `at`. Walk back to a boundary that does
+/// not depend on earlier context, then use the same forward UAX #29 rules.
+pub fn graphemeRange(s: []const u8, at: usize) [2]usize {
+    if (at >= s.len) return .{ s.len, s.len };
+    var start = scalarStart(s, at);
+    while (start > 0) {
+        const before = scalarStart(s, start - 1);
+        if (s[before] >= ' ' and s[before] <= '~' and s[start] >= ' ' and s[start] <= '~') break;
+        const p_cp = scalar(s, before).cp;
+        const p = property(p_cp);
+        const q = scalar(s, start).cp;
+        const qp = property(q);
+        if (p != .prepend and qp == .other and
+            data.indicOf(q) != .consonant and (p != .zwj or !data.isPictographic(q))) break;
+        // Hangul and Indic consonants join only after particular scalars
+        // (GB6-8, GB9c). Stopping here keeps spaceless runs linear.
+        if (hangul(qp) and p != .prepend and (!hangul(p) or !hangulJoins(p, qp))) break;
+        if (data.indicOf(q) == .consonant and p != .prepend and p != .zwj and
+            (data.indicOf(p_cp) == .none or data.indicOf(p_cp) == .consonant)) break;
+        start = before;
+    }
+    while (true) {
+        const end = graphemeEnd(s, start);
+        if (at < end) return .{ start, end };
+        start = end;
+    }
+}
+
+fn hangul(p: Break) bool {
+    return p == .l or p == .v or p == .t or p == .lv or p == .lvt;
+}
+
+fn hangulJoins(p: Break, q: Break) bool {
+    return (p == .l and (q == .l or q == .v or q == .lv or q == .lvt)) or
+        ((p == .lv or p == .v) and (q == .v or q == .t)) or
+        ((p == .lvt or p == .t) and q == .t);
+}
+
+/// Parts of emoji sequences, flags and keycaps, which Backspace removes
+/// as a whole.
+fn emojiPart(cp: u21) bool {
+    return data.isPictographic(cp) or cp == 0x200d or cp == 0xfe0f or cp == 0x20e3 or
+        (cp >= 0x1f1e6 and cp <= 0x1f1ff) or (cp >= 0x1f3fb and cp <= 0x1f3ff) or
+        (cp >= 0xe0020 and cp <= 0xe007f);
+}
+
+/// Where Backspace at `at` starts deleting. An emoji sequence, flag or
+/// keycap goes whole; otherwise only the last scalar does, as on Apple
+/// platforms, Android and Chromium, so a typo after an accent or inside an
+/// Indic conjunct keeps the rest of the cluster. Nothing after `at` is
+/// touched, even when `at` is inside a cluster.
+pub fn backspaceStart(s: []const u8, at: usize) usize {
+    if (at == 0) return 0;
+    const end = @min(at, s.len);
+    const cluster = graphemeRange(s, end - 1)[0];
+    var i = cluster;
+    while (i < end) {
+        const next = scalar(s, i);
+        if (emojiPart(next.cp)) return cluster;
+        i = next.end;
+    }
+    return scalarStart(s, end - 1);
+}
+
+fn scalarStart(s: []const u8, at: usize) usize {
+    var i = at;
+    while (i > 0 and s[i] & 0xc0 == 0x80) i -= 1;
+    return i;
+}
+
 const Class = enum { word, space, atom };
 
 fn class(s: []const u8, at: usize) Class {
@@ -172,6 +242,7 @@ fn checkGraphemeVectors(source: []const u8) !usize {
         var at: usize = 0;
         for (boundaries[1..count]) |end| {
             try std.testing.expectEqual(end, graphemeEnd(text, at));
+            for (at..end) |byte| try std.testing.expectEqual([2]usize{ at, end }, graphemeRange(text, byte));
             at = end;
         }
         try std.testing.expectEqual(length, at);
