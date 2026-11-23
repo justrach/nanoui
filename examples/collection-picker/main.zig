@@ -1,11 +1,14 @@
 //! One collection picker for a native window and a browser canvas: a
 //! trigger opens a search field and a result list. Typing filters, the
 //! arrows move the selection, Enter chooses, and Escape closes. Focus
-//! returns to the trigger either way.
+//! returns to the trigger either way. A second button reads one small
+//! text file through the native dialog or the browser's file input.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
+const files = nanoui.file_picker;
 const browser = @import("builtin").os.tag == .wasi;
+const file_options: files.Options = .{ .extensions = &.{"txt"}, .max_bytes = 32 * 1024 };
 
 const Entry = struct { id: []const u8, label: []const u8 };
 const entries = [_]Entry{
@@ -27,6 +30,14 @@ fn matches(label: []const u8, query: []const u8) bool {
 }
 
 const Picker = struct {
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    window: ?*nanoui.Window = null,
+    file_pending: bool = false,
+    file_name: ui.TextBuffer = .{},
+    file_size: usize = 0,
+    file_preview: ui.TextBuffer = .{},
+    file_message: []const u8 = "",
     query: ui.TextBuffer = .{},
     open: bool = false,
     trigger: u64 = 0,
@@ -37,6 +48,8 @@ const Picker = struct {
 
     fn deinit(s: *Picker) void {
         s.query.deinit();
+        s.file_name.deinit();
+        s.file_preview.deinit();
     }
 
     fn update(s: *Picker) void {
@@ -68,6 +81,67 @@ const Picker = struct {
         s.close(c);
     }
 
+    fn fileResult(ctx: ?*anyopaque, result: files.Result) void {
+        const s: *Picker = @ptrCast(@alignCast(ctx.?));
+        s.file_name.clear();
+        s.file_preview.clear();
+        s.file_message = switch (result) {
+            .picked => |file| blk: {
+                s.file_name.set(file.name);
+                s.file_size = file.bytes.len;
+                const first = file.bytes[0 .. std.mem.indexOfScalar(u8, file.bytes, '\n') orelse file.bytes.len];
+                if (first.len <= 120 and std.unicode.utf8ValidateSlice(first)) s.file_preview.set(first);
+                break :blk "";
+            },
+            .cancelled => "No file chosen",
+            .failed => |failure| switch (failure) {
+                .too_large => "The file exceeds 32 KiB",
+                else => "Could not open the file",
+            },
+        };
+    }
+
+    fn openNative(ctx: ?*anyopaque) callconv(.c) void {
+        const s: *Picker = @ptrCast(@alignCast(ctx.?));
+        defer s.file_pending = false;
+        if (s.window == null) return;
+        const chosen = files.open(s.allocator, s.io, file_options) catch |err| blk: {
+            fileResult(s, .{ .failed = if (err == error.FileTooLarge) .too_large else .io });
+            break :blk null;
+        };
+        if (chosen) |file| {
+            defer file.deinit(s.allocator);
+            fileResult(s, .{ .picked = file.file });
+        } else if (s.file_message.len == 0) {
+            fileResult(s, .cancelled);
+        }
+        if (s.window) |win| win.redraw();
+    }
+
+    fn closed(ctx: *anyopaque, _: *nanoui.Window) void {
+        const s: *Picker = @ptrCast(@alignCast(ctx));
+        s.window = null;
+    }
+
+    fn fileControl(s: *Picker, c: *ui.Context) void {
+        ui.key(c, "choose-text-file");
+        const control = ui.div(c).row().p(8).rounded(6).bg(c.theme.surface).control();
+        defer control.end();
+        const label = "Choose text file";
+        ui.access.describe(c, control.index, .{ .label = label, .enabled = !s.file_pending });
+        const click = c.interact(control.index, .{ .focusable = true }).clicked;
+        if (comptime browser) {
+            files.bind(c, control.index, file_options, s, fileResult) catch {
+                s.file_message = "File selection is unavailable";
+            };
+        } else if (click and !s.file_pending and s.window != null) {
+            s.file_message = "";
+            s.file_pending = nanoui.App.onMain(s, openNative);
+            if (!s.file_pending) s.file_message = "Could not open the file";
+        }
+        ui.label(c, label);
+    }
+
     fn view(s: *Picker, c: *ui.Context) void {
         c.focus_ring = .{ .color = c.theme.accent };
         const column = ui.div(c).column().wFull().p(18).gap(10);
@@ -85,6 +159,10 @@ const Picker = struct {
         if (s.chosen) |index| ui.label(c, entries[index].label);
         if (!s.open) {
             if (c.shortcut(.{ .key = 'k', .cmd = true })) s.show(c);
+            s.fileControl(c);
+            if (s.file_name.text().len > 0) ui.label(c, c.print("{s} ({d} bytes)", .{ s.file_name.text(), s.file_size }));
+            if (s.file_preview.text().len > 0) ui.label(c, s.file_preview.text());
+            if (s.file_message.len > 0) ui.label(c, s.file_message);
             return;
         }
         // Claiming the Escape shortcut also takes Android's Back, which
@@ -130,7 +208,7 @@ const Picker = struct {
 };
 
 pub fn main(init: std.process.Init) !void {
-    var picker: Picker = .{};
+    var picker: Picker = .{ .allocator = init.gpa, .io = init.io };
     defer picker.deinit();
     if (comptime browser) {
         _ = nanoui.web.registerBundledFonts();
@@ -139,17 +217,18 @@ pub fn main(init: std.process.Init) !void {
     }
     const app = try nanoui.App.create(init, .{ .name = "Collection Picker" });
     defer app.destroy();
-    _ = try app.newWindow(.{
+    picker.window = try app.newWindow(.{
         .title = "Collection Picker",
         .width = 520,
         .height = 460,
         .content = .{ .view = .init(&picker, Picker.view) },
+        .on_close = .{ .ctx = &picker, .func = Picker.closed },
     });
     try app.run();
 }
 
 test "picker composes a query, chooses by keyboard and returns focus" {
-    var s: Picker = .{};
+    var s: Picker = .{ .allocator = std.testing.allocator, .io = std.testing.io };
     defer s.deinit();
     var tester: ui.Tester = undefined;
     try tester.init(std.testing.allocator, .init(&s, Picker.view), .{ .width = 360, .height = 440 });

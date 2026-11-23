@@ -88,7 +88,45 @@ try {
     await page.waitForTimeout(300);
     assert.equal(await page.evaluate(() => window.nanoui.host.stats.callbacks), frames);
 
-    console.log(`PASS collection picker, composition, semantics, focus and clipboard on ${cpu ? "Canvas 2D" : "WebGPU"}`);
+    const fileButton = page.getByRole("button", { name: "Choose text file" });
+    const [chooser] = await Promise.all([
+      page.waitForEvent("filechooser"),
+      fileButton.click(),
+    ]);
+    assert.equal(await chooser.element().getAttribute("accept"), ".txt");
+    await chooser.setFiles({ name: "fixture.txt", mimeType: "text/plain", buffer: Buffer.from("chosen data") });
+    await page.getByText("fixture.txt (11 bytes)", { exact: true }).waitFor();
+    await page.getByText("chosen data", { exact: true }).waitFor();
+
+    await fileButton.focus();
+    const [large] = await Promise.all([
+      page.waitForEvent("filechooser"),
+      page.keyboard.press("Enter"),
+    ]);
+    await large.setFiles({ name: "large.txt", mimeType: "text/plain", buffer: Buffer.alloc(32769, 65) });
+    await page.getByText("The file exceeds 32 KiB", { exact: true }).waitFor();
+    await Promise.all([
+      page.waitForEvent("filechooser"),
+      fileButton.click(),
+    ]);
+    await page.locator('input[type="file"]').evaluate(el => el.dispatchEvent(new Event("cancel")));
+    await page.getByText("No file chosen", { exact: true }).waitFor();
+    await page.locator('input[type="file"]').waitFor({ state: "detached" });
+
+    // Hiding the bound button abandons the request instead of delivering
+    // results into the next view.
+    await Promise.all([
+      page.waitForEvent("filechooser"),
+      fileButton.click(),
+    ]);
+    await trigger.focus();
+    await page.keyboard.press("Enter");
+    await input.waitFor();
+    await page.locator('input[type="file"]').waitFor({ state: "detached" });
+    await page.keyboard.press("Escape");
+    await fileButton.waitFor();
+
+    console.log(`PASS collection picker, composition, semantics, focus, clipboard and file on ${cpu ? "Canvas 2D" : "WebGPU"}`);
     await page.evaluate(() => window.nanoui.destroy());
     await page.close();
   }

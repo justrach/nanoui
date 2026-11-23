@@ -15,6 +15,7 @@ const Item = struct {
     enabled: bool,
     header: bool,
     password: bool,
+    file_picker: ?@import("file_bridge.zig").Descriptor,
 };
 const Focus = struct {
     id: u64,
@@ -32,6 +33,8 @@ pub fn publish(s: *web.Surface) void {
     var tree: std.ArrayList(ui.access.Element) = .empty;
     ui.access.tree(&s.ctx, a, &tree) catch return;
     const items = a.alloc(Item, tree.items.len) catch return;
+    var buttons = s.files.buttons.valueIterator();
+    while (buttons.next()) |button| button.published = false;
     for (items, tree.items) |*item, el| item.* = .{
         .id = el.id,
         .role = el.role,
@@ -41,7 +44,9 @@ pub fn publish(s: *web.Surface) void {
         .enabled = el.enabled,
         .header = el.header,
         .password = el.password,
+        .file_picker = if (el.role == .button and el.enabled) s.files.descriptor(el.id) else null,
     };
+    s.files.discardStale(s.gpa);
     const focused: ?Focus = if (s.ctx.focused_text) |f| blk: {
         const lo = @min(f.text.len, @min(f.anchor, f.caret));
         const hi = @min(f.text.len, @max(f.anchor, f.caret));

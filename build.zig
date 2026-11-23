@@ -514,7 +514,7 @@ fn addWebParity(b: *std.Build) void {
     exe.rdynamic = true;
     exe.wasi_exec_model = .reactor;
     step.dependOn(&b.addInstallArtifact(exe, .{ .dest_dir = .{ .override = .{ .custom = "web" } } }).step);
-    for ([_][]const u8{ "gpu.js", "gpu_timing.js", "external.js", "wasi.js", "nanoui.js", "host.js", "semantics.js" }) |file| {
+    for ([_][]const u8{ "gpu.js", "gpu_timing.js", "external.js", "wasi.js", "nanoui.js", "host.js", "semantics.js", "files.js" }) |file| {
         step.dependOn(&b.addInstallFile(b.path(b.fmt("src/web/{s}", .{file})), b.fmt("web/{s}", .{file})).step);
     }
 }

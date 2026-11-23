@@ -142,6 +142,7 @@ pub const TrayOptions = plat.tray.Options;
 pub const TrayClick = plat.tray.Click;
 pub const TrayAnchor = plat.tray.Anchor;
 pub const dialog = if (builtin.os.tag == .wasi) @import("dialog_types.zig") else plat.dialog;
+pub const file_picker = @import("file_picker.zig");
 pub const fdwatch = plat.fdwatch;
 pub const clipboard = plat.desktop.clipboard;
 pub const shell = plat.desktop.shell;
@@ -181,6 +182,7 @@ fn rtPanic(msg: []const u8, first_trace_addr: ?usize) noreturn {
 }
 
 test {
+    _ = file_picker;
     _ = tsgen;
     _ = ui;
     _ = kit;
