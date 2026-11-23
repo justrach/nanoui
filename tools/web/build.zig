@@ -10,7 +10,7 @@ pub fn install(b: *std.Build, exe: *std.Build.Step.Compile, nanoui_root: std.Bui
     if (target.cpu.arch != .wasm32 or target.os.tag != .wasi) @panic("web.install needs wasm32-wasi");
     exe.rdynamic = true;
     const output = b.addInstallArtifact(exe, .{ .dest_dir = .{ .override = .{ .custom = "web" } } });
-    for ([_][]const u8{ "gpu.js", "gpu_timing.js", "external.js", "wasi.js", "nanoui.js", "host.js" }) |name| {
+    for ([_][]const u8{ "gpu.js", "gpu_timing.js", "external.js", "wasi.js", "nanoui.js", "host.js", "input.js" }) |name| {
         const source = nanoui_root.path(b, b.fmt("src/web/{s}", .{name}));
         output.step.dependOn(&b.addInstallFile(source, b.fmt("web/{s}", .{name})).step);
     }
