@@ -26,4 +26,18 @@ and `--nanoui-snapshot` works on a device too, into a path of the app's
 as glibc does and looks host names up in /etc/resolv.conf, neither of which
 fits Android: nanoui translates the one and asks Android's resolver instead.
 
-Not yet: pages, file pickers (`dialog.open` answers null), TalkBack accessibility, more than three buttons in a message, and predictive Back's animation. See the [Android roadmap](roadmap.md#android) and [benchmarks](benchmarks.md#android).
+Opening a file needs an activity of nanoui's own: Android answers a picker
+in the activity's result, which NativeActivity drops. Name
+`dev.nanoui.android.NanoUIActivity` (or a subclass of it, with its source)
+as `.activity`, and `dialog.open` shows the system's document picker. The
+chosen file is copied, at most `OpenOptions.copy_limit` bytes, into a
+folder of its own in the app's cache; the path returned is the caller's,
+who deletes the copy and its folder once read. One file, no folders. The
+examples use it:
+
+```zig
+const apk = android.apk(b, lib, .{ .name = "Notes", .id = "com.example.notes",
+    .activity = .{ .name = "dev.nanoui.android.NanoUIActivity" } });
+```
+
+Not yet: pages, choosing several files or a folder, TalkBack accessibility, more than three buttons in a message, and predictive Back's animation. See the [Android roadmap](roadmap.md#android) and [benchmarks](benchmarks.md#android).

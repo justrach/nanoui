@@ -451,7 +451,8 @@ beside each other ([docs/ios.md](docs/ios.md#ipad-windows)).
 
 Native UI runs on Android with Linux's text and renderer, nanoui's TrueType
 reader on Android's fonts and OpenGL ES 3 (or the CPU), on the NDK's
-NativeActivity (`src/android/`). There's no Java of nanoui's own: the app's
+NativeActivity (`src/android/`). The only Java of nanoui's own is the opt-in
+`NanoUIActivity`, for the file picker: the app's
 `main` runs on a thread of its own with a looper, and Java's classes are
 called through JNI where Android has no C interface (the clipboard, links,
 dialogs, the software keyboard, the insets). As on iOS, the first window

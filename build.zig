@@ -345,7 +345,12 @@ fn addAndroidExample(b: *std.Build, name: []const u8, target: std.Build.Resolved
         .nanoui = nanoui,
     });
     const title = b.fmt("{c}{s}", .{ std.ascii.toUpper(name[0]), name[1..] });
-    const opts: android.Options = .{ .name = title, .id = b.fmt("dev.nanoui.{s}", .{name}) };
+    // NanoUIActivity answers `dialog.open` with the system document picker.
+    const opts: android.Options = .{
+        .name = title,
+        .id = b.fmt("dev.nanoui.{s}", .{name}),
+        .activity = .{ .name = "dev.nanoui.android.NanoUIActivity" },
+    };
     const apk = android.apk(b, lib, opts);
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(apk, .prefix, b.fmt("android/{s}.apk", .{title})).step);
     const run = android.runOnDevice(b, apk, opts, b.path("."));

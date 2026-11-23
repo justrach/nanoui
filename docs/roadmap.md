@@ -79,7 +79,7 @@ See [Benchmarks](benchmarks.md) for current macOS, iOS, iPadOS, CPU-raster, and 
 - **Shipped (`v0.14.8`):** `NativeActivity` backend (`src/android/` with zero nanoui Java — JNI calls only), OpenGL ES 3 + banded multi-threaded CPU raster (`src/ui/raster.zig`, `src/ui/raster_group.zig`), nanoui TrueType text (`src/ui/text_tt.zig`), composing `EditText` IME (`src/android/ime.zig` supporting CJK, voice, emoji), touch/fling/pinch/mouse input, safe areas/display cutouts/keyboard insets, `AlertDialog` messages, APK builder & signer (`tools/android/apk.zig`, ~730 KB `ReleaseSmall` gallery), API 29+.
 - **Next (`v0.15.0`):**
   - **Web pages + IPC:** Embed `android.webkit.WebView` via JNI (`src/page_android.zig` or equivalent) with bridge injection and `PageOptions.private` / request interception.
-  - **File picker (`dialog.open`) & >3-button sheets:** Trampoline `ACTION_OPEN_DOCUMENT` (SAF) results back into `src/android/dialog.zig` without dropping NativeActivity results.
+  - **>3-button sheets:** Messages with more than three buttons. (`dialog.open` answers through the opt-in `NanoUIActivity`, `tools/android/NanoUIActivity.java`; several files and folders remain.)
   - **TalkBack accessibility (`src/android/access.zig`):** Bridge `ui/access.zig` semantic trees to Android `AccessibilityNodeProvider` / `ExploreByTouchHelper`.
   - **On-device GLES3 & CPU benchmarks:** Capture physical Android ARM64 `hillclimb` baselines (`OpenGL ES 3` offscreen EGL pbuffer + CPU raster) in [benchmarks.md](benchmarks.md).
 - **Later (`v0.15.x+`):**

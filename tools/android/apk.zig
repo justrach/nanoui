@@ -20,7 +20,10 @@ pub const Options = struct {
     /// The application id ("dev.nanoui.gallery"): yours, reverse DNS.
     id: []const u8,
     /// A Java NativeActivity subclass. Supply its fully qualified name and source.
-    activity: ?struct { name: []const u8, source: std.Build.LazyPath } = null,
+    /// nanoui's `dev.nanoui.android.NanoUIActivity` (NanoUIActivity.java),
+    /// which answers `dialog.open`, is compiled with it: extend it, or name
+    /// it without a source to use it as it is.
+    activity: ?struct { name: []const u8, source: ?std.Build.LazyPath = null } = null,
     version: []const u8 = "1.0",
     /// Each release's must be higher than the last's.
     version_code: u32 = 1,
@@ -311,7 +314,8 @@ pub fn apk(b: *std.Build, lib: *std.Build.Step.Compile, opts: Options) std.Build
         javac.addFileArg(platform_jar);
         javac.addArg("-d");
         const classes = javac.addOutputDirectoryArg("classes");
-        javac.addFileArg(activity.source);
+        javac.addFileArg(b.addWriteFiles().add("NanoUIActivity.java", @embedFile("NanoUIActivity.java")));
+        if (activity.source) |source| javac.addFileArg(source);
         const d8 = b.addSystemCommand(&.{ sdk.tool(b, "d8"), "--min-api" });
         d8.addArg(b.fmt("{d}", .{target.os.version_range.linux.android}));
         d8.addArg("--lib");
