@@ -133,9 +133,75 @@ try {
   await gallery.close();
   const unavailable = await context.newPage();
   await unavailable.addInitScript(() => Object.defineProperty(navigator, 'gpu', { value: undefined }));
-  await unavailable.goto(host.url + '/gallery.html');
-  assert.equal(await unavailable.getByRole('alert').textContent(), 'WebGPU is unavailable');
+  await unavailable.goto(host.url + '/counter.html');
+  await unavailable.waitForFunction(() => window.nanoui?.exports.nanoui_web_frames() > 0);
+  assert.equal(await unavailable.evaluate(() => window.nanoui.gpu === null), true);
   await unavailable.close();
+  const failover = await context.newPage();
+  failover.on('pageerror', e => errors.push(e.message));
+  await failover.goto(host.url + '/counter.html');
+  await failover.waitForFunction(() => window.nanoui?.gpu?.stats.frames > 0);
+  await failover.mouse.click(207,185);
+  await failover.waitForFunction(() => window.nanoui.exports.counter_value() === 1n);
+  await failover.evaluate(() => {
+    const runtime = window.nanoui;
+    const { canvas, gpu } = runtime;
+    canvas.focus();
+    window.beforeFailover = { runtime, canvas, gpu, frames: runtime.exports.nanoui_web_frames() };
+    navigator.gpu.requestAdapter = async () => null;
+    runtime.host.debugLoseDevice();
+  });
+  await failover.waitForFunction(() => !window.nanoui.gpu &&
+    window.nanoui.exports.nanoui_web_frames() > window.beforeFailover.frames);
+  await failover.evaluate(() => {
+    const { runtime, canvas, gpu } = window.beforeFailover;
+    if (window.nanoui !== runtime || runtime.device !== undefined || gpu.objects.size !== 0 ||
+        gpu.imports.device_generation() !== 0 || canvas.isConnected || document.activeElement !== runtime.canvas)
+      throw new Error('Failover did not retain the runtime and focus or retire the lost device');
+    if (runtime.exports.counter_value() !== 1n) throw new Error('Counter state was lost');
+    const pixels = runtime.canvas.getContext('2d').getImageData(0, 0, 840, 600).data;
+    if (!pixels.some((value, i) => i % 4 === 0 && value !== pixels[0]))
+      throw new Error('No visible Canvas 2D content');
+  });
+  await failover.mouse.click(207,185);
+  await failover.waitForFunction(() => window.nanoui.exports.counter_value() === 2n);
+  await failover.setViewportSize({ width: 360, height: 240 });
+  await failover.waitForFunction(() => window.nanoui.canvas.width === 720 && window.nanoui.canvas.height === 480);
+  await failover.waitForFunction(async () => {
+    const before = window.nanoui.host.stats.callbacks;
+    await new Promise(resolve => setTimeout(resolve, 300));
+    return window.nanoui.host.stats.callbacks === before;
+  });
+  await failover.evaluate(() => window.nanoui.destroy());
+  await failover.close();
+
+  const closing = await context.newPage();
+  closing.on('pageerror', e => errors.push(e.message));
+  await closing.goto(host.url + '/counter.html');
+  await closing.waitForFunction(() => window.nanoui?.gpu?.stats.frames > 0);
+  await closing.evaluate(async () => {
+    const runtime = window.nanoui;
+    const adapter = await navigator.gpu.requestAdapter();
+    const device = await adapter.requestDevice();
+    navigator.gpu.requestAdapter = () => new Promise(resolve => {
+      window.completeRecovery = async () => {
+        resolve({ features: adapter.features, requestDevice: async () => device });
+        return device.lost;
+      };
+    });
+    runtime.host.debugLoseDevice();
+  });
+  await closing.waitForFunction(() => !!window.completeRecovery);
+  await closing.evaluate(() => {
+    const runtime = window.nanoui;
+    window.closingCanvas = runtime.canvas;
+    runtime.destroy();
+    window.completeRecovery().then(info => { window.lateDeviceReason = info.reason; });
+  });
+  await closing.waitForFunction(() => window.lateDeviceReason === 'destroyed', undefined, { timeout: 5000 });
+  assert.equal(await closing.evaluate(() => window.nanoui.canvas === window.closingCanvas &&
+    window.nanoui.exports.nanoui_web_frames() === 0), true);
+  await closing.close();
   assert.deepEqual(errors,[]);
-  console.log('PASS canvas, click, idle, resize/DPR, device loss, disposal, Worker input and idle, Gallery keyboard');
+  console.log('PASS canvas, click, idle, resize/DPR, device loss, disposal, Worker input and idle, Gallery keyboard, Canvas 2D startup, live Canvas 2D failover, teardown during recovery');
 } finally { await browser.close(); await host.close(); }

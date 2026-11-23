@@ -20,7 +20,7 @@ canvas.setAttribute('aria-label', name);
 
 try {
   window.nanoui = await start({
-    canvas, url: wasm,
+    canvas, url: wasm, cpuFallback: true,
     keyboard(e) {
       if (e.key === 'Tab' || /^F\d+$/.test(e.key)) return false;
       // Option (macOS) and AltGr type characters such as @ on many layouts.

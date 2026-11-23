@@ -130,6 +130,15 @@ export fn nanoui_web_wheel(x: f32, y: f32, dx: f32, dy: f32) void {
 export fn nanoui_web_device_lost() void {
     if (web.active) |s| s.lost = true;
 }
+export fn nanoui_web_cancel_input() void {
+    const s = web.active orelse return;
+    const mouse = s.ctx.input.mouse;
+    nanoui_web_pointer(3, mouse.x, mouse.y, 0, 0, 1);
+    s.ctx.input.releaseKeys();
+}
+export fn nanoui_web_use_cpu() void {
+    if (web.active) |s| s.useCpu();
+}
 export fn nanoui_web_device() u32 {
     const s = web.active orelse return 0;
     s.setDevice() catch return 1;
