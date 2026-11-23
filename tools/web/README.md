@@ -57,6 +57,10 @@ import {start} from './nanoui.js';
 const runtime = await start({canvas, url: './my-app.wasm', device});
 ```
 
+`nanoui.web.mount` follows the browser's `prefers-color-scheme` unless
+`Options.theme` names a theme, and redraws when the scheme changes. A view's
+own `Context.theme_chosen` still wins, as on native surfaces.
+
 Omit `device` to have nanoui acquire and recover one. Injecting a device
 leaves its ownership/recovery to the app; call `await runtime.setDevice(next)`
 after replacement. `runtime.destroy()` frees renderer resources and only
