@@ -1,7 +1,7 @@
 //! Browser build helper for applications consuming nanoui as a dependency.
 const std = @import("std");
 
-/// Installs a wasm32-wasi command and its browser ES modules side by side.
+/// Installs a wasm32-wasi command, its browser shell and ES modules.
 /// Pass the nanoui dependency's root so this works outside nanoui's tree:
 /// `nanoui.web.install(b, exe, dependency.path("."))`.
 /// Both the executable and nanoui modules must be single-threaded wasm32-wasi.
@@ -14,5 +14,7 @@ pub fn install(b: *std.Build, exe: *std.Build.Step.Compile, nanoui_root: std.Bui
         const source = nanoui_root.path(b, b.fmt("src/web/{s}", .{name}));
         output.step.dependOn(&b.addInstallFile(source, b.fmt("web/{s}", .{name})).step);
     }
+    const shell = b.addInstallFile(nanoui_root.path(b, "src/web/app.html"), b.fmt("web/{s}.html", .{exe.name}));
+    output.step.dependOn(&shell.step);
     return &output.step;
 }

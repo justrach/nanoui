@@ -47,7 +47,9 @@ update produces identical pixels. Backdrop effects, transformed layers,
 and application-owned passes use a full redraw.
 
 The build helper `@import("nanoui").web.install(b, exe, dependency.path("."))`
-installs a wasm32-wasi command and the browser modules together. Its module
+installs a wasm32-wasi command, browser modules, and a default
+`web/<executable>.html` entry point. Serve that page over localhost or HTTPS.
+The standard shell needs no app-authored HTML or JavaScript. Its module
 must be single-threaded and link libc. In JavaScript:
 
 ```js

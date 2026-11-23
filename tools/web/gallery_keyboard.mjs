@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 
 export async function checkGalleryKeyboard(page, url) {
-  await page.goto(url + '/index.html?app=gallery');
+  await page.goto(url + '/gallery.html');
   await page.waitForFunction(() => window.nanoui?.exports.nanoui_web_frames() > 0);
-  const canvas = page.getByLabel('nanoui Gallery');
+  const canvas = page.getByLabel('gallery', {exact: true});
   await canvas.focus();
   await page.keyboard.press('Control+k');
   await page.waitForFunction(() => window.nanoui.exports.gallery_palette_query_bytes() === 0);
