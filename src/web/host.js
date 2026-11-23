@@ -143,9 +143,12 @@ export function createHost(canvas, options = {}) {
   async function recoverOnCpu(operation, error) {
     if (stopped || operation !== generation) return;
     if (options.cpuFallback) {
-      // A canvas keeps its context type, so Canvas 2D needs a fresh element.
+      // A canvas keeps its context type. In a Worker, the embedder must
+      // transfer a fresh canvas from the page that owns the visible element.
       try {
-        const replacement = canvas.ownerDocument && canvas.parentNode && canvas.cloneNode(false);
+        const replacement = canvas.ownerDocument
+          ? canvas.parentNode && canvas.cloneNode(false)
+          : await options.replaceOffscreenCanvas?.();
         if (stopped || operation !== generation) return;
         if (replacement && replacement !== canvas && useCpu(replacement)) return;
       } catch (fallbackError) {

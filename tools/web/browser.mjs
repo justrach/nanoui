@@ -1,6 +1,7 @@
 import { chromium } from 'playwright';
 import assert from 'node:assert/strict';
 import { checkGalleryKeyboard } from './gallery_keyboard.mjs';
+import { checkWorker } from './worker_browser.mjs';
 import { serve } from './serve.mjs';
 import { chromiumOptions } from './browser_options.mjs';
 const host = await serve();
@@ -93,42 +94,7 @@ try {
   await page.waitForTimeout(300);
   {const result=await compare();assert.ok(result.mean<0.05);}
   await page.evaluate(()=>{const r=window.nanoui;r.destroy();r.device.destroy();});
-  await page.evaluate(async () => {
-    const old=document.querySelector('canvas');old.remove();
-    const canvas=document.createElement('canvas');canvas.style.width='420px';canvas.style.height='300px';document.body.append(canvas);
-    const worker=new Worker('./worker.js',{type:'module'});
-    let seq=0; const pending=new Map();
-    worker.onmessage=({data})=>{ if(data.error)throw Error(data.error); const f=pending.get(data.id??'ready');if(f){pending.delete(data.id??'ready');f(data);} };
-    const ready=new Promise(resolve=>pending.set('ready',resolve));
-    const offscreen=canvas.transferControlToOffscreen();
-    worker.postMessage({canvas:offscreen,width:840,height:600,scale:2},[offscreen]);await ready;
-    window.workerProbe={worker,info:()=>new Promise(resolve=>{const id=++seq;pending.set(id,resolve);worker.postMessage({info:id});})};
-  });
-  await page.waitForTimeout(400);
-  const workerBefore=await page.evaluate(()=>window.workerProbe.info());
-  assert.equal(workerBefore.value,0);
-  await page.evaluate(()=>{
-    window.workerProbe.worker.postMessage({pointer:[0,207,185]});
-    window.workerProbe.worker.postMessage({pointer:[1,207,185]});
-    window.workerProbe.worker.postMessage({pointer:[2,207,185]});
-  });
-  // Worker frames can still be settling after the click on a loaded host:
-  // retry until the click has landed and no frame runs for a second.
-  {
-    const info = () => page.evaluate(() => window.workerProbe.info());
-    const deadline = Date.now() + 8000;
-    let before, after;
-    for (;;) {
-      before = await info();
-      if (before.value === 1) {
-        await page.waitForTimeout(1000);
-        after = await info();
-        if (after.value === 1 && after.callbacks === before.callbacks) break;
-      } else await page.waitForTimeout(200);
-      if (Date.now() > deadline) throw new Error(`Worker did not settle idle after the click within 8 s: before ${JSON.stringify(before)}, after ${JSON.stringify(after)}`);
-    }
-  }
-  await page.evaluate(()=>window.workerProbe.worker.postMessage({destroy:true}));
+  await checkWorker(context, host.url, errors);
   const scaleOne=await browser.newContext({viewport:{width:420,height:300},deviceScaleFactor:1});
   const low=await scaleOne.newPage();low.on('pageerror',e=>errors.push(e.message));
   await low.goto(host.url+'/index.html');
@@ -225,5 +191,5 @@ try {
     window.nanoui.exports.nanoui_web_frames() === 0), true);
   await closing.close();
   assert.deepEqual(errors,[]);
-  console.log('PASS canvas, click, idle, resize/DPR, device loss, disposal, Worker input and idle, Gallery keyboard, Canvas 2D startup, Canvas 2D scale cap, live Canvas 2D failover, teardown during recovery');
+  console.log('PASS canvas, click, idle, resize/DPR, device loss, disposal, Worker input, idle, keyboard, recovery, decline and teardown, Gallery keyboard, Canvas 2D startup, Canvas 2D scale cap, live Canvas 2D failover, teardown during recovery');
 } finally { await browser.close(); await host.close(); }

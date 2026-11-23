@@ -60,7 +60,7 @@ const runtime = await start({canvas, url: './my-app.wasm', device});
 Omit `device` to have nanoui acquire and recover one. Injecting a device
 leaves its ownership/recovery to the app; call `await runtime.setDevice(next)`
 after replacement. `runtime.destroy()` frees renderer resources and only
-an owned device. OffscreenCanvas/Workers use the same API (`worker.js`).
+an owned device. To run the command in a Worker, see [Workers](#workers).
 
 `ui.webgpuDevice()` and `ui.webgpuDeviceGeneration()` identify the shared
 GPUDevice. `runtime.gpu.objects.put/get/drop` bridges app objects as handles.
@@ -85,7 +85,6 @@ The host handles pointer and wheel input, pinch gestures, resize/DPR and
 device recovery. The canvas delivers pinch scale and midpoint through
 `Context.input.zoom` and `mouse`, and two-finger translation through `pan`.
 A pinch cancels any active touch pointer drag rather than releasing it.
-Workers can forward a pinch through `runtime.host.pinch(x, y, scale, dx, dy)`.
 On a focusable DOM canvas, pass a `keyboard(event)` predicate to `start` to
 forward selected key events. The Gallery demo uses this for its Zig command
 palette. The predicate leaves browser-owned shortcuts and Tab available.
@@ -107,7 +106,35 @@ DPR 3 phone rasterizes 2.25 times fewer pixels and the browser scales the
 canvas up. It also caps the buffer at 4096 × 4096 pixels by reducing backing
 scale. Zig writes RGBA, and the host presents it through an `ImageData` view
 of WASM memory. GPU textures, custom GPU encoding and GPU timing
-require WebGPU. A canvas inside a Worker has no element to replace, so
-`cpuFallback` there only applies at startup.
+require WebGPU.
+
+## Workers
+
+`worker.js` runs a WASM command on an OffscreenCanvas in a dedicated module
+Worker. On the page, `startWorker` from `worker_page.js` transfers the canvas,
+forwards pointer, wheel, pinch, key and size events through the same DOM
+input code as the page host, and returns `{ worker, canvas, ready, destroy }`:
+
+```js
+import {startWorker} from './worker_page.js';
+const worker = new Worker('./worker.js', {type: 'module'});
+const view = startWorker({canvas, worker, url: './my-app.wasm', cpuFallback: true, keyboard: e => e.key !== 'Tab'});
+await view.ready;
+```
+
+With `cpuFallback: true`, a Worker that cannot recover WebGPU after device
+loss asks the page for a fresh canvas, because a canvas keeps its first
+context type. `startWorker` clones the element, transfers the clone, replaces
+the visible element, moves focus and input to it, and the Worker keeps the
+mounted view and applies the most recent size. Pass
+`replaceCanvas: () => false` (or a promise for it) to decline; the Worker
+then reports the failure through `onError` and stops drawing. `destroy()`
+during recovery ends it without a replacement. `view.canvas` is the current
+element.
+
+Pages that drive `worker.js` directly answer `{ replaceCanvas: true }` with
+`{ fallbackCanvas: offscreen }`, transferring it, or `{ fallbackCanvas: null }`
+to decline. A Worker has no DOM, so semantic controls, IME composition,
+clipboard and file selection need the page-hosted runtime.
 
 See [MEASUREMENTS.md](MEASUREMENTS.md) for verification scope.
