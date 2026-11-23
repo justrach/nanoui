@@ -1,5 +1,5 @@
 #!/bin/sh
-# Zig 0.17.0 can't build any program for iOS as it ships: its std says iOS
+# Zig 0.17.0 and 0.17.1 can't build any program for iOS as they ship: its std says iOS
 # can replace its process image (std.process.can_replace), so every
 # program's std.Io pulls in posix_spawn's /dev/null handling, which std
 # leaves out on iOS ("no field named 'fd' in struct ... NullFile").
@@ -20,6 +20,10 @@ if [ ! -f "$lib/std/process.zig" ]; then
 fi
 broken='    .windows, .haiku, .wasi => false,'
 fixed='    .windows, .haiku, .wasi, .ios, .tvos, .visionos, .watchos => false,'
+# Zig 0.17.1 added tvOS and watchOS to the same arm but still omits iOS.
+if grep -qxF '    .windows, .haiku, .wasi, .tvos, .watchos => false,' "$lib/std/process.zig"; then
+	broken='    .windows, .haiku, .wasi, .tvos, .watchos => false,'
+fi
 
 grep -qxF "$broken" "$lib/std/process.zig" || exit 0
 
