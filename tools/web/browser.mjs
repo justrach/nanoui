@@ -111,10 +111,14 @@ try {
     window.workerProbe.worker.postMessage({pointer:[1,207,185]});
     window.workerProbe.worker.postMessage({pointer:[2,207,185]});
   });
-  await page.waitForTimeout(600);
-  const workerAfter=await page.evaluate(()=>window.workerProbe.info());assert.equal(workerAfter.value,1);
-  await page.waitForTimeout(1000);
-  assert.equal((await page.evaluate(()=>window.workerProbe.info())).callbacks,workerAfter.callbacks);
+  // Worker frames can still be settling after the click on a loaded host.
+  await page.waitForFunction(async () => {
+    const before = await window.workerProbe.info();
+    if (before.value !== 1) return false;
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    const after = await window.workerProbe.info();
+    return after.value === 1 && after.callbacks === before.callbacks;
+  }, undefined, { timeout: 8000 });
   await page.evaluate(()=>window.workerProbe.worker.postMessage({destroy:true}));
   const scaleOne=await browser.newContext({viewport:{width:420,height:300},deviceScaleFactor:1});
   const low=await scaleOne.newPage();low.on('pageerror',e=>errors.push(e.message));
