@@ -1,3 +1,5 @@
+import { createSemantics } from "./semantics.js";
+
 // Canvas lifecycle and event delivery. Applications opt in to keyboard
 // events so they can keep the browser's own shortcuts where appropriate.
 const namedKeys = {
@@ -12,12 +14,14 @@ function keyCode(name) {
   return Array.from(name).length === 1 ? name.codePointAt(0) : 0;
 }
 export function createHost(canvas, options = {}) {
+  const decoder = new TextDecoder();
+  let semantics;
   let cpu = options.cpu;
   let lastResize;
   let runtime, context, frame = null, timer = null, observer, media;
   let stopped = false, lost = false, paused = true, generation = 0, forceRecovery = false;
   const listeners = [];
-  const inputEvents = [];
+  let inputEvents = [];
   const unwind = Symbol("nanoui.run");
   const stats = { callbacks: 0 };
   const raf = options.requestAnimationFrame ?? globalThis.requestAnimationFrame.bind(globalThis);
@@ -38,7 +42,15 @@ export function createHost(canvas, options = {}) {
           const event = inputEvents.shift();
           if (event[0] === "pinch") runtime.exports.nanoui_web_pinch(...event.slice(1));
           else if (event[0] === "key") runtime.exports.nanoui_web_key(...event.slice(1));
-          else runtime.exports.nanoui_web_pointer(...event);
+          else if (event[0] === "access") runtime.exports.nanoui_web_access(...event.slice(1));
+          else if (event[0] === "text") {
+            const [, id, bytes, cut] = event;
+            if (bytes.length <= 65536) {
+              const e = runtime.exports;
+              new Uint8Array(e.memory.buffer, e.nanoui_web_text_buffer(), bytes.length).set(bytes);
+              e.nanoui_web_text(id, bytes.length, cut);
+            }
+          } else runtime.exports.nanoui_web_pointer(...event);
           if (event[0] !== 0 && !(event[0] === "key" && event[1] === 3)) break;
         }
         const submitted = runtime.gpu?.stats.frames;
@@ -146,6 +158,7 @@ export function createHost(canvas, options = {}) {
     }
     canvas = replacement;
     context = nextContext;
+    semantics?.setCanvas(replacement);
     host.listen();
     if (restoreFocus) replacement.focus({ preventScroll: true });
     request();
@@ -173,9 +186,10 @@ export function createHost(canvas, options = {}) {
       lost = true;
       runtime.exports.nanoui_web_device_lost();
       cancelFrame();
-      // A release can arrive while rendering is suspended.
+      // A release can arrive while rendering is suspended. Preserve input
+      // already committed by the browser's semantic editor.
       runtime.exports.nanoui_web_cancel_input();
-      inputEvents.length = 0;
+      inputEvents = inputEvents.filter(([kind]) => kind === "text" || kind === "access");
       const recover = info.reason !== "destroyed" || forceRecovery;
       forceRecovery = false;
       options.onDeviceLost?.(info);
@@ -222,6 +236,11 @@ export function createHost(canvas, options = {}) {
     stats, unwind, requestFrame: request, resize, pointer, wheel, pinch, key, setDevice,
     imports: {
       cpu_backend: () => Number(cpu),
+      semantics_enabled: () => Number(!!semantics),
+      publish_semantics(ptr, len) {
+        const bytes = new Uint8Array(runtime.exports.memory.buffer, ptr, len);
+        semantics?.publish(decoder.decode(bytes));
+      },
       present_cpu(ptr, width, height) {
         if (!context || stopped) return;
         // Zig wrote opaque RGBA; ImageData can view WASM memory directly.
@@ -232,6 +251,13 @@ export function createHost(canvas, options = {}) {
     },
     attach(value) {
       runtime = value;
+      if (options.semantics && canvas.ownerDocument) {
+        semantics = createSemantics(canvas, event => {
+          if (stopped) return;
+          inputEvents.push(event);
+          request();
+        });
+      }
       if (cpu) {
         context = canvas.getContext("2d", { alpha: false });
         if (!context) throw new Error("Canvas 2D context is unavailable");
@@ -257,9 +283,12 @@ export function createHost(canvas, options = {}) {
             (Number(e.altKey && !altGraph(e)) << 2) | (Number(e.metaKey) << 3) | (Number(e.repeat) << 4);
           const down = e => {
             if (e.defaultPrevented || e.isComposing || !options.keyboard(e)) return;
+            if (e.target.tagName === "BUTTON" && (e.key === "Enter" || e.key === " ")) return;
             const code = keyCode(e.key);
             if (!code) return;
-            const typed = Array.from(e.key).length === 1 && (!e.ctrlKey || altGraph(e)) && !e.metaKey ? code : 0;
+            const printable = Array.from(e.key).length === 1 && (!e.ctrlKey || altGraph(e)) && !e.metaKey;
+            if (printable && e.target.tagName === "TEXTAREA") return;
+            const typed = printable ? code : 0;
             forwarded.set(e.code, code);
             key(0, code, mods(e), typed);
             e.preventDefault();
@@ -271,8 +300,10 @@ export function createHost(canvas, options = {}) {
             key(1, code, mods(e));
             e.preventDefault();
           };
-          on(canvas, "keydown", down);
-          on(canvas, "keyup", up);
+          for (const target of [canvas, semantics?.root]) if (target) {
+            on(target, "keydown", down);
+            on(target, "keyup", up);
+          }
           on(canvas, "blur", () => {
             forwarded.clear();
             key(2, 0, 0);
@@ -370,6 +401,7 @@ export function createHost(canvas, options = {}) {
       inputEvents.length=0;
       cancelFrame();
       detachListeners();
+      semantics?.destroy();
       runtime?.exports.nanoui_web_destroy();
       context?.unconfigure?.();
       runtime?.gpu?.dispose();

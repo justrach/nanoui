@@ -19,6 +19,7 @@ extern "nanoui_web" fn run_forever() noreturn;
 pub var active: ?*Surface = null;
 comptime {
     _ = @import("exports.zig");
+    _ = @import("interaction.zig");
 }
 
 /// Optional fallback fonts shipped with the web examples. Applications may
@@ -117,6 +118,7 @@ pub const Surface = struct {
             .atlas_reset = s.text.atlas.reset_during_frame,
             .animating = s.ctx.animating,
         }));
+        @import("interaction.zig").publish(s);
         s.frame_count +%= 1;
         const more = s.dirty or s.ctx.animating or result.hot_changed or s.ctx.time_driven == .fast;
         if (!more) {
