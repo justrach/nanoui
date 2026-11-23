@@ -19,6 +19,8 @@ pub const Options = struct {
     name: []const u8,
     /// The application id ("dev.nanoui.gallery"): yours, reverse DNS.
     id: []const u8,
+    /// A Java NativeActivity subclass. Supply its fully qualified name and source.
+    activity: ?struct { name: []const u8, source: std.Build.LazyPath } = null,
     version: []const u8 = "1.0",
     /// Each release's must be higher than the last's.
     version_code: u32 = 1,
@@ -302,6 +304,28 @@ pub fn apk(b: *std.Build, lib: *std.Build.Step.Compile, opts: Options) std.Build
     add.addFileArg(base);
     add.addArg(abi(target).?);
     add.addArtifactArg(lib);
+    if (opts.activity) |activity| {
+        const platform_jar: std.Build.LazyPath = .{ .cwd_relative = jar };
+        const javac = b.addSystemCommand(&.{ "javac", "--release", "8", "-classpath" });
+        javac.addFileArg(platform_jar);
+        javac.addArg("-d");
+        const classes = javac.addOutputDirectoryArg("classes");
+        javac.addFileArg(activity.source);
+        const d8 = b.addSystemCommand(&.{ sdk.tool(b, "d8"), "--min-api" });
+        d8.addArg(b.fmt("{d}", .{target.os.version_range.linux.android}));
+        d8.addArg("--lib");
+        d8.addFileArg(platform_jar);
+        d8.addArg("--output");
+        const dex = d8.addOutputDirectoryArg("dex");
+        const jar_classes = b.addSystemCommand(&.{ "jar", "--create", "--file" });
+        const java_archive = jar_classes.addOutputFileArg("activity.jar");
+        jar_classes.addArg("-C");
+        jar_classes.addDirectoryArg(classes);
+        jar_classes.addArg(".");
+        d8.addFileArg(java_archive);
+        add.addArg("--dex");
+        add.addFileArg(dex.path(b, "classes.dex"));
+    }
 
     // Signed with the schemes apksigner picks for the minimum API level.
     const sign = b.addSystemCommand(&.{ sdk.tool(b, "apksigner"), "sign", "--ks" });
@@ -367,9 +391,9 @@ pub fn manifestXml(b: *std.Build, lib_name: []const u8, target: std.Target, opts
         \\    package="{s}" android:versionCode="{d}" android:versionName="{s}">
         \\  <uses-sdk android:minSdkVersion="{d}" android:targetSdkVersion="{d}"/>
         \\  <uses-feature android:glEsVersion="0x00030000" android:required="false"/>
-        \\{s}  <application android:label="{s}" android:hasCode="false" android:extractNativeLibs="false"
+        \\{s}  <application android:label="{s}" android:hasCode="{s}" android:extractNativeLibs="false"
         \\      android:theme="@style/NanoUI" android:enableOnBackInvokedCallback="false"{s}>
-        \\    <activity android:name="android.app.NativeActivity" android:exported="true"
+        \\    <activity android:name="{s}" android:exported="true"
         \\        android:launchMode="singleTask" android:windowSoftInputMode="adjustResize"
         \\        android:configChanges="mcc|mnc|locale|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|density|screenSize|smallestScreenSize|layoutDirection|colorMode|grammaticalGender|fontWeightAdjustment">
         \\      <meta-data android:name="android.app.lib_name" android:value="{s}"/>
@@ -389,7 +413,9 @@ pub fn manifestXml(b: *std.Build, lib_name: []const u8, target: std.Target, opts
         opts.target_api,
         permissions.items,
         label(b, opts.name),
+        if (opts.activity != null) "true" else "false",
         if (opts.icon != null) " android:icon=\"@mipmap/icon\"" else "",
+        escape(b.allocator, if (opts.activity) |activity| activity.name else "android.app.NativeActivity"),
         escape(b.allocator, lib_name),
     });
 }
@@ -422,6 +448,7 @@ pub fn runOnDevice(b: *std.Build, apk_path: std.Build.LazyPath, opts: Options, n
     run.addFileArg(nanoui_root.path(b, "tools/android/run.sh"));
     run.addFileArg(apk_path);
     run.addArg(opts.id);
+    if (opts.activity) |activity| run.setEnvironmentVariable("ANDROID_APK_ACTIVITY", activity.name);
     run.setEnvironmentVariable("ANDROID_HOME", (Sdk.find(b) orelse return run).root);
     run.has_side_effects = true;
     return run;

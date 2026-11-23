@@ -5,7 +5,7 @@
 //! devices with 4 or 16 KiB pages); every other stored entry aligned to 4
 //! bytes, as zipalign does. The result is for apksigner to sign.
 //!
-//!     pack OUT.apk IN.apk ABI LIB.so...
+//!     pack OUT.apk IN.apk ABI LIB.so... [--dex CLASSES.dex]
 const std = @import("std");
 
 const local_sig = 0x04034b50;
@@ -33,7 +33,7 @@ pub fn main(init: std.process.Init) !void {
     const io = init.io;
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     if (args.len < 5) {
-        std.debug.print("usage: pack OUT.apk IN.apk ABI LIB.so...\n", .{});
+        std.debug.print("usage: pack OUT.apk IN.apk ABI LIB.so... [--dex CLASSES.dex]\n", .{});
         return error.Usage;
     }
     const cwd = std.Io.Dir.cwd();
@@ -52,11 +52,15 @@ pub fn main(init: std.process.Init) !void {
         for (names.items) |n| gpa.free(n);
         names.deinit(gpa);
     }
-    for (args[4..]) |path| {
+    var paths = args[4..];
+    while (paths.len > 0) {
+        const dex = std.mem.eql(u8, paths[0], "--dex");
+        if (dex and paths.len != 2) return error.Usage;
+        const path = paths[@intFromBool(dex)];
         const data = try cwd.readFileAlloc(io, path, gpa, .limited(1 << 30));
-        try libs.append(gpa, data);
-        const name = try std.fmt.allocPrint(gpa, "lib/{s}/{s}", .{ args[3], std.fs.path.basename(path) });
-        try names.append(gpa, name);
+        errdefer gpa.free(data);
+        const name = if (dex) try gpa.dupe(u8, "classes.dex") else try std.fmt.allocPrint(gpa, "lib/{s}/{s}", .{ args[3], std.fs.path.basename(path) });
+        errdefer gpa.free(name);
         try entries.append(gpa, .{
             .name = name,
             .method = 0,
@@ -67,10 +71,14 @@ pub fn main(init: std.process.Init) !void {
             .crc = std.hash.Crc32.hash(data),
             .size = @intCast(data.len),
             .raw_size = @intCast(data.len),
-            // A regular file, rw-r--r-- (for unzip; Android reads no modes).
             .external = 0o100644 << 16,
             .data = data,
         });
+        try libs.ensureUnusedCapacity(gpa, 1);
+        try names.ensureUnusedCapacity(gpa, 1);
+        libs.appendAssumeCapacity(data);
+        names.appendAssumeCapacity(name);
+        paths = paths[if (dex) 2 else 1..];
     }
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(gpa);

@@ -54,7 +54,7 @@ EOF
 "$adb" shell am force-stop "$id"
 # The log from now on (the device's own clock).
 since="$("$adb" shell date "'+%m-%d %H:%M:%S.000'" | tr -d '\r')"
-started="$("$adb" shell "am start -n $id/android.app.NativeActivity $extras" 2>&1)"
+started="$("$adb" shell "am start -n $id/${ANDROID_APK_ACTIVITY:-android.app.NativeActivity} $extras" 2>&1)"
 case "$started" in
 *Error*)
 	echo "$started" >&2
