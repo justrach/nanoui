@@ -231,3 +231,72 @@ test "text fields without placeholders take their row caption instead of typed t
     try testing.expectEqualStrings("Password", els[1].label);
     try testing.expectEqualStrings("", els[1].value);
 }
+
+const Lists = struct {
+    fn row(c: *ui.Context, role: access.Role, label: []const u8, selected: bool) void {
+        const r = ui.div(c).p(4).control();
+        defer r.end();
+        access.describe(c, r.index, .{ .role = role, .label = label, .selected = selected });
+        _ = r.clicked();
+        ui.text(c, label, .{});
+    }
+
+    fn view(_: *Lists, c: *ui.Context) void {
+        ui.column(c, .{ .width = .fill, .height = .fill, .gap = 4, .padding = .all(8) });
+        defer ui.end(c);
+        ui.text(c, "Library", .{ .size = 30, .weight = .bold });
+        ui.text(c, "Recent", .{ .size = 22, .weight = .bold });
+        const title = ui.div(c).p(2);
+        access.describe(c, title.index, .{ .role = .static_text, .label = "Shelves", .header = true, .level = 3 });
+        ui.text(c, "Shelves", .{});
+        title.end();
+        {
+            const tabs = ui.div(c).row().gap(4);
+            defer tabs.end();
+            access.describe(c, tabs.index, .{ .role = .list, .label = "Views" });
+            row(c, .tab, "Grid", true);
+            row(c, .tab, "Table", false);
+        }
+        {
+            const results = ui.div(c).column().gap(4);
+            defer results.end();
+            access.describe(c, results.index, .{ .role = .list, .label = "Results" });
+            row(c, .row, "Atlas", true);
+            row(c, .row, "Bestiary", false);
+        }
+        row(c, .button, "Done", false);
+    }
+};
+
+test "headings carry a level, and a list keeps its rows and tabs as elements" {
+    var p: Lists = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&p, Lists.view), .{ .width = 400, .height = 500 });
+    defer t.deinit();
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const els = try elements(&t, arena.allocator());
+    // Library, Recent, Shelves, Views, Grid, Table, Results, Atlas, Bestiary, Done.
+    try testing.expectEqual(@as(usize, 10), els.len);
+    try testing.expectEqual(@as(u8, 1), els[0].level);
+    try testing.expectEqual(@as(u8, 2), els[1].level);
+    try testing.expect(els[2].header);
+    try testing.expectEqual(@as(u8, 3), els[2].level);
+    const views = els[3];
+    try testing.expectEqual(access.Role.list, views.role);
+    try testing.expectEqualStrings("Views", views.label);
+    for (els[4..6], [_][]const u8{ "Grid", "Table" }) |e, label| {
+        try testing.expectEqual(access.Role.tab, e.role);
+        try testing.expectEqualStrings(label, e.label);
+        try testing.expectEqual(views.id, e.container);
+    }
+    try testing.expect(els[4].selected and !els[5].selected);
+    const results = els[6];
+    try testing.expectEqual(access.Role.list, results.role);
+    for (els[7..9]) |e| {
+        try testing.expectEqual(access.Role.row, e.role);
+        try testing.expectEqual(results.id, e.container);
+    }
+    try testing.expectEqual(@as(u64, 0), els[9].container);
+    try testing.expectEqual(@as(u64, 0), els[0].container);
+}
