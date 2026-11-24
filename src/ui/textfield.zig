@@ -233,13 +233,12 @@ pub fn apply(buffer: *TextBuffer, e: *EditState, op: ctx_mod.TextOp, opts: Optio
                         buffer.remove(lo, hi);
                         collapse(e, lo);
                     } else if (e.caret > 0) {
-                        const range = switch (cmd) {
-                            .delete_word_backward => .{ prevWord(s, e.caret), e.caret },
-                            .delete_to_line_start => .{ if (line_start == e.caret) e.caret - 1 else line_start, e.caret },
-                            else => .{ backspaceStart(s, e.caret), e.caret },
+                        const from = switch (cmd) {
+                            .delete_word_backward => prevWord(s, e.caret),
+                            .delete_to_line_start => if (line_start == e.caret) e.caret - 1 else line_start,
+                            else => backspaceStart(s, e.caret),
                         };
-                        const from = range[0];
-                        buffer.remove(from, range[1]);
+                        buffer.remove(from, e.caret);
                         collapse(e, from);
                     } else return;
                     result.changed = true;
