@@ -138,6 +138,13 @@ pub const Surface = struct {
             .width = width,
             .height = height,
         }, s.instances.items, s.text.atlas.mask(), pictures, s.scale, s.ctx.theme.background);
+        // Canvas 2D takes RGBA; swapping here is far cheaper than in JS.
+        const px = s.pixels.items;
+        var i: usize = 0;
+        while (i < px.len) : (i += 4) {
+            std.mem.swap(u8, &px[i], &px[i + 2]);
+            px[i + 3] = 255;
+        }
         present_cpu(s.pixels.items.ptr, width, height);
     }
 

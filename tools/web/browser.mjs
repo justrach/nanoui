@@ -137,6 +137,16 @@ try {
   await unavailable.waitForFunction(() => window.nanoui?.exports.nanoui_web_frames() > 0);
   assert.equal(await unavailable.evaluate(() => window.nanoui.gpu === null), true);
   await unavailable.close();
+  // Canvas 2D renders at most at scale 2, even on a DPR 3 phone.
+  const dense = await browser.newContext({ viewport: { width: 420, height: 300 }, deviceScaleFactor: 3 });
+  const densePage = await dense.newPage();
+  await densePage.addInitScript(() => Object.defineProperty(navigator, 'gpu', { value: undefined }));
+  await densePage.goto(host.url + '/counter.html');
+  await densePage.waitForFunction(() => window.nanoui?.exports.nanoui_web_frames() > 0);
+  assert.deepEqual(await densePage.evaluate(() => [window.nanoui.canvas.width, window.nanoui.canvas.height]), [840, 600]);
+  await densePage.mouse.click(207, 185);
+  await densePage.waitForFunction(() => window.nanoui.exports.counter_value() === 1n);
+  await dense.close();
   const failover = await context.newPage();
   failover.on('pageerror', e => errors.push(e.message));
   await failover.goto(host.url + '/counter.html');
@@ -203,5 +213,5 @@ try {
     window.nanoui.exports.nanoui_web_frames() === 0), true);
   await closing.close();
   assert.deepEqual(errors,[]);
-  console.log('PASS canvas, click, idle, resize/DPR, device loss, disposal, Worker input and idle, Gallery keyboard, Canvas 2D startup, live Canvas 2D failover, teardown during recovery');
+  console.log('PASS canvas, click, idle, resize/DPR, device loss, disposal, Worker input and idle, Gallery keyboard, Canvas 2D startup, Canvas 2D scale cap, live Canvas 2D failover, teardown during recovery');
 } finally { await browser.close(); await host.close(); }

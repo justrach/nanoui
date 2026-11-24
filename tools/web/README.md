@@ -102,8 +102,11 @@ replaced in place and the mounted Zig view keeps its state and focus. Use
 directly by an embedder need to be attached to the replacement.
 Externally owned devices use the app's device recovery path.
 `cpu: true` forces Canvas 2D on startup.
-The Canvas 2D path caps the presentation buffer at 4096 × 4096 pixels by
-reducing backing scale. GPU textures, custom GPU encoding and GPU timing
+The Canvas 2D path renders at most at `cpuMaxScale` (2 by default), so a
+DPR 3 phone rasterizes 2.25 times fewer pixels and the browser scales the
+canvas up. It also caps the buffer at 4096 × 4096 pixels by reducing backing
+scale. Zig writes RGBA, and the host presents it through an `ImageData` view
+of WASM memory. GPU textures, custom GPU encoding and GPU timing
 require WebGPU. A canvas inside a Worker has no element to replace, so
 `cpuFallback` there only applies at startup.
 

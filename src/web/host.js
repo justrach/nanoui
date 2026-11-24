@@ -12,7 +12,6 @@ function keyCode(name) {
   return Array.from(name).length === 1 ? name.codePointAt(0) : 0;
 }
 export function createHost(canvas, options = {}) {
-  let cpuImage;
   let cpu = options.cpu;
   let lastResize;
   let runtime, context, frame = null, timer = null, observer, media;
@@ -63,6 +62,15 @@ export function createHost(canvas, options = {}) {
     }
     if (![width, height, scale].every(Number.isFinite) || width < 1 || height < 1 || scale <= 0) return;
     lastResize = [width, height, scale];
+    // Phones report DPR 3; the CPU raster costs per pixel, so it renders at
+    // most at cpuMaxScale and the browser scales the canvas up.
+    const cpuMaxScale = options.cpuMaxScale ?? 2;
+    if (cpu && scale > cpuMaxScale) {
+      const ratio = cpuMaxScale / scale;
+      width = Math.max(1, Math.round(width * ratio));
+      height = Math.max(1, Math.round(height * ratio));
+      scale = cpuMaxScale;
+    }
     if (cpu && width * height > 4096 * 4096) {
       const ratio = Math.sqrt((4096 * 4096) / (width * height));
       width = Math.max(1, Math.floor(width * ratio));
@@ -216,17 +224,9 @@ export function createHost(canvas, options = {}) {
       cpu_backend: () => Number(cpu),
       present_cpu(ptr, width, height) {
         if (!context || stopped) return;
-        if (cpuImage?.width !== width || cpuImage?.height !== height)
-          cpuImage = context.createImageData(width, height);
-        const src = new Uint8Array(runtime.exports.memory.buffer, ptr, width * height * 4);
-        const dst = cpuImage.data;
-        for (let i = 0; i < src.length; i += 4) {
-          dst[i] = src[i + 2];
-          dst[i + 1] = src[i + 1];
-          dst[i + 2] = src[i];
-          dst[i + 3] = 255;
-        }
-        context.putImageData(cpuImage, 0, 0);
+        // Zig wrote opaque RGBA; ImageData can view WASM memory directly.
+        const pixels = new Uint8ClampedArray(runtime.exports.memory.buffer, ptr, width * height * 4);
+        context.putImageData(new ImageData(pixels, width, height), 0, 0);
       },
       request_frame: request, request_after: after, now_ms: () => performance.now(), run_forever() { throw unwind; },
     },
