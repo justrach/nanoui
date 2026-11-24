@@ -41,8 +41,8 @@ pub const Item = struct {
     /// The element this one operates: a query field's listbox (`controls`).
     controls: u64 = 0,
     /// An option's 1-based place among its listbox's options and their
-    /// count, when the visible rows are not all of them (a virtualized
-    /// list). 0 derives it from the options drawn.
+    /// count, when the rows drawn are not all of them (a virtualized list).
+    /// 0 derives it from the options drawn, in view or scrolled out of it.
     position: u32 = 0,
     set_size: u32 = 0,
 };
@@ -225,6 +225,9 @@ pub fn tree(c: *Context, arena: std.mem.Allocator, out: *std.ArrayList(Element))
     const items = try arena.alloc(?u32, nodes.len);
     @memset(items, null);
     const first = out.items.len;
+    // Each published listbox's options so far, drawn ones scrolled or clipped
+    // out of view included: an option's place and the set size count them all.
+    var options: std.AutoHashMapUnmanaged(u64, u32) = .empty;
     for (c.a11y_items.items, 0..) |it, k| if (it.node_index < nodes.len) {
         // The first registration of a box is its own (a field's, before an app's).
         if (items[it.node_index] == null or it.hidden) items[it.node_index] = @intCast(k);
@@ -257,16 +260,21 @@ pub fn tree(c: *Context, arena: std.mem.Allocator, out: *std.ArrayList(Element))
             // as elements of their own.
             const holds = holdsElements(it.role);
             if (!holds) f.claimed = true;
+            const place: u32 = if (it.role != .option) 0 else if (options.getPtr(container)) |count| place: {
+                count.* += 1;
+                break :place count.*;
+            } else 0;
             if (vis.w <= 0 or vis.h <= 0) continue;
             // A text field's child text is its typed value (or password bullets),
             // never its accessible name; when it has no placeholder, let a caption
             // before it on the same line name it.
             var label = if (it.label.len > 0) it.label else if (it.role == .text_field or holds) "" else try textOf(c, arena, @intCast(i));
             if (label.len == 0) label = takeCaption(out, vis);
-            try out.append(arena, .{ .id = it.id, .role = it.role, .label = label, .value = it.value, .hint = it.hint, .rect = vis, .selected = it.selected, .enabled = it.enabled, .adjustable = it.adjustable, .header = it.header, .level = it.level, .container = container, .controls = it.controls, .position = it.position, .set_size = it.set_size });
+            try out.append(arena, .{ .id = it.id, .role = it.role, .label = label, .value = it.value, .hint = it.hint, .rect = vis, .selected = it.selected, .enabled = it.enabled, .adjustable = it.adjustable, .header = it.header, .level = it.level, .container = container, .controls = it.controls, .position = if (it.position > 0) it.position else place, .set_size = it.set_size });
             // Only a published container is named: the rows of one clipped out
             // of view stand alone (or in the container around it).
             if (holds) containers[i] = it.id;
+            if (it.role == .listbox) try options.put(arena, it.id, 0);
             continue;
         }
         if (n.interactive and !n.style.scroll and !n.style.scroll_x and !holdsControls(c, items, @intCast(i))) {
@@ -287,23 +295,14 @@ pub fn tree(c: *Context, arena: std.mem.Allocator, out: *std.ArrayList(Element))
             else => {},
         }
     }
-    try relate(arena, out.items[first..]);
+    relate(out.items[first..], &options);
 }
 
-/// Fills what follows from the listboxes: each option's place and count,
-/// and each field's active descendant (its listbox's selected option).
-/// A listbox's elements follow it in `els`, as boxes follow their parents.
-fn relate(arena: std.mem.Allocator, els: []Element) !void {
-    var counts: std.AutoHashMapUnmanaged(u64, u32) = .empty;
-    for (els) |e| if (e.role == .listbox) try counts.put(arena, e.id, 0);
+/// Fills what follows from the listboxes: each option's set size (`counts`:
+/// every option drawn in its listbox, in view or not) and each field's
+/// active descendant (its listbox's selected option).
+fn relate(els: []Element, counts: *const std.AutoHashMapUnmanaged(u64, u32)) void {
     if (counts.count() == 0) return;
-    for (els) |*e| {
-        if (e.role != .option or e.container == 0) continue;
-        // Inside a `.list` rather than a listbox: no place to count.
-        const n = counts.getPtr(e.container) orelse continue;
-        n.* += 1;
-        if (e.position == 0) e.position = n.*;
-    }
     for (els) |*e| if (e.role == .option and e.set_size == 0) {
         if (counts.get(e.container)) |n| e.set_size = n;
     };

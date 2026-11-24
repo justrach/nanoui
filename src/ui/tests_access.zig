@@ -459,3 +459,70 @@ test "a window of results keeps its place; a disabled or hidden choice is not ac
         if (e.role == .text_field) try testing.expectEqual(@as(u64, 0), e.active_descendant);
     }
 }
+
+const Long = struct {
+    clip: bool = false,
+    fn view(p: *Long, c: *ui.Context) void {
+        ui.column(c, .{ .width = .fill, .height = .fill, .gap = 4, .padding = .all(8) });
+        defer ui.end(c);
+        const box = if (p.clip) ui.div(c).column().wFull().h(90).clip() else ui.div(c).column().wFull().maxH(90).scrollY();
+        defer box.end();
+        access.describe(c, box.index, .{ .role = .listbox, .label = "Commands" });
+        for (0..30) |k| {
+            ui.key(c, c.print("long-{d}", .{k}));
+            const row = ui.div(c).row().p(4).control();
+            // A hidden option is not one of the set.
+            if (k == 0 and p.clip) access.hide(c, row.index);
+            access.describe(c, row.index, .{ .role = .option, .label = c.print("Command {d}", .{k + 1}), .selected = k == 0 });
+            ui.text(c, c.print("Command {d}", .{k + 1}), .{});
+            row.end();
+        }
+    }
+};
+
+/// The options published, in order, checked against their listbox.
+fn shownOptions(els: []const access.Element, box: u64, set_size: u32) !struct { first: u32, count: u32 } {
+    var first: u32 = 0;
+    var count: u32 = 0;
+    for (els) |e| if (e.role == .option) {
+        try testing.expectEqual(box, e.container);
+        try testing.expectEqual(set_size, e.set_size);
+        if (count == 0) first = e.position else try testing.expectEqual(first + count, e.position);
+        count += 1;
+    };
+    return .{ .first = first, .count = count };
+}
+
+test "options scrolled out of view still count toward each option's place and the set size" {
+    var p: Long = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&p, Long.view), .{ .width = 300, .height = 300 });
+    defer t.deinit();
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var els = try elements(&t, arena.allocator());
+    const box = find(els, "Commands").id;
+    const top = try shownOptions(els, box, 30);
+    try testing.expectEqual(@as(u32, 1), top.first);
+    try testing.expect(top.count > 0 and top.count < 30);
+    t.scroll(100, 60, -200);
+    t.settle(2);
+    els = try elements(&t, arena.allocator());
+    const scrolled = try shownOptions(els, box, 30);
+    try testing.expect(scrolled.first > 1);
+    try testing.expect(scrolled.count > 0 and scrolled.count < 30);
+}
+
+test "options clipped by their listbox count; a hidden one does not" {
+    var p: Long = .{ .clip = true };
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&p, Long.view), .{ .width = 300, .height = 300 });
+    defer t.deinit();
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const els = try elements(&t, arena.allocator());
+    const shown = try shownOptions(els, find(els, "Commands").id, 29);
+    try testing.expectEqual(@as(u32, 1), shown.first);
+    try testing.expectEqualStrings("Command 2", find(els, "Command 2").label);
+    try testing.expect(shown.count < 29);
+}
