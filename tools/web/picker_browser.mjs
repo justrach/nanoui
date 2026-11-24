@@ -39,9 +39,19 @@ try {
         el.dispatchEvent(new CompositionEvent("compositionend", { data: "日本" }));
       });
     }
-    const result = page.getByRole("button", { name: "日本語の資料" });
+    const result = page.getByRole("option", { name: "日本語の資料" });
     await result.waitFor();
-    await page.getByRole("button", { name: "Art history" }).waitFor({ state: "detached" });
+
+    await page.getByRole("option", { name: "Art history" }).waitFor({ state: "detached" });
+    // The results are a list box of options; the highlighted one is selected
+    // and is the query's active descendant while focus stays in the query.
+    const listbox = page.getByRole("listbox", { name: "Collections" });
+    await listbox.waitFor();
+    assert.equal(await result.getAttribute("aria-selected"), "true");
+    assert.equal(await result.getAttribute("aria-posinset"), "1");
+    assert.equal(await result.getAttribute("aria-setsize"), "1");
+    assert.equal(await input.getAttribute("aria-controls"), await listbox.getAttribute("id"));
+    assert.equal(await input.getAttribute("aria-activedescendant"), await result.getAttribute("id"));
 
     await page.keyboard.press("Control+a");
     await page.waitForFunction(() => !document.activeElement?.value);
@@ -58,13 +68,13 @@ try {
       return event.clipboardData.getData("text/plain");
     });
     assert.equal(cut, "日本");
-    await page.getByRole("button", { name: "Art history" }).waitFor();
+    await page.getByRole("option", { name: "Art history" }).waitFor();
     await input.evaluate(el => {
       const data = new DataTransfer();
       data.setData("text/plain", "Café");
       el.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
     });
-    const cafe = page.getByRole("button", { name: "Café notebooks" });
+    const cafe = page.getByRole("option", { name: "Café notebooks" });
     await cafe.waitFor();
     // DOM action on the projected button goes through Zig's a11y action path.
     await cafe.focus();

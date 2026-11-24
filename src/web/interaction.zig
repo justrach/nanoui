@@ -15,6 +15,15 @@ const Item = struct {
     enabled: bool,
     header: bool,
     password: bool,
+    /// A heading's level (0: assume 2) and the list or listbox it is in (0: none).
+    level: u8,
+    container: u64,
+    /// A query field's listbox and its highlighted option (0: none).
+    controls: u64,
+    active_descendant: u64,
+    /// An option's 1-based place among its listbox's options, and their count.
+    position: u32,
+    set_size: u32,
 };
 const Focus = struct {
     id: u64,
@@ -41,6 +50,12 @@ pub fn publish(s: *web.Surface) void {
         .enabled = el.enabled,
         .header = el.header,
         .password = el.password,
+        .level = el.level,
+        .container = el.container,
+        .controls = el.controls,
+        .active_descendant = el.active_descendant,
+        .position = el.position,
+        .set_size = el.set_size,
     };
     const focused: ?Focus = if (s.ctx.focused_text) |f| blk: {
         const lo = @min(f.text.len, @min(f.anchor, f.caret));
@@ -97,7 +112,7 @@ export fn nanoui_web_access(id: u64, activate: bool) void {
         if (item.id != id or !item.enabled) continue;
         switch (item.role) {
             .text_field => if (activate) return,
-            .button, .tab, .checkbox, .switch_toggle, .radio_button, .row, .menu_button, .link => {},
+            .button, .tab, .checkbox, .switch_toggle, .radio_button, .row, .option, .menu_button, .link => {},
             else => return,
         }
         if (activate) s.ctx.a11yPress(id) else s.ctx.focus = id;

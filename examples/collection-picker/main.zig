@@ -104,21 +104,28 @@ const Picker = struct {
             c.input.key = null;
         }
         const result = ui.textField(c, &s.query, .{ .placeholder = "Search collections", .width = .fill });
+        const field = c.focus;
         if (result.changed) s.update();
         if (result.submitted and s.count != 0) {
             s.choose(c, s.results[s.selected]);
             return;
         }
         if (s.count == 0) ui.label(c, "No matching collections");
+        // The results are a list box of options. Focus stays in the query,
+        // which names the highlighted option as its active descendant.
+        const results = ui.div(c).column().wFull().gap(10);
+        ui.access.describe(c, results.index, .{ .role = .listbox, .label = "Collections" });
+        if (result.focused) ui.access.controls(c, field, c.node(results.index).id);
         for (s.results[0..s.count], 0..) |index, rank| {
             ui.key(c, entries[index].id);
             const row = ui.div(c).row().p(14).wFull().rounded(6)
                 .bg(if (rank == s.selected) c.theme.accent.alpha(0.18) else c.theme.surface).control();
             defer row.end();
-            ui.access.describe(c, row.index, .{ .label = entries[index].label, .selected = rank == s.selected });
+            ui.access.describe(c, row.index, .{ .role = .option, .label = entries[index].label, .selected = rank == s.selected });
             if (c.interact(row.index, .{ .focusable = true }).clicked) s.choose(c, index);
             ui.label(c, entries[index].label);
         }
+        results.end();
         // Touch screens have no Escape key.
         ui.key(c, "cancel");
         const cancel = ui.div(c).row().p(14).rounded(6).bg(c.theme.surface).control();
@@ -165,9 +172,13 @@ test "picker composes a query, chooses by keyboard and returns focus" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     try ui.access.tree(&tester.ctx, arena.allocator(), &tree);
-    for (tree.items) |item| {
-        if (item.role == .button and std.mem.eql(u8, item.label, "日本語の資料")) break;
+    const option = for (tree.items) |item| {
+        if (item.role == .option and item.container != 0 and std.mem.eql(u8, item.label, "日本語の資料")) break item;
     } else return error.MissingAccessibleResult;
+    // The query keeps focus and names the highlighted option.
+    for (tree.items) |item| {
+        if (item.role == .text_field and item.active_descendant == option.id) break;
+    } else return error.MissingActiveDescendant;
 
     tester.key(.enter);
     tester.settle(3);

@@ -1,11 +1,15 @@
 // DOM projection of the current Zig frame. The canvas owns layout and paint.
-const button = new Set(["button", "tab", "checkbox", "switch_toggle", "radio_button", "row", "menu_button", "link"]);
-const roles = { checkbox: "checkbox", switch_toggle: "switch", radio_button: "radio", tab: "tab", link: "link", menu_button: "button" };
+const button = new Set(["button", "tab", "checkbox", "switch_toggle", "radio_button", "row", "option", "menu_button", "link"]);
+const roles = { checkbox: "checkbox", switch_toggle: "switch", radio_button: "radio", tab: "tab", option: "option", link: "link", menu_button: "button" };
+const containers = new Set(["list", "listbox"]);
 const tagFor = item => item.role === "text_field" ? (item.password ? "input" : "textarea") :
-  button.has(item.role) ? "button" : "span";
+  containers.has(item.role) ? "div" : button.has(item.role) ? "button" : "span";
+let nextProjection = 0;
 const isEditor = node => node?.tagName === "TEXTAREA" || node?.tagName === "INPUT";
 
 export function createSemantics(canvas, send) {
+  const prefix = `nanoui-${++nextProjection}-`;
+  const domId = id => `${prefix}${id}`;
   const root = document.createElement("div");
   root.dataset.nanouiSemantics = "";
   const live = document.createElement("span");
@@ -39,6 +43,7 @@ export function createSemantics(canvas, send) {
     const node = document.createElement(tag);
     // 16px keeps iOS from zooming the page when the editor takes focus.
     node.style.cssText = "position:fixed;opacity:0;pointer-events:none;margin:0;box-sizing:border-box;font-size:16px";
+    node.id = domId(id);
     node.box = item.rect;
     if (password) node.type = "password";
     if (tag === "button") {
@@ -111,7 +116,9 @@ export function createSemantics(canvas, send) {
     const ids = new Set();
     reconciling = true;
     try {
-      let previous = live;
+      // Each parent's last placed child: the root's starts after the live region.
+      const previous = new Map([[root, live]]);
+      const lists = new Map();
       for (const item of snapshot.items) {
         const id = BigInt(item.id);
         ids.add(id);
@@ -127,17 +134,29 @@ export function createSemantics(canvas, send) {
           nodes.set(id, node);
           root.append(node);
         }
-        if (node !== active && previous.nextSibling !== node)
-          root.insertBefore(node, previous.nextSibling);
-        previous = node;
+        // A list's or listbox's elements live inside its node.
+        const list = item.container && item.container !== "0" ? nodes.get(BigInt(item.container)) : null;
+        const parent = list?.tagName === "DIV" ? list : root;
+        if (list && parent === list) {
+          const kinds = lists.get(list) ?? new Set();
+          kinds.add(item.role);
+          lists.set(list, kinds);
+        }
+        const last = previous.get(parent);
+        const want = last ? last.nextSibling : parent.firstChild;
+        // Leave the active node in place within its parent; moving other
+        // siblings restores their order without blurring it. A change of
+        // parent must still establish the new ownership before using siblings.
+        if (node !== want && (node !== active || node.parentNode !== parent))
+          parent.insertBefore(node, want);
+        previous.set(parent, node);
         node.box = item.rect;
         place(node, item.rect);
         if (node.tagName === "SPAN") {
           if (node.textContent !== item.label) node.textContent = item.label;
-          // The access model has no heading levels yet.
           if (item.header) {
             node.setAttribute("role", "heading");
-            node.setAttribute("aria-level", "2");
+            node.setAttribute("aria-level", String(item.level || 2));
           } else {
             node.removeAttribute("role");
             node.removeAttribute("aria-level");
@@ -148,18 +167,31 @@ export function createSemantics(canvas, send) {
           // Zig ignores actions on them.
           if (item.enabled) node.removeAttribute("aria-disabled");
           else node.setAttribute("aria-disabled", "true");
-          const role = roles[item.role];
+          // A list of tabs becomes a tab list below. Other lists are labelled groups.
+          const role = item.role === "list" ? "group" : item.role === "listbox" ? "listbox" : roles[item.role];
           if (role) node.setAttribute("role", role);
           else node.removeAttribute("role");
           const checked = ["checkbox", "switch_toggle", "radio_button"].includes(item.role);
+          const selectable = item.role === "tab" || item.role === "option";
           if (checked) node.setAttribute("aria-checked", String(item.selected));
           else node.removeAttribute("aria-checked");
-          if (item.role === "tab" && item.selected) node.setAttribute("aria-selected", "true");
+          if (selectable) node.setAttribute("aria-selected", String(item.selected));
           else node.removeAttribute("aria-selected");
-          if (!checked && item.role !== "tab" && item.selected) node.setAttribute("aria-current", "true");
+          if (!checked && !selectable && item.selected) node.setAttribute("aria-current", "true");
           else node.removeAttribute("aria-current");
+          for (const [name, value] of [["aria-posinset", item.position], ["aria-setsize", item.set_size]]) {
+            if (item.role === "option" && value) node.setAttribute(name, String(value));
+            else node.removeAttribute(name);
+          }
+          // Focus stays in a picker's query; the highlighted option is its
+          // active descendant.
+          for (const [name, value] of [["aria-controls", item.controls], ["aria-activedescendant", item.active_descendant]]) {
+            if (value && value !== "0") node.setAttribute(name, domId(BigInt(value)));
+            else node.removeAttribute(name);
+          }
         }
       }
+      for (const [list, kinds] of lists) if (kinds.has("tab") && list.getAttribute("role") === "group") list.setAttribute("role", "tablist");
       for (const [id, node] of nodes) if (!ids.has(id)) {
         node.remove();
         nodes.delete(id);
@@ -168,8 +200,8 @@ export function createSemantics(canvas, send) {
       const nextEditor = focused ? nodes.get(focused.id) : null;
       if (isEditor(nextEditor)) {
         place(nextEditor, focused.rect);
-        if (owned && active !== nextEditor) nextEditor.focus({ preventScroll: true });
-      } else if (owned && (active === editor || !active.isConnected)) {
+        if (owned && document.activeElement !== nextEditor) nextEditor.focus({ preventScroll: true });
+      } else if (owned && (active === editor || document.activeElement !== active)) {
         const restore = nodes.get(BigInt(snapshot.focused_id)) ?? canvas;
         restore.focus({ preventScroll: true });
       }

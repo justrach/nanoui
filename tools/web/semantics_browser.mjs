@@ -27,6 +27,11 @@ export async function checkSemantics(browser, url, errors) {
       checkboxes: [...document.querySelectorAll(`${root} [role=checkbox]`)].map(n => [n.getAttribute('aria-checked'), n.hasAttribute('aria-current')]),
     }), root);
     assert.equal(states.disabledButtons, 0, 'disabled controls stay in screen-reader navigation');
+    // Typography's large title is a first-level heading, its titles second.
+    await page.locator(`${root} [aria-label="Typography"]`).focus();
+    await page.keyboard.press('Enter');
+    await page.locator(`${root} [role=heading][aria-level="1"]`, { hasText: 'Large Title' }).waitFor();
+    assert.ok(await page.locator(`${root} [role=heading][aria-level="2"]`).count() > 0);
     assert.ok(states.checkboxes.length > 0, 'checkboxes have the checkbox role');
     for (const [checked, current] of states.checkboxes) {
       assert.ok(checked === 'true' || checked === 'false');
