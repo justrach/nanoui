@@ -5,7 +5,9 @@
 //! opened in place); saving asks for a name in an alert and answers a path
 //! in the app's Documents, which the app then writes. A dialog waits for
 //! a window still coming or going; one UIKit won't show answers as if
-//! closed: canceled, or a message's last button.
+//! closed: canceled, or a message's last button. Call them from `App.soon`:
+//! inside a GCD main-queue block (`App.onMain`) UIKit never attaches the
+//! document picker, so it would answer canceled.
 const std = @import("std");
 const objc = @import("../objc.zig");
 const cf = @import("../ui/cf.zig");
@@ -86,8 +88,15 @@ fn present(a: objc.Object, w: *Wait) bool {
         top = presenter() orelse return false;
     }
     objc.msg(void, top, "presentViewController:animated:completion:", .{ a, objc.YES, @as(?*anyopaque, null) });
-    // Refused: no answer would ever come.
-    if (objc.msg(?objc.Object, a, "presentingViewController", .{}) == null) return false;
+    // A remote view controller such as the document picker attaches after
+    // this call returns (about 1-2 s in the iOS 26 simulator). Inside a GCD
+    // main-queue block it never does, so open dialogs from `App.soon`.
+    // Refused only if nothing attaches: no answer would ever come.
+    const attach_by = cf.CACurrentMediaTime() + 10;
+    while (!w.done and objc.msg(?objc.Object, a, "presentingViewController", .{}) == null) {
+        if (cf.CACurrentMediaTime() > attach_by) return false;
+        _ = CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, true);
+    }
     const answered = w.run();
     // Windows shown or closed meanwhile waited for it (`App.arrange`).
     if (App.shared()) |app| app.scheduleArrange();
