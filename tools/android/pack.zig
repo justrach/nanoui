@@ -52,17 +52,16 @@ pub fn main(init: std.process.Init) !void {
         for (names.items) |n| gpa.free(n);
         names.deinit(gpa);
     }
-    var paths = args[4..];
+    var paths: []const []const u8 = args[4..];
     while (paths.len > 0) {
-        const dex = std.mem.eql(u8, paths[0], "--dex");
-        if (dex and paths.len != 2) return error.Usage;
-        const path = paths[@intFromBool(dex)];
-        const data = try cwd.readFileAlloc(io, path, gpa, .limited(1 << 30));
+        const input = try nextInput(gpa, args[3], &paths);
+        errdefer gpa.free(input.name);
+        const data = try cwd.readFileAlloc(io, input.path, gpa, .limited(1 << 30));
         errdefer gpa.free(data);
-        const name = if (dex) try gpa.dupe(u8, "classes.dex") else try std.fmt.allocPrint(gpa, "lib/{s}/{s}", .{ args[3], std.fs.path.basename(path) });
-        errdefer gpa.free(name);
+        try libs.ensureUnusedCapacity(gpa, 1);
+        try names.ensureUnusedCapacity(gpa, 1);
         try entries.append(gpa, .{
-            .name = name,
+            .name = input.name,
             .method = 0,
             .flags = 0,
             // 1 January 1980, as aapt2 dates its entries.
@@ -71,19 +70,31 @@ pub fn main(init: std.process.Init) !void {
             .crc = std.hash.Crc32.hash(data),
             .size = @intCast(data.len),
             .raw_size = @intCast(data.len),
+            // A regular file, rw-r--r-- (for unzip; Android reads no modes).
             .external = 0o100644 << 16,
             .data = data,
         });
-        try libs.ensureUnusedCapacity(gpa, 1);
-        try names.ensureUnusedCapacity(gpa, 1);
         libs.appendAssumeCapacity(data);
-        names.appendAssumeCapacity(name);
-        paths = paths[if (dex) 2 else 1..];
+        names.appendAssumeCapacity(input.name);
     }
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(gpa);
     try write(gpa, &out, entries.items);
     try cwd.writeFile(io, .{ .sub_path = args[1], .data = out.items });
+}
+
+/// The next file to store from pack's arguments, taken off `paths`: a
+/// library, at `lib/<abi>/`, or the last two, `--dex CLASSES.dex`, as
+/// `classes.dex`. The name is the caller's.
+fn nextInput(gpa: std.mem.Allocator, abi: []const u8, paths: *[]const []const u8) !struct { path: []const u8, name: []u8 } {
+    const p = paths.*;
+    if (std.mem.eql(u8, p[0], "--dex")) {
+        if (p.len != 2) return error.Usage;
+        paths.* = p[2..];
+        return .{ .path = p[1], .name = try gpa.dupe(u8, "classes.dex") };
+    }
+    paths.* = p[1..];
+    return .{ .path = p[0], .name = try std.fmt.allocPrint(gpa, "lib/{s}/{s}", .{ abi, std.fs.path.basename(p[0]) }) };
 }
 
 fn le16(b: []const u8, at: usize) u16 {
@@ -233,4 +244,25 @@ test "entries come back as written, stored data aligned" {
         const at = @intFromPtr(b.data.ptr) - @intFromPtr(out.items.ptr);
         try std.testing.expectEqual(0, at % alignmentOf(a));
     }
+}
+
+test "libraries go under lib/<abi>/, the activity's code as classes.dex" {
+    const gpa = std.testing.allocator;
+    var paths: []const []const u8 = &.{ "zig-out/lib/libgallery.so", "--dex", "dex/classes.dex" };
+    const lib = try nextInput(gpa, "arm64-v8a", &paths);
+    defer gpa.free(lib.name);
+    try std.testing.expectEqualStrings("zig-out/lib/libgallery.so", lib.path);
+    try std.testing.expectEqualStrings("lib/arm64-v8a/libgallery.so", lib.name);
+    const dex = try nextInput(gpa, "arm64-v8a", &paths);
+    defer gpa.free(dex.name);
+    try std.testing.expectEqualStrings("dex/classes.dex", dex.path);
+    try std.testing.expectEqualStrings("classes.dex", dex.name);
+    try std.testing.expectEqual(0, paths.len);
+    // Stored, but aligned as any other file, not as a library.
+    try std.testing.expectEqual(4, alignmentOf(.{ .name = dex.name, .method = 0, .flags = 0, .time = 0, .date = 0x21, .crc = 0, .size = 0, .raw_size = 0, .external = 0, .data = "" }));
+    // --dex comes last, with one file.
+    var early: []const []const u8 = &.{ "--dex", "a.dex", "libb.so" };
+    try std.testing.expectError(error.Usage, nextInput(gpa, "arm64-v8a", &early));
+    var bare: []const []const u8 = &.{"--dex"};
+    try std.testing.expectError(error.Usage, nextInput(gpa, "arm64-v8a", &bare));
 }
