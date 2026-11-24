@@ -81,9 +81,10 @@ pub fn defaultBundleId(a: std.mem.Allocator, name: []const u8) ![]const u8 {
     return std.fmt.allocPrint(a, "dev.nanoui.{s}", .{slug});
 }
 
-/// `text` with `{{name}}`, `{{title}}`, and `{{id}}` filled in.
+/// `text` with `\r\n` normalized to `\n` and `{{name}}`, `{{title}}`, and `{{id}}` filled in.
 pub fn fill(a: std.mem.Allocator, text: []const u8, name: []const u8, app_title: []const u8, bundle_id: []const u8) ![]const u8 {
-    const s1 = try std.mem.replaceOwned(u8, a, text, "{{name}}", name);
+    const lf = try std.mem.replaceOwned(u8, a, text, "\r\n", "\n");
+    const s1 = try std.mem.replaceOwned(u8, a, lf, "{{name}}", name);
     const s2 = try std.mem.replaceOwned(u8, a, s1, "{{title}}", app_title);
     return std.mem.replaceOwned(u8, a, s2, "{{id}}", bundle_id);
 }
@@ -184,6 +185,7 @@ test "names, titles, ids, templates and build.zig.zon" {
     try std.testing.expectEqualStrings("My App", try title(a, "my-app"));
     try std.testing.expectEqualStrings("dev.nanoui.my-app", try defaultBundleId(a, "My_App"));
     try std.testing.expectEqualStrings("exe my_app, My App, dev.nanoui.my-app", try fill(a, "exe {{name}}, {{title}}, {{id}}", "my_app", "My App", "dev.nanoui.my-app"));
+    try std.testing.expectEqualStrings("a\nmy_app\n", try fill(a, "a\r\n{{name}}\r\n", "my_app", "My App", "dev.nanoui.my-app"));
     const zon =
         \\.{
         \\    .name = .my_app,
