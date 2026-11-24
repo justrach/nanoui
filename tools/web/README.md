@@ -127,10 +127,12 @@ loss asks the page for a fresh canvas, because a canvas keeps its first
 context type. `startWorker` clones the element, transfers the clone, replaces
 the visible element, moves focus and input to it, and the Worker keeps the
 mounted view and applies the most recent size. Pass
-`replaceCanvas: () => false` (or a promise for it) to decline; the Worker
+`canReplaceCanvas: () => false` (or a promise for it) to decline; the Worker
 then reports the failure through `onError` and stops drawing. `destroy()`
 during recovery ends it without a replacement. `view.canvas` is the current
-element.
+element. `view.ready` rejects if the Worker fails to load or start, or is
+destroyed first. A custom Worker must not call `runtime.setDevice` while
+it waits for a replacement canvas; the page has already swapped its element.
 
 Pages that drive `worker.js` directly answer `{ replaceCanvas: true }` with
 `{ fallbackCanvas: offscreen }`, transferring it, or `{ fallbackCanvas: null }`

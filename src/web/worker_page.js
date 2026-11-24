@@ -5,9 +5,10 @@ import { bindInput } from "./input.js";
 
 // Options: canvas (a visible element), worker (a module Worker running
 // worker.js), url (the WASM command), cpuFallback, keyboard (as for start),
-// replaceCanvas (returns or resolves false to decline a replacement) and
-// onError. Returns { worker, canvas, ready, destroy }.
-export function startWorker({ canvas, worker, url, cpuFallback = false, keyboard, replaceCanvas = () => true, onError = console.error }) {
+// canReplaceCanvas (returns or resolves false to decline a replacement) and
+// onError. Returns { worker, canvas, ready, destroy }. ready rejects if the
+// Worker fails to load or start, or is destroyed first.
+export function startWorker({ canvas, worker, url, cpuFallback = false, keyboard, canReplaceCanvas = () => true, onError = console.error }) {
   let current = canvas, unbind, stopped = false;
   const scale = () => globalThis.devicePixelRatio ?? 1;
   const post = (message, transfer = []) => { if (!stopped) worker.postMessage(message, transfer); };
@@ -30,7 +31,7 @@ export function startWorker({ canvas, worker, url, cpuFallback = false, keyboard
   async function replace() {
     let offscreen = null;
     try {
-      if (await replaceCanvas() !== false && !stopped) {
+      if (await canReplaceCanvas() !== false && !stopped) {
         // A canvas keeps its first context type, so Canvas 2D needs a new one.
         const next = current.cloneNode(false);
         const focused = current.ownerDocument.activeElement === current;
@@ -50,7 +51,9 @@ export function startWorker({ canvas, worker, url, cpuFallback = false, keyboard
 
   let settle;
   const ready = new Promise((resolve, reject) => { settle = { resolve, reject }; });
-  worker.addEventListener("message", ({ data }) => {
+  // Callers that never await ready still get errors through onError.
+  ready.catch(() => {});
+  const onMessage = ({ data }) => {
     if (data.ready) settle.resolve();
     else if (data.replaceCanvas) replace();
     else if (data.error) {
@@ -58,7 +61,16 @@ export function startWorker({ canvas, worker, url, cpuFallback = false, keyboard
       settle.reject(error);
       onError(error);
     }
-  });
+  };
+  const onFailure = event => {
+    event.preventDefault?.();
+    const error = new Error(event.message || "The nanoui Worker failed to load");
+    settle.reject(error);
+    onError(error);
+  };
+  worker.addEventListener("message", onMessage);
+  worker.addEventListener("error", onFailure);
+  worker.addEventListener("messageerror", onFailure);
   if (keyboard && current.tabIndex < 0) current.tabIndex = 0;
   const rect = current.getBoundingClientRect();
   const offscreen = current.transferControlToOffscreen();
@@ -75,6 +87,10 @@ export function startWorker({ canvas, worker, url, cpuFallback = false, keyboard
       worker.postMessage({ destroy: true });
       stopped = true;
       unbind?.();
+      settle.reject(new Error("The Worker view was destroyed"));
+      worker.removeEventListener("message", onMessage);
+      worker.removeEventListener("error", onFailure);
+      worker.removeEventListener("messageerror", onFailure);
     },
   };
 }

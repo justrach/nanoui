@@ -41,7 +41,7 @@ async function open(context, base, app, errors) {
     probe.handle = startWorker({
       canvas, worker, url: `./${app}.wasm`, cpuFallback: true,
       keyboard: e => e.key !== 'Tab' && (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() === 'k'),
-      replaceCanvas: () => new Promise(resolve => { probe.replacements++; release = resolve; }),
+      canReplaceCanvas: () => new Promise(resolve => { probe.replacements++; release = resolve; }),
       onError: error => probe.errors.push(error.message),
     });
     probe.release = ok => release(ok);
@@ -151,6 +151,43 @@ export async function checkWorker(context, base, errors) {
     assert.equal(await page.evaluate(() => window.probe.handle.canvas === window.original &&
       window.original.isConnected && window.probe.errors.length === 0), true);
     await page.close();
+  }
+  {
+    // ready settles on failure, and diagnostics cannot call internal exports.
+    const page = await open(context, base, 'counter', errors);
+    const read = await page.evaluate(() => new Promise(resolve => {
+      const { worker } = window.probe;
+      const listener = ({ data }) => {
+        if (data.id !== 'read') return;
+        worker.removeEventListener('message', listener);
+        resolve(data);
+      };
+      worker.addEventListener('message', listener);
+      worker.postMessage({ info: 'read', read: ['_start', 'nanoui_web_destroy', 'counter_value'] });
+    }));
+    assert.deepEqual(read.exports, { counter_value: 0 });
+    assert.equal((await page.evaluate(() => window.probe.info())).exports.counter_value, 0);
+    await closeWorker(page);
+    const failures = await context.newPage();
+    failures.on('pageerror', e => errors.push(e.message));
+    await failures.goto(base + '/index.html');
+    await failures.waitForFunction(() => window.nanoui?.exports.nanoui_web_frames() > 0);
+    const outcomes = await failures.evaluate(async () => {
+      window.nanoui.destroy();
+      const { startWorker } = await import('./worker_page.js');
+      const outcome = async (url, destroyEarly) => {
+        const canvas = document.createElement('canvas');
+        canvas.style.cssText = 'width:100px;height:100px';
+        document.body.append(canvas);
+        const view = startWorker({ canvas, worker: new Worker('./worker.js', { type: 'module' }), url, onError: () => {} });
+        if (destroyEarly) view.destroy();
+        try { await view.ready; return 'ready'; } catch (error) { return error.message; } finally { view.destroy(); }
+      };
+      return [await outcome('./missing.wasm', false), await outcome('./counter.wasm', true)];
+    });
+    assert.match(outcomes[0], /404|HTTP/);
+    assert.equal(outcomes[1], 'The Worker view was destroyed');
+    await failures.close();
   }
   {
     const page = await open(context, base, 'gallery', errors);

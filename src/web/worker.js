@@ -31,10 +31,14 @@ self.onmessage = async ({ data }) => {
       if (earlyResize) runtime.host.resize(...earlyResize);
       self.postMessage({ ready: true });
     } else if (data.info) {
-      // Diagnostics: frame counts, the renderer and any named no-argument exports.
+      if (!runtime) return self.postMessage({ id: data.info, starting: true });
+      // Diagnostics: frame counts, the renderer and named app exports that
+      // take no arguments. nanoui's own and WASI exports are not callable here.
       const exports = {};
       for (const name of data.read ?? []) {
-        const value = runtime.exports[name]?.();
+        const read = runtime.exports[name];
+        if (typeof read !== "function" || read.length !== 0 || name.startsWith("_") || name.startsWith("nanoui_")) continue;
+        const value = read();
         if (value !== undefined) exports[name] = Number(value);
       }
       self.postMessage({
