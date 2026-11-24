@@ -125,7 +125,7 @@ const Picker = struct {
 
     fn fileControl(s: *Picker, c: *ui.Context) void {
         ui.key(c, "choose-text-file");
-        const control = ui.div(c).row().p(8).rounded(6).bg(c.theme.surface).control();
+        const control = ui.div(c).row().p(14).rounded(6).bg(c.theme.surface).control();
         defer control.end();
         const label = "Choose text file";
         ui.access.describe(c, control.index, .{ .label = label, .enabled = !s.file_pending });
@@ -136,8 +136,15 @@ const Picker = struct {
             };
         } else if (click and !s.file_pending and s.window != null) {
             s.file_message = "";
-            s.file_pending = nanoui.App.onMain(s, openNative);
-            if (!s.file_pending) s.file_message = "Could not open the file";
+            // A dialog runs its own loop: on Apple platforms open it after this event,
+            // outside GCD's main queue, where other main-queue work can run.
+            if (@hasDecl(nanoui.App, "soon")) {
+                nanoui.App.soon(s, openNative);
+                s.file_pending = true;
+            } else {
+                s.file_pending = nanoui.App.onMain(s, openNative);
+                if (!s.file_pending) s.file_message = "Could not open the file";
+            }
         }
         ui.label(c, label);
     }
@@ -159,7 +166,7 @@ const Picker = struct {
         if (s.chosen) |index| ui.label(c, entries[index].label);
         if (!s.open) {
             if (c.shortcut(.{ .key = 'k', .cmd = true })) s.show(c);
-            s.fileControl(c);
+            if (browser or files.native) s.fileControl(c) else ui.label(c, "File selection is not available on this device");
             if (s.file_name.text().len > 0) ui.label(c, c.print("{s} ({d} bytes)", .{ s.file_name.text(), s.file_size }));
             if (s.file_preview.text().len > 0) ui.label(c, s.file_preview.text());
             if (s.file_message.len > 0) ui.label(c, s.file_message);

@@ -35,7 +35,9 @@ export function createFilePicker(document) {
           if (!file) return finish(null);
           if (file.size > maxBytes) return finish(null, new RangeError("The file exceeds the size limit"));
           try {
-            const bytes = new Uint8Array(await file.arrayBuffer());
+            const bytes = new Uint8Array(await file.slice(0, maxBytes + 1).arrayBuffer());
+            if (bytes.length > maxBytes) return finish(null, new RangeError("The file exceeds the size limit"));
+            if (bytes.length !== file.size) return finish(null, new Error("The selected file changed"));
             finish({ name: file.name, type: file.type, bytes });
           } catch (error) {
             finish(null, error);

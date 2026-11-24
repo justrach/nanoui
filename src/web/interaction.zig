@@ -44,7 +44,8 @@ pub fn publish(s: *web.Surface) void {
         .enabled = el.enabled,
         .header = el.header,
         .password = el.password,
-        .file_picker = if (el.role == .button and el.enabled) s.files.descriptor(el.id) else null,
+        // A disabled bound button keeps its request; its node ignores clicks.
+        .file_picker = if (el.role == .button) s.files.descriptor(el.id) else null,
     };
     s.files.discardStale(s.gpa);
     const focused: ?Focus = if (s.ctx.focused_text) |f| blk: {

@@ -113,14 +113,20 @@ input directly from that button's pointer or keyboard activation. The callback
 receives `.picked`, `.cancelled`, or `.failed` on the browser event loop.
 Picked names and bytes are borrowed until the callback returns. Keep callback
 context alive until completion or until the frame removing the bound button
-has completed. Removing the button abandons the request and any late result.
+has completed. Removing the button abandons the request and any late result; disabling it
+keeps the request and ignores further activation.
 The browser accepts one request at a time and caps configured limits at 64 MiB.
 This binding requires the standard semantic DOM host.
 
 Native Zig callers can use `nanoui.file_picker.open(allocator, io, options)`
 on the UI thread outside view building. It uses the native dialog and returns
 the same file name and bytes in an owned result. Free it with `Owned.deinit`.
-Android reports `error.Unsupported` until its native file picker is available.
+`file_picker.native` is false where `open` has no dialog that answers yet:
+Android, iOS (its document picker is presented but `dialog.open` cannot
+wait for the answer yet) and the browser. `open` reports
+`error.Unsupported` there. On macOS, open the dialog from `App.soon`: a
+dialog runs a nested run loop, and inside an `onMain` block it would hold
+every other main-queue task until it closes.
 Options default to a 16 MiB limit. An extension filter is a chooser hint.
 Callers still validate content.
 

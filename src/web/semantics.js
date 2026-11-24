@@ -46,7 +46,9 @@ export function createSemantics(canvas, send, pickFile) {
       node.type = "button";
       node.addEventListener("click", () => {
         const file = fileButtons.get(id);
-        if (file) pickFile(id, file);
+        if (file) {
+          if (node.getAttribute("aria-disabled") !== "true") pickFile(id, file);
+        }
         else send(["access", id, true]);
       });
     }
