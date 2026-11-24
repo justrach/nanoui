@@ -128,9 +128,9 @@ pub const Describe = struct {
 };
 
 /// Box `index` as one element, labeled so (its text when `label` is
-/// empty); what is inside it is read as part of it. A `.list` is the
-/// exception: a container whose rows and tabs stay elements of their own,
-/// each naming the list as its `container`.
+/// empty); what is inside it is read as part of it. A container role
+/// (`holdsElements`: `.list`) is the exception: its rows and tabs stay
+/// elements of their own, each naming it as its `container`.
 pub fn describe(c: *Context, index: u32, d: Describe) void {
     const n = c.a11y_items.items.len;
     c.addA11y(index, d.role, d.label, d.value, d.selected, d.enabled);
@@ -161,8 +161,9 @@ pub const Element = struct {
     header: bool = false,
     /// A heading's level, 1 to 6; 0 lets the reader assume 2.
     level: u8 = 0,
-    /// The `.list` this element is inside (its id), 0 when none: rows make
-    /// a list box and tabs a tab list.
+    /// The nearest container (`holdsElements`) this element is inside, by
+    /// id: rows in a `.list` make a list box and tabs a tab list. 0 when none,
+    /// or when the container itself is not published (clipped out of view).
     container: u64 = 0,
     /// Made by `tree`, not registered by a widget.
     implied: bool = false,
@@ -181,8 +182,8 @@ pub fn tree(c: *Context, arena: std.mem.Allocator, out: *std.ArrayList(Element))
     const Flag = packed struct { claimed: bool = false, hidden: bool = false };
     const flags = try arena.alloc(Flag, nodes.len);
     const clips = try arena.alloc(types.Rect, nodes.len);
-    // The `.list` each box is inside, 0 when none.
-    const lists = try arena.alloc(u64, nodes.len);
+    // The published container (`holdsElements`) each box is inside, 0 when none.
+    const containers = try arena.alloc(u64, nodes.len);
     const items = try arena.alloc(?u32, nodes.len);
     @memset(items, null);
     for (c.a11y_items.items, 0..) |it, k| if (it.node_index < nodes.len) {
@@ -193,17 +194,17 @@ pub fn tree(c: *Context, arena: std.mem.Allocator, out: *std.ArrayList(Element))
     for (nodes, 0..) |n, i| {
         var f: Flag = .{};
         var clip = view;
-        var list: u64 = 0;
+        var container: u64 = 0;
         if (n.parent != ctx_mod.none and n.parent < i) {
             f = flags[n.parent];
             clip = clips[n.parent];
-            list = lists[n.parent];
+            container = containers[n.parent];
             const p = nodes[n.parent];
             if (p.style.scroll or p.style.scroll_x or p.style.clip) clip = intersect(clip, p.rect);
         }
         if (n.style.opacity <= 0.01) f.hidden = true;
         clips[i] = clip;
-        lists[i] = list;
+        containers[i] = container;
         defer flags[i] = f;
         if (f.hidden or f.claimed) continue;
         const vis = intersect(clip, n.rect);
@@ -213,15 +214,19 @@ pub fn tree(c: *Context, arena: std.mem.Allocator, out: *std.ArrayList(Element))
                 f.hidden = true;
                 continue;
             }
-            // A list holds its rows and tabs as elements of their own.
-            if (it.role == .list) lists[i] = it.id else f.claimed = true;
+            // A container holds its rows and tabs as elements of their own.
+            const holds = holdsElements(it.role);
+            if (!holds) f.claimed = true;
             if (vis.w <= 0 or vis.h <= 0) continue;
             // A text field's child text is its typed value (or password bullets),
             // never its accessible name; when it has no placeholder, let a caption
             // before it on the same line name it.
-            var label = if (it.label.len > 0) it.label else if (it.role == .text_field or it.role == .list) "" else try textOf(c, arena, @intCast(i));
+            var label = if (it.label.len > 0) it.label else if (it.role == .text_field or holds) "" else try textOf(c, arena, @intCast(i));
             if (label.len == 0) label = takeCaption(out, vis);
-            try out.append(arena, .{ .id = it.id, .role = it.role, .label = label, .value = it.value, .hint = it.hint, .rect = vis, .selected = it.selected, .enabled = it.enabled, .adjustable = it.adjustable, .header = it.header, .level = it.level, .container = list });
+            try out.append(arena, .{ .id = it.id, .role = it.role, .label = label, .value = it.value, .hint = it.hint, .rect = vis, .selected = it.selected, .enabled = it.enabled, .adjustable = it.adjustable, .header = it.header, .level = it.level, .container = container });
+            // Only a published container is named: the rows of one clipped out
+            // of view stand alone (or in the container around it).
+            if (holds) containers[i] = it.id;
             continue;
         }
         if (n.interactive and !n.style.scroll and !n.style.scroll_x and !holdsControls(c, items, @intCast(i))) {
@@ -229,7 +234,7 @@ pub fn tree(c: *Context, arena: std.mem.Allocator, out: *std.ArrayList(Element))
             if (label.len == 0) continue;
             f.claimed = true;
             if (vis.w <= 0 or vis.h <= 0) continue;
-            try out.append(arena, .{ .id = n.id, .role = .button, .label = label, .rect = vis, .container = list, .implied = true });
+            try out.append(arena, .{ .id = n.id, .role = .button, .label = label, .rect = vis, .container = container, .implied = true });
             continue;
         }
         switch (n.content) {
@@ -237,11 +242,17 @@ pub fn tree(c: *Context, arena: std.mem.Allocator, out: *std.ArrayList(Element))
                 if (vis.w <= 0 or vis.h <= 0 or std.mem.trim(u8, t.str, " \t\n").len == 0) continue;
                 const header = t.style.size >= heading_size;
                 const level: u8 = if (!header) 0 else if (t.style.size >= top_heading_size) 1 else 2;
-                try out.append(arena, .{ .id = n.id, .role = .static_text, .label = t.str, .rect = vis, .header = header, .level = level, .container = list, .implied = true });
+                try out.append(arena, .{ .id = n.id, .role = .static_text, .label = t.str, .rect = vis, .header = header, .level = level, .container = container, .implied = true });
             },
             else => {},
         }
     }
+}
+
+/// A role whose element does not claim what is inside it: its rows, tabs and
+/// headings stay elements of their own, each naming it as its `container`.
+pub fn holdsElements(role: Role) bool {
+    return role == .list;
 }
 
 /// The text just before an unlabeled control on its line ("Volume" left

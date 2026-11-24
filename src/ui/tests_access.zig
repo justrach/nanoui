@@ -300,3 +300,58 @@ test "headings carry a level, and a list keeps its rows and tabs as elements" {
     try testing.expectEqual(@as(u64, 0), els[9].container);
     try testing.expectEqual(@as(u64, 0), els[0].container);
 }
+
+const Clipped = struct {
+    fn view(_: *Clipped, c: *ui.Context) void {
+        ui.column(c, .{ .width = .fill, .height = .fill, .gap = 4, .padding = .all(8) });
+        defer ui.end(c);
+        // A list with no area of its own, whose rows still show below it.
+        const empty = ui.div(c).column().h(0);
+        access.describe(c, empty.index, .{ .role = .list, .label = "Empty" });
+        Lists.row(c, .row, "Stray", false);
+        empty.end();
+        {
+            const outer = ui.div(c).column().p(2);
+            defer outer.end();
+            access.describe(c, outer.index, .{ .role = .list, .label = "Outer" });
+            const inner = ui.div(c).column().h(0);
+            access.describe(c, inner.index, .{ .role = .list, .label = "Inner" });
+            Lists.row(c, .row, "Nested", false);
+            inner.end();
+        }
+    }
+};
+
+test "rows of a list that is not published name no container, or the one around it" {
+    var p: Clipped = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&p, Clipped.view), .{ .width = 400, .height = 300 });
+    defer t.deinit();
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const els = try elements(&t, arena.allocator());
+    var outer: u64 = 0;
+    for (els) |e| {
+        try testing.expect(!std.mem.eql(u8, e.label, "Empty") and !std.mem.eql(u8, e.label, "Inner"));
+        if (std.mem.eql(u8, e.label, "Outer")) outer = e.id;
+    }
+    try testing.expect(outer != 0);
+    var seen: u32 = 0;
+    for (els) |e| {
+        if (std.mem.eql(u8, e.label, "Stray")) {
+            try testing.expectEqual(@as(u64, 0), e.container);
+            seen += 1;
+        }
+        if (std.mem.eql(u8, e.label, "Nested")) {
+            try testing.expectEqual(outer, e.container);
+            seen += 1;
+        }
+        // Every container named is published.
+        if (e.container != 0) {
+            var found = false;
+            for (els) |o| found = found or o.id == e.container;
+            try testing.expect(found);
+        }
+    }
+    try testing.expectEqual(@as(u32, 2), seen);
+}
