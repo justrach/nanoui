@@ -41,7 +41,9 @@ const monos = (if (android) [_][]const u8{ "Droid Sans Mono", "Cutive Mono" } el
 /// Families a CJK string needs when the UI family has no glyph for it:
 /// Windows, macOS and Linux each name theirs. Kept ahead of the symbol
 /// fallbacks so a hanzi never lands in a partial-coverage font.
-const cjk = [_][]const u8{ "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", "SimSun", "MS Gothic" };
+/// Android ships Noto Sans CJK only with CFF2 outlines, which are not read,
+/// so its Noto Serif CJK is the last resort there.
+const cjk = [_][]const u8{ "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", "SimSun", "MS Gothic", "Noto Serif CJK SC", "Noto Serif CJK JP" };
 /// Where characters a font lacks are looked for first.
 const fallbacks = cjk ++ [_][]const u8{ "Noto Sans", "DejaVu Sans", "Segoe UI Symbol", "Noto Sans Symbols", "Noto Sans Symbols2", "Arial Unicode MS", "Symbola" };
 
@@ -362,6 +364,17 @@ pub const Db = struct {
             header_len = wide;
         }
         for (0..font.faces(data)) |i| {
+            // A collection can keep a face's table directory far past the
+            // first window (Noto CJK puts faces 1-4 about 24 MB in).
+            if (is_ttc and 16 + 4 * i <= header_len) {
+                const dir: usize = std.mem.readInt(u32, data[12 + 4 * i ..][0..4], .big);
+                if (dir + 12 > header_len and dir + 12 <= len) {
+                    _ = file.readPositionalAll(db.io, data[dir..][0..12], dir) catch continue;
+                    const tables: usize = std.mem.readInt(u16, data[dir + 4 ..][0..2], .big);
+                    const end = @min(len, dir + 12 + 16 * tables);
+                    _ = file.readPositionalAll(db.io, data[dir + 12 .. end], dir + 12) catch continue;
+                }
+            }
             const t = font.Tables.read(data, i) catch continue;
             inline for (.{ "head", "os2", "name" }) |name| {
                 const off = @field(t, name);

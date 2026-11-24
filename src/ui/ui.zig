@@ -414,6 +414,7 @@ test {
     if (@import("builtin").os.tag == .linux) _ = @import("tests_opengl.zig");
     _ = @import("tt/raster.zig");
     _ = @import("tt/tests.zig");
+    _ = @import("tt/tests_collection.zig");
     _ = @import("tt/tests_decode.zig");
     _ = @import("tt/brotli.zig");
     _ = @import("font_registry.zig");
