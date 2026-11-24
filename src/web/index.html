@@ -14,7 +14,9 @@ try {
     canvas.setAttribute('aria-label', 'nanoui Gallery');
   }
   const keyboard = gallery ? e => {
-    if (e.key === 'Tab' || e.altKey) return false;
+    if (e.key === 'Tab') return false;
+    if (e.getModifierState('AltGraph')) return Array.from(e.key).length === 1;
+    if (e.altKey && (Array.from(e.key).length !== 1 || e.ctrlKey || e.metaKey)) return false;
     if (e.ctrlKey || e.metaKey) return e.key.toLowerCase() === 'k';
     return !e.key.startsWith('F') || e.key.length === 1;
   } : undefined;

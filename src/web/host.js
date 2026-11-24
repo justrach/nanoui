@@ -149,13 +149,15 @@ export function createHost(canvas, options = {}) {
       if (canvas.getBoundingClientRect) {
         if (options.keyboard) {
           const forwarded = new Map();
-          const mods = e => Number(e.shiftKey) | (Number(e.ctrlKey) << 1) |
-            (Number(e.altKey) << 2) | (Number(e.metaKey) << 3) | (Number(e.repeat) << 4);
+          // AltGr reports Ctrl and Alt on Windows; it types, it is not a shortcut.
+          const altGraph = e => !!e.getModifierState?.("AltGraph");
+          const mods = e => Number(e.shiftKey) | (Number(e.ctrlKey && !altGraph(e)) << 1) |
+            (Number(e.altKey && !altGraph(e)) << 2) | (Number(e.metaKey) << 3) | (Number(e.repeat) << 4);
           on(canvas, "keydown", e => {
             if (e.defaultPrevented || e.isComposing || !options.keyboard(e)) return;
             const code = keyCode(e.key);
             if (!code) return;
-            const typed = Array.from(e.key).length === 1 && !e.ctrlKey && !e.metaKey ? code : 0;
+            const typed = Array.from(e.key).length === 1 && (!e.ctrlKey || altGraph(e)) && !e.metaKey ? code : 0;
             forwarded.set(e.code, code);
             key(0, code, mods(e), typed);
             e.preventDefault();

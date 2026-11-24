@@ -22,7 +22,11 @@ try {
   window.nanoui = await start({
     canvas, url: wasm,
     keyboard(e) {
-      if (e.key === 'Tab' || e.altKey || /^F\d+$/.test(e.key)) return false;
+      if (e.key === 'Tab' || /^F\d+$/.test(e.key)) return false;
+      // Option (macOS) and AltGr type characters such as @ on many layouts.
+      const typed = Array.from(e.key).length === 1;
+      if (e.getModifierState('AltGraph')) return typed;
+      if (e.altKey && (!typed || e.ctrlKey || e.metaKey)) return false;
       if (e.ctrlKey || e.metaKey) return e.key.toLowerCase() === 'k';
       return true;
     },
