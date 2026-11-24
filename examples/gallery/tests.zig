@@ -6,6 +6,7 @@ const std = @import("std");
 const testing = std.testing;
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
+const kit = nanoui.kit;
 const main_mod = @import("main.zig");
 const phone = @import("phone.zig");
 const catalog = @import("catalog.zig");
@@ -83,6 +84,70 @@ test "command palette opens on shortcut, filters, navigates, and closes on escap
     _ = t.shortcut(.{ .key = ui.Shortcut.escape });
     t.settle(1);
     try testing.expect(!g.palette.open);
+}
+
+fn paletteSelected(t: *ui.Tester) !?[]const u8 {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var tree: std.ArrayList(ui.access.Element) = .empty;
+    try ui.access.tree(&t.ctx, arena.allocator(), &tree);
+    for (tree.items) |item| if (item.selected) for (phone.pages) |page| {
+        if (std.mem.eql(u8, page[0], item.label)) return page[0];
+    };
+    return null;
+}
+
+test "command palette: keyboard only, wrapping highlight, input-method keys stay with the field, focus returns" {
+    var g: Gallery = .{ .page = 1 };
+    defer g.deinit();
+    initGallery(&g);
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&g, Gallery.view), .{ .width = 960, .height = 640 });
+    defer t.deinit();
+    t.settle(1);
+    try t.clickText("Something to do");
+    t.frame();
+    const field = t.ctx.focus;
+    try testing.expect(field != 0);
+
+    try testing.expect(t.shortcut(.{ .key = 'k', .cmd = true }));
+    t.settle(1);
+    try testing.expectEqual(@as(?kit.picker.Id, 0), g.palette.active);
+    try testing.expectEqualStrings("Controls", (try paletteSelected(&t)).?);
+    // Up from the first entry wraps to the last; Down comes back.
+    try testing.expect(t.shortcut(.{ .key = ui.Shortcut.up }));
+    try testing.expectEqual(@as(?kit.picker.Id, phone.pages.len + 4), g.palette.active);
+    try testing.expect(t.shortcut(.{ .key = ui.Shortcut.down }));
+    try testing.expectEqual(@as(?kit.picker.Id, 0), g.palette.active);
+
+    // While the input method composes, Escape is its own, not the palette's.
+    t.textOps(&.{.{ .set_marked = .{ .text = "stu", .sel_start = 3, .sel_len = 0 } }});
+    try testing.expect(g.palette.composition.active);
+    try testing.expect(!t.shortcut(.{ .key = ui.Shortcut.escape }));
+    try testing.expect(g.palette.open);
+    t.textOps(&.{.{ .insert = "stu" }});
+    t.frame();
+    try testing.expectEqualStrings("stu", g.palette.query.text());
+    try testing.expectEqual(@as(?kit.picker.Id, 7), g.palette.active);
+    try testing.expectEqualStrings("Studio", (try paletteSelected(&t)).?);
+    try testing.expect(t.shortcut(.{ .key = ui.Shortcut.down }));
+    try testing.expect(t.shortcut(.{ .key = ui.Shortcut.up }));
+    try testing.expectEqual(@as(?kit.picker.Id, 7), g.palette.active);
+
+    try testing.expect(t.shortcut(.{ .key = ui.Shortcut.escape }));
+    t.settle(1);
+    try testing.expect(!g.palette.open);
+    try testing.expectEqual(@as(usize, 1), g.page);
+    try testing.expectEqual(field, t.ctx.focus);
+
+    try testing.expect(t.shortcut(.{ .key = 'k', .cmd = true }));
+    t.settle(1);
+    t.typeText("studio");
+    t.frame();
+    try testing.expect(t.shortcut(.{ .key = ui.Shortcut.enter }));
+    t.settle(1);
+    try testing.expect(!g.palette.open);
+    try testing.expectEqual(@as(usize, 7), g.page);
 }
 
 test "studio folded tool timeline expands and composer appends note" {

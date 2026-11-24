@@ -1,11 +1,15 @@
 //! Command palette overlay for the gallery (`⌘K` on Apple systems,
 //! `Ctrl+K` elsewhere, plus `⌘1`..`⌘9` page jumps), following the modal scrim
-//! layering and cross-platform shortcut rules from `nanoui.kit`.
+//! layering and cross-platform shortcut rules from `nanoui.kit`. Its
+//! behaviour comes from `kit.picker`: the highlight follows an entry (not a
+//! row number) as the query narrows, keys that compose input-method text stay
+//! with the field, and closing returns focus to where it was.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const kit = nanoui.kit;
 const motion = ui.motion;
+const picker = kit.picker;
 const phone = @import("phone.zig");
 
 const Kind = enum {
@@ -48,7 +52,11 @@ const page_shortcuts = blk: {
 pub const Palette = struct {
     open: bool = false,
     query: ui.TextBuffer = .{},
-    selected: usize = 0,
+    /// The highlighted entry's index in the catalog (its id), not its row.
+    active: ?picker.Id = null,
+    composition: picker.Composition = .{},
+    /// What had focus when the palette opened; it gets it back on close.
+    return_focus: u64 = 0,
     /// Counts the opens, keying the list, so each opens scrolled to the top.
     opens: u32 = 0,
 
@@ -63,15 +71,17 @@ pub const Palette = struct {
         }
         p.open = true;
         p.opens +%= 1;
+        p.return_focus = c.focus;
         p.query.clear();
-        p.selected = 0;
+        p.active = null;
+        p.composition = .{};
         p.query.focus();
         c.changed = true;
     }
 
     pub fn close(p: *Palette, c: *ui.Context) void {
         p.open = false;
-        c.focus = 0;
+        c.focus = p.return_focus;
         c.changed = true;
     }
 
@@ -89,7 +99,7 @@ pub const Palette = struct {
         return actions[i - phone.pages.len];
     }
 
-    fn collectMatches(p: *const Palette, out: *[total_entries]usize) usize {
+    fn collectMatches(p: *const Palette, out: *[total_entries]picker.Id) usize {
         const q = std.mem.trim(u8, p.query.text(), " \t\n");
         var n: usize = 0;
         for (0..total_entries) |i| {
@@ -113,27 +123,19 @@ pub const Palette = struct {
             return;
         }
         if (p.open) {
-            var matches: [total_entries]usize = undefined;
-            const count = p.collectMatches(&matches);
-            p.selected = if (count == 0) 0 else @min(p.selected, count - 1);
-
-            if (takeKey(c, ui.Shortcut.escape, .escape, .cancel)) {
-                p.close(c);
-                return;
-            }
-            if (takeKey(c, ui.Shortcut.down, .down, .move_down)) {
-                if (count > 0) p.selected = (p.selected + 1) % count;
-                c.changed = true;
-                return;
-            }
-            if (takeKey(c, ui.Shortcut.up, .up, .move_up)) {
-                if (count > 0) p.selected = if (p.selected == 0) count - 1 else p.selected - 1;
-                c.changed = true;
-                return;
-            }
-            if (takeKey(c, ui.Shortcut.enter, .enter, .insert_newline)) {
-                if (count > 0) p.runEntry(g, c, matches[p.selected]);
-                return;
+            var matches: [total_entries]picker.Id = undefined;
+            const ids = matches[0..p.collectMatches(&matches)];
+            _ = picker.reconcile(&p.active, ids, .first);
+            // Keys that compose, commit or cancel input-method text are the field's.
+            if (!p.composition.begin(c).quiet()) return;
+            const intent = picker.keys(c, .{ .consume = true }) orelse return;
+            switch (intent) {
+                .dismiss => p.close(c),
+                .next, .previous => {
+                    _ = picker.step(&p.active, ids, if (intent == .next) .next else .previous, .wrap);
+                    c.changed = true;
+                },
+                .activate => if (p.active) |id| p.runEntry(g, c, @intCast(id)),
             }
             return;
         }
@@ -146,21 +148,6 @@ pub const Palette = struct {
                 }
             }
         }
-    }
-
-    fn takeKey(c: *ui.Context, sc: u21, comptime k: anytype, cmd: ui.Command) bool {
-        if (c.shortcut(.{ .key = sc })) return true;
-        if (c.input.key == k) {
-            c.input.key = null;
-            return true;
-        }
-        for (c.input.ops) |op| {
-            if (op == .command and op.command == cmd) {
-                c.input.ops = &.{};
-                return true;
-            }
-        }
-        return false;
     }
 
     pub fn overlay(p: *Palette, g: anytype, c: *ui.Context) void {
@@ -195,9 +182,8 @@ pub const Palette = struct {
             .clip().motion(f);
         defer card.end();
 
-        var matches: [total_entries]usize = undefined;
+        var matches: [total_entries]picker.Id = undefined;
         const count = p.collectMatches(&matches);
-        p.selected = if (count == 0) 0 else @min(p.selected, count - 1);
 
         {
             const top = ui.div(c).row().wFull().px(14).py(10).gap(10).itemsCenter();
@@ -209,8 +195,10 @@ pub const Palette = struct {
                 .width = .fill,
                 .size = 15,
             });
-            if (tf.changed) p.selected = 0;
-            if (tf.submitted and count > 0) p.runEntry(g, c, matches[p.selected]);
+            _ = p.composition.end(c, &p.query);
+            if (tf.changed) p.active = null;
+            _ = picker.reconcile(&p.active, matches[0..count], .first);
+            if (tf.submitted) if (p.active) |id| p.runEntry(g, c, @intCast(id));
             if (kit.button(c, "Esc", .{ .variant = .ghost, .size = .xs }).clicked) p.close(c);
         }
         kit.separator(c, .{});
@@ -218,13 +206,15 @@ pub const Palette = struct {
             ui.key(c, c.print("pal-list-{d}", .{p.opens}));
             const list = ui.div(c).column().wFull().maxH(280).scrollY().p(6).gap(2);
             defer list.end();
-            for (matches[0..count], 0..) |idx, rank| {
+            for (matches[0..count]) |id| {
+                const idx: usize = @intCast(id);
                 const e = entryAt(idx);
-                ui.key(c, c.print("pal-{d}", .{idx}));
-                const hot = rank == p.selected;
+                picker.rowKey(c, 0, id);
+                const hot = p.active == id;
                 var row = ui.div(c).row().wFull().px(10).py(8).gap(10).rounded(8).itemsCenter().control();
                 row = if (hot) row.bg(th.accent.alpha(0.14)) else row.hover(th.surface_hover);
                 defer row.end();
+                ui.access.describe(c, row.index, .{ .label = e.title, .value = e.subtitle, .selected = hot });
                 if (row.clicked()) p.runEntry(g, c, idx);
                 ui.icon(c, e.icon, .{ .size = 14, .frame = 18, .color = if (hot) th.accent else th.muted });
                 {
