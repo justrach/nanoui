@@ -230,3 +230,30 @@ test "a glyph of a hostile font can't nest or repeat components without end" {
     }
     _ = outlinePoints(&f, 0);
 }
+
+test "a CFF2 font draws its default instance, and survives any change" {
+    const gpa = std.testing.allocator;
+    const plain = try testfont.build(gpa, .{ .family = "Cff2", .cff2 = true, .ranges = &.{.{ 0x20, 0x30 }}, .advance = 620 });
+    defer gpa.free(plain);
+    try sfnt.validate(plain);
+    const f = try font.Font.init(plain, 0);
+    const g = f.glyphIndex('!');
+    try std.testing.expect(g != 0);
+    try std.testing.expectEqual(@as(f32, 620), f.advance(g));
+    // The same box as the CFF font: blend kept the default and dropped the
+    // region's delta of 999.
+    const b = f.bounds(g).?;
+    try std.testing.expectEqual(@as(f32, 50), b[0]);
+    try std.testing.expectEqual(@as(f32, 570), b[2]);
+    try std.testing.expectEqual(@as(f32, 700), b[3]);
+    try std.testing.expectEqual(@as(u32, 4), outlinePoints(&f, g));
+    const buf = try gpa.dupe(u8, plain);
+    defer gpa.free(buf);
+    for (0..plain.len) |i| {
+        for ([_]u8{ 0, 0xff, plain[i] ^ 0x41, 15, 16, 23, 24, 29 }) |v| {
+            buf[i] = v;
+            exercise(buf);
+        }
+        buf[i] = plain[i];
+    }
+}

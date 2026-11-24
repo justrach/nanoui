@@ -20,6 +20,8 @@ pub const Options = struct {
     gap: i16 = 0,
     /// Outlines in a `CFF ` table, as an OpenType font's, not TrueType's.
     cff: bool = false,
+    /// Outlines in a `CFF2` table whose charstrings blend over one region.
+    cff2: bool = false,
     /// A `liga` turning this text into one glyph with this advance.
     ligature: ?[]const u8 = null,
     ligature_advance: u16 = 1000,
@@ -208,6 +210,83 @@ fn cffTable(w: *Buf, advance: u16, num_glyphs: u16, family: []const u8) !void {
     try w.b.appendSlice(w.a, head.b.items);
 }
 
+/// A CFF2 table of the same boxes. Each charstring blends its width with a
+/// delta of 999 over one region, and the private dict blends a stem width,
+/// so a reader that drops the wrong number of deltas draws another shape.
+fn cff2Table(w: *Buf, advance: u16, num_glyphs: u16) !void {
+    const a = w.a;
+    const x1: i16 = @intCast(@max(advance, 100) - 50);
+    const word = struct {
+        fn put(o: *Buf, v: i16) !void {
+            try o.b.append(o.a, 28);
+            try o.i16be(v);
+        }
+    }.put;
+    var code: Buf = .{ .a = a };
+    try word(&code, 50);
+    try word(&code, 0);
+    try code.b.append(a, 21); // rmoveto
+    try word(&code, x1 - 50);
+    try word(&code, 999);
+    try word(&code, 1);
+    try code.b.append(a, 16); // blend: x1 - 50 at the default
+    for ([_]i16{ 0, 0, 700, 50 - x1, 0 }) |v| try word(&code, v);
+    try code.b.append(a, 5); // rlineto; no endchar in CFF2
+    const one = code.b.items;
+
+    // Item variation store: one axis, one region, one item variation data.
+    var ivs: Buf = .{ .a = a };
+    try ivs.u16be(1);
+    try ivs.u32be(12);
+    try ivs.u16be(1);
+    try ivs.u32be(22);
+    for ([_]u16{ 1, 1, 0, 0x4000, 0x4000 }) |v| try ivs.u16be(v); // region list
+    for ([_]u16{ 0, 0, 1, 0 }) |v| try ivs.u16be(v); // item variation data
+    var private: Buf = .{ .a = a };
+    try word(&private, 0);
+    try word(&private, 5);
+    try word(&private, 1);
+    try private.b.appendSlice(a, &.{ 23, 10 }); // blend, StdHW
+
+    const top_len = 19;
+    var at: usize = 5 + top_len + 4;
+    const vs_at = at;
+    at += 2 + ivs.b.items.len;
+    const fd_at = at;
+    at += 4 + 1 + 2 + 11;
+    const priv_at = at;
+    at += private.b.items.len;
+    const cs_at = at;
+
+    try w.b.appendSlice(a, &.{ 2, 0, 5 });
+    try w.u16be(top_len);
+    try w.b.append(a, 29);
+    try w.u32be(@intCast(cs_at));
+    try w.b.append(a, 17); // CharStrings
+    try w.b.append(a, 29);
+    try w.u32be(@intCast(fd_at));
+    try w.b.appendSlice(a, &.{ 12, 36 }); // FDArray
+    try w.b.append(a, 29);
+    try w.u32be(@intCast(vs_at));
+    try w.b.append(a, 24); // vstore
+    try w.u32be(0); // no global subroutines
+    try w.u16be(@intCast(ivs.b.items.len));
+    try w.b.appendSlice(a, ivs.b.items);
+    // FDArray: one font dict pointing at the private dict.
+    try w.u32be(1);
+    try w.b.appendSlice(a, &.{ 1, 1, 12 });
+    try w.b.append(a, 29);
+    try w.u32be(@intCast(private.b.items.len));
+    try w.b.append(a, 29);
+    try w.u32be(@intCast(priv_at));
+    try w.b.append(a, 18);
+    try w.b.appendSlice(a, private.b.items);
+    try w.u32be(num_glyphs);
+    try w.b.append(a, 4);
+    for (0..@as(usize, num_glyphs) + 1) |i| try w.u32be(@intCast(1 + i * one.len));
+    for (0..num_glyphs) |_| try w.str(one);
+}
+
 /// The font's sfnt, the caller's.
 pub fn build(gpa: std.mem.Allocator, o: Options) ![]u8 {
     var arena: std.heap.ArenaAllocator = .init(gpa);
@@ -305,7 +384,12 @@ pub fn build(gpa: std.mem.Allocator, o: Options) ![]u8 {
     }.f;
     try add(&tables, a, "cmap", &cmap);
     var cff_data: Buf = .{ .a = a };
-    if (o.cff) {
+    if (o.cff2) {
+        try cff2Table(&cff_data, o.advance, num_glyphs);
+        try add(&tables, a, "CFF2", &cff_data);
+        maxp.b.items.len = 6;
+        std.mem.writeInt(u32, maxp.b.items[0..4], 0x00005000, .big);
+    } else if (o.cff) {
         try cffTable(&cff_data, o.advance, num_glyphs, o.family);
         try add(&tables, a, "CFF ", &cff_data);
         maxp.b.items.len = 6;
@@ -326,5 +410,5 @@ pub fn build(gpa: std.mem.Allocator, o: Options) ![]u8 {
         try gsubTable(&gsub, o, text, num_glyphs - 1);
         try add(&tables, a, "GSUB", &gsub);
     }
-    return sfnt.assemble(gpa, if (o.cff) sfnt.tag("OTTO") else 0x00010000, tables.items);
+    return sfnt.assemble(gpa, if (o.cff or o.cff2) sfnt.tag("OTTO") else 0x00010000, tables.items);
 }

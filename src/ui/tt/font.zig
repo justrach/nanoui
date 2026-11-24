@@ -82,7 +82,7 @@ pub const Tables = struct {
                 tag("kern") => t.kern = off,
                 tag("OS/2") => t.os2 = off,
                 tag("fvar") => t.fvar = off,
-                tag("CFF ") => {
+                tag("CFF "), tag("CFF2") => {
                     t.cff = off;
                     t.cff_len = be32(data, rec + 12);
                 },
