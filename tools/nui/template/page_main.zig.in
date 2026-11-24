@@ -1,0 +1,36 @@
+//! {{title}}: a webview window calling Zig services through /nanoui.js.
+const std = @import("std");
+const nanoui = @import("nanoui");
+
+pub const Greeter = struct {
+    pub const nanoui_params = .{ .greet = .{"name"} };
+
+    pub fn greet(_: *Greeter, call: *nanoui.Call, name: []const u8) ![]const u8 {
+        return formatGreeting(call.arena, name);
+    }
+};
+
+pub fn formatGreeting(a: std.mem.Allocator, name: []const u8) ![]u8 {
+    const who = std.mem.trim(u8, name, " ");
+    return std.fmt.allocPrint(a, "Hello, {s}!", .{if (who.len == 0) "world" else who});
+}
+
+const assets = [_]nanoui.Asset{
+    .{ .path = "/index.html", .data = @embedFile("frontend/index.html") },
+    .{ .path = "/main.js", .data = @embedFile("frontend/main.js") },
+    .{ .path = "/style.css", .data = @embedFile("frontend/style.css") },
+};
+
+pub fn main(init: std.process.Init) !void {
+    const app = try nanoui.App.create(init, .{ .name = "{{title}}" });
+    defer app.destroy();
+    var greeter: Greeter = .{};
+    try app.bind(&greeter);
+    _ = try app.newWindow(.{
+        .title = "{{title}}",
+        .width = 640,
+        .height = 480,
+        .content = .{ .page = .{ .url = "/", .assets = &assets } },
+    });
+    try app.run();
+}

@@ -69,29 +69,25 @@ submodules under `apps/`. To fetch them after a plain clone, run
 
 ### A new app: `nui`
 
-`nui` makes an app that builds, and checks it without opening a window,
-for people and for coding agents alike. It never asks anything, and every
-command takes `--json`.
+`nui` scaffolds, cross-builds, and checks nanoui apps without opening a window,
+for people and coding agents alike. Every command supports `--json`; see [docs/cli.md](docs/cli.md).
 
 ```sh
-nui start my-app          # build.zig, a view, its test and an AGENTS.md; then it builds
+sh tools/install-nui.sh --from-source   # or `zig build nui` into zig-out/bin
+nui start my-app                        # templates: `--template native | kit | page`
 cd my-app
-nui test                  # the view's tests, rendered offscreen
-nui snapshot --out shot.png --script "click:Increment"   # the app as a PNG, no window
-nui run                   # its window
-nui doctor                # Zig 0.17, and GTK 3 on Linux
+nui check --lines                       # zig fmt --check, <= 600 lines/file, build & tests
+nui build --target linux --release      # also windows, ios-sim, android, web
+nui snapshot --out shot.png --script "click:Increment"   # offscreen PNG, no window
+nui run                                 # open the app's window
+nui doctor                              # Zig 0.17, GTK 4/3, iOS/Android toolchains
 ```
 
-Each release has `nui` for macOS, Linux and Windows; `zig build nui` builds
-it into `zig-out/bin`. `nui start` pins nanoui at the release `nui` came
-with (`--nanoui REF` for another, `--local PATH` for a checkout). The app's
-`AGENTS.md` tells an agent the commands and rules: check the look with
-`nui snapshot`, the behavior with `ui.Tester`.
-
-To add nanoui to a project of your own instead:
+`nui start` pins nanoui at the release `nui` came with (`--nanoui REF` for
+another, `--local PATH` for a local checkout). To add nanoui manually instead:
 
 ```sh
-zig fetch --save git+https://github.com/justrach/nanoui#v0.13.0
+zig fetch --save git+https://github.com/justrach/nanoui#v0.14.9
 ```
 
 Releases are tagged `vMAJOR.MINOR.PATCH`, as mygo's are, and each is listed

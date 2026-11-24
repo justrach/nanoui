@@ -166,7 +166,7 @@ pub const version = @import("build_options").version;
 /// skip recompiling `std.Io.Threaded` and DWARF unwinding in the app's unit.
 pub const Init = if (@import("rt.zig").desktop) std.process.Init.Minimal else std.process.Init;
 pub const std_options: std.Options = .{
-    .enable_segfault_handler = !@import("rt.zig").enabled,
+    .enable_segfault_handler = !@import("rt.zig").enabled and std.debug.default_enable_segfault_handler,
     .allow_stack_tracing = !@import("rt.zig").enabled,
     .unexpected_error_tracing = !@import("rt.zig").enabled,
 };

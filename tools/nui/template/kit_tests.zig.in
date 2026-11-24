@@ -1,0 +1,24 @@
+//! Offscreen tests for {{title}} with ui.Tester.
+const std = @import("std");
+const nanoui = @import("nanoui");
+const ui = nanoui.ui;
+const app_view = @import("app.zig");
+
+test "Boost increases progress; tabs switch views cleanly" {
+    var state = app_view.State.init(std.testing.allocator);
+    defer state.deinit();
+    var t: ui.Tester = undefined;
+    try t.init(std.testing.allocator, .init(&state, app_view.State.view), .{ .width = 480, .height = 360 });
+    defer t.deinit();
+    t.settle(0.3);
+
+    try t.clickText("Boost");
+    t.settle(0.3);
+    try std.testing.expectEqual(@as(u32, 1), state.clicks);
+    try std.testing.expect(t.hasText("Updated"));
+
+    try t.clickText("Activity");
+    t.settle(3.0);
+    try std.testing.expectEqual(@as(usize, 1), state.tab);
+    try std.testing.expect(t.hasText("Ready to build"));
+}

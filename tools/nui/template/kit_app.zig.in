@@ -1,0 +1,63 @@
+//! {{title}}'s state and its view, built with `nanoui.kit`.
+const std = @import("std");
+const nanoui = @import("nanoui");
+const ui = nanoui.ui;
+const kit = nanoui.kit;
+
+pub const State = struct {
+    tab: usize = 0,
+    progress: f32 = 0.4,
+    clicks: u32 = 0,
+    toaster: kit.Toaster,
+
+    pub fn init(gpa: std.mem.Allocator) State {
+        return .{ .toaster = .{ .gpa = gpa } };
+    }
+
+    pub fn deinit(s: *State) void {
+        s.toaster.deinit();
+    }
+
+    pub fn view(s: *State, c: *ui.Context) void {
+        const t = kit.tokens(c);
+        const root = ui.div(c).column().sizeFull().p(20).gap(14).bg(t.background);
+        defer root.end();
+
+        {
+            const head = ui.div(c).row().wFull().itemsCenter().gap(8);
+            defer head.end();
+            ui.text(c, "{{title}}", .{ .size = 18, .weight = .bold, .color = t.foreground });
+            kit.tag(c, "kit", .{ .status = .info, .pill = true });
+            ui.spacer(c);
+            ui.text(c, c.print("Clicks: {d}", .{s.clicks}), .{ .size = 13, .color = t.muted });
+        }
+
+        _ = kit.tabs(c, &.{ "Overview", "Activity" }, &s.tab, .{ .variant = .segmented });
+
+        if (s.tab == 0) {
+            const card = ui.div(c).column().wFull().p(16).gap(12).rounded(t.radius).bg(t.surface).border(t.border);
+            defer card.end();
+            ui.text(c, "Progress", .{ .size = 13, .weight = .semibold, .color = t.foreground });
+            kit.progress(c, s.progress, .{ .status = .success });
+            const row = ui.div(c).row().gap(8);
+            defer row.end();
+            if (kit.button(c, "Boost", .{ .variant = .primary }).clicked) {
+                s.clicks += 1;
+                s.progress = @min(1.0, s.progress + 0.2);
+                s.toaster.push(.{ .status = .success, .title = "Updated", .message = "Progress increased.", .duration = 2 });
+            }
+            if (kit.button(c, "Reset", .{ .variant = .ghost, .disabled = s.clicks == 0 }).clicked) {
+                s.clicks = 0;
+                s.progress = 0.4;
+            }
+        } else {
+            _ = kit.alert(c, .{
+                .status = .info,
+                .title = "Ready to build",
+                .description = "Edit src/app.zig and run `nui check` or `nui snapshot`.",
+            });
+        }
+
+        s.toaster.view(c);
+    }
+};

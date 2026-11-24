@@ -1,0 +1,14 @@
+//! Service unit tests for {{title}}.
+const std = @import("std");
+const app_main = @import("main.zig");
+
+test "formatGreeting trims whitespace and defaults blank names" {
+    const a = std.testing.allocator;
+    const ada = try app_main.formatGreeting(a, "  Ada  ");
+    defer a.free(ada);
+    try std.testing.expectEqualStrings("Hello, Ada!", ada);
+
+    const blank = try app_main.formatGreeting(a, "   ");
+    defer a.free(blank);
+    try std.testing.expectEqualStrings("Hello, world!", blank);
+}

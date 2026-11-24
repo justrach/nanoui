@@ -1,0 +1,39 @@
+const std = @import("std");
+
+pub fn build(b: *std.Build) void {
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+    const filters = b.option([]const []const u8, "test-filter", "Run only the tests whose names contain this") orelse &.{};
+
+    const nanoui = b.dependency("nanoui", .{ .target = target, .optimize = optimize }).module("nanoui");
+    const exe = b.addExecutable(.{
+        .name = "{{name}}",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "nanoui", .module = nanoui }},
+        }),
+    });
+    if (target.result.os.tag == .windows) exe.subsystem = .windows;
+    b.installArtifact(exe);
+
+    const run = b.addRunArtifact(exe);
+    run.addPassthruArgs();
+    b.step("run", "Run {{title}} (opens its window)").dependOn(&run.step);
+
+    const gen = b.addRunArtifact(exe);
+    gen.addArg("--nanoui-generate=src/frontend");
+    b.step("gen", "Write src/frontend/nanoui.js and src/frontend/nanoui.d.ts").dependOn(&gen.step);
+
+    const tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tests.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "nanoui", .module = nanoui }},
+        }),
+        .filters = filters,
+    });
+    b.step("test", "Run the tests").dependOn(&b.addRunArtifact(tests).step);
+}

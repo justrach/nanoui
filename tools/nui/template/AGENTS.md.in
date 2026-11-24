@@ -1,18 +1,21 @@
 # AGENTS.md
 
-{{title}} is a desktop app made with [nanoui](https://github.com/justrach/nanoui)
-in Zig 0.17: native UI drawn by nanoui itself (Metal on macOS, its own CPU
-renderer on Linux and Windows), from one codebase.
+{{title}} is an app made with [nanoui](https://github.com/justrach/nanoui)
+in Zig 0.17: native UI drawn by nanoui itself (Metal on macOS/iOS, OpenGL/CPU
+on Linux/Android, Direct3D 11 on Windows, WebGPU in browsers), or a webview page.
 
 ## Commands
 
 ```sh
-nui build                       # compile (zig build)
-nui test                        # the tests: views rendered offscreen with ui.Tester
+nui check --lines               # fmt check, <= 600 lines/file, build, and offscreen tests
+nui build                       # compile (`--target linux|windows|ios-sim|android|web`, `--release`)
+nui test                        # the tests: views rendered offscreen with ui.Tester (`--portable`)
+nui dev --test                  # re-run tests automatically on every file save
 nui snapshot --out shot.png     # build, then render the app to a PNG, no window
 nui snapshot --out shot.png --script "click:Increment;click:Increment"
+nui gen                         # generate nanoui.js and nanoui.d.ts (for page apps)
 nui run                         # open the app's window (for people, not agents)
-nui doctor                      # check Zig and the platform
+nui doctor                      # check Zig and the platform toolchains
 ```
 
 Every command takes `--json` for output a program can read.
@@ -22,6 +25,8 @@ Every command takes `--json` for output a program can read.
 - **Never open windows while working.** Check what the app looks like with
   `nui snapshot` (open the PNG), and what it does with tests through
   `ui.Tester` (`src/tests.zig`). `nui run` is for people.
+- **Keep every file at most 600 lines.** Split by responsibility before
+  growing past 600 lines (`nui check --lines` enforces it).
 - **A view is a function of the state.** `State.view` in `src/app.zig` draws
   everything each frame; widgets report input as they're drawn
   (`if (ui.button(c, "Save", .{}).clicked) …`). Keep ids stable with
@@ -34,11 +39,11 @@ Every command takes `--json` for output a program can read.
 ## Layout
 
 ```
-build.zig       the app, `run` and `test` steps
+build.zig       the app, `run`, `test`, iOS/Android/WebGPU targets
 build.zig.zon   nanoui, pinned
-src/main.zig    the window
-src/app.zig     the state and its view
-src/tests.zig   the view's tests
+src/main.zig    the window (or webview setup for `--template page`)
+src/app.zig     the state and its view (native / kit templates)
+src/tests.zig   the app's tests
 ```
 
 nanoui's README lists the widgets (`ui.div(c).row().gap(8)…`, text,

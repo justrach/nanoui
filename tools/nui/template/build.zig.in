@@ -3,27 +3,84 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const nanoui = b.dependency("nanoui", .{ .target = target, .optimize = optimize }).module("nanoui");
+    const portable = b.option(bool, "portable", "Use portable text and CPU rendering") orelse false;
+    const filters = b.option([]const []const u8, "test-filter", "Run only the tests whose names contain this") orelse &.{};
 
-    const exe = b.addExecutable(.{ .name = "{{name}}", .root_module = b.createModule(.{
+    const nanoui_pkg = @import("nanoui");
+    const os = target.result.os.tag;
+    const is_wasi = os == .wasi;
+    const nanoui_dep = b.dependency("nanoui", .{
+        .target = target,
+        .optimize = optimize,
+        .portable = if (is_wasi) true else portable,
+    });
+    const nanoui = nanoui_dep.module("nanoui");
+
+    const root_module = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+        .single_threaded = if (is_wasi) true else null,
         .imports = &.{.{ .name = "nanoui", .module = nanoui }},
-    }) });
+    });
+
+    if (os == .ios) {
+        const exe = b.addExecutable(.{ .name = "{{name}}", .root_module = root_module });
+        const opts: nanoui_pkg.ios.Options = .{ .name = "{{title}}", .id = "{{id}}" };
+        const bundle = nanoui_pkg.ios.app(b, exe, opts);
+        b.getInstallStep().dependOn(&b.addInstallDirectory(.{
+            .source_dir = bundle,
+            .install_dir = .prefix,
+            .install_subdir = "ios/{{title}}.app",
+        }).step);
+        const step = b.step("run", "Run {{title}} in the booted iOS Simulator");
+        if (target.result.abi == .simulator) {
+            const run = nanoui_pkg.ios.runInSimulator(b, bundle, opts, nanoui_dep.path("."));
+            run.addPassthruArgs();
+            step.dependOn(&run.step);
+        } else {
+            step.dependOn(&b.addFail("install on a device from Xcode or with `xcrun devicectl`").step);
+        }
+        return;
+    }
+
+    if (target.result.abi.isAndroid()) {
+        const lib = nanoui_pkg.android.library(b, .{
+            .name = "{{name}}",
+            .root_module = root_module,
+            .nanoui = nanoui,
+        });
+        const opts: nanoui_pkg.android.Options = .{ .name = "{{title}}", .id = "{{id}}" };
+        const apk = nanoui_pkg.android.apk(b, lib, opts);
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(apk, .prefix, "android/{{title}}.apk").step);
+        const run = nanoui_pkg.android.runOnDevice(b, apk, opts, nanoui_dep.path("."));
+        run.addPassthruArgs();
+        b.step("run", "Run {{title}} on the Android device adb sees").dependOn(&run.step);
+        return;
+    }
+
+    const exe = b.addExecutable(.{ .name = "{{name}}", .root_module = root_module });
+    if (is_wasi) {
+        b.getInstallStep().dependOn(nanoui_pkg.web.install(b, exe, nanoui_dep.path(".")));
+        return;
+    }
+
     // A window of its own on Windows, without a console window beside it.
-    if (target.result.os.tag == .windows) exe.subsystem = .windows;
+    if (os == .windows) exe.subsystem = .windows;
     b.installArtifact(exe);
     const run = b.addRunArtifact(exe);
     run.addPassthruArgs();
     b.step("run", "Run {{title}} (opens its window)").dependOn(&run.step);
 
     // Tests render the view offscreen with ui.Tester: no window opens.
-    const tests = b.addTest(.{ .root_module = b.createModule(.{
-        .root_source_file = b.path("src/tests.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{.{ .name = "nanoui", .module = nanoui }},
-    }) });
+    const tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tests.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "nanoui", .module = nanoui }},
+        }),
+        .filters = filters,
+    });
     b.step("test", "Run the tests").dependOn(&b.addRunArtifact(tests).step);
 }

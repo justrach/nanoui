@@ -70,8 +70,17 @@ jobs:
         run: |
           zig build nui
           nui="$PWD/zig-out/bin/nui"
+          "$nui" doctor --target ios-sim --json
           "$nui" start ci-app --dir "$RUNNER_TEMP/ci-app" --local "$PWD"
-          cd "$RUNNER_TEMP/ci-app" && "$nui" test && "$nui" snapshot --out shot.png --script "click:Increment" --json
+          (
+            cd "$RUNNER_TEMP/ci-app"
+            "$nui" check --lines
+            "$nui" snapshot --out shot.png --script "click:Increment" --json
+            "$nui" build --target web --json
+            "$nui" build --target ios-sim --json
+          )
+          "$nui" start ci-kit --template kit --dir "$RUNNER_TEMP/ci-kit" --local "$PWD"
+          (cd "$RUNNER_TEMP/ci-kit" && "$nui" check --lines)
       # iOS needs Zig's lib fixed (the flag goes first) and Xcode's SDKs.
       - run: zig build $(sh tools/ios/zig-lib.sh) -Dtarget=aarch64-ios-simulator --prefix zig-out/ios-sim
       - run: zig build $(sh tools/ios/zig-lib.sh) -Dtarget=aarch64-ios --prefix zig-out/ios
@@ -135,8 +144,15 @@ jobs:
           zig build nui
           nui="$PWD/zig-out/bin/nui"
           "$nui" doctor
+          "$nui" doctor --target android --json
           "$nui" start ci-app --dir "$RUNNER_TEMP/ci-app" --local "$PWD"
-          cd "$RUNNER_TEMP/ci-app" && xvfb-run -a "$nui" test && xvfb-run -a "$nui" snapshot --out shot.png --script "click:Increment" --json
+          (
+            cd "$RUNNER_TEMP/ci-app"
+            xvfb-run -a "$nui" check --lines
+            xvfb-run -a "$nui" snapshot --out shot.png --script "click:Increment" --json
+            "$nui" build --target web --json
+            "$nui" build --target android --json
+          )
       # Android: the runner has its SDK, NDK and Java (ANDROID_HOME, ANDROID_NDK_HOME).
       - run: zig build -Dtarget=aarch64-linux-android
       - run: zig build test-tools
@@ -162,13 +178,24 @@ jobs:
       - run: zig build test-nui
       - name: nui makes an app that builds, passes its test and renders
         run: |
+          $repo = $PWD.Path
           zig build nui
           if ($LASTEXITCODE) { throw "nui didn't build" }
-          $nui = "$PWD\zig-out\bin\nui.exe"
-          & $nui start ci-app --dir "$env:RUNNER_TEMP\ci-app" --local "$PWD"
+          $nui = "$repo\zig-out\bin\nui.exe"
+          & $nui doctor
+          if ($LASTEXITCODE) { throw "nui doctor failed" }
+          & $nui start ci-app --dir "$env:RUNNER_TEMP\ci-app" --local "$repo"
           if ($LASTEXITCODE) { throw "nui start failed" }
-          Set-Location "$env:RUNNER_TEMP\ci-app"
-          & $nui test
-          if ($LASTEXITCODE) { throw "nui test failed" }
-          & $nui snapshot --out shot.png --script "click:Increment" --json
-          if ($LASTEXITCODE) { throw "nui snapshot failed" }
+          Push-Location "$env:RUNNER_TEMP\ci-app"
+          try {
+            & $nui check --lines
+            if ($LASTEXITCODE) { throw "nui check failed" }
+            & $nui snapshot --out shot.png --script "click:Increment" --json
+            if ($LASTEXITCODE) { throw "nui snapshot failed" }
+            & $nui build --target web --json
+            if ($LASTEXITCODE) { throw "nui web build failed" }
+          } finally {
+            Pop-Location
+          }
+          pwsh -NoProfile -ExecutionPolicy Bypass -File "$repo\tools\install-nui.ps1" -FromSource -Dir "$env:RUNNER_TEMP\nui-bin"
+          if ($LASTEXITCODE) { throw "install-nui.ps1 failed" }
