@@ -17,23 +17,11 @@ is preserved. This also applies to queued selection and preedit offsets.
 In invalid text, a stray continuation byte keeps its own offset rather than
 moving the caret onto an earlier scalar.
 
-## Follow-up contributions
+## Known gaps
 
-1. Make ordinary caret movement, selection extension and deletion in
-   editable fields respect extended grapheme boundaries. Reuse the
-   segmentation already used by static text selection. Keep storage and IME
-   APIs byte based. Cover decomposed accents, emoji with modifiers and ZWJ
-   sequences, flags, Indic conjuncts, and a caret supplied inside a cluster.
-   Measure repeated backward steps on long ASCII and non-ASCII lines before
-   choosing a reverse lookup strategy.
-2. Test geometry separately from editing. Use a synthetic ligature font
-   with known advances and a deterministic CJK fallback fixture. Verify
-   hit testing, caret placement and copied source bytes on the native and
-   portable text paths. Glyph count can change with the font and shaping
-   options even when byte and grapheme counts stay fixed.
-3. Add host conversion cases for supplementary plane scalars in the middle
-   of composition, including selection ranges next to a surrogate pair.
-   Preserve each host's rounding and cancellation rules in its adapter.
-
-See [Unicode Text Segmentation](https://www.unicode.org/reports/tr29/) for
-extended grapheme rules.
+- Caret movement and deletion in editable fields step by scalar, not by
+  extended grapheme cluster ([UAX #29](https://www.unicode.org/reports/tr29/)).
+- No tests cover glyph geometry (hit testing, caret placement) for ligatures
+  or CJK fallback fonts separately from editing.
+- No tests cover host offset conversion for supplementary-plane scalars in
+  the middle of a composition.
