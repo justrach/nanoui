@@ -37,10 +37,10 @@ const android = builtin.abi.isAndroid();
 /// The persistent index's name. Bump it whenever face discovery changes, so
 /// an index written by an older reader, missing faces it skipped, is rebuilt
 /// even though no font file changed.
-pub const index_file = "font-index-v3.bin";
+pub const index_file = "font-index-v4.bin";
 /// Names earlier readers wrote. Nothing reads them again, so writing the
 /// current index removes them from the same cache directory.
-pub const retired_index_files = [_][]const u8{ "font-index-v1.bin", "font-index-v2.bin" };
+pub const retired_index_files = [_][]const u8{ "font-index-v1.bin", "font-index-v2.bin", "font-index-v3.bin" };
 /// Families tried when the theme names none (or one not installed):
 /// Android's own first there.
 const sans = (if (android) [_][]const u8{"Roboto"} else [_][]const u8{}) ++ [_][]const u8{ "Inter", "Geist", "Segoe UI", "Noto Sans", "Cantarell", "Ubuntu", "DejaVu Sans", "Liberation Sans", "Arial", "Helvetica" };
