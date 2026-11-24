@@ -16,7 +16,10 @@ const ctx_mod = @import("context.zig");
 const Context = ctx_mod.Context;
 const Theme = @import("theme.zig").Theme;
 
-pub const Role = enum { button, tab, text_field, splitter, slider, checkbox, switch_toggle, radio_button, group, static_text, list, row, image, menu_button, popover, link };
+/// `listbox` holds a picker's results and `option` is one of them. Like a
+/// `list`, a listbox does not swallow what is inside it (`holdsElements`): its
+/// options (and any headings among them) are published as its children.
+pub const Role = enum { button, tab, text_field, splitter, slider, checkbox, switch_toggle, radio_button, group, static_text, list, row, image, menu_button, popover, link, listbox, option };
 
 pub const Item = struct {
     id: u64,
@@ -35,6 +38,13 @@ pub const Item = struct {
     level: u8 = 0,
     /// Left out, with what is inside it (a decoration, a duplicate).
     hidden: bool = false,
+    /// The element this one operates: a query field's listbox (`controls`).
+    controls: u64 = 0,
+    /// An option's 1-based place among its listbox's options and their
+    /// count, when the visible rows are not all of them (a virtualized
+    /// list). 0 derives it from the options drawn.
+    position: u32 = 0,
+    set_size: u32 = 0,
 };
 
 /// What the system asks for, set by the platform before each frame, and
@@ -125,11 +135,15 @@ pub const Describe = struct {
     header: bool = false,
     /// A heading's level, 1 to 6 (with `header`); 0 lets the reader assume 2.
     level: u8 = 0,
+    /// See `Item.controls`, `Item.position` and `Item.set_size`.
+    controls: u64 = 0,
+    position: u32 = 0,
+    set_size: u32 = 0,
 };
 
 /// Box `index` as one element, labeled so (its text when `label` is
 /// empty); what is inside it is read as part of it. A container role
-/// (`holdsElements`: `.list`) is the exception: its rows and tabs stay
+/// (`holdsElements`: `.list`, `.listbox`) is the exception: its rows and tabs stay
 /// elements of their own, each naming it as its `container`.
 pub fn describe(c: *Context, index: u32, d: Describe) void {
     const n = c.a11y_items.items.len;
@@ -139,6 +153,20 @@ pub fn describe(c: *Context, index: u32, d: Describe) void {
     it.hint = if (d.hint.len > 0) (c.alloc().dupe(u8, d.hint) catch d.hint) else "";
     it.header = d.header;
     it.level = @min(d.level, 6);
+    it.controls = d.controls;
+    it.position = d.position;
+    it.set_size = d.set_size;
+}
+
+/// Box `field_id` (a picker's query) operates listbox `listbox_id`: the
+/// listbox's selected option becomes the field's active descendant. Call it
+/// once both are described in this frame; the field's own registration (the
+/// first for its box) is the one changed.
+pub fn controls(c: *Context, field_id: u64, listbox_id: u64) void {
+    for (c.a11y_items.items) |*it| if (it.id == field_id and !it.hidden) {
+        it.controls = listbox_id;
+        return;
+    };
 }
 
 /// Box `index` and what is inside it, left out: a decoration.
@@ -162,11 +190,21 @@ pub const Element = struct {
     /// A heading's level, 1 to 6; 0 lets the reader assume 2.
     level: u8 = 0,
     /// The nearest container (`holdsElements`) this element is inside, by
-    /// id: rows in a `.list` make a list box and tabs a tab list. 0 when none,
+    /// id: rows in a `.list` make a list box and tabs a tab list; a
+    /// `.listbox`'s options (and headings among them) are its children. 0 when none,
     /// or when the container itself is not published (clipped out of view).
     container: u64 = 0,
     /// Made by `tree`, not registered by a widget.
     implied: bool = false,
+    /// A field's listbox (`controls`).
+    controls: u64 = 0,
+    /// For a field that controls a listbox: its selected, enabled option,
+    /// where the keyboard acts while focus stays in the field. Derived from
+    /// `selected`, so it cannot go stale.
+    active_descendant: u64 = 0,
+    /// An option's 1-based place among its listbox's options, and their count.
+    position: u32 = 0,
+    set_size: u32 = 0,
 };
 
 /// Text this size or larger, outside any element, is a heading; from
@@ -186,6 +224,7 @@ pub fn tree(c: *Context, arena: std.mem.Allocator, out: *std.ArrayList(Element))
     const containers = try arena.alloc(u64, nodes.len);
     const items = try arena.alloc(?u32, nodes.len);
     @memset(items, null);
+    const first = out.items.len;
     for (c.a11y_items.items, 0..) |it, k| if (it.node_index < nodes.len) {
         // The first registration of a box is its own (a field's, before an app's).
         if (items[it.node_index] == null or it.hidden) items[it.node_index] = @intCast(k);
@@ -214,7 +253,8 @@ pub fn tree(c: *Context, arena: std.mem.Allocator, out: *std.ArrayList(Element))
                 f.hidden = true;
                 continue;
             }
-            // A container holds its rows and tabs as elements of their own.
+            // A container (a list, a listbox) holds its rows, tabs and options
+            // as elements of their own.
             const holds = holdsElements(it.role);
             if (!holds) f.claimed = true;
             if (vis.w <= 0 or vis.h <= 0) continue;
@@ -223,7 +263,7 @@ pub fn tree(c: *Context, arena: std.mem.Allocator, out: *std.ArrayList(Element))
             // before it on the same line name it.
             var label = if (it.label.len > 0) it.label else if (it.role == .text_field or holds) "" else try textOf(c, arena, @intCast(i));
             if (label.len == 0) label = takeCaption(out, vis);
-            try out.append(arena, .{ .id = it.id, .role = it.role, .label = label, .value = it.value, .hint = it.hint, .rect = vis, .selected = it.selected, .enabled = it.enabled, .adjustable = it.adjustable, .header = it.header, .level = it.level, .container = container });
+            try out.append(arena, .{ .id = it.id, .role = it.role, .label = label, .value = it.value, .hint = it.hint, .rect = vis, .selected = it.selected, .enabled = it.enabled, .adjustable = it.adjustable, .header = it.header, .level = it.level, .container = container, .controls = it.controls, .position = it.position, .set_size = it.set_size });
             // Only a published container is named: the rows of one clipped out
             // of view stand alone (or in the container around it).
             if (holds) containers[i] = it.id;
@@ -247,12 +287,39 @@ pub fn tree(c: *Context, arena: std.mem.Allocator, out: *std.ArrayList(Element))
             else => {},
         }
     }
+    try relate(arena, out.items[first..]);
+}
+
+/// Fills what follows from the listboxes: each option's place and count,
+/// and each field's active descendant (its listbox's selected option).
+/// A listbox's elements follow it in `els`, as boxes follow their parents.
+fn relate(arena: std.mem.Allocator, els: []Element) !void {
+    var counts: std.AutoHashMapUnmanaged(u64, u32) = .empty;
+    for (els) |e| if (e.role == .listbox) try counts.put(arena, e.id, 0);
+    if (counts.count() == 0) return;
+    for (els) |*e| {
+        if (e.role != .option or e.container == 0) continue;
+        // Inside a `.list` rather than a listbox: no place to count.
+        const n = counts.getPtr(e.container) orelse continue;
+        n.* += 1;
+        if (e.position == 0) e.position = n.*;
+    }
+    for (els) |*e| if (e.role == .option and e.set_size == 0) {
+        if (counts.get(e.container)) |n| e.set_size = n;
+    };
+    for (els) |*e| {
+        if (e.controls == 0 or !counts.contains(e.controls)) continue;
+        for (els) |o| if (o.role == .option and o.container == e.controls and o.selected and o.enabled) {
+            e.active_descendant = o.id;
+            break;
+        };
+    }
 }
 
 /// A role whose element does not claim what is inside it: its rows, tabs and
 /// headings stay elements of their own, each naming it as its `container`.
 pub fn holdsElements(role: Role) bool {
-    return role == .list;
+    return role == .list or role == .listbox;
 }
 
 /// The text just before an unlabeled control on its line ("Volume" left

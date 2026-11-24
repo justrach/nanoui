@@ -6,6 +6,8 @@
 //! An element keeps its object while its box keeps its id, so VoiceOver's
 //! cursor stays on it across frames. Pressing one (VO-Space) clicks its
 //! box (`Context.a11yPress`); VO-Up and VO-Down step an adjustable one.
+//! A listbox is an `AXList` whose children are its options (`AXRow`, with
+//! `AXIndex`); everything else is a child of the view.
 const std = @import("std");
 const objc = @import("../objc.zig");
 const types = @import("types.zig");
@@ -26,11 +28,22 @@ pub const Payload = struct {
     enabled: bool = true,
     adjustable: bool = false,
     header: bool = false,
+    /// The listbox it is published inside (0: the view).
+    container: u64 = 0,
+    /// A field's listbox (`AXLinkedUIElements`).
+    controls: u64 = 0,
+    /// An option's 1-based place in its listbox.
+    position: u32 = 0,
+    /// A listbox's children in this build (retained), or null.
+    kids: ?objc.Object = null,
     /// The build that last listed it: older ones are let go.
     seen: u64 = 0,
 
     pub fn update(p: *Payload, gpa: std.mem.Allocator, e: access.Element) void {
         p.role = e.role;
+        p.container = e.container;
+        p.controls = e.controls;
+        p.position = e.position;
         p.rect = e.rect;
         p.selected = e.selected;
         p.enabled = e.enabled;
@@ -47,7 +60,15 @@ pub const Payload = struct {
         old.* = gpa.dupe(u8, new) catch &.{};
     }
 
+    /// Starts this build's children: a listbox gets an empty array.
+    fn resetKids(p: *Payload) void {
+        if (p.kids) |k| objc.release(k);
+        p.kids = if (p.role == .listbox) objc.retain(objc.msg(objc.Object, objc.class("NSMutableArray"), "array", .{})) else null;
+    }
+
     pub fn deinit(p: *Payload, gpa: std.mem.Allocator) void {
+        if (p.kids) |k| objc.release(k);
+        p.kids = null;
         gpa.free(p.label);
         gpa.free(p.value);
         gpa.free(p.hint);
@@ -88,6 +109,12 @@ fn elementClass() objc.Class {
             .{ .name = "isAccessibilityEnabled", .imp = &elemEnabled, .types = "c@:" },
             .{ .name = "isAccessibilitySelected", .imp = &elemSelected, .types = "c@:" },
             .{ .name = "accessibilityParent", .imp = &elemParent, .types = "@@:" },
+            .{ .name = "accessibilityChildren", .imp = &elemChildren, .types = "@@:" },
+            .{ .name = "accessibilityRows", .imp = &elemRows, .types = "@@:" },
+            .{ .name = "accessibilitySelectedRows", .imp = &elemSelectedRows, .types = "@@:" },
+            .{ .name = "accessibilitySelectedChildren", .imp = &elemSelectedRows, .types = "@@:" },
+            .{ .name = "accessibilityIndex", .imp = &elemIndex, .types = "q@:" },
+            .{ .name = "accessibilityLinkedUIElements", .imp = &elemLinked, .types = "@@:" },
             .{ .name = "accessibilityRole", .imp = &elemRole, .types = "@@:" },
             .{ .name = "accessibilitySubrole", .imp = &elemSubrole, .types = "@@:" },
             .{ .name = "accessibilityLabel", .imp = &elemLabel, .types = "@@:" },
@@ -155,6 +182,9 @@ pub fn elements(s: *Surface) ?objc.Object {
         h.update(e.label);
         h.update(e.value);
         h.update(&.{ @intFromBool(e.selected), @intFromBool(e.enabled) });
+        h.update(std.mem.asBytes(&e.container));
+        h.update(std.mem.asBytes(&e.position));
+        h.update(std.mem.asBytes(&e.set_size));
         const gop = st.cache.getOrPut(s.gpa, e.id) catch continue;
         if (!gop.found_existing) {
             const p = s.gpa.create(Payload) catch {
@@ -170,13 +200,25 @@ pub fn elements(s: *Surface) ?objc.Object {
         const p = objc.getZig(Payload, el) orelse continue;
         p.seen = st.builds;
         p.update(s.gpa, e);
-        objc.msg(void, arr, "addObject:", .{el});
+        p.resetKids();
+        // A listbox precedes what is inside it, so its array is ready.
+        const parent = if (e.container != 0) listedPayload(s, e.container) else null;
+        const kids = if (parent) |lp| lp.kids else null;
+        objc.msg(void, kids orelse arr, "addObject:", .{el});
     }
     st.hash = h.final();
     prune(s);
     if (st.array) |old| objc.release(old);
     st.array = objc.retain(arr);
     return arr;
+}
+
+/// The payload of element `id` listed in the current build.
+fn listedPayload(s: *Surface, id: u64) ?*Payload {
+    const st = &s.a11y_cache;
+    const el = st.cache.get(id) orelse return null;
+    const p = payloadOf(el) orelse return null;
+    return if (p.seen == st.builds) p else null;
 }
 
 fn forget(gpa: std.mem.Allocator, el: objc.Object) void {
@@ -234,7 +276,55 @@ fn elemSelected(obj: objc.Object, _: objc.SEL) callconv(.c) objc.BOOL {
 
 fn elemParent(obj: objc.Object, _: objc.SEL) callconv(.c) ?objc.Object {
     const p = payloadOf(obj) orelse return null;
+    if (p.container != 0) if (listedPayload(p.surface, p.container)) |lp| if (lp.kids != null) {
+        return p.surface.a11y_cache.cache.get(p.container);
+    };
     return p.surface.nsview;
+}
+
+fn elemChildren(obj: objc.Object, _: objc.SEL) callconv(.c) ?objc.Object {
+    const p = payloadOf(obj) orelse return null;
+    return p.kids;
+}
+
+/// A listbox's options, all or only the selected one.
+fn optionsOf(obj: objc.Object, only_selected: bool) ?objc.Object {
+    const p = payloadOf(obj) orelse return null;
+    const kids = p.kids orelse return null;
+    const out = objc.msg(objc.Object, objc.class("NSMutableArray"), "array", .{});
+    const n = objc.msg(objc.NSUInteger, kids, "count", .{});
+    var i: objc.NSUInteger = 0;
+    while (i < n) : (i += 1) {
+        const el = objc.msg(objc.Object, kids, "objectAtIndex:", .{i});
+        const k = payloadOf(el) orelse continue;
+        if (k.role != .option or (only_selected and !k.selected)) continue;
+        objc.msg(void, out, "addObject:", .{el});
+    }
+    return out;
+}
+
+fn elemRows(obj: objc.Object, _: objc.SEL) callconv(.c) ?objc.Object {
+    return optionsOf(obj, false);
+}
+
+fn elemSelectedRows(obj: objc.Object, _: objc.SEL) callconv(.c) ?objc.Object {
+    return optionsOf(obj, true);
+}
+
+/// An option's 0-based row index (`AXIndex`).
+fn elemIndex(obj: objc.Object, _: objc.SEL) callconv(.c) objc.NSInteger {
+    const p = payloadOf(obj) orelse return 0;
+    return if (p.position > 0) @intCast(p.position - 1) else 0;
+}
+
+/// A query field's listbox, so VO-Command-J can jump to the results.
+fn elemLinked(obj: objc.Object, _: objc.SEL) callconv(.c) ?objc.Object {
+    const p = payloadOf(obj) orelse return null;
+    if (p.controls == 0) return null;
+    const lp = listedPayload(p.surface, p.controls) orelse return null;
+    if (lp.role != .listbox) return null;
+    const el = p.surface.a11y_cache.cache.get(p.controls) orelse return null;
+    return objc.msg(objc.Object, objc.class("NSArray"), "arrayWithObject:", .{el});
 }
 
 /// The AppKit role for an element: a heading is AXHeading, as WebKit's.
@@ -255,6 +345,8 @@ pub fn roleName(role: access.Role, header: bool) []const u8 {
         .menu_button => "AXMenuButton",
         .popover => "AXPopover",
         .link => "AXLink",
+        .listbox => "AXList",
+        .option => "AXRow",
     };
 }
 
@@ -331,7 +423,10 @@ fn step(obj: objc.Object, dir: i8) objc.BOOL {
 fn elemAllowed(obj: objc.Object, _: objc.SEL, s: objc.SEL) callconv(.c) objc.BOOL {
     const p = payloadOf(obj) orelse return objc.NO;
     if (s == objc.sel("accessibilityPerformIncrement") or s == objc.sel("accessibilityPerformDecrement")) return if (p.adjustable) objc.YES else objc.NO;
-    if (s == objc.sel("accessibilityPerformPress")) return if (p.enabled and p.role != .static_text) objc.YES else objc.NO;
+    if (s == objc.sel("accessibilityPerformPress")) return if (p.enabled and p.role != .static_text and p.role != .listbox) objc.YES else objc.NO;
+    if (s == objc.sel("accessibilityRows") or s == objc.sel("accessibilitySelectedRows") or s == objc.sel("accessibilitySelectedChildren")) return if (p.role == .listbox) objc.YES else objc.NO;
+    if (s == objc.sel("accessibilityIndex")) return if (p.role == .option) objc.YES else objc.NO;
+    if (s == objc.sel("accessibilityLinkedUIElements")) return if (p.controls != 0) objc.YES else objc.NO;
     return objc.msgSuper(objc.BOOL, obj, objc.class("NSAccessibilityElement"), "isAccessibilitySelectorAllowed:", .{s});
 }
 
