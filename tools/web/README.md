@@ -95,7 +95,14 @@ the DOM. A browser text field hosts IME composition at the Zig caret; commit
 inserts one UTF-8 operation into the focused Zig field. Copy, cut and paste
 use browser clipboard events in that field, with password selections omitted.
 A commit or paste is limited to 64 KiB. Browser preedit is displayed by the DOM
-field and is not sent to Zig until commit. Dialogs, filesystem access,
+field and is not sent to Zig until commit. Password fields use an `<input type=password>`.
+A pointer press or touch release over a text field focuses its DOM editor in
+the same event, which iOS requires before it shows the on-screen keyboard. A
+field that gets focus from Zig without a tap, such as a search field opened
+by a button, gets the keyboard on iOS only after the user taps it.
+Disabled controls stay focusable with `aria-disabled`. Heading levels and
+list or tab containers are not yet part of the access model, so headings
+are level 2 and rows are buttons. Dialogs, filesystem access,
 multi-window, a complete App/Window platform and screen-reader acceptance
 remain separate work. Opaque desktop handle types let
 shared app state compile without creating desktop windows in the browser.

@@ -75,7 +75,7 @@ const Picker = struct {
         ui.label(c, "Collections");
         {
             ui.key(c, "open collections");
-            const trigger = ui.div(c).row().p(8).rounded(6).bg(c.theme.surface).control();
+            const trigger = ui.div(c).row().p(14).rounded(6).bg(c.theme.surface).control();
             defer trigger.end();
             s.trigger = c.node(trigger.index).id;
             if (s.open) ui.access.hide(c, trigger.index) else ui.access.describe(c, trigger.index, .{ .label = "Choose collection" });
@@ -110,13 +110,20 @@ const Picker = struct {
         if (s.count == 0) ui.label(c, "No matching collections");
         for (s.results[0..s.count], 0..) |index, rank| {
             ui.key(c, entries[index].id);
-            const row = ui.div(c).row().p(8).wFull().rounded(6)
+            const row = ui.div(c).row().p(14).wFull().rounded(6)
                 .bg(if (rank == s.selected) c.theme.accent.alpha(0.18) else c.theme.surface).control();
             defer row.end();
             ui.access.describe(c, row.index, .{ .label = entries[index].label, .selected = rank == s.selected });
             if (c.interact(row.index, .{ .focusable = true }).clicked) s.choose(c, index);
             ui.label(c, entries[index].label);
         }
+        // Touch screens have no Escape key.
+        ui.key(c, "cancel");
+        const cancel = ui.div(c).row().p(14).rounded(6).bg(c.theme.surface).control();
+        defer cancel.end();
+        ui.access.describe(c, cancel.index, .{ .label = "Cancel" });
+        if (c.interact(cancel.index, .{ .focusable = true }).clicked) s.close(c);
+        ui.label(c, "Cancel");
     }
 };
 
@@ -175,4 +182,10 @@ test "picker composes a query, chooses by keyboard and returns focus" {
     try std.testing.expect(!s.open);
     try std.testing.expectEqual(s.trigger, tester.ctx.focus);
     try std.testing.expectEqual(@as(?usize, 3), s.chosen);
+
+    try tester.clickText("Choose collection");
+    try tester.clickText("Cancel");
+    tester.settle(3);
+    try std.testing.expect(!s.open);
+    try std.testing.expectEqual(s.trigger, tester.ctx.focus);
 }

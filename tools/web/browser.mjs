@@ -1,6 +1,7 @@
 import { chromium } from 'playwright';
 import assert from 'node:assert/strict';
 import { checkGalleryKeyboard } from './gallery_keyboard.mjs';
+import { checkSemantics } from './semantics_browser.mjs';
 import { serve } from './serve.mjs';
 import { chromiumOptions } from './browser_options.mjs';
 const host = await serve();
@@ -230,6 +231,7 @@ try {
   await composing.evaluate(() => window.nanoui.destroy());
   await composing.close();
 
+  await checkSemantics(browser, host.url, errors);
   const closing = await context.newPage();
   closing.on('pageerror', e => errors.push(e.message));
   await closing.goto(host.url + '/counter.html');
@@ -258,5 +260,5 @@ try {
     window.nanoui.exports.nanoui_web_frames() === 0), true);
   await closing.close();
   assert.deepEqual(errors,[]);
-  console.log('PASS canvas, click, idle, resize/DPR, device loss, disposal, Worker input and idle, Gallery keyboard, Canvas 2D startup, Canvas 2D scale cap, live Canvas 2D failover, IME across failover, teardown during recovery');
+  console.log('PASS canvas, click, idle, resize/DPR, device loss, disposal, Worker input and idle, Gallery keyboard, Canvas 2D startup, Canvas 2D scale cap, live Canvas 2D failover, IME across failover, password editor, ARIA states, focus in a tap, overlay placement, teardown during recovery');
 } finally { await browser.close(); await host.close(); }

@@ -1,11 +1,11 @@
 <!doctype html>
 <html lang="en">
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,interactive-widget=resizes-content">
 <title>nanoui</title>
 <style>
   html, body { margin: 0; width: 100%; height: 100%; background: #fafafa; }
-  canvas { display: block; width: 100%; height: 100%; }
+  canvas { display: block; width: 100%; height: 100%; -webkit-touch-callout: none; user-select: none; -webkit-user-select: none; }
   p { font: 16px system-ui; padding: 24px; }
 </style>
 <canvas tabindex="0"></canvas>
@@ -29,7 +29,7 @@ try {
       if (e.altKey && (!typed || e.ctrlKey || e.metaKey)) return false;
       if (e.ctrlKey || e.metaKey) {
         const key = e.key.toLowerCase();
-        return key === 'k' || (key === 'a' && e.target.tagName === 'TEXTAREA');
+        return key === 'k' || (key === 'a' && (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT'));
       }
       return true;
     },

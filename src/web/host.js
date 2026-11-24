@@ -287,7 +287,7 @@ export function createHost(canvas, options = {}) {
             const code = keyCode(e.key);
             if (!code) return;
             const printable = Array.from(e.key).length === 1 && (!e.ctrlKey || altGraph(e)) && !e.metaKey;
-            if (printable && e.target.tagName === "TEXTAREA") return;
+            if (printable && (e.target.tagName === "TEXTAREA" || e.target.tagName === "INPUT")) return;
             const typed = printable ? code : 0;
             forwarded.set(e.code, code);
             key(0, code, mods(e), typed);
@@ -308,6 +308,12 @@ export function createHost(canvas, options = {}) {
             forwarded.clear();
             key(2, 0, 0);
           });
+          // Keys held in a semantic control are released when focus leaves both.
+          if (semantics) on(semantics.root, "focusout", e => {
+            if (e.relatedTarget === canvas || semantics.root.contains(e.relatedTarget)) return;
+            forwarded.clear();
+            key(2, 0, 0);
+          });
         }
         const coords = e => { const r = canvas.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
         const touches = touchInput(pointer, pinch);
@@ -319,11 +325,12 @@ export function createHost(canvas, options = {}) {
         for (const [event, kind] of [["pointermove", 0], ["pointerdown", 1], ["pointerup", 2], ["pointercancel", 3]]) {
           on(canvas, event, e => {
             const mods = Number(e.shiftKey) | (Number(e.ctrlKey) << 1) | (Number(e.altKey) << 2) | (Number(e.metaKey) << 3);
-            if (kind === 1) {
-              canvas.setPointerCapture(e.pointerId);
-              if (options.keyboard) canvas.focus({ preventScroll: true });
-            }
             const [x, y] = coords(e);
+            if (kind === 1) canvas.setPointerCapture(e.pointerId);
+            // Focus inside the gesture: iOS shows its keyboard only then. A
+            // touch focuses on release so a scroll does not close the editor.
+            if (options.keyboard && (kind === 1 ? e.pointerType !== "touch" : kind === 2 && e.pointerType === "touch"))
+              (semantics?.editorAt(x, y) ?? canvas).focus({ preventScroll: true });
             if (e.pointerType === "touch") touches.event(kind, e.pointerId, x, y);
             else {
               if (kind === 1) {

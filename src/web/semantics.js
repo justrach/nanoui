@@ -1,6 +1,7 @@
 // DOM projection of the current Zig frame. The canvas owns layout and paint.
 const button = new Set(["button", "tab", "checkbox", "switch_toggle", "radio_button", "row", "menu_button", "link"]);
-const roles = { switch_toggle: "switch", radio_button: "radio", menu_button: "button" };
+const roles = { checkbox: "checkbox", switch_toggle: "switch", radio_button: "radio", tab: "tab", link: "link", menu_button: "button" };
+const isEditor = node => node?.tagName === "TEXTAREA" || node?.tagName === "INPUT";
 
 export function createSemantics(canvas, send) {
   const root = document.createElement("div");
@@ -15,7 +16,10 @@ export function createSemantics(canvas, send) {
   let reconciling = false;
   const encoder = new TextEncoder();
 
+  // `box` is the control's area; `anchor` is where its node sits, which for
+  // the focused editor is the caret, so IME candidates appear beside it.
   const place = (node, rect) => {
+    node.anchor = rect;
     const b = canvas.getBoundingClientRect();
     Object.assign(node.style, {
       left: `${b.left + rect.x}px`, top: `${b.top + rect.y}px`,
@@ -28,10 +32,13 @@ export function createSemantics(canvas, send) {
     const bytes = encoder.encode(value);
     if (bytes.length <= 65536) send(["text", id, bytes, false]);
   };
-  function create(item, id) {
-    const tag = item.role === "text_field" ? "textarea" : button.has(item.role) ? "button" : "span";
+  function create(item, id, password) {
+    const tag = item.role === "text_field" ? (password ? "input" : "textarea") : button.has(item.role) ? "button" : "span";
     const node = document.createElement(tag);
-    node.style.cssText = "position:fixed;opacity:0;pointer-events:none;margin:0;box-sizing:border-box";
+    // 16px keeps iOS from zooming the page when the editor takes focus.
+    node.style.cssText = "position:fixed;opacity:0;pointer-events:none;margin:0;box-sizing:border-box;font-size:16px";
+    node.box = item.rect;
+    if (password) node.type = "password";
     if (tag === "button") {
       node.type = "button";
       node.addEventListener("click", () => send(["access", id, true]));
@@ -39,9 +46,12 @@ export function createSemantics(canvas, send) {
     if (tag !== "span") node.addEventListener("focus", () => {
       if (!reconciling) send(["access", id, false]);
     });
-    if (tag === "textarea") {
-      node.autocomplete = "off";
+    if (tag === "textarea" || tag === "input") {
+      node.autocomplete = password ? "current-password" : "off";
       node.spellcheck = false;
+      // Corrections would rewrite text Zig already holds.
+      node.setAttribute("autocapitalize", "off");
+      node.setAttribute("autocorrect", "off");
       node.addEventListener("compositionstart", () => {
         composing = true;
         if (focused?.id !== id || focused.password) return;
@@ -99,29 +109,46 @@ export function createSemantics(canvas, send) {
         const id = BigInt(item.id);
         ids.add(id);
         let node = nodes.get(id);
+        const password = item.role === "text_field" && snapshot.focus?.password && BigInt(snapshot.focus.id) === id;
+        if (node && isEditor(node) && (node.tagName === "INPUT") !== !!password) {
+          node.remove();
+          nodes.delete(id);
+          node = undefined;
+        }
         if (!node) {
-          node = create(item, id);
+          node = create(item, id, password);
           nodes.set(id, node);
           root.append(node);
         }
         if (node !== active && previous.nextSibling !== node)
           root.insertBefore(node, previous.nextSibling);
         previous = node;
+        node.box = item.rect;
         place(node, item.rect);
         if (node.tagName === "SPAN") {
           if (node.textContent !== item.label) node.textContent = item.label;
+          // The access model has no heading levels yet.
           if (item.header) {
             node.setAttribute("role", "heading");
             node.setAttribute("aria-level", "2");
+          } else {
+            node.removeAttribute("role");
+            node.removeAttribute("aria-level");
           }
         } else {
           if (node.getAttribute("aria-label") !== item.label) node.setAttribute("aria-label", item.label);
-          node.disabled = !item.enabled;
-          if (item.selected) node.setAttribute("aria-current", "true");
-          else node.removeAttribute("aria-current");
+          // aria-disabled keeps disabled controls in screen-reader navigation;
+          // Zig ignores actions on them.
+          if (item.enabled) node.removeAttribute("aria-disabled");
+          else node.setAttribute("aria-disabled", "true");
           if (item.role in roles) node.setAttribute("role", roles[item.role]);
-          if (["checkbox", "switch_toggle", "radio_button"].includes(item.role))
+          if (["checkbox", "switch_toggle", "radio_button"].includes(item.role)) {
             node.setAttribute("aria-checked", String(item.selected));
+          } else {
+            const selection = item.role === "tab" ? "aria-selected" : "aria-current";
+            if (item.selected) node.setAttribute(selection, "true");
+            else node.removeAttribute(selection);
+          }
         }
       }
       for (const [id, node] of nodes) if (!ids.has(id)) {
@@ -130,7 +157,7 @@ export function createSemantics(canvas, send) {
       }
       focused = snapshot.focus ? { ...snapshot.focus, id: BigInt(snapshot.focus.id) } : null;
       const nextEditor = focused ? nodes.get(focused.id) : null;
-      if (nextEditor?.tagName === "TEXTAREA") {
+      if (isEditor(nextEditor)) {
         place(nextEditor, focused.rect);
         if (owned && active !== nextEditor) nextEditor.focus({ preventScroll: true });
       } else if (owned && (active === editor || !active.isConnected)) {
@@ -144,10 +171,34 @@ export function createSemantics(canvas, send) {
     }
   }
 
-  return { root, publish, setCanvas(next) {
+  // The canvas moves with page scroll, resizes and the on-screen keyboard.
+  const relayout = () => { for (const node of nodes.values()) if (node.anchor) place(node, node.anchor); };
+  const view = globalThis.visualViewport;
+  globalThis.addEventListener("scroll", relayout, { capture: true, passive: true });
+  globalThis.addEventListener("resize", relayout);
+  view?.addEventListener("resize", relayout);
+  view?.addEventListener("scroll", relayout);
+
+  // The enabled editor under a canvas point, so a tap can focus it while the
+  // browser still treats the event as a user gesture (iOS shows its
+  // keyboard only then).
+  function editorAt(x, y) {
+    for (const node of nodes.values()) {
+      const r = node.box;
+      if (isEditor(node) && node.getAttribute("aria-disabled") !== "true" && r &&
+          x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h) return node;
+    }
+    return null;
+  }
+
+  return { root, publish, editorAt, setCanvas(next) {
     canvas = next;
     lastJson = undefined;
   }, destroy() {
+    globalThis.removeEventListener("scroll", relayout, { capture: true });
+    globalThis.removeEventListener("resize", relayout);
+    view?.removeEventListener("resize", relayout);
+    view?.removeEventListener("scroll", relayout);
     root.remove();
     nodes.clear();
     lastJson = focused = editor = undefined;
