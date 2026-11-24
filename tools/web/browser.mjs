@@ -240,11 +240,18 @@ try {
       return Array.from(scratch.getImageData(4, 4, 1, 1).data.slice(0, 3));
     }, png.toString('base64'));
   };
-  await themed.waitForTimeout(200);
-  assert.deepEqual(await corner(), [0x1c, 0x1c, 0x1e], 'dark scheme background');
+  // Polls the drawn pixel rather than waiting a fixed time for the frame.
+  const cornerBecomes = async (want, message) => {
+    let got;
+    for (const end = Date.now() + 5000; Date.now() < end; await themed.waitForTimeout(25)) {
+      got = await corner();
+      if (got.every((v, i) => v === want[i])) return;
+    }
+    assert.deepEqual(got, want, message);
+  };
+  await cornerBecomes([0x1c, 0x1c, 0x1e], 'dark scheme background');
   await themed.emulateMedia({ colorScheme: 'light' });
-  await themed.waitForTimeout(300);
-  assert.deepEqual(await corner(), [0xf5, 0xf5, 0xf7], 'light scheme background after a live change');
+  await cornerBecomes([0xf5, 0xf5, 0xf7], 'light scheme background after a live change');
   await scheme.close();
   assert.deepEqual(errors,[]);
   console.log('PASS canvas, click, idle, resize/DPR, device loss, disposal, Worker input and idle, Gallery keyboard, Canvas 2D startup, Canvas 2D scale cap, live Canvas 2D failover, teardown during recovery, system color scheme');

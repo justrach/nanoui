@@ -193,12 +193,13 @@ pub const Surface = struct {
     }
 };
 
-/// Mount one view. Its state must outlive the surface; `run` preserves main's
-/// stack by unwinding to JavaScript without running Zig's deferred teardown.
+/// The theme for the browser's `prefers-color-scheme`: dark or light.
 fn systemTheme() ui.Theme {
     return if (prefers_dark()) ui.Theme.dark_theme else ui.Theme.light;
 }
 
+/// Mount one view. Its state must outlive the surface; `run` preserves main's
+/// stack by unwinding to JavaScript without running Zig's deferred teardown.
 pub fn mount(view: ui.View, options: Options) !*Surface {
     if (active != null) return error.AlreadyMounted;
     const s = try options.allocator.create(Surface);
