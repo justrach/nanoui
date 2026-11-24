@@ -87,7 +87,9 @@ const Picker = struct {
             if (c.shortcut(.{ .key = 'k', .cmd = true })) s.show(c);
             return;
         }
-        if (c.input.key == .escape) {
+        // Claiming the Escape shortcut also takes Android's Back, which
+        // otherwise sends the app to the background when no field has focus.
+        if (c.shortcut(.{ .key = ui.Shortcut.escape }) or c.input.key == .escape) {
             c.input.key = null;
             s.close(c);
             return;
@@ -182,6 +184,13 @@ test "picker composes a query, chooses by keyboard and returns focus" {
     try std.testing.expect(!s.open);
     try std.testing.expectEqual(s.trigger, tester.ctx.focus);
     try std.testing.expectEqual(@as(?usize, 3), s.chosen);
+
+    // Android's Back arrives as the Escape shortcut, field focused or not.
+    try tester.clickText("Choose collection");
+    try std.testing.expect(tester.shortcut(.{ .key = ui.Shortcut.escape }));
+    tester.settle(3);
+    try std.testing.expect(!s.open);
+    try std.testing.expectEqual(s.trigger, tester.ctx.focus);
 
     try tester.clickText("Choose collection");
     try tester.clickText("Cancel");
