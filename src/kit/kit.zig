@@ -60,6 +60,10 @@ pub const sheet = dialog_mod.sheet;
 
 pub const Toaster = @import("toast.zig").Toaster;
 
+/// Picker behaviour without presentation: stable-id highlight, row keys,
+/// an input-method guard and key intents (`kit.picker.step`, `keys`).
+pub const picker = @import("picker.zig");
+
 const nav = @import("nav.zig");
 pub const tabs = nav.tabs;
 pub const TabsVariant = nav.TabsVariant;
@@ -175,4 +179,5 @@ test {
     _ = @import("tests.zig");
     _ = @import("tests_timeline.zig");
     _ = @import("kbd.zig");
+    _ = @import("picker.zig");
 }
