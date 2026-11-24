@@ -197,7 +197,12 @@ pub fn keys(c: *ui.Context, opts: KeyOptions) ?Intent {
     if (c.input.shortcut) |s| {
         const plain: ui.Shortcut = .{ .key = s.key };
         if (std.meta.eql(s.native(), plain.native())) if (ofShortcut(s.key, opts)) |intent| {
-            if (opts.consume) std.debug.assert(c.shortcut(plain));
+            if (opts.consume) {
+                // Matched above, so taking it cannot fail; the call stays out of
+                // the assert, which release builds drop with its argument.
+                const taken = c.shortcut(plain);
+                std.debug.assert(taken);
+            }
             return intent;
         };
     }
@@ -218,18 +223,23 @@ pub fn keys(c: *ui.Context, opts: KeyOptions) ?Intent {
     for (c.input.ops, 0..) |op, i| {
         if (op != .command) continue;
         const intent = ofCommand(op.command, opts) orelse continue;
-        if (opts.consume) {
-            const rest = c.alloc().alloc(ui.TextOp, c.input.ops.len - 1) catch {
-                c.input.ops = &.{};
-                return intent;
-            };
-            @memcpy(rest[0..i], c.input.ops[0..i]);
-            @memcpy(rest[i..], c.input.ops[i + 1 ..]);
-            c.input.ops = rest;
-        }
+        if (opts.consume) c.input.ops = without(c, c.input.ops, i);
         return intent;
     }
     return null;
+}
+
+/// `ops` without op `i`, the picker's command. At either end it is sliced
+/// off; from the middle the rest is copied to the frame's arena. Should that
+/// copy fail, every op stays: the field also sees the command (a caret move,
+/// a newline, a cancel) rather than losing the frame's typing.
+fn without(c: *ui.Context, ops: []const ui.TextOp, i: usize) []const ui.TextOp {
+    if (i == 0) return ops[1..];
+    if (i == ops.len - 1) return ops[0..i];
+    const rest = c.alloc().alloc(ui.TextOp, ops.len - 1) catch return ops;
+    @memcpy(rest[0..i], ops[0..i]);
+    @memcpy(rest[i..], ops[i + 1 ..]);
+    return rest;
 }
 
 const testing = std.testing;
@@ -517,6 +527,13 @@ test "keys leave input alone unless asked to consume it" {
     t.textOps(&.{ .{ .insert = "a" }, .{ .command = .cancel } });
     try testing.expectEqual(@as(?Intent, .dismiss), p.seen);
     try testing.expectEqual(@as(usize, 1), p.after_ops);
+    // Only the picker's command goes, wherever it falls among the ops.
+    t.textOps(&.{ .{ .command = .move_down }, .{ .insert = "a" } });
+    try testing.expectEqual(@as(?Intent, .next), p.seen);
+    try testing.expectEqual(@as(usize, 1), p.after_ops);
+    t.textOps(&.{ .{ .insert = "a" }, .{ .command = .move_up }, .{ .insert = "b" } });
+    try testing.expectEqual(@as(?Intent, .previous), p.seen);
+    try testing.expectEqual(@as(usize, 2), p.after_ops);
     p.opts = .{ .commands = false };
     t.textOps(&.{.{ .command = .move_down }});
     try testing.expectEqual(@as(?Intent, null), p.seen);
