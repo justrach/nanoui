@@ -43,6 +43,7 @@ pub const Selection = struct {
     /// button, a pill over the text), if any: texts before it in the tree
     /// are under it, and the pointer is not on them.
     cover: ?u32 = null,
+    cover_seen: bool = false,
     /// A finger, not a pointer: a press doesn't select (it may be a scroll),
     /// holding or tapping twice does, and the ends have handles.
     touch: bool = false,
@@ -96,6 +97,7 @@ pub const Selection = struct {
 /// laid out as `lay` at (x, y), `lh` high, in a box spanning `bx`…`bx_end`:
 /// notes where the pointer is, draws the highlight, gathers the text.
 pub fn line(c: anytype, out: *std.ArrayList(gpu.Instance), id: u64, index: u32, str: []const u8, start: usize, end: usize, lay: text_mod.Layout, x: f32, y: f32, lh: f32, bx: f32, bx_end: f32, clip4: [4]f32) void {
+    _ = index;
     const s = &c.selection;
     const count: u32 = @intCast(s.next_order.count());
     if (s.next_order.getOrPut(c.gpa, id) catch null) |g| if (!g.found_existing) {
@@ -105,7 +107,7 @@ pub fn line(c: anytype, out: *std.ArrayList(gpu.Instance), id: u64, index: u32, 
     const area: types.Rect = .{ .x = bx - 6, .y = y, .w = bx_end - bx + 12, .h = lh };
     // Under a box drawn over it, the line is not there for the pointer
     // (unless a selection is being dragged across).
-    const covered = if (s.cover) |k| index < k and !s.dragging else false;
+    const covered = if (s.cover != null) !s.cover_seen and !s.dragging else false;
     if (!covered) s.lines.append(c.gpa, area) catch {};
     const m = c.input.mouse;
     if (!covered and area.contains(m)) {
@@ -185,6 +187,7 @@ pub fn beginPaint(c: anytype) void {
     s.hit_str = "";
     s.below = null;
     s.cover = null;
+    s.cover_seen = false;
     s.start_rect = null;
     s.end_rect = null;
     if (c.hot != 0) {

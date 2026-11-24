@@ -49,7 +49,7 @@ fn hotPath(c: *Context, h: context.Hit) void {
     var at = h.index;
     while (at != none) {
         const n = c.nodes.items[at];
-        if (n.interactive) c.hot_path.append(c.gpa, n.id) catch return;
+        if (n.interactive or n.style.occlude) c.hot_path.append(c.gpa, n.id) catch return;
         at = n.parent;
     }
 }
@@ -79,5 +79,6 @@ pub fn pointerDown(c: *Context) void {
     c.input.pressed = true;
     c.right_press = c.input.button == .right or (@import("keys.zig").mac and c.input.button == .left and c.input.ctrl);
     if (@import("scroll.zig").tryPressScrollbar(c)) return;
-    if (c.hot == 0) c.focus = 0;
+    const left_press = c.input.button == .left and !c.right_press;
+    if (c.hot == 0 or (left_press and c.hot_index < c.nodes.items.len and !c.nodes.items[c.hot_index].interactive)) c.focus = 0;
 }

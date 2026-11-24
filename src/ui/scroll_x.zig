@@ -40,7 +40,7 @@ pub fn scrollerAtAxis(c: *const Context, p: types.Point, axis: Axis) ?u64 {
         i -= 1;
         const h = hits[i];
         if (!h.rect.contains(p)) continue;
-        if (h.wheel) return null;
+        if (h.wheel or h.occlude) return null;
         if (if (axis == .x) h.scroll_x else h.scroll) return h.id;
     }
     return null;
@@ -130,7 +130,7 @@ pub fn takeScrollX(c: *Context) void {
         const h = c.hits.items[i];
         if (!h.rect.contains(c.input.mouse)) continue;
         // Leave the delta for the view, not a scroller behind its wheel box.
-        if (h.wheel) return;
+        if (h.wheel or h.occlude) return;
         if (!h.scroll_x) continue;
         const g = c.scroll_x.getOrPut(c.gpa, h.id) catch return;
         g.value_ptr.* = @max(0, (if (g.found_existing) g.value_ptr.* else 0) - dx);

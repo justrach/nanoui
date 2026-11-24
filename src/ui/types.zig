@@ -344,6 +344,11 @@ pub const Style = struct {
     /// and not clipped by its parents: menus, popovers, dialogs, tooltips.
     /// Its clicks come first too. 0 is the page.
     layer: u8 = 0,
+    /// Blocks pointer clicks, hover, scrollbar grabs and scroll/wheel events
+    /// from passing through to boxes behind this one (for overlays, panels and
+    /// backdrops), without making the box clickable, showing a hand cursor or
+    /// exposing it as an accessibility button.
+    occlude: bool = false,
     /// Children are clipped to the box.
     clip: bool = false,
     /// Which corners `radius` rounds when it clips its children (1 top left,
