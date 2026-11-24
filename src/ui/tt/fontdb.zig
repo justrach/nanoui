@@ -34,6 +34,10 @@ const Loaded = struct {
 };
 
 const android = builtin.abi.isAndroid();
+/// The persistent index's name. Bump it whenever face discovery changes, so
+/// an index written by an older reader, missing faces it skipped, is rebuilt
+/// even though no font file changed.
+pub const index_file = "font-index-v3.bin";
 /// Families tried when the theme names none (or one not installed):
 /// Android's own first there.
 const sans = (if (android) [_][]const u8{"Roboto"} else [_][]const u8{}) ++ [_][]const u8{ "Inter", "Geist", "Segoe UI", "Noto Sans", "Cantarell", "Ubuntu", "DejaVu Sans", "Liberation Sans", "Arial", "Helvetica" };
@@ -104,7 +108,7 @@ pub const Db = struct {
     /// Enables the cross-process index below the app's own cache directory.
     pub fn enableCache(db: *Db, cache_dir: []const u8) void {
         if (db.owned_cache_path != null) return;
-        const path = std.fs.path.join(db.gpa, &.{ cache_dir, "font-index-v2.bin" }) catch return;
+        const path = std.fs.path.join(db.gpa, &.{ cache_dir, index_file }) catch return;
         db.owned_cache_path = path;
         db.cache_path = path;
     }
