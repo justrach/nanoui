@@ -130,6 +130,9 @@ test "font index hits without scanning and directory changes rebuild it" {
     defer gpa.free(cache_dir);
     const cache_path = try std.fs.path.join(gpa, &.{ cache_dir, fontdb.index_file });
     defer gpa.free(cache_path);
+    // An index an older reader left behind.
+    try tmp.dir.createDir(std.testing.io, "cache", .default_dir);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "cache/" ++ fontdb.retired_index_files[1], .data = "old" });
 
     var faces: usize = 0;
     {
@@ -140,6 +143,7 @@ test "font index hits without scanning and directory changes rebuild it" {
         try std.testing.expectEqualStrings(cache_path, db.cache_path.?);
         db.scan();
         try std.testing.expectEqual(@import("fontindex.zig").State.written, db.cache.state);
+        try std.testing.expectError(error.FileNotFound, tmp.dir.statFile(std.testing.io, "cache/" ++ fontdb.retired_index_files[1], .{}));
         try std.testing.expect(db.scan_files > 0 and db.scan_directories > 0);
         faces = db.faces.items.len;
         try std.testing.expect(faces > 0);

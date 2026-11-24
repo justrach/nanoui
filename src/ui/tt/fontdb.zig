@@ -38,6 +38,9 @@ const android = builtin.abi.isAndroid();
 /// an index written by an older reader, missing faces it skipped, is rebuilt
 /// even though no font file changed.
 pub const index_file = "font-index-v3.bin";
+/// Names earlier readers wrote. Nothing reads them again, so writing the
+/// current index removes them from the same cache directory.
+pub const retired_index_files = [_][]const u8{ "font-index-v1.bin", "font-index-v2.bin" };
 /// Families tried when the theme names none (or one not installed):
 /// Android's own first there.
 const sans = (if (android) [_][]const u8{"Roboto"} else [_][]const u8{}) ++ [_][]const u8{ "Inter", "Geist", "Segoe UI", "Noto Sans", "Cantarell", "Ubuntu", "DejaVu Sans", "Liberation Sans", "Arial", "Helvetica" };
@@ -236,6 +239,18 @@ pub const Db = struct {
         db.cache.faces = faces.len;
         db.cache.directories = db.cache_dirs.items.len;
         db.cache.bytes = written;
+        db.retireIndexes(path);
+    }
+
+    /// Only below the cache directory `enableCache` names, which nanoui owns.
+    fn retireIndexes(db: *Db, path: []const u8) void {
+        if (db.owned_cache_path == null) return;
+        const dir = std.fs.path.dirname(path) orelse return;
+        for (retired_index_files) |name| {
+            const old = std.fs.path.join(db.gpa, &.{ dir, name }) catch return;
+            defer db.gpa.free(old);
+            std.Io.Dir.cwd().deleteFile(db.io, old) catch {};
+        }
     }
 
     fn scanFonts(db: *Db) void {
