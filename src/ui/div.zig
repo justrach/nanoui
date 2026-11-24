@@ -281,6 +281,14 @@ pub const Div = struct {
         return d.set("control", true);
     }
 
+    /// Blocks clicks, hover, scrollbar grabs and scroll/wheel events from
+    /// passing through to boxes behind this one (for overlays, panels and
+    /// backdrops), without turning the box itself into a clickable control or
+    /// showing a hand cursor.
+    pub fn occlude(d: Div) Div {
+        return d.set("occlude", true);
+    }
+
     /// The background eases toward `color` while the pointer is over it.
     pub fn hover(d: Div, color: Color) Div {
         const it = d.c.interact(d.index, .{});

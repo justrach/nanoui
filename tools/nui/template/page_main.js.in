@@ -1,0 +1,10 @@
+import { Greeter } from "/nanoui.js";
+
+const form = document.getElementById("greet-form");
+const input = document.getElementById("name");
+const output = document.getElementById("greeting");
+
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  output.textContent = await Greeter.greet(input.value);
+});

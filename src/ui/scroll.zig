@@ -84,7 +84,7 @@ pub fn applyScroll(c: *Context, dy: f32) bool {
         const h = c.hits.items[i];
         if (h.scroll and h.rect.contains(c.input.mouse)) {
             // A box that takes the wheel itself is over the one behind.
-            if (h.wheel) return false;
+            if (h.wheel or h.occlude) return false;
             const gop = c.scroll.getOrPut(c.gpa, h.id) catch return false;
             if (!gop.found_existing) gop.value_ptr.* = 0;
             if (!isHolding(c)) {
@@ -213,7 +213,10 @@ pub fn tryPressScrollbar(c: *Context) bool {
     // the scroll box's right side is under the track, and the press is the
     // button's. Without this the 10 points of track swallow it and the button
     // never fires.
-    if (c.hot_index != none and c.hot_index < c.nodes.items.len and c.node(c.hot_index).interactive) return false;
+    if (c.hot_index != none and c.hot_index < c.nodes.items.len) {
+        const hot = c.node(c.hot_index);
+        if (hot.interactive or hot.style.occlude) return false;
+    }
     var found: ?struct { id: u64, g: ScrollbarGeom } = null;
     var it = c.scrollbars.iterator();
     while (it.next()) |e| {

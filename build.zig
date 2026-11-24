@@ -26,17 +26,18 @@ pub fn build(b: *std.Build) void {
     // The one place the version is kept: build.zig.zon (tools/version.sh).
     options.addOption([]const u8, "version", @import("build.zig.zon").version);
 
+    const os = target.result.os.tag;
     const nanoui = b.addModule("nanoui", .{
         .root_source_file = b.path("src/nanoui.zig"),
         .target = target,
         .optimize = optimize,
+        .single_threaded = if (os == .wasi) true else null,
         .link_libc = true,
     });
     nanoui.addOptions("build_options", options);
     addWebCheck(b);
     addWebParity(b);
     addWebDemo(b);
-    const os = target.result.os.tag;
     if (os == .macos) {
         const rt_options = b.addOptions();
         rt_options.addOption(bool, "portable", portable);
@@ -125,7 +126,7 @@ pub fn build(b: *std.Build) void {
     }
     // Elsewhere GTK is loaded when the app starts (dlopen): nothing to link.
     // HTTP there is http-zig's (nanoui.http), fetched only for those targets.
-    if (os != .macos and os != .ios) {
+    if (os != .macos and os != .ios and os != .wasi) {
         if (b.lazyDependency("http_zig", .{ .target = target, .optimize = optimize })) |d| nanoui.addImport("http_zig", d.module("http_zig"));
     }
 

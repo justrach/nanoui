@@ -104,6 +104,9 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip_
         c.layers.append(c.gpa, index) catch {};
         return;
     }
+    if (c.selection.cover) |k| if (index == k) {
+        c.selection.cover_seen = true;
+    };
     // Transformed, it is worked out where it was and moved after: what shows
     // of the clip is what comes back to the clip. Flattened, it draws nothing.
     const clip = if (st.transform) |m| xform.clipBefore(m, clip_in) orelse return else clip_in;
@@ -222,11 +225,12 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip_
             .none => {},
         }
     }
-    if (n.interactive and painted.w > 0 and painted.h > 0) c.addHit(n.id, index, visible, false);
+    if ((n.interactive or st.occlude) and painted.w > 0 and painted.h > 0) c.addHit(n.id, index, visible, false);
     // Each axis routes through the same clipped, paint-ordered regions.
     if (st.scroll_x and visible.w > 0 and visible.h > 0) c.next_hits.append(c.gpa, .{ .id = n.id, .index = index, .rect = visible, .scroll = false, .scroll_x = true }) catch {};
     // Over the scrolling boxes behind it, never hot itself.
     if (st.wheel and visible.w > 0 and visible.h > 0) c.next_hits.append(c.gpa, .{ .id = n.id, .index = index, .rect = visible, .scroll = true, .wheel = true }) catch {};
+    if (st.occlude and !st.wheel and visible.w > 0 and visible.h > 0) c.next_hits.append(c.gpa, .{ .id = n.id, .index = index, .rect = visible, .scroll = true, .occlude = true }) catch {};
 
     var child_clip = clip;
     if (st.clip or st.scroll_x) child_clip = visible;

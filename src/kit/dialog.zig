@@ -64,7 +64,7 @@ fn close(c: *ui.Context, open: *bool) void {
 fn backdrop(c: *ui.Context, key: []const u8, show: bool) bool {
     const t = kit.tokens(c);
     const f = motion.present(c, key, show, .{ .initial = .{ .opacity = 0 }, .exit = .{ .opacity = 0 }, .transition = .{ .tween = .{ .duration = 0.18 } } }) orelse return false;
-    const d = ui.div(c).fixed().w(c.size.w).h(c.size.h).layer(layer_backdrop).bg(t.overlay).motion(f);
+    const d = ui.div(c).fixed().w(c.size.w).h(c.size.h).layer(layer_backdrop).bg(t.overlay).occlude().motion(f);
     const it = d.interaction();
     d.end();
     return it.clicked and show;
@@ -83,8 +83,7 @@ pub fn dialog(c: *ui.Context, id: []const u8, open: *bool, opts: Options) ?Dialo
     const panel_id = c.peekId(null);
     const h = if (c.rects.get(panel_id)) |r| r.h else 200;
     const w = @min(opts.width, c.size.w - 32);
-    const panel = ui.div(c).fixed().offset((c.size.w - w) / 2, @max(16, (c.size.h - h) / 2 - c.size.h * 0.06)).w(w).layer(layer_panel).column().gap(14).p(22).rounded(14).bg(t.popover).border(t.border).shadow(.{ .color = t.shadow.alpha(1), .blur = 40, .y = 16 }).motion(f);
-    _ = panel.interaction();
+    const panel = ui.div(c).fixed().offset((c.size.w - w) / 2, @max(16, (c.size.h - h) / 2 - c.size.h * 0.06)).w(w).layer(layer_panel).column().gap(14).p(22).rounded(14).bg(t.popover).border(t.border).shadow(.{ .color = t.shadow.alpha(1), .blur = 40, .y = 16 }).occlude().motion(f);
     {
         const head = ui.div(c).row().wFull().gap(8).itemsStart();
         defer head.end();
@@ -116,8 +115,7 @@ pub fn sheet(c: *ui.Context, id: []const u8, open: *bool, opts: struct { side: S
         .right => ui.div(c).fixed().offset(c.size.w - opts.size, 0).w(opts.size).h(c.size.h),
         .bottom => ui.div(c).fixed().offset(0, c.size.h - opts.size).w(c.size.w).h(opts.size),
     };
-    d = d.layer(layer_panel).column().gap(12).p(20).bg(t.popover).border(t.border).shadow(.{ .color = t.shadow.alpha(1), .blur = 30 }).clip().motion(f);
-    _ = d.interaction();
+    d = d.layer(layer_panel).column().gap(12).p(20).bg(t.popover).border(t.border).shadow(.{ .color = t.shadow.alpha(1), .blur = 30 }).clip().occlude().motion(f);
     if (opts.title.len > 0) {
         const head = ui.div(c).row().wFull().itemsCenter();
         defer head.end();

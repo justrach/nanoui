@@ -1,4 +1,6 @@
 //! {{title}}: one window showing the view in app.zig.
+const builtin = @import("builtin");
+const std = @import("std");
 const nanoui = @import("nanoui");
 const app_view = @import("app.zig");
 
@@ -7,14 +9,28 @@ pub const std_options = nanoui.std_options;
 pub const std_options_debug_threaded_io = nanoui.std_options_debug_threaded_io;
 
 pub fn main(init: nanoui.Init) void {
-    const app = nanoui.App.create(init, .{ .name = "{{title}}" }) catch return;
-    defer app.destroy();
-    var state: app_view.State = .{};
-    _ = app.newWindow(.{
-        .title = "{{title}}",
-        .width = 480,
-        .height = 360,
-        .content = .{ .view = .init(&state, app_view.State.view) },
-    }) catch return;
-    app.run() catch return;
+    if (comptime builtin.os.tag == .wasi) {
+        var state: app_view.State = if (comptime @hasDecl(app_view.State, "init"))
+            app_view.State.init(std.heap.wasm_allocator)
+        else
+            .{};
+        _ = nanoui.web.registerBundledFonts();
+        _ = nanoui.web.mount(.init(&state, app_view.State.view), .{}) catch return;
+        nanoui.web.run();
+    } else {
+        const app = nanoui.App.create(init, .{ .name = "{{title}}" }) catch return;
+        defer app.destroy();
+        var state: app_view.State = if (comptime @hasDecl(app_view.State, "init"))
+            app_view.State.init(app.gpa)
+        else
+            .{};
+        defer if (comptime @hasDecl(app_view.State, "deinit")) state.deinit();
+        _ = app.newWindow(.{
+            .title = "{{title}}",
+            .width = 480,
+            .height = 360,
+            .content = .{ .view = .init(&state, app_view.State.view) },
+        }) catch return;
+        app.run() catch return;
+    }
 }

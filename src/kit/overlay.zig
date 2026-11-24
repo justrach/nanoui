@@ -123,8 +123,8 @@ pub fn popover(c: *ui.Context, id: []const u8, open: *bool, anchor: ?ui.Rect, op
     var d = ui.div(c).fixed().offset(at.x, at.y).layer(layer_popover).column().gap(2).p(opts.padding).rounded(t.radius + 2).shadow(.{ .color = t.shadow.alpha(0.9), .blur = 24, .y = 8 });
     d = if (opts.glass) d.rounded(t.radius + 8).glass(.{}) else d.bg(t.popover).border(t.border);
     if (opts.width) |w| d = d.w(w);
-    // It takes the pointer (and so its clicks aren't "outside").
-    _ = d.interaction();
+    // Block pointer and scroll pass-through (so clicks inside aren't "outside").
+    d = d.occlude();
     return .{ .div = d.motion(f) };
 }
 

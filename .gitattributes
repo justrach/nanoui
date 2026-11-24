@@ -1,4 +1,6 @@
 .githooks/* text eol=lf
 tools/check-snapshot.sh text eol=lf
 tools/install-hooks.sh text eol=lf
+tools/install-nui.sh text eol=lf
 tools/test-hooks.sh text eol=lf
+tools/nui/template/* text eol=lf
