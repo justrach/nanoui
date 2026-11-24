@@ -72,13 +72,14 @@ pub fn title(a: std.mem.Allocator, name: []const u8) ![]const u8 {
     return out;
 }
 
-/// Default reverse-DNS bundle id for `name`: `dev.nanoui.<slug>`.
+/// Default reverse-DNS bundle id for `name`: `dev.nanoui.<alnum>` (valid for both Apple and Android).
 pub fn defaultBundleId(a: std.mem.Allocator, name: []const u8) ![]const u8 {
-    const slug = try a.dupe(u8, name);
-    for (slug) |*ch| {
-        if (ch.* == '_') ch.* = '-' else ch.* = std.ascii.toLower(ch.*);
+    var out: std.ArrayList(u8) = .empty;
+    try out.appendSlice(a, "dev.nanoui.");
+    for (name) |ch| {
+        if (std.ascii.isAlphanumeric(ch)) try out.append(a, std.ascii.toLower(ch));
     }
-    return std.fmt.allocPrint(a, "dev.nanoui.{s}", .{slug});
+    return try out.toOwnedSlice(a);
 }
 
 /// `text` with `\r\n` normalized to `\n` and `{{name}}`, `{{title}}`, and `{{id}}` filled in.
@@ -183,7 +184,8 @@ test "names, titles, ids, templates and build.zig.zon" {
     try std.testing.expect(validName("my-app") and validName("Notes_2"));
     try std.testing.expect(!validName("2fast") and !validName("a b") and !validName("../x") and !validName(""));
     try std.testing.expectEqualStrings("My App", try title(a, "my-app"));
-    try std.testing.expectEqualStrings("dev.nanoui.my-app", try defaultBundleId(a, "My_App"));
+    try std.testing.expectEqualStrings("dev.nanoui.myapp", try defaultBundleId(a, "My_App"));
+    try std.testing.expectEqualStrings("dev.nanoui.ciapp", try defaultBundleId(a, "ci-app"));
     try std.testing.expectEqualStrings("exe my_app, My App, dev.nanoui.my-app", try fill(a, "exe {{name}}, {{title}}, {{id}}", "my_app", "My App", "dev.nanoui.my-app"));
     try std.testing.expectEqualStrings("a\nmy_app\n", try fill(a, "a\r\n{{name}}\r\n", "my_app", "My App", "dev.nanoui.my-app"));
     const zon =
