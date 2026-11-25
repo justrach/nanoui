@@ -219,7 +219,7 @@ test {
         return;
     }
     if (builtin.os.tag == .ios) {
-        inline for (.{ plat.app, plat.window, plat.dialog, plat.desktop, plat.fdwatch, @import("ios/surface.zig"), @import("ios/keys.zig"), @import("ios/touch.zig") }) |m| std.testing.refAllDecls(m);
+        inline for (.{ plat.app, plat.window, plat.dialog, plat.desktop, plat.fdwatch, @import("ios/surface.zig"), @import("ios/surface_display.zig"), @import("ios/keys.zig"), @import("ios/touch.zig") }) |m| std.testing.refAllDecls(m);
         inline for (.{ plat.app.App, plat.window.Window, plat.desktop.clipboard, plat.desktop.shell, @import("ios/surface.zig").Surface }) |T| std.testing.refAllDecls(T);
         return;
     }

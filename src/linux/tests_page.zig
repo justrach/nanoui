@@ -194,3 +194,236 @@ test "bubblewrap's refusal counts, its absence says nothing" {
     try testing.expect(!wk.refuses("true"));
     try testing.expect(!wk.refuses("nanoui-no-such-program"));
 }
+
+const PageTestServer = struct {
+    gpa: std.mem.Allocator,
+    srv: std.Io.net.Server,
+    port: u16,
+    stop: std.atomic.Value(bool) = .init(false),
+    mu: std.Io.Mutex = .init,
+    allowed_hits: usize = 0,
+    blocked_hits: usize = 0,
+    thread: ?std.Thread = null,
+
+    fn init(gpa: std.mem.Allocator) !*PageTestServer {
+        const s = try gpa.create(PageTestServer);
+        errdefer gpa.destroy(s);
+        var addr: std.Io.net.IpAddress = .{ .ip4 = .loopback(0) };
+        const srv = try addr.listen(testing.io, .{ .reuse_address = true });
+        s.* = .{ .gpa = gpa, .srv = srv, .port = srv.socket.address.getPort() };
+        s.thread = try std.Thread.spawn(.{}, serveLoop, .{s});
+        return s;
+    }
+
+    fn deinit(self: *PageTestServer) void {
+        self.stop.store(true, .release);
+        var addr: std.Io.net.IpAddress = .{ .ip4 = .loopback(self.port) };
+        if (addr.connect(testing.io, .{ .mode = .stream })) |st| st.close(testing.io) else |_| {}
+        if (self.thread) |t| t.join();
+        self.srv.deinit(testing.io);
+        self.gpa.destroy(self);
+    }
+
+    fn serveLoop(self: *PageTestServer) void {
+        while (!self.stop.load(.acquire)) {
+            const st = self.srv.accept(testing.io) catch break;
+            defer st.close(testing.io);
+            if (self.stop.load(.acquire)) break;
+            var rbuf: [2048]u8 = undefined;
+            var used: usize = 0;
+            while (used < rbuf.len) {
+                var vecs = [1][]u8{rbuf[used..]};
+                const res = st.readWithControl(testing.io, &vecs, &.{}) catch break;
+                if (res.data_len == 0) break;
+                used += res.data_len;
+                if (std.mem.indexOf(u8, rbuf[0..used], "\r\n\r\n") != null) break;
+            }
+            const req = rbuf[0..used];
+            if (req.len == 0) continue;
+            const path = blk: {
+                const sp1 = std.mem.indexOfScalar(u8, req, ' ') orelse break :blk "";
+                const rest = req[sp1 + 1 ..];
+                const sp2 = std.mem.indexOfScalar(u8, rest, ' ') orelse break :blk rest;
+                break :blk rest[0..sp2];
+            };
+            const body = self.bodyFor(path);
+            var wbuf: [4096]u8 = undefined;
+            var wr = st.writer(testing.io, &wbuf);
+            wr.interface.print("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n{s}", .{ body.len, body }) catch continue;
+            wr.interface.flush() catch {};
+        }
+    }
+
+    fn bodyFor(self: *PageTestServer, target: []const u8) []const u8 {
+        const q = std.mem.indexOfScalar(u8, target, '?') orelse target.len;
+        const path = target[0..q];
+        self.mu.lockUncancelable(testing.io);
+        if (std.mem.eql(u8, path, "/allowed")) self.allowed_hits += 1;
+        if (std.mem.eql(u8, path, "/blocked")) self.blocked_hits += 1;
+        self.mu.unlock(testing.io);
+        if (std.mem.eql(u8, path, "/set")) {
+            return "<!doctype html><script>document.cookie='nanoui_priv=secret; path=/';localStorage.setItem('nanoui_ls','secret');var t=new URLSearchParams(location.search).get('t')||'s';window.nanoui.call('Report.say',t+':'+document.cookie+'|'+localStorage.getItem('nanoui_ls'));</script>";
+        }
+        if (std.mem.eql(u8, path, "/get")) {
+            return "<!doctype html><script>var t=new URLSearchParams(location.search).get('t')||'g';window.nanoui.call('Report.say',t+':'+document.cookie+'|'+localStorage.getItem('nanoui_ls'));</script>";
+        }
+        if (std.mem.eql(u8, path, "/allowed")) {
+            return "<!doctype html><script>window.nanoui.call('Report.say','allowed-loaded');</script><iframe src='/blocked'></iframe>";
+        }
+        return "<!doctype html><p>ok</p>";
+    }
+};
+
+test "private pages isolate storage and cookies per WebKitGTK view" {
+    _ = setenv("WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS", "1", 1);
+    const gpa = testing.allocator;
+    const app = try makeApp(gpa);
+    defer app.destroy();
+    if (!wk.load()) return error.SkipZigTest;
+
+    const srv = try PageTestServer.init(gpa);
+    defer srv.deinit();
+
+    var report: Report = .{ .gpa = gpa };
+    defer report.deinit();
+    try app.bind(&report);
+
+    var ubuf1: [96]u8 = undefined;
+    var ubuf2: [96]u8 = undefined;
+    var ubuf3: [96]u8 = undefined;
+    var ubuf4: [96]u8 = undefined;
+    var ubuf5: [96]u8 = undefined;
+    const u_set1 = try std.fmt.bufPrint(&ubuf1, "http://127.0.0.1:{d}/set?t=p1", .{srv.port});
+    const u_get2 = try std.fmt.bufPrint(&ubuf2, "http://127.0.0.1:{d}/get?t=p2", .{srv.port});
+    const u_get3 = try std.fmt.bufPrint(&ubuf3, "http://127.0.0.1:{d}/get?t=p3", .{srv.port});
+    const u_set3 = try std.fmt.bufPrint(&ubuf4, "http://127.0.0.1:{d}/set?t=s3", .{srv.port});
+    const u_get4 = try std.fmt.bufPrint(&ubuf5, "http://127.0.0.1:{d}/get?t=p4", .{srv.port});
+
+    const priv_assets = [_]@import("../window_types.zig").Asset{
+        .{ .path = "/index.html", .data = "<!doctype html><script type='module'>import { Report } from '/nanoui.js'; await Report.say('priv-own');</script>" },
+    };
+    const w1 = try app.newWindow(.{ .title = "priv1", .content = .{ .page = .{ .url = "/", .assets = &priv_assets, .private = true } } });
+    try until(&report, struct {
+        fn done(r: *Report) bool {
+            return r.saw("priv-own");
+        }
+    }.done);
+
+    w1.setPageUrl(u_set1);
+    try until(&report, struct {
+        fn done(r: *Report) bool {
+            return r.saw("p1:nanoui_priv=secret|secret");
+        }
+    }.done);
+
+    _ = try app.newWindow(.{ .title = "priv2", .content = .{ .page = .{ .url = u_get2, .private = true } } });
+    try until(&report, struct {
+        fn done(r: *Report) bool {
+            return r.saw("p2:|null");
+        }
+    }.done);
+
+    const w3 = try app.newWindow(.{ .title = "shared", .content = .{ .page = .{ .url = u_get3, .private = false } } });
+    try until(&report, struct {
+        fn done(r: *Report) bool {
+            return r.saw("p3:|null");
+        }
+    }.done);
+
+    w3.setPageUrl(u_set3);
+    try until(&report, struct {
+        fn done(r: *Report) bool {
+            return r.saw("s3:nanoui_priv=secret|secret");
+        }
+    }.done);
+
+    _ = try app.newWindow(.{ .title = "priv4", .content = .{ .page = .{ .url = u_get4, .private = true } } });
+    try until(&report, struct {
+        fn done(r: *Report) bool {
+            return r.saw("p4:|null");
+        }
+    }.done);
+}
+
+test "allow_request blocks disallowed main-frame and iframe navigations before reaching the network" {
+    _ = setenv("WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS", "1", 1);
+    const gpa = testing.allocator;
+    const app = try makeApp(gpa);
+    defer app.destroy();
+    if (!wk.load() or !wk.has_request_api) return error.SkipZigTest;
+
+    const srv = try PageTestServer.init(gpa);
+    defer srv.deinit();
+
+    var report: Report = .{ .gpa = gpa };
+    defer report.deinit();
+    try app.bind(&report);
+
+    const Filter = struct {
+        blocked_seen: usize = 0,
+        allowed_seen: usize = 0,
+        own_seen: usize = 0,
+        fn allow(ctx: ?*anyopaque, url: []const u8) bool {
+            const self: *@This() = @ptrCast(@alignCast(ctx.?));
+            if (std.mem.startsWith(u8, url, "nanoui://")) self.own_seen += 1;
+            if (std.mem.endsWith(u8, url, "/blocked")) {
+                self.blocked_seen += 1;
+                return false;
+            }
+            if (std.mem.endsWith(u8, url, "/allowed")) {
+                self.allowed_seen += 1;
+                return true;
+            }
+            return false;
+        }
+    };
+    var filter: Filter = .{};
+
+    const own_assets = [_]@import("../window_types.zig").Asset{
+        .{ .path = "/index.html", .data = "<!doctype html><script type='module'>import { Report } from '/nanoui.js'; await Report.say('ready');</script>" },
+    };
+    const win = try app.newWindow(.{ .title = "filter", .content = .{ .page = .{
+        .url = "/",
+        .assets = &own_assets,
+        .allow_request = Filter.allow,
+        .allow_request_ctx = &filter,
+    } } });
+    try until(&report, struct {
+        fn done(r: *Report) bool {
+            return r.saw("ready");
+        }
+    }.done);
+    try testing.expectEqual(@as(usize, 0), filter.own_seen);
+
+    var bbuf: [96]u8 = undefined;
+    var abuf: [96]u8 = undefined;
+    const u_blocked = try std.fmt.bufPrint(&bbuf, "http://127.0.0.1:{d}/blocked", .{srv.port});
+    const u_allowed = try std.fmt.bufPrint(&abuf, "http://127.0.0.1:{d}/allowed", .{srv.port});
+
+    win.setPageUrl(u_blocked);
+    try until(&filter, struct {
+        fn done(f: *Filter) bool {
+            return f.blocked_seen >= 1;
+        }
+    }.done);
+
+    win.setPageUrl(u_allowed);
+    try until(&report, struct {
+        fn done(r: *Report) bool {
+            return r.saw("allowed-loaded");
+        }
+    }.done);
+    try until(&filter, struct {
+        fn done(f: *Filter) bool {
+            return f.blocked_seen >= 2;
+        }
+    }.done);
+
+    srv.mu.lockUncancelable(testing.io);
+    const allowed_hits = srv.allowed_hits;
+    const blocked_hits = srv.blocked_hits;
+    srv.mu.unlock(testing.io);
+    try testing.expectEqual(@as(usize, 1), allowed_hits);
+    try testing.expectEqual(@as(usize, 0), blocked_hits);
+    try testing.expect(filter.allowed_seen >= 1);
+}

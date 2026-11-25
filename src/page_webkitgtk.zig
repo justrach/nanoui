@@ -48,12 +48,16 @@ pub const Page = struct {
 
     pub fn create(window: *Window, options: window_mod.PageOptions) !*Page {
         if (!wk.load()) return error.WebKitMissing;
+        if (options.allow_request != null and !wk.has_request_api) {
+            std.log.warn("nanoui: WebKitGTK lacks navigation policy APIs; page with allow_request is not loaded", .{});
+            return error.Unsupported;
+        }
         const app = window.app;
         const gpa = app.gpa;
         const self = try gpa.create(Page);
         errdefer gpa.destroy(self);
 
-        const view = try newView(app);
+        const view = try newView(app, options.private);
         const manager = wk.api.webkit_web_view_get_user_content_manager(view);
         self.* = .{
             .queue = page.Queue(Window).init(window, options),
@@ -189,16 +193,41 @@ pub const Page = struct {
     }
 };
 
-/// A view in the app's one context, its reference ours.
-fn newView(app: *App) !*gtk.Widget {
+/// A view in the app's shared profile, or an isolated ephemeral profile for `private` pages.
+fn newView(app: *App, private: bool) !*gtk.Widget {
     const g = &gtk.api;
-    const context = try contextOf(app);
     const kind = wk.api.webkit_web_view_get_type();
+    if (private) {
+        if (wk.six) {
+            const context = try contextOf(app);
+            const session = wk.v6.webkit_network_session_new_ephemeral() orelse return error.WebViewFailed;
+            defer g.g_object_unref(session);
+            const made = g.g_object_new(kind, "web-context", context, "network-session", session, @as(?[*:0]const u8, null));
+            return g.g_object_ref_sink(made orelse return error.WebViewFailed);
+        }
+        const manager = wk.v4x.webkit_website_data_manager_new_ephemeral() orelse return error.WebViewFailed;
+        defer g.g_object_unref(manager);
+        const context = wk.v4x.webkit_web_context_new_with_website_data_manager(manager) orelse return error.WebViewFailed;
+        defer g.g_object_unref(context);
+        registerScheme(context, app);
+        const made = g.g_object_new(kind, "web-context", context, @as(?[*:0]const u8, null));
+        return g.g_object_ref_sink(made orelse return error.WebViewFailed);
+    }
+    const context = try contextOf(app);
     const made = if (wk.six)
         g.g_object_new(kind, "web-context", context, "network-session", app.web_session.?, @as(?[*:0]const u8, null))
     else
         g.g_object_new(kind, "web-context", context, @as(?[*:0]const u8, null));
     return g.g_object_ref_sink(made orelse return error.WebViewFailed);
+}
+
+fn registerScheme(context: *anyopaque, app: *App) void {
+    wk.api.webkit_web_context_register_uri_scheme(context, "nanoui", onRequest, app, null);
+    // Secure, so pages have what https gives them (crypto.subtle, service
+    // APIs); CORS-enabled, or `<script type=module>` and fetch refuse it.
+    const security = wk.api.webkit_web_context_get_security_manager(context);
+    wk.api.webkit_security_manager_register_uri_scheme_as_secure(security, "nanoui");
+    wk.api.webkit_security_manager_register_uri_scheme_as_cors_enabled(security, "nanoui");
 }
 
 /// The app's context: its profile and its scheme, once. Without a profile
@@ -223,22 +252,17 @@ fn contextOf(app: *App) !*anyopaque {
         cache = try std.fmt.allocPrintSentinel(gpa, "{s}/webkit", .{c}, 0);
     }
     const context = if (wk.six) blk: {
-        app.web_session = if (hidden) wk.v6.webkit_network_session_new_ephemeral() else wk.v6.webkit_network_session_new(data.?, cache.?);
+        app.web_session = (if (hidden) wk.v6.webkit_network_session_new_ephemeral() else wk.v6.webkit_network_session_new(data.?, cache.?)) orelse return error.WebViewFailed;
         break :blk wk.v6.webkit_web_context_new();
     } else blk: {
-        const manager = if (hidden)
+        const manager = (if (hidden)
             wk.v4x.webkit_website_data_manager_new_ephemeral()
         else
-            gtk.api.g_object_new(wk.v4x.webkit_website_data_manager_get_type(), "base-data-directory", data.?.ptr, "base-cache-directory", cache.?.ptr, @as(?[*:0]const u8, null)) orelse return error.WebViewFailed;
+            gtk.api.g_object_new(wk.v4x.webkit_website_data_manager_get_type(), "base-data-directory", data.?.ptr, "base-cache-directory", cache.?.ptr, @as(?[*:0]const u8, null))) orelse return error.WebViewFailed;
         defer gtk.api.g_object_unref(manager);
-        break :blk wk.v4x.webkit_web_context_new_with_website_data_manager(manager);
+        break :blk wk.v4x.webkit_web_context_new_with_website_data_manager(manager) orelse return error.WebViewFailed;
     };
-    wk.api.webkit_web_context_register_uri_scheme(context, "nanoui", onRequest, app, null);
-    // Secure, so pages have what https gives them (crypto.subtle, service
-    // APIs); CORS-enabled, or `<script type=module>` and fetch refuse it.
-    const security = wk.api.webkit_web_context_get_security_manager(context);
-    wk.api.webkit_security_manager_register_uri_scheme_as_secure(security, "nanoui");
-    wk.api.webkit_security_manager_register_uri_scheme_as_cors_enabled(security, "nanoui");
+    registerScheme(context, app);
     app.web_context = context;
     return context;
 }
@@ -274,13 +298,44 @@ fn onTerminated(_: *anyopaque, reason: c_int, _: ?*anyopaque) callconv(.c) void 
 const GError = extern struct { domain: u32, code: c_int, message: ?[*:0]const u8 };
 
 fn onDecidePolicy(_: *anyopaque, decision: *anyopaque, decision_type: c_int, data: ?*anyopaque) callconv(.c) c_int {
-    if (decision_type != 0 or !wk.has_request_api) return 0;
+    // 0 = WEBKIT_POLICY_DECISION_TYPE_NAVIGATION_ACTION, 1 = NEW_WINDOW_ACTION.
+    if ((decision_type != 0 and decision_type != 1) or !wk.has_request_api) return 0;
     const self: *Page = @ptrCast(@alignCast(data));
-    if (self.queue.dead or self.scope.origin_url == null) return 0;
-    const action = wk.req_api.webkit_navigation_policy_decision_get_navigation_action(decision) orelse return 0;
-    const req = wk.req_api.webkit_navigation_action_get_request(action) orelse return 0;
-    const uri_z = wk.req_api.webkit_uri_request_get_uri(req) orelse return 0;
-    const uri = std.mem.span(uri_z);
+    var uri_buf: ?[]const u8 = null;
+    if (self.queue.options.allow_request) |allow| {
+        if (self.queue.dead) {
+            wk.req_api.webkit_policy_decision_ignore(decision);
+            return 1;
+        }
+        const action = wk.req_api.webkit_navigation_policy_decision_get_navigation_action(decision) orelse {
+            wk.req_api.webkit_policy_decision_ignore(decision);
+            return 1;
+        };
+        const req = wk.req_api.webkit_navigation_action_get_request(action) orelse {
+            wk.req_api.webkit_policy_decision_ignore(decision);
+            return 1;
+        };
+        const uri_z = wk.req_api.webkit_uri_request_get_uri(req) orelse {
+            wk.req_api.webkit_policy_decision_ignore(decision);
+            return 1;
+        };
+        const uri = std.mem.span(uri_z);
+        uri_buf = uri;
+        if (!page.ownUrl(uri)) {
+            const ok = allow(self.queue.options.allow_request_ctx, uri);
+            if (!ok or self.queue.dead) {
+                wk.req_api.webkit_policy_decision_ignore(decision);
+                return 1;
+            }
+        }
+    }
+    if (decision_type != 0 or self.queue.dead or self.scope.origin_url == null) return 0;
+    const uri = uri_buf orelse blk: {
+        const action = wk.req_api.webkit_navigation_policy_decision_get_navigation_action(decision) orelse return 0;
+        const req = wk.req_api.webkit_navigation_action_get_request(action) orelse return 0;
+        const uri_z = wk.req_api.webkit_uri_request_get_uri(req) orelse return 0;
+        break :blk std.mem.span(uri_z);
+    };
     if (self.scope.allowsHeadersFor(uri)) return 0;
     const gpa = self.queue.gpa;
     const copy = gpa.dupe(u8, uri) catch uri;

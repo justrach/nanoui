@@ -331,3 +331,7 @@ test "a one-shot requestClose closes the window once the frame is done" {
     try testing.expect(cl.closed);
     try testing.expectEqual(@as(usize, 0), app.windows.items.len);
 }
+
+comptime {
+    _ = @import("surface_display.zig");
+}

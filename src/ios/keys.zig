@@ -371,7 +371,8 @@ fn handle(s: *Surface, key: objc.Object) bool {
     const moves = base == ui.Shortcut.up or base == ui.Shortcut.down or base == ui.Shortcut.tab or base == ui.Shortcut.escape;
     if (base != 0 and (in.cmd or in.ctrl or (in.alt and !focused) or moves)) {
         const sc: ui.Shortcut = .{ .key = base, .cmd = in.cmd, .ctrl = in.ctrl, .alt = in.alt, .shift = in.shift };
-        if (s.window.app.accelerator(sc)) return true;
+        @import("scenes.zig").noteActive(s.window);
+        if (s.window.app.acceleratorFor(s.window, sc)) return true;
         s.ctx.shortcut_taken = false;
         in.shortcut = sc;
         s.frame();

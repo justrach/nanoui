@@ -38,6 +38,7 @@ pub fn paintGpu(self: *Surface, h: w.HWND) bool {
         // The beat is this swap chain's monitor's from now on.
         @import("surface_pace.zig").updateOutput(self);
         self.display_info = self.presenter.?.displayInfo();
+        self.colour_dirty = self.colour != .sdr_srgb;
     }
     const p = &self.presenter.?;
     // The drag state is set before the size is given to the swap chain: a drag
@@ -65,10 +66,24 @@ pub fn paintGpu(self: *Surface, h: w.HWND) bool {
     g.sync(self.text.atlas.mask(), self.text.atlas.generation, self.text.images.pictures(), self.text.images.generation);
     // What the app asked the window to show (`setColour`), at this frame's
     // boundary: no back buffer is held yet (`ResizeBuffers` needs none).
-    if ((self.colour == .extended_linear) != p.extended) {
-        _ = p.setExtended(self.colour == .extended_linear);
-        self.display_info = p.displayInfo();
-        self.ctx.changed = true;
+    if (self.colour_dirty) {
+        self.colour_dirty = false;
+        const display = @import("surface_display.zig");
+        switch (display.syncAction(self.colour, p.extended, true, self.display_info.hdr_output)) {
+            .set_extended => {
+                const was = p.extended;
+                _ = p.setExtended(true);
+                self.display_info = p.displayInfo();
+                if (p.extended != was) self.ctx.changed = true;
+            },
+            .set_sdr => {
+                const was = p.extended;
+                _ = p.setExtended(false);
+                self.display_info = p.displayInfo();
+                if (p.extended != was) self.ctx.changed = true;
+            },
+            .none => {},
+        }
     }
     g.extended = p.extended;
     g.sdr_white_scale = self.display_info.sdr_white_scale;
@@ -160,7 +175,10 @@ pub fn present(self: *Surface, h: w.HWND) bool {
     }
     const p = &self.presenter.?;
     // The CPU's pixels are BGRA8: an scRGB chain goes back first.
-    if (p.extended) _ = p.setExtended(false);
+    if (p.extended) {
+        _ = p.setExtended(false);
+        self.colour_dirty = self.colour != .sdr_srgb;
+    }
     const bg = self.ctx.theme.background;
     p.setBackground(bg.r, bg.g, bg.b);
     p.upload(self.pixels.bytes, pw, ph) catch |e| {

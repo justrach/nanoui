@@ -42,8 +42,10 @@ pub const PageOptions = struct {
     /// Nothing the page stores outlives it: no cookies, storage or cache
     /// kept, or shared with the app's other pages. macOS: a non-persistent
     /// `WKWebsiteDataStore` (set before `configure`, which may change it);
-    /// Windows: an InPrivate controller (a runtime without
-    /// `ICoreWebView2Environment10` makes none, and the page stays blank).
+    /// Linux: a per-page ephemeral `WebKitNetworkSession` (6.0) or ephemeral
+    /// `WebKitWebsiteDataManager` + `WebKitWebContext` (4.x); Windows: an
+    /// InPrivate controller (a runtime without `ICoreWebView2Environment10`
+    /// makes none, and the page stays blank).
     private: bool = false,
     /// Pages the window can switch between, shown as a bar on every one of
     /// them (the app's own and every remote page): `{ "Local", "/" }`,
@@ -68,7 +70,11 @@ pub const PageOptions = struct {
     /// 403, so it never leaves the machine. Windows, through WebView2's
     /// `WebResourceRequested`, which is raised for no WebSocket; a runtime
     /// without `ICoreWebView2_22` (filters for every frame) does not load
-    /// the page. macOS has no per-request hook: give the configuration a
+    /// the page. Linux (WebKitGTK): filters every frame's navigations,
+    /// redirects, and new-window actions via `decide-policy` (failing
+    /// closed if the runtime lacks the policy API; subresource fetches
+    /// such as `fetch`/`<img>`/`<script>` are not exposed to the UI
+    /// process). macOS has no per-request hook: give the configuration a
     /// `WKContentRuleList` from `configure` instead.
     allow_request: ?*const fn (ctx: ?*anyopaque, url: []const u8) bool = null,
     allow_request_ctx: ?*anyopaque = null,

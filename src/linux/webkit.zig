@@ -64,15 +64,15 @@ pub const RequestApi = struct {
 pub const Api6 = struct {
     webkit_web_context_new: *const fn () callconv(.c) Obj,
     webkit_network_session_new: *const fn (data: Str, cache: Str) callconv(.c) Obj,
-    webkit_network_session_new_ephemeral: *const fn () callconv(.c) Obj,
+    webkit_network_session_new_ephemeral: *const fn () callconv(.c) ?Obj,
 };
 
 /// WebKitGTK 4.x's own: the profile is a data manager, and script messages
 /// arrive wrapped.
 pub const Api4x = struct {
-    webkit_web_context_new_with_website_data_manager: *const fn (manager: Obj) callconv(.c) Obj,
+    webkit_web_context_new_with_website_data_manager: *const fn (manager: Obj) callconv(.c) ?Obj,
     webkit_website_data_manager_get_type: *const fn () callconv(.c) usize,
-    webkit_website_data_manager_new_ephemeral: *const fn () callconv(.c) Obj,
+    webkit_website_data_manager_new_ephemeral: *const fn () callconv(.c) ?Obj,
     webkit_javascript_result_get_js_value: *const fn (result: Obj) callconv(.c) Obj,
 };
 
