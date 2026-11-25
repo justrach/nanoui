@@ -447,19 +447,19 @@ test "d3d11: the sizes a drag passes through keep every glass target alive" {
 }
 
 test "d3d11: multi-stop gradients and dithered shadows match the CPU renderer" {
-    const stops = [_]ui.GradientStop{
-        .{ .at = 0, .color = .hex(0x00ff14) },
-        .{ .at = 0.3, .color = .hex(0x3cc350) },
-        .{ .at = 0.6, .color = .hex(0x00ff8c) },
-        .{ .at = 1, .color = .hex(0x50afdc) },
-    };
     const Scene = struct {
+        const stops = [_]ui.GradientStop{
+            .{ .at = 0, .color = .hex(0x00ff14) },
+            .{ .at = 0.3, .color = .hex(0x3cc350) },
+            .{ .at = 0.6, .color = .hex(0x00ff8c) },
+            .{ .at = 1, .color = .hex(0x50afdc) },
+        };
         fn view(_: *@This(), c: *ui.Context) void {
             const root = ui.div(c).sizeFull().bg(.hex(0x191816));
             defer root.end();
-            ui.div(c).absolute().offset(12, 12).w(44).h(96).radius(10).bg(.white).gradientStops(&stops, null).end();
+            ui.div(c).absolute().offset(12, 12).w(44).h(96).rounded(10).bg(.white).gradientStops(&stops, null).end();
             ui.div(c).absolute().offset(68, 60).w(44).h(48).bg(.white).gradientStops(&stops, .{ .x = 0, .y = -48, .w = 44, .h = 96 }).end();
-            ui.div(c).absolute().offset(136, 20).w(84).h(64).radius(14).bg(.hex(0x282724))
+            ui.div(c).absolute().offset(136, 20).w(84).h(64).rounded(14).bg(.hex(0x282724))
                 .shadow(.{ .blur = 14, .y = 6, .color = .{ .a = 0.45 } })
                 .shadow(.{ .blur = 6, .y = 2, .knockout = true, .color = .{ .a = 0.3 } })
                 .end();
