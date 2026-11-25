@@ -87,7 +87,7 @@ nui doctor                              # Zig 0.17, GTK 4/3, iOS/Android toolcha
 another, `--local PATH` for a local checkout). To add nanoui manually instead:
 
 ```sh
-zig fetch --save git+https://github.com/justrach/nanoui#v0.14.10
+zig fetch --save git+https://github.com/justrach/nanoui#v0.14.11
 ```
 
 Releases are tagged `vMAJOR.MINOR.PATCH`, as mygo's are, and each is listed
