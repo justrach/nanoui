@@ -9,6 +9,26 @@ const builtin = @import("builtin");
 const root = @import("root");
 const ndk = @import("ndk.zig");
 const activity = @import("activity.zig");
+const jni = @import("jni.zig");
+
+/// Calls a boolean method of the NativeActivity subclass on the app thread.
+pub fn activityBoolean(name: [*:0]const u8) ?bool {
+    if (!activity.onAppThread()) return null;
+    const env = activity.env orelse return null;
+    const host = activity.activity orelse return null;
+    return jni.call(env, host.clazz, name, "()Z", &.{});
+}
+
+/// Copies a subclass method's Java string result into allocator-owned UTF-8.
+pub fn activityString(gpa: std.mem.Allocator, name: [*:0]const u8) !?[]u8 {
+    if (!activity.onAppThread()) return error.ActivityUnavailable;
+    const env = activity.env orelse return error.ActivityUnavailable;
+    const host = activity.activity orelse return error.ActivityUnavailable;
+    const result = jni.call(env, host.clazz, name, "()Ljava/lang/String;", &.{}) orelse
+        return error.ActivityCallFailed;
+    defer jni.deleteLocal(env, result);
+    return jni.fromString(env, gpa, result);
+}
 
 comptime {
     // std's signal handlers, as bionic lays them out.
