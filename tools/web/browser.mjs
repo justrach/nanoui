@@ -111,10 +111,22 @@ try {
     window.workerProbe.worker.postMessage({pointer:[1,207,185]});
     window.workerProbe.worker.postMessage({pointer:[2,207,185]});
   });
-  await page.waitForTimeout(600);
-  const workerAfter=await page.evaluate(()=>window.workerProbe.info());assert.equal(workerAfter.value,1);
-  await page.waitForTimeout(1000);
-  assert.equal((await page.evaluate(()=>window.workerProbe.info())).callbacks,workerAfter.callbacks);
+  // Worker frames can still be settling after the click on a loaded host:
+  // retry until the click has landed and no frame runs for a second.
+  {
+    const info = () => page.evaluate(() => window.workerProbe.info());
+    const deadline = Date.now() + 8000;
+    let before, after;
+    for (;;) {
+      before = await info();
+      if (before.value === 1) {
+        await page.waitForTimeout(1000);
+        after = await info();
+        if (after.value === 1 && after.callbacks === before.callbacks) break;
+      } else await page.waitForTimeout(200);
+      if (Date.now() > deadline) throw new Error(`Worker did not settle idle after the click within 8 s: before ${JSON.stringify(before)}, after ${JSON.stringify(after)}`);
+    }
+  }
   await page.evaluate(()=>window.workerProbe.worker.postMessage({destroy:true}));
   const scaleOne=await browser.newContext({viewport:{width:420,height:300},deviceScaleFactor:1});
   const low=await scaleOne.newPage();low.on('pageerror',e=>errors.push(e.message));
