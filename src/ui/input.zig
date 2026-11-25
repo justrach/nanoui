@@ -92,7 +92,8 @@ pub const Shortcut = struct {
 /// pasted text, an input method's composition, and editing commands.
 pub const TextOp = union(enum) {
     insert: []const u8,
-    /// Text being composed (underlined), with the selection inside it.
+    /// Text being composed (underlined). The selection is in UTF-8 bytes
+    /// relative to the start of this text.
     set_marked: struct { text: []const u8, sel_start: usize, sel_len: usize },
     unmark,
     /// A selection set from outside (iOS's text input): byte offsets.

@@ -20,9 +20,9 @@ const EditState = ctx_mod.EditState;
 /// as long as they grow: `deinit` frees them.
 pub const TextBuffer = struct {
     buf: std.ArrayList(u8) = .empty,
-    /// Where the caret goes in the next frame, after the app set the text.
+    /// UTF-8 byte offset for the next frame, clamped to a scalar boundary.
     want_caret: ?usize = null,
-    /// The selection (anchor, caret) the next frame applies, as `want_caret`.
+    /// The next selection (anchor, caret), both byte offsets as in `want_caret`.
     want_selection: ?[2]usize = null,
     /// The box id this buffer was last built under, so focus, caret and undo
     /// survive when a parent container is added or removed around the field.
@@ -209,14 +209,15 @@ pub fn apply(buffer: *TextBuffer, e: *EditState, op: ctx_mod.TextOp, opts: Optio
             const range = e.marked orelse .{ lo, hi };
             const n = buffer.replace(range[0], range[1], m.text);
             e.marked = if (n == 0) null else .{ range[0], range[0] + n };
-            e.caret = range[0] + @min(m.sel_start + m.sel_len, n);
-            e.anchor = range[0] + @min(m.sel_start, n);
+            const marked = buffer.text()[range[0]..][0..n];
+            e.caret = range[0] + utf8.floorBoundary(marked, m.sel_start +| m.sel_len);
+            e.anchor = range[0] + utf8.floorBoundary(marked, m.sel_start);
             result.changed = true;
         },
         .unmark => e.marked = null,
         .select => |r| {
-            e.anchor = @min(r.anchor, s.len);
-            e.caret = @min(r.caret, s.len);
+            e.anchor = utf8.floorBoundary(s, r.anchor);
+            e.caret = utf8.floorBoundary(s, r.caret);
             e.marked = null;
         },
         .command => |cmd| {
