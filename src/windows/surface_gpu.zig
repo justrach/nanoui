@@ -84,9 +84,10 @@ pub fn paintGpu(self: *Surface, h: w.HWND) bool {
     const draw_w: f32 = @as(f32, @floatFromInt(p.width)) / self.scale;
     const draw_h: f32 = @as(f32, @floatFromInt(p.height)) / self.scale;
     const draw_size: types.Size = .{ .w = @min(self.size.w, draw_w), .h = @min(self.size.h, draw_h) };
-    // The frame's textures (`ui.texture`): uploaded into their slots and
-    // sampled by the texture instances, as the CPU path draws them.
+    // The frame's textures (`ui.texture`) and multi-stop gradients: uploaded into
+    // their slots and sampled during drawing, as the CPU path draws them.
     g.textures = self.ctx.textures.items;
+    g.gradients = self.ctx.gradients.items;
     const t_draw = clock.now();
     g.draw(self.instances.items, draw_size, self.scale, bg, @ptrCast(back));
     const t_present = clock.now();

@@ -35,3 +35,54 @@ float2 corner_sdf_aa(float2 p, float2 half_size, float r_in) {
     return float2(d, max(grad / scale, 0.0001) * 0.5);
 }
 
+float shadow_alpha(float2 p, float2 half_size, float corner, float sigma) {
+    float c = abs(corner);
+    float low = p.y - half_size.y;
+    float high = p.y + half_size.y;
+    float start = clamp(-3.0 * sigma, low, high);
+    float end = clamp(3.0 * sigma, low, high);
+    float step = (end - start) / 8.0;
+    float y = start + step * 0.5;
+    float alpha = 0.0;
+    for (int k = 0; k < 8; k++) {
+        alpha += blur_along_x(p.x, p.y - y, sigma, c, half_size) * gaussian(y, sigma) * step;
+        y += step;
+    }
+    return alpha;
+}
+
+float shadow_dither(float2 pos) {
+    uint x = (uint)pos.x;
+    uint y = (uint)pos.y;
+    uint h1 = (x * 1664525u + y * 1013904223u) ^ 0x68bc21ebu;
+    h1 ^= h1 >> 15;
+    h1 *= 0x85ebca6bu;
+    h1 ^= h1 >> 13;
+    uint h2 = (x * 22695477u + y * 2891336453u) ^ 0x02e5be93u;
+    h2 ^= h2 >> 15;
+    h2 *= 0xc2b2ae35u;
+    h2 ^= h2 >> 13;
+    float u1 = float(h1 & 0xffffu) / 65535.0;
+    float u2 = float(h2 & 0xffffu) / 65535.0;
+    return (u1 + u2 - 1.0) * (0.5 / 255.0);
+}
+
+float4 gradient_stops(float4 uv, float y) {
+    uint at = (uint)uv.z;
+    float4 h = grads[at];
+    uint n = (uint)h.z;
+    if (n == 0u) return float4(0.0, 0.0, 0.0, 0.0);
+    float t = (y - h.x) / max(h.y, 1e-4);
+    if (t <= grads[at + 1u].x) return grads[at + 2u];
+    for (uint k = 1u; k < n; k++) {
+        float p0 = grads[at + 1u + 2u * (k - 1u)].x;
+        float p1 = grads[at + 1u + 2u * k].x;
+        if (t <= p1) {
+            float4 c0 = grads[at + 2u + 2u * (k - 1u)];
+            float4 c1 = grads[at + 2u + 2u * k];
+            return lerp(c0, c1, (t - p0) / max(p1 - p0, 1e-6));
+        }
+    }
+    return grads[at + 2u * n];
+}
+

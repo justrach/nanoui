@@ -78,6 +78,7 @@ Texture2D<float4> native_atlas : register(t4);
 // bound by d3d11.zig for that instance's draw alone, as shader.metal's
 // `frame` is. Sampled as pictures are (linear, clamped).
 Texture2D<float4> frame_tex : register(t5);
+StructuredBuffer<float4> grads : register(t6);
 SamplerState sampler_atlas : register(s1);
 SamplerState sampler_images : register(s2);
 
@@ -272,20 +273,10 @@ float blur_along_x(float x, float y, float sigma, float corner, float2 half_size
     return integral.y - integral.x;
 }
 
-float shadow_alpha(float2 p, float2 half_size, float corner, float sigma) {
-    float low = p.y - half_size.y;
-    float high = p.y + half_size.y;
-    float start = clamp(-3.0 * sigma, low, high);
-    float end = clamp(3.0 * sigma, low, high);
-    float step = (end - start) / 4.0;
-    float y = start + step * 0.5;
-    float alpha = 0.0;
-    for (int k = 0; k < 4; k++) {
-        alpha += blur_along_x(p.x, p.y - y, sigma, corner, half_size) * gaussian(y, sigma) * step;
-        y += step;
-    }
-    return alpha;
-}
+// Shadows, dithering, and multi-stop gradient helpers live in corner_sdf.hlsl.
+float shadow_alpha(float2 p, float2 half_size, float corner, float sigma);
+float shadow_dither(float2 pos);
+float4 gradient_stops(float4 uv, float y);
 
 // A line, as shader.metal's line_color, smoothed by its exact gradient.
 float4 line_color(Varyings v) {
@@ -428,11 +419,13 @@ float4 shade(Varyings v) {
             if (r < 0.0) rb = -rb;
             a *= clamp(corner_sdf_aa(p - v.i_uv.xy, max(half_size - v.i_uv.z, float2(0.0, 0.0)), rb).x + 0.5, 0.0, 1.0);
         }
+        if (a > 0.0) a = clamp(a + shadow_dither(v.pos.xy), 0.0, 1.0);
         return float4(v.i_color.rgb * a, a);
     }
     // Premultiplied: the border is laid over the fill (see shader.metal).
     float4 fill = v.i_color;
-    if (v.i_uv.y > 0.5 && v.i_uv.y < 1.5) {
+    if (v.i_uv.y > 1.5) fill = gradient_stops(v.i_uv, v.v_local.y);
+    else if (v.i_uv.y > 0.5) {
         float gr = floor(v.i_uv.z / 256.0), gb = floor(v.i_uv.w / 256.0);
         float4 bottom = float4(gr, v.i_uv.z - gr * 256.0, gb, v.i_uv.w - gb * 256.0) / 255.0;
         fill = lerp(fill, bottom, saturate(v.v_local.y / max(v.i_rect.w, 1e-4)));
@@ -514,9 +507,10 @@ float3 glass_tone(float3 c, float4 tone) {
 
 Pixel glass_ps(Varyings v) {
     float clip_cover = clip_coverage(v);
-    // The pane's edge, antialiased as a quad's.
+    // The pane's edge, antialiased as a quad's (continuous squircle by default).
     float2 hp = v.i_rect.zw * 0.5;
-    float2 da = rounded_box_aa(v.v_local - hp, hp, min(v.i_misc.x, min(hp.x, hp.y)));
+    float gr_abs = min(abs(v.i_misc.x), min(hp.x, hp.y));
+    float2 da = corner_sdf_aa(v.v_local - hp, hp, v.i_misc.x < 0.0 ? -gr_abs : gr_abs);
     float coverage = (1.0 - smoothstep(-da.y, da.y, da.x)) * clip_cover * v.i_uv.z;
 
     // The optics, in the frame's pixels.
@@ -524,7 +518,7 @@ Pixel glass_ps(Varyings v) {
     float2 p = v.v_world * s;
     float2 h = hp * s;
     float2 q = p - v.i_rect.xy * s - h;
-    float rr = min(v.i_misc.x * s, min(h.x, h.y));
+    float rr = min(abs(v.i_misc.x) * s, min(h.x, h.y));
     float t = max(-rounded_box(q, h, rr), 0.0);
     float bezel = v.i_uv.x * s;
     bool sidebar = v.i_uv.x < 0.0;

@@ -156,7 +156,9 @@ pub const Presenter = struct {
         try check(factory.?.slot(*const fn (*Com, *Com, w.HWND, *const SwapChainDesc1, ?*anyopaque, ?*anyopaque, *?*Com) callconv(.winapi) HRESULT, 15)(factory.?, dev, hwnd, &desc, null, null, &swap)); // CreateSwapChainForHwnd
         // Alt+Enter is nanoui's to give meaning to, not DXGI's.
         _ = factory.?.slot(*const fn (*Com, w.HWND, u32) callconv(.winapi) HRESULT, 8)(factory.?, hwnd, 2); // MakeWindowAssociation, NO_ALT_ENTER
-        return .{ .device = dev, .context = ctx, .swap = swap orelse return error.Direct3D, .width = desc.width, .height = desc.height };
+        const swap_out = swap orelse return error.Direct3D;
+        _ = setColourSpace(swap_out, colour_space_srgb);
+        return .{ .device = dev, .context = ctx, .swap = swap_out, .width = desc.width, .height = desc.height };
     }
 
     pub fn deinit(p: *Presenter) void {
@@ -296,7 +298,11 @@ pub const Presenter = struct {
     fn reformat(p: *Presenter, format: u32, colour_space: u32) bool {
         // ResizeBuffers: every buffer, this size, the new format.
         if (p.swap.slot(*const fn (*Com, u32, u32, u32, u32, u32) callconv(.winapi) HRESULT, 13)(p.swap, 0, p.width, p.height, format, 0) < 0) return false;
-        const sc3 = p.swap.query(&iid_swap_chain3) catch return false;
+        return setColourSpace(p.swap, colour_space);
+    }
+
+    fn setColourSpace(swap: *Com, colour_space: u32) bool {
+        const sc3 = swap.query(&iid_swap_chain3) catch return false;
         defer sc3.release();
         var support: u32 = 0;
         // CheckColorSpaceSupport, then SetColorSpace1: present support is bit 0.
