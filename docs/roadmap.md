@@ -1,40 +1,52 @@
 # nanoui Roadmap
 
-Baseline: **[`v0.14.8`](https://github.com/justrach/nanoui/releases/tag/v0.14.8)** (2026-11-20).
-See [Benchmarks](benchmarks.md) for current macOS, iOS, iPadOS, CPU-raster, and Linux numbers, [docs/ios.md](ios.md) for iOS/iPadOS bundling, and [docs/android.md](android.md) for Android details.
+Baseline: **[`v0.14.10`](https://github.com/justrach/nanoui/releases/tag/v0.14.10)** (2026-11-24), plus recent merges on `main`.
+See [Benchmarks](benchmarks.md) for current macOS, iOS, iPadOS, CPU-raster, and Linux numbers, [CLI Reference](cli.md) for `nui` workflows, [docs/ios.md](ios.md) for iOS/iPadOS bundling, and [docs/android.md](android.md) for Android details.
 
 ---
 
-## Shipped in `v0.14.8`
+## Shipped Recently
 
-- **Lean-verified Linux startup & idle memory hill-climb ([#214](https://github.com/justrach/nanoui/pull/214)):** Added `lean-proofs/NanoUI/LinuxStartup.lean`, `src/linux/renderer.zig` (no-GPU CPU + `cairo` GSK fast path), async D-Bus portal (`src/linux/appearance.zig`), `.LAZY` `dlopen`, lazy Liquid Glass shaders (`src/ui/opengl.zig`), and 4 KB SFNT header reads (`src/ui/tt/fontdb.zig`) — reaching `68.4–90.3 ms` first-frame, `40.7–84.8 MiB` idle PSS, and `0.0 ms` idle CPU under Xvfb.
-- **macOS Dock reopen of minimized windows ([#201](https://github.com/justrach/nanoui/issues/201), [#215](https://github.com/justrach/nanoui/pull/215)):** `decideReopen` in `src/app.zig` restores minimized windows on Dock click (`src/tests_window_more.zig`).
-- **Deferred initial page navigation & authenticated requests ([#212](https://github.com/justrach/nanoui/issues/212), [#216](https://github.com/justrach/nanoui/pull/216)):** Added `PageOptions.defer_initial_load`, `PageOptions.on_load_error`, `PageRequest`, `PageHeader`, and `Page.loadRequest` across WKWebView, WebKitGTK, and WebView2 (`src/page_request.zig`, `examples/page-auth/main.zig`).
-- **Opt-in native file-drop callbacks over webviews ([#211](https://github.com/justrach/nanoui/issues/211), [#217](https://github.com/justrach/nanoui/pull/217)):** Added `PageOptions.file_drop` (`PageFileDrop`, `PageDropOffer`, `PageDropEvent`, `PageDropDecision`) across macOS WKWebView, Linux WebKitGTK, and Windows WebView2 (`src/page_drop.zig`, `docs/page-file-drop.md`, `examples/page-drop/main.zig`).
+### On `main` (post-`v0.14.10`)
+
+- **Windows task dialog message boxes ([#230](https://github.com/justrach/nanoui/issues/230), [#231](https://github.com/justrach/nanoui/pull/231)):** `src/windows/task_dialog.zig` renders message boxes via `comctl32` 6 activation context with custom button labels and checkboxes, modal to the active window (`src/windows/tests_task_dialog.zig`).
+- **UTF-8 text editing bounds & headless picker ([#235](https://github.com/justrach/nanoui/pull/235), [#236](https://github.com/justrach/nanoui/pull/236)):** Text edit offsets clamp to UTF-8 scalar boundaries ([text-index-audit.md](text-index-audit.md)), and `kit.picker` (`src/kit/picker.zig`) extracts stable-id picker selection, IME composition guards, and keyboard intents used by Gallery's command palette.
+- **Accessibility heading levels & list containers ([#250](https://github.com/justrach/nanoui/pull/250)):** Added `Describe.level` / `Element.level` (1–6) and `access.holdsElements` so `.list` containers keep rows and tabs as individual elements (`src/ui/access.zig`).
+- **Web default browser shell & worker stability ([#233](https://github.com/justrach/nanoui/pull/233), [#238](https://github.com/justrach/nanoui/pull/238)):** Added default `src/web/app.html` (`tools/web/build.zig`) with opt-in `keyboard` forwarding in `src/web/host.js` and worker click-settle synchronization in `tools/web/browser.mjs`.
+- **Fonts, iOS & Android fixes ([#234](https://github.com/justrach/nanoui/pull/234), [#245](https://github.com/justrach/nanoui/pull/245), [#247](https://github.com/justrach/nanoui/pull/247), [#252](https://github.com/justrach/nanoui/pull/252)):** Multi-face TTC font collection scanning + Android CJK fallback (`src/ui/tt/fontdb.zig`), iOS `App.soon` (`src/cf_soon.zig`) and remote document-picker attachment waits (`src/ios/dialog.zig`), Zig 0.17.1 iOS stdlib patch (`tools/ios/zig-lib.sh`), and opt-in app-supplied `NativeActivity` subclasses (`tools/android/apk.zig`).
+
+### `v0.14.10` (2026-11-24)
+
+- **Overlay occlusion (`Div.occlude()` / `Style.occlude`, [#244](https://github.com/justrach/nanoui/pull/244)):** Blocks pointer clicks, hover, scrollbar grabs, vertical/horizontal scroll pass-through, and paint-order text selection bleed-through behind overlays without hand-cursor side effects or implied accessibility buttons; adopted across `kit.dialog`, `kit.sheet`, `kit.popover`, and `kit.Toaster`.
+- **`nui` CLI, templates, installers & release archives ([#244](https://github.com/justrach/nanoui/pull/244)):** Modularized `tools/nui/` (`start --template native|kit|page`, `--id`, short target aliases, `check --lines`, `doctor`, `snapshot --portable/--eval`), added `tools/install-nui.sh` and `tools/install-nui.ps1`, documented `docs/cli.md`, fixed `wasm32-wasi` downstream builds, and shipped 6-platform `nui` archives + `SHA256SUMS`.
+
+### `v0.14.9` (2026-11-21)
+
+- **WebGPU backend & security hardening ([#225](https://github.com/justrach/nanoui/pull/225), [#228](https://github.com/justrach/nanoui/pull/228), [#229](https://github.com/justrach/nanoui/pull/229)):** Added the `wasm32-wasi` WebGPU renderer and browser host (`src/web/`), fail-closed WebView2 `allow_request` resource filtering + tests, `tools/check-security.sh` CI/PR security gate, and gallery `--nanoui-*` CLI flag preservation.
+
+### `v0.14.8` (2026-11-20)
+
+- **Lean-verified Linux startup & memory, Dock reopen & WebView APIs ([#214](https://github.com/justrach/nanoui/pull/214), [#215](https://github.com/justrach/nanoui/pull/215), [#216](https://github.com/justrach/nanoui/pull/216), [#217](https://github.com/justrach/nanoui/pull/217)):** Added `lean-proofs/NanoUI/LinuxStartup.lean`, `src/linux/renderer.zig`, async D-Bus portal (`src/linux/appearance.zig`), Dock restore on minimized macOS windows (`#201`), `Page.loadRequest` / `PageOptions.defer_initial_load` (`#212`), and native webview `PageOptions.file_drop` (`#211`).
 
 ---
 
 ## Upcoming Milestones
 
-### `v0.14.9` — Stabilization & Security Hardening
+### `v0.15.0` — Cross-Platform Parity & Stacked Follow-ups
 
-- **WebView2 security follow-ups (`src/page_webview2*.zig`):** Fail closed with `403` on UTF-8 conversion/OOM inside `ResourceRequested` (`src/page_webview2_handlers.zig`), gate or reject loading when `addWebResourceRequested` fails with `allow_request != null`, and add live WebView2 SDK smoke tests in Windows CI.
-- **Windows extended-colour surface polish (`src/windows/surface_gpu.zig`):** Avoid retrying `setExtended(true)` every painted frame when an HDR-capable app starts on an SDR monitor; retry only on `WM_DISPLAYCHANGE` or monitor moves.
-- **`nui` & docs alignment:** Document `PageOptions.private`, `PageOptions.allow_request`, and `SurfaceColour` support matrix clearly across templates and generated headers.
-
-### `v0.15.0` — Cross-Platform Parity
-
-- **Linux WebKitGTK page security (`src/page_webkitgtk.zig`):** Implement `PageOptions.private` using an ephemeral `WebKitWebsiteDataManager` / network session and `PageOptions.allow_request` via WebKitGTK request filtering.
-- **macOS `allow_request` ergonomics (`src/page_webkit.zig`):** Provide a first-class helper or bridge (`WKURLSchemeHandler` / `WKContentRuleList`) so `PageOptions.allow_request` works cross-platform where possible.
-- **Extended linear colour & GPU parity:** Bring `Surface.setColour(.extended_linear)` and `DisplayInfo` to iOS/iPadOS (`CAMetalLayer` EDR) and Linux Wayland/OpenGL (`src/ui/opengl.zig`), and add OpenGL/GLES vs. CPU parity tests for negative circular `clip_round` and nested masked `scroll_edge_fade` layers.
-- **Mobile parity (`src/ios/`, `src/android/`):** Close remaining IME, file-picker, accessibility, and multi-window scene gaps listed below.
+- **Windows (`src/windows/`, `src/page_webview2*.zig`):** Avoid retrying `setExtended(true)` every painted frame when an HDR-capable app starts on an SDR monitor (`src/windows/surface_gpu.zig`; retry on `WM_DISPLAYCHANGE` / monitor move), and add live WebView2 SDK smoke tests in Windows CI.
+- **Linux (`src/page_webkitgtk.zig`, `src/ui/opengl.zig`):** Implement `PageOptions.private` using an ephemeral `WebKitWebsiteDataManager` / network session and `PageOptions.allow_request` via WebKitGTK request filtering; add OpenGL vs. CPU parity tests for negative circular `clip_round` and nested masked `scroll_edge_fade`; Wayland HDR/fractional-scale polish.
+- **macOS (`src/page_webkit.zig`, `tools/nui/`):** Provide a `WKURLSchemeHandler` / `WKContentRuleList` request-filtering helper for `PageOptions.allow_request`, and integrate `.app` / `.dmg` bundling and notarization into `nui`.
+- **Web stacked follow-ups (`src/web/`):** Land follow-up PRs for browser color-scheme (`#239`), Canvas 2D fallback (`#240`), DOM semantics/IME/clipboard (`#241`), shared bounded `file_picker` (`#242`), Worker Canvas 2D recovery (`#243`), browser glyph fallback (`#249`), and ARIA mapping (`#251`).
+- **Text, Fonts & Accessibility:** Grapheme-cluster editing (`#237`), `CFF2` outlines for Android `NotoSansCJK` (`#248`), and listbox/option accessibility roles (`#246`).
+- **Mobile parity (`src/ios/`, `src/android/`):** Close remaining EDR, file-picker, TalkBack accessibility, and multi-window scene gaps listed below.
 
 ### `v0.15.x – v0.16.0` — Engine Performance, Formal Proofs & Ecosystem
 
 - **Retained / partial-frame UI:** Land `feat/retained-scroll` and partial tree/damage optimizations backed by [`lean-proofs/NanoUI/RetainedScroll.lean`](../lean-proofs/NanoUI/RetainedScroll.lean), reducing `scroll` and `springs` CPU build/layout cost at 120 Hz.
-- **Staged `nanobrowser` landing:** Upstream the `nanobrowser` CSS cascade/invalidation, HTML fast fragment parser, DOM Bloom filters, and ARM64 JIT optimizations onto `main` in reviewable PRs paired with their Lean 4 theorems (`lean-proofs/NanoUI.lean`).
-- **Expanded Lean 4 verification:** Added `lean-proofs/NanoUI/LinuxStartup.lean` proving Linux 72-state renderer selection, async D-Bus portal non-blocking, lazy glass shader compilation (`4 -> 1`), frame coalescing, and 4 KB SFNT startup bounds; next model and prove invariants for Windows VBlank frame pacing (`src/ui/frame_pace.zig`) and CPU raster layer-depth isolation (`src/ui/raster_group.zig`).
-- **`nanoui.kit`, Gallery & contributor workflow:** Expand `src/kit/` accessibility coverage and Gallery Studio demos; add a PR security & COM-vtable verification checklist for external contributors.
+- **Staged `nanobrowser` landing:** Upstream `nanobrowser` CSS cascade/invalidation, HTML fast fragment parser, DOM Bloom filters, and ARM64 JIT optimizations onto `main` in reviewable PRs paired with Lean 4 theorems (`lean-proofs/NanoUI.lean`).
+- **Expanded Lean 4 verification:** Model and prove invariants for Windows VBlank frame pacing (`src/ui/frame_pace.zig`) and CPU raster layer-depth isolation (`src/ui/raster_group.zig`).
+- **`nanoui.kit`, Gallery & contributor workflow:** Expand `src/kit/` accessibility coverage and Gallery Studio demos; keep PR security & COM-vtable verification checks current.
 
 ---
 
@@ -42,51 +54,24 @@ See [Benchmarks](benchmarks.md) for current macOS, iOS, iPadOS, CPU-raster, and 
 
 ### macOS
 
-- **Shipped (`v0.14.8`):** AppKit windows and menus (including Dock restore of minimized windows `#201`), Metal renderer + Liquid Glass, CoreText text shaping & UAX #29 selection, extended linear-light EDR surfaces (`Surface.setColour(.extended_linear)`, `DisplayInfo`, `Screen`), `Texture.encoding`, WKWebView typed IPC + `PageOptions.private` + `Page.loadRequest` (`#212`) + `PageOptions.file_drop` (`#211`), `NSAccessibility`, self-updates (`nanoui.Updater`), headless `--nanoui-snapshot` / `--nanoui-script` / `--nanoui-eval`.
-- **Next (`v0.14.9` – `v0.15.0`):**
-  - Ergonomic `WKContentRuleList` / request-filtering bridge for `PageOptions.allow_request` (`src/page_webkit.zig`).
-  - `.app` / `.dmg` bundling and notarization integration in `nui`.
-- **Later (`v0.15.x+`):**
-  - Native desktop notifications (`UNUserNotificationCenter`).
-  - Retained scroll / partial-frame rebuilds for sustained 120 Hz ProMotion headroom.
-  - Staged `nanobrowser` engine & JIT landings onto `main`.
+- **Shipped:** AppKit windows/menus (including Dock restore `#201`), Metal + Liquid Glass, CoreText & UAX #29 selection, EDR surfaces (`Surface.setColour(.extended_linear)`, `DisplayInfo`, `Screen`), `Div.occlude()`, WKWebView typed IPC + `private` + `loadRequest` + `file_drop`, `NSAccessibility` (`level` / `.list` containers), `nanoui.Updater`, `nui` CLI + archives, and headless `--nanoui-*` test flags.
+- **Next (`v0.15.0`):** `WKContentRuleList` / request-filtering bridge for `PageOptions.allow_request`, plus `.app` / `.dmg` bundling and notarization in `nui`.
+- **Later (`v0.15.x+`):** Native `UNUserNotificationCenter` notifications, retained scroll / partial-frame rebuilds, staged `nanobrowser` engine landings.
 
-### iOS
+### iOS & iPadOS
 
-- **Shipped (`v0.14.8`):** UIKit + Metal + CoreText + Liquid Glass, WKWebView pages with typed IPC and `PageOptions.private`, single-finger scroll & flings, pinch zoom, selection handles, `UITextInput` IME composition (CJK/dictation/autocorrect), hardware keyboard & key repeat, VoiceOver (`UIAccessibilityElement` + Dynamic Type/contrast/bold-text traits in `src/ios/access.zig`), `MapKit`, safe-area / keyboard insets, and zero-Xcode `.app` / `.ipa` bundling (`tools/ios/bundle.zig`, iOS 15+).
-- **Next (`v0.15.0`):**
-  - **EDR / HDR surfaces:** Extend `Surface.setColour(.extended_linear)` and `DisplayInfo` (`UIScreen.currentEDRHeadroom` / `potentialEDRHeadroom`) to iOS `CAMetalLayer` (`src/ios/surface.zig`).
-  - **Native pickers & sharing:** Wire `UIDocumentPickerViewController` / `PHPickerViewController` into `dialog.open`, add `UIActivityViewController` share sheets, and add haptics (`UIImpactFeedbackGenerator`).
-  - **ProMotion & keyboard pacing:** Explicit `CAFrameRateRange` (120 Hz) for animations/flings and smooth frame-paced keyboard height transitions (`UIKeyboardWillChangeFrameNotification`).
-  - **Physical device benchmarks:** Run `hillclimb` on physical iPhone Silicon via `xcrun devicectl` alongside Simulator baselines in [benchmarks.md](benchmarks.md).
-- **Later (`v0.15.x+`):**
-  - Release transient Metal intermediate/layer textures on `UIApplicationDidEnterBackgroundNotification` to stay under Jetsam background memory limits.
-  - Background/audio/notification app-lifecycle hooks (`BGTaskScheduler`, `UNUserNotificationCenter`).
-
-### iPadOS
-
-- **Shipped (`v0.14.8`):** Multi-window `UIScene` support (`UIApplicationSupportsMultipleScenes` via `.multiple_windows = true`, `.own_scene = true`, `App.onNewWindow` in `src/ios/scenes.zig`), external hardware keyboard + key repeat, VoiceOver, and adaptive safe areas across split/slide-over layouts.
-- **Next (`v0.15.0`):**
-  - **Scene-scoped alerts & `⌘W`:** Fix the current limitation in [docs/ios.md](ios.md#ipad-windows) where dialogs and `⌘W` act on the first scene's stack instead of the active/frontmost `UIWindowScene`.
-  - **Trackpad, mouse & Apple Pencil:** Support pointer hover (`UIHoverGestureRecognizer` / `UIPointerInteraction`), indirect scroll-wheel events on Magic Keyboard/trackpad, and Apple Pencil hover/pressure metadata in `ui.Input`.
-  - **Stage Manager & XDR parity:** Per-scene `DisplayInfo` updates on external display / Stage Manager resize, plus Reference Mode / XDR headroom via `Surface.setColour(.extended_linear)`.
-- **Later (`v0.15.x+`):**
-  - Cross-scene and inter-app drag-and-drop (`UIDragInteraction` / `UIDropInteraction` bridged to `src/ui/drag_payload.zig`).
-  - `UIMenuBuilder` integration so desktop `Menu` templates populate iPadOS's hold-`⌘` shortcut overlay and menu bar.
+- **Shipped:** UIKit + Metal + CoreText + Liquid Glass, WKWebView (`private`), touch scroll/flings, pinch zoom, `UITextInput` IME, `App.soon` + remote document-picker attach wait (`#247`), Zig 0.17.1 stdlib workaround (`#234`), VoiceOver + Dynamic Type traits, `MapKit`, multi-window `UIScene`, zero-Xcode `.app` / `.ipa` bundling (`tools/ios/bundle.zig`).
+- **Next (`v0.15.0`):** `Surface.setColour(.extended_linear)` / EDR `CAMetalLayer` headroom, `PHPickerViewController` / `UIActivityViewController` share sheets & haptics, scene-scoped alerts & `⌘W` targeting the active `UIWindowScene` (fixing [docs/ios.md](ios.md#ipad-windows)), `CAFrameRateRange` 120 Hz pacing, trackpad/mouse hover & Apple Pencil metadata.
+- **Later (`v0.15.x+`):** Background texture purging on Jetsam pressure, `BGTaskScheduler` / notifications, inter-scene drag-and-drop, and `UIMenuBuilder` shortcuts.
 
 ### Android
 
-- **Shipped (`v0.14.8`):** `NativeActivity` backend (`src/android/` with zero nanoui Java — JNI calls only), OpenGL ES 3 + banded multi-threaded CPU raster (`src/ui/raster.zig`, `src/ui/raster_group.zig`), nanoui TrueType text (`src/ui/text_tt.zig`), composing `EditText` IME (`src/android/ime.zig` supporting CJK, voice, emoji), touch/fling/pinch/mouse input, safe areas/display cutouts/keyboard insets, `AlertDialog` messages, APK builder & signer (`tools/android/apk.zig`, ~730 KB `ReleaseSmall` gallery), API 29+.
-- **Next (`v0.15.0`):**
-  - **Web pages + IPC:** Embed `android.webkit.WebView` via JNI (`src/page_android.zig` or equivalent) with bridge injection and `PageOptions.private` / request interception.
-  - **File picker (`dialog.open`) & >3-button sheets:** Trampoline `ACTION_OPEN_DOCUMENT` (SAF) results back into `src/android/dialog.zig` without dropping NativeActivity results.
-  - **TalkBack accessibility (`src/android/access.zig`):** Bridge `ui/access.zig` semantic trees to Android `AccessibilityNodeProvider` / `ExploreByTouchHelper`.
-  - **On-device GLES3 & CPU benchmarks:** Capture physical Android ARM64 `hillclimb` baselines (`OpenGL ES 3` offscreen EGL pbuffer + CPU raster) in [benchmarks.md](benchmarks.md).
-- **Later (`v0.15.x+`):**
-  - Predictive Back animation (`OnBackAnimationCallback` on API 33+).
-  - `SurfaceTexture` / `AHardwareBuffer` interop for `ui.texture` and extended-range/HDR swapchains (`EGL_EXT_gl_colorspace_scrgb_linear` / `FP16`).
+- **Shipped:** `NativeActivity` backend + opt-in app subclass packaging (`#252`), OpenGL ES 3 + CPU raster, nanoui TrueType text with multi-face TTC & CJK fallback (`#245`), `EditText` IME, touch/fling/pinch/mouse input, safe areas/cutouts, `AlertDialog` messages, APK builder & signer (`tools/android/apk.zig`, API 29+).
+- **Next (`v0.15.0`):** `CFF2` outlines for `NotoSansCJK` (`#248`), `dialog.open` SAF support aligned with the no-nanoui-Java policy (or app-provided subclassing; see `#232`), embedded `android.webkit.WebView` + IPC, TalkBack (`AccessibilityNodeProvider`), on-device GLES3/CPU benchmarks.
+- **Later (`v0.15.x+`):** Predictive Back animation (API 33+), `SurfaceTexture` / `AHardwareBuffer` interop for `ui.texture`, HDR swapchains.
 
-### Linux & Windows
+### Linux, Windows & Web
 
-- **Linux (`src/linux/`, `src/page_webkitgtk.zig`, `src/ui/opengl.zig`):** Shipped GTK 4/3 runtime loading, StatusNotifierItem + dbusmenu trays, OpenGL 3.3 + CPU raster, bubblewrap fallback messaging, `Page.loadRequest` (`#212`), `PageOptions.file_drop` (`#211`), and Lean-proved startup/memory optimization (`src/linux/renderer.zig`, async D-Bus portal, `.LAZY` `dlopen`, lazy Liquid Glass shaders, 4 KB SFNT headers — reaching `74.3 ms` warm / `90.3 ms` cold / `68.4 ms` headless first-frame, `40.7–84.8 MiB` idle PSS, and `0.0 ms` idle CPU under Xvfb). Next: `PageOptions.private` / `allow_request`, OpenGL vs. CPU parity tests for circular clips and nested scroll-fade groups, and Wayland HDR/fractional-scale polish.
-- **Windows (`src/windows/`, `src/ui/d3d11*.zig`, `src/page_webview2*.zig`):** Shipped D3D11 + shader caching, scRGB HDR swap chains (`#204`), VBlank beat starvation fix + circular SDF parity (`#203`), WebView2 `private` / `allow_request` (`#205`/`#206`), `Page.loadRequest` (`#212`), and `PageOptions.file_drop` (`#211`). Next: `ResourceRequested` OOM fail-closed hardening, SDR monitor `setExtended` retry gating, and live WebView2 SDK tests in Windows CI.
+- **Linux (`src/linux/`, `src/page_webkitgtk.zig`, `src/ui/opengl.zig`):** Shipped GTK 4/3 runtime loading, StatusNotifierItem + dbusmenu trays, OpenGL 3.3 + CPU raster, bubblewrap messaging, `Page.loadRequest`, `PageOptions.file_drop`, Lean-proved startup/memory optimization (`74.3 ms` warm / `68.4 ms` headless first-frame, `40.7–84.8 MiB` idle PSS). Next: `PageOptions.private` / `allow_request`, OpenGL vs. CPU circular clip & nested fade parity tests, Wayland HDR/fractional-scale polish.
+- **Windows (`src/windows/`, `src/ui/d3d11*.zig`, `src/page_webview2*.zig`):** Shipped D3D11 + shader caching, scRGB HDR swap chains, VBlank pacing + circular SDF parity, TaskDialog message boxes with custom labels & checkboxes (`#231`), WebView2 `private` / `allow_request` (fail-closed) / `loadRequest` / `file_drop`. Next: SDR monitor `setExtended` retry gating and live WebView2 SDK CI tests.
+- **Web (`src/web/`, `tools/web/`):** Shipped `wasm32-wasi` WebGPU renderer + Worker host (`#225`), default `app.html` shell with opt-in keyboard forwarding (`#238`), and `nui start --template page` / WASI build support (`#244`). Next: color-scheme following (`#239`), Canvas 2D fallback (`#240`/`#243`), DOM semantics/ARIA/IME/clipboard (`#241`/`#251`), shared `file_picker` (`#242`), and browser glyph fallback (`#249`).
