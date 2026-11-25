@@ -113,9 +113,7 @@ pub const Renderer = struct {
     sampler: *Com,
     params: *Com,
     /// The instances, as a structured buffer the vertex shader reads.
-    instances: ?*Com = null,
-    instance_srv: ?*Com = null,
-    instance_bytes: usize = 0,
+    instance_buf: api.StructuredBuf = .{},
     atlas: ?*Com = null,
     atlas_srv: ?*Com = null,
     native_atlas: ?*Com = null,
@@ -149,6 +147,9 @@ pub const Renderer = struct {
     /// The frame's textures (`ui.texture`), set by whoever draws it, as
     /// `metal.zig`'s are; `slots` holds their GPU copies.
     textures: []const gpu.Texture = &.{},
+    /// The frame's multi-stop gradients (`Context.gradients`).
+    gradients: []const [4]f32 = &.{},
+    grad_buf: api.StructuredBuf = .{},
     slots: d3d11_texture.Slots = .{},
     /// The texture the next draw samples at t5 (one texture instance's).
     bound_texture: ?*Com = null,
@@ -245,8 +246,8 @@ pub const Renderer = struct {
     }
 
     pub fn deinit(r: *Renderer) void {
-        if (r.instance_srv) |v| v.release();
-        if (r.instances) |b| b.release();
+        r.instance_buf.deinit();
+        r.grad_buf.deinit();
         if (r.atlas_srv) |t| t.release();
         if (r.atlas) |t| t.release();
         if (r.native_atlas_srv) |t| t.release();
@@ -357,7 +358,8 @@ pub const Renderer = struct {
         g.slot(*const fn (*Com, *Com, *const [4]f32) callconv(.winapi) void, ClearRenderTargetView)(g, f.rtv.?, &rgba);
         // The instances go up first: `setState` binds their view, and on the
         // first frame the buffer and its view are only made by the upload.
-        r.uploadInstances(instances);
+        r.instance_buf.upload(r.device, g, gpu.Instance, instances, 86, "instances");
+        r.grad_buf.upload(r.device, g, [4]f32, r.gradients, 64, "gradients");
         r.setState();
 
         r.drawSpan(instances, size, scale, 0, instances.len, 0, false);
@@ -496,10 +498,10 @@ pub const Renderer = struct {
         const ps = if (pane) r.glass_ps else r.quad_ps;
         g.slot(*const fn (*Com, ?*Com, ?*const anyopaque, u32) callconv(.winapi) void, VSSetShader)(g, r.quad_vs, null, 0);
         g.slot(*const fn (*Com, ?*Com, ?*const anyopaque, u32) callconv(.winapi) void, PSSetShader)(g, ps, null, 0);
-        var inst = [1]?*Com{r.instance_srv};
+        var inst = [1]?*Com{r.instance_buf.srv};
         g.slot(*const fn (*Com, u32, u32, [*]const ?*Com) callconv(.winapi) void, VSSetShaderResources)(g, 0, 1, &inst);
-        var views = [6]?*Com{ r.instance_srv, r.atlas_srv, r.images_srv, r.a.srv, r.native_atlas_srv, r.bound_texture };
-        g.slot(*const fn (*Com, u32, u32, [*]const ?*Com) callconv(.winapi) void, PSSetShaderResources)(g, 0, 6, &views);
+        var views = [7]?*Com{ r.instance_buf.srv, r.atlas_srv, r.images_srv, r.a.srv, r.native_atlas_srv, r.bound_texture, r.grad_buf.srv };
+        g.slot(*const fn (*Com, u32, u32, [*]const ?*Com) callconv(.winapi) void, PSSetShaderResources)(g, 0, 7, &views);
         // The instance offset goes through `Params`: StartInstanceLocation
         // only moves vertex-buffer reads, not this structured buffer's.
         g.slot(*const fn (*Com, u32, u32, u32, u32) callconv(.winapi) void, DrawInstanced)(g, 4, @intCast(count), 0, 0);
@@ -512,10 +514,10 @@ pub const Renderer = struct {
         r.setParams(size, scale, .{ .start_instance = @intCast(first) });
         g.slot(*const fn (*Com, ?*Com, ?*const anyopaque, u32) callconv(.winapi) void, VSSetShader)(g, r.quad_vs, null, 0);
         g.slot(*const fn (*Com, ?*Com, ?*const anyopaque, u32) callconv(.winapi) void, PSSetShader)(g, ps, null, 0);
-        var inst = [1]?*Com{r.instance_srv};
+        var inst = [1]?*Com{r.instance_buf.srv};
         g.slot(*const fn (*Com, u32, u32, [*]const ?*Com) callconv(.winapi) void, VSSetShaderResources)(g, 0, 1, &inst);
-        var views = [6]?*Com{ r.instance_srv, r.atlas_srv, r.images_srv, r.a.srv, r.native_atlas_srv, r.bound_texture };
-        g.slot(*const fn (*Com, u32, u32, [*]const ?*Com) callconv(.winapi) void, PSSetShaderResources)(g, 0, 6, &views);
+        var views = [7]?*Com{ r.instance_buf.srv, r.atlas_srv, r.images_srv, r.a.srv, r.native_atlas_srv, r.bound_texture, r.grad_buf.srv };
+        g.slot(*const fn (*Com, u32, u32, [*]const ?*Com) callconv(.winapi) void, PSSetShaderResources)(g, 0, 7, &views);
         g.slot(*const fn (*Com, u32, u32, u32, u32) callconv(.winapi) void, DrawInstanced)(g, 4, @intCast(count), 0, 0);
     }
 
@@ -541,38 +543,6 @@ pub const Renderer = struct {
         if (hr < 0) return;
         @memcpy(mapped.data[0..@sizeOf(Params)], std.mem.asBytes(&p));
         g.slot(*const fn (*Com, *Com, u32) callconv(.winapi) void, Unmap)(g, r.params, 0);
-    }
-
-    /// The instances in a structured buffer the vertex shader reads, grown
-    /// when a frame has more than the last.
-    fn uploadInstances(r: *Renderer, instances: []const gpu.Instance) void {
-        const bytes = instances.len * @sizeOf(gpu.Instance);
-        if (r.instances == null or bytes > r.instance_bytes) {
-            if (r.instance_srv) |v| v.release();
-            if (r.instances) |b| b.release();
-            r.instance_srv = null;
-            // A structured buffer's ByteWidth must be a whole number of
-            // elements, or CreateBuffer refuses it.
-            const stride: usize = @sizeOf(gpu.Instance);
-            const want = @max(bytes, 1 << 14);
-            const capacity: u32 = @intCast(((want + stride - 1) / stride) * stride);
-            const desc: BufferDesc = .{ .byte_width = capacity, .bind = bind_shader_resource, .misc = misc_structured, .stride = stride };
-            var buf: ?*Com = null;
-            must(r.device.slot(*const fn (*Com, *const BufferDesc, ?*const anyopaque, *?*Com) callconv(.winapi) HRESULT, CreateBuffer)(r.device, &desc, null, &buf), "CreateBuffer(instances)") catch return;
-            r.instances = buf;
-            r.instance_bytes = capacity;
-        }
-        const g = r.context;
-        if (r.instance_srv == null) {
-            const sd: SrvDesc = .{ .dimension = srv_buffer, .count = @intCast(r.instance_bytes / @sizeOf(gpu.Instance)) };
-            var srv: ?*Com = null;
-            must(r.device.slot(*const fn (*Com, *Com, *const SrvDesc, *?*Com) callconv(.winapi) HRESULT, CreateShaderResourceView)(r.device, r.instances.?, &sd, &srv), "CreateShaderResourceView(instances)") catch return;
-            r.instance_srv = srv;
-        }
-        var mapped: Mapped = undefined;
-        must(g.slot(*const fn (*Com, *Com, u32, u32, u32, *Mapped) callconv(.winapi) HRESULT, Map)(g, r.instances.?, 0, map_write_discard, 0, &mapped), "Map(instances)") catch return;
-        if (bytes > 0) @memcpy(mapped.data[0..bytes], std.mem.sliceAsBytes(instances)[0..bytes]);
-        g.slot(*const fn (*Com, *Com, u32) callconv(.winapi) void, Unmap)(g, r.instances.?, 0);
     }
 };
 

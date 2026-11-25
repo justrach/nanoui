@@ -21,9 +21,7 @@ const Source = struct {
 const sources = [_]Source{
     .{ .name = "Metal", .code = @embedFile("shader.metal") },
     .{ .name = "OpenGL", .code = @embedFile("shader.glsl") },
-    // HLSL currently has no shadow dither. Remove
-    // allowances as those features land; stale allowances fail too.
-    .{ .name = "D3D11", .code = @embedFile("shader.hlsl") ++ "\n" ++ @embedFile("corner_sdf.hlsl"), .missing = &dither },
+    .{ .name = "D3D11", .code = @embedFile("shader.hlsl") ++ "\n" ++ @embedFile("corner_sdf.hlsl") },
     .{ .name = "CPU", .code = @embedFile("raster.zig") ++ "\n" ++ @embedFile("raster_shapes.zig") },
     .{ .name = "WebGPU", .code = @embedFile("shader.wgsl") ++ "\n" ++ @embedFile("shader_shapes.wgsl") },
 };

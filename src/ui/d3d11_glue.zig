@@ -435,3 +435,46 @@ pub fn textureSrv(device: *Com, texture: *Com) ?*Com {
     must(device.slot(*const fn (*Com, *Com, ?*const anyopaque, *?*Com) callconv(.winapi) HRESULT, CreateShaderResourceView)(device, texture, null, &srv), "textureSrv") catch return null;
     return srv;
 }
+
+/// A dynamic structured buffer and its shader-resource view, grown on demand.
+pub const StructuredBuf = struct {
+    buf: ?*Com = null,
+    srv: ?*Com = null,
+    bytes: usize = 0,
+
+    pub fn deinit(b: *StructuredBuf) void {
+        if (b.srv) |v| v.release();
+        if (b.buf) |x| x.release();
+        b.* = .{};
+    }
+
+    pub fn upload(b: *StructuredBuf, device: *Com, context: *Com, comptime T: type, items: []const T, min_items: usize, comptime what: []const u8) void {
+        const len_bytes = items.len * @sizeOf(T);
+        if (len_bytes == 0) return;
+        const stride: usize = @sizeOf(T);
+        if (b.buf == null or len_bytes > b.bytes) {
+            if (b.srv) |v| v.release();
+            if (b.buf) |x| x.release();
+            b.srv = null;
+            // A structured buffer's ByteWidth must be a whole number of
+            // elements, or CreateBuffer refuses it.
+            const want = @max(len_bytes, min_items * stride);
+            const capacity: u32 = @intCast(((want + stride - 1) / stride) * stride);
+            const desc: BufferDesc = .{ .byte_width = capacity, .bind = bind_shader_resource, .misc = misc_structured, .stride = @intCast(stride) };
+            var buf: ?*Com = null;
+            must(device.slot(*const fn (*Com, *const BufferDesc, ?*const anyopaque, *?*Com) callconv(.winapi) HRESULT, CreateBuffer)(device, &desc, null, &buf), what) catch return;
+            b.buf = buf;
+            b.bytes = capacity;
+        }
+        if (b.srv == null) {
+            const sd: SrvDesc = .{ .dimension = srv_buffer, .count = @intCast(b.bytes / stride) };
+            var srv: ?*Com = null;
+            must(device.slot(*const fn (*Com, *Com, *const SrvDesc, *?*Com) callconv(.winapi) HRESULT, CreateShaderResourceView)(device, b.buf.?, &sd, &srv), what) catch return;
+            b.srv = srv;
+        }
+        var mapped: Mapped = undefined;
+        must(context.slot(*const fn (*Com, *Com, u32, u32, u32, *Mapped) callconv(.winapi) HRESULT, Map)(context, b.buf.?, 0, map_write_discard, 0, &mapped), what) catch return;
+        @memcpy(mapped.data[0..len_bytes], std.mem.sliceAsBytes(items)[0..len_bytes]);
+        context.slot(*const fn (*Com, *Com, u32) callconv(.winapi) void, Unmap)(context, b.buf.?, 0);
+    }
+};
