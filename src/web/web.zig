@@ -9,6 +9,8 @@ const webgpu = @import("../ui/webgpu.zig");
 pub const Renderer = webgpu.Renderer;
 pub const Target = webgpu.Target;
 
+extern "nanoui_web" fn cpu_backend() bool;
+extern "nanoui_web" fn present_cpu(ptr: [*]const u8, width: u32, height: u32) void;
 pub extern "nanoui_web" fn request_frame() void;
 pub extern "nanoui_web" fn request_after(ms: f64) void;
 pub extern "nanoui_web" fn now_ms() f64;
@@ -39,7 +41,8 @@ pub const Surface = struct {
     ctx: ui.Context,
     text: text.TextSystem,
     view: ui.View,
-    renderer: webgpu.Renderer,
+    renderer: ?webgpu.Renderer,
+    pixels: std.ArrayList(u8) = .empty,
     instances: std.ArrayList(gpu.Instance) = .empty,
     size: ui.Size,
     scale: f32,
@@ -75,7 +78,7 @@ pub const Surface = struct {
         s.text.setScale(s.scale);
         s.dirty = false;
         s.ctx.frame_time = dt;
-        s.ctx.renderer = "WebGPU";
+        s.ctx.renderer = if (s.renderer != null) "WebGPU" else "Canvas 2D";
         const theme = s.ctx.theme_chosen orelse s.theme;
         const result = frames.run(&s.ctx, s.view, &s.text, &s.instances, s.size, s.scale, theme, dt, time - s.start_time);
         if (!std.meta.eql(theme, s.ctx.theme_chosen orelse s.theme)) s.dirty = true;
@@ -84,14 +87,18 @@ pub const Surface = struct {
             s.dirty = true;
         };
         const after_ms = now_ms() - after_start;
-        s.renderer.before_encode = s.before_encode;
-        s.renderer.gradients = s.ctx.gradients.items;
-        s.renderer.textures = s.ctx.textures.items;
-        s.renderer.sync(s.text.atlas.mask(), s.text.atlas.generation, s.text.images.pictures(), s.text.images.generation);
         const width: u32 = @intFromFloat(@round(s.size.w * s.scale));
         const height: u32 = @intFromFloat(@round(s.size.h * s.scale));
         const encode_start = now_ms();
-        s.renderer.drawCanvas(s.instances.items, s.size, s.scale, s.ctx.theme.background, width, height, time - s.start_time);
+        if (s.renderer) |*renderer| {
+            renderer.before_encode = s.before_encode;
+            renderer.gradients = s.ctx.gradients.items;
+            renderer.textures = s.ctx.textures.items;
+            renderer.sync(s.text.atlas.mask(), s.text.atlas.generation, s.text.images.pictures(), s.text.images.generation);
+            renderer.drawCanvas(s.instances.items, s.size, s.scale, s.ctx.theme.background, width, height, time - s.start_time);
+        } else {
+            s.drawCpu(width, height);
+        }
         if (s.frame_log) |*log| s.last_record = @intCast(log.append(.{
             .t = time,
             .kind = .input,
@@ -119,10 +126,44 @@ pub const Surface = struct {
         return more;
     }
 
+    fn drawCpu(s: *Surface, width: u32, height: u32) void {
+        const count = @as(u64, width) * height;
+        if (count == 0 or count > 4096 * 4096) return;
+        s.pixels.resize(s.gpa, @as(usize, @intCast(count)) * 4) catch return;
+        var pictures = s.text.images.pictures();
+        pictures.textures = s.ctx.textures.items;
+        pictures.gradients = s.ctx.gradients.items;
+        @import("../ui/raster.zig").draw(.{
+            .bytes = s.pixels.items,
+            .width = width,
+            .height = height,
+        }, s.instances.items, s.text.atlas.mask(), pictures, s.scale, s.ctx.theme.background);
+        // Canvas 2D takes RGBA; swapping here is far cheaper than in JS.
+        const px = s.pixels.items;
+        var i: usize = 0;
+        while (i < px.len) : (i += 4) {
+            std.mem.swap(u8, &px[i], &px[i + 2]);
+            px[i + 3] = 255;
+        }
+        present_cpu(s.pixels.items.ptr, width, height);
+    }
+
     pub fn setDevice(s: *Surface) !void {
-        s.renderer.deinit();
-        s.renderer = try .init();
+        const next = try webgpu.Renderer.init();
+        if (s.renderer) |*renderer| renderer.deinit();
+        s.renderer = next;
         s.text.images.invalidateAtlas();
+        s.lost = false;
+        s.requestFrame();
+    }
+
+    pub fn useCpu(s: *Surface) void {
+        s.text.images.sink = null;
+        if (s.renderer) |*renderer| renderer.deinit();
+        s.renderer = null;
+        s.text.images.invalidateAtlas();
+        s.ctx.retain.scroll_scene_ok = false;
+        s.last_time = 0;
         s.lost = false;
         s.requestFrame();
     }
@@ -130,7 +171,8 @@ pub const Surface = struct {
     pub fn deinit(s: *Surface) void {
         if (active == s) active = null;
         if (s.frame_log) |*log| log.deinit();
-        s.renderer.deinit();
+        if (s.renderer) |*renderer| renderer.deinit();
+        s.pixels.deinit(s.gpa);
         s.instances.deinit(s.gpa);
         s.ctx.deinit();
         s.text.deinit();
@@ -149,14 +191,14 @@ pub fn mount(view: ui.View, options: Options) !*Surface {
         .ctx = undefined,
         .text = .init(options.allocator),
         .view = view,
-        .renderer = try .init(),
+        .renderer = if (cpu_backend()) null else try webgpu.Renderer.init(),
         .size = .{ .w = options.width, .h = options.height },
         .scale = options.scale,
         .theme = options.theme,
         .start_time = now_ms() / 1000,
     };
     s.ctx = .init(s.gpa, &s.text);
-    s.text.images.sink = .{ .ctx = &s.renderer, .upload = webgpu.Renderer.uploadImage };
+    if (s.renderer) |*renderer| s.text.images.sink = .{ .ctx = renderer, .upload = webgpu.Renderer.uploadImage };
     s.ctx.waker = .{ .ctx = s, .wake = wake };
     active = s;
     s.requestFrame();

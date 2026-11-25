@@ -14,13 +14,16 @@ try{
         if(!navigator.gpu)return{webgpu:false};const adapter=await navigator.gpu.requestAdapter();
         return{webgpu:true,adapter:!!adapter};
       });
-      if(!support.adapter){console.log(name,JSON.stringify(support));continue;}
-      await page.goto(host.url+'/index.html');
-      await page.waitForFunction(()=>window.nanoui?.exports.nanoui_web_frames()>1,{},{timeout:15000});
-      await page.mouse.click(207,185);await page.waitForTimeout(600);
-      const result=await page.evaluate(async()=>{await window.nanoui.gpu.check();return{frames:window.nanoui.exports.nanoui_web_frames(),value:Number(window.nanoui.exports.counter_value())};});
+      await page.goto(host.url+'/counter.html');
+      await page.waitForFunction(()=>window.nanoui?.exports.nanoui_web_frames()>0, undefined, {timeout:15000});
+      await page.mouse.click(207,185);
+      await page.waitForFunction(()=>Number(window.nanoui.exports.counter_value())===1);
+      const result=await page.evaluate(async()=>{
+        await window.nanoui.gpu?.check();
+        return {frames:window.nanoui.exports.nanoui_web_frames(),renderer:window.nanoui.gpu ? "WebGPU" : "Canvas 2D"};
+      });
       console.log(name,JSON.stringify({...support,...result}));
-      if(result.value!==1)process.exitCode=1;
+      await page.evaluate(()=>window.nanoui.destroy());
       await checkGalleryKeyboard(await browser.newPage({viewport:{width:420,height:300}}), host.url);
       console.log(name, 'Gallery keyboard passed');
     }catch(error){console.log(name,JSON.stringify({error:error.message}));process.exitCode=1;}

@@ -12,6 +12,8 @@ function keyCode(name) {
   return Array.from(name).length === 1 ? name.codePointAt(0) : 0;
 }
 export function createHost(canvas, options = {}) {
+  let cpu = options.cpu;
+  let lastResize;
   let runtime, context, frame = null, timer = null, observer, media;
   let stopped = false, lost = false, paused = true, generation = 0, forceRecovery = false;
   const listeners = [];
@@ -39,10 +41,10 @@ export function createHost(canvas, options = {}) {
           else runtime.exports.nanoui_web_pointer(...event);
           if (event[0] !== 0 && !(event[0] === "key" && event[1] === 3)) break;
         }
-        const submitted = runtime.gpu.stats.frames;
+        const submitted = runtime.gpu?.stats.frames;
         const more=runtime.exports.nanoui_web_frame(time);
-        const sample=runtime.gpu.stats.samples.at(-1);
-        if(sample && runtime.gpu.stats.frames !== submitted)sample.log_index=runtime.exports.nanoui_web_last_record();
+        const sample=runtime.gpu?.stats.samples.at(-1);
+        if(sample && runtime.gpu?.stats.frames !== submitted)sample.log_index=runtime.exports.nanoui_web_last_record();
         if(more || inputEvents.length)request();
       }
     });
@@ -58,7 +60,23 @@ export function createHost(canvas, options = {}) {
       width = Math.round((rect?.width ?? canvas.width / scale) * scale);
       height = Math.round((rect?.height ?? canvas.height / scale) * scale);
     }
-    if (width < 1 || height < 1) return;
+    if (![width, height, scale].every(Number.isFinite) || width < 1 || height < 1 || scale <= 0) return;
+    lastResize = [width, height, scale];
+    // Phones report DPR 3; the CPU raster costs per pixel, so it renders at
+    // most at cpuMaxScale and the browser scales the canvas up.
+    const cpuMaxScale = options.cpuMaxScale ?? 2;
+    if (cpu && scale > cpuMaxScale) {
+      const ratio = cpuMaxScale / scale;
+      width = Math.max(1, Math.round(width * ratio));
+      height = Math.max(1, Math.round(height * ratio));
+      scale = cpuMaxScale;
+    }
+    if (cpu && width * height > 4096 * 4096) {
+      const ratio = Math.sqrt((4096 * 4096) / (width * height));
+      width = Math.max(1, Math.floor(width * ratio));
+      height = Math.max(1, Math.floor(height * ratio));
+      scale *= ratio;
+    }
     if (canvas.width !== width) canvas.width = width;
     if (canvas.height !== height) canvas.height = height;
     runtime.exports.nanoui_web_resize(width, height, scale);
@@ -99,6 +117,54 @@ export function createHost(canvas, options = {}) {
       alphaMode: "opaque", usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC | GPUTextureUsage.COPY_DST });
     runtime.gpu.setCanvas(context);
   }
+  function cancelFrame() {
+    if (frame !== null) { caf(frame); frame = null; }
+    if (timer !== null) { clearTimeout(timer); timer = null; }
+  }
+  function detachListeners() {
+    observer?.disconnect();
+    for (const off of listeners.splice(0)) off();
+  }
+  function useCpu(replacement) {
+    const nextContext = replacement.getContext("2d", { alpha: false });
+    if (!nextContext) return false;
+    const previous = canvas;
+    const restoreFocus = previous.ownerDocument?.activeElement === previous;
+    runtime.exports.nanoui_web_use_cpu();
+    const gpu = runtime.gpu;
+    const device = gpu.device;
+    context.unconfigure();
+    gpu.retire();
+    device.destroy();
+    runtime.gpu = null;
+    cpu = true;
+    lost = false;
+    detachListeners();
+    if (previous.ownerDocument) {
+      replacement.style.touchAction = previous.style.touchAction;
+      previous.replaceWith(replacement);
+    }
+    canvas = replacement;
+    context = nextContext;
+    host.listen();
+    if (restoreFocus) replacement.focus({ preventScroll: true });
+    request();
+    return true;
+  }
+  async function recoverOnCpu(operation, error) {
+    if (stopped || operation !== generation) return;
+    if (options.cpuFallback) {
+      // A canvas keeps its context type, so Canvas 2D needs a fresh element.
+      try {
+        const replacement = canvas.ownerDocument && canvas.parentNode && canvas.cloneNode(false);
+        if (stopped || operation !== generation) return;
+        if (replacement && replacement !== canvas && useCpu(replacement)) return;
+      } catch (fallbackError) {
+        error = fallbackError;
+      }
+    }
+    options.onError?.(error);
+  }
   function watchDevice() {
     const device = runtime.gpu.device;
     const current = ++generation;
@@ -106,35 +172,71 @@ export function createHost(canvas, options = {}) {
       if (stopped || current !== generation) return;
       lost = true;
       runtime.exports.nanoui_web_device_lost();
-      if (frame !== null) { caf(frame); frame = null; }
-      if (timer !== null) { clearTimeout(timer); timer = null; }
+      cancelFrame();
+      // A release can arrive while rendering is suspended.
+      runtime.exports.nanoui_web_cancel_input();
+      inputEvents.length = 0;
       const recover = info.reason !== "destroyed" || forceRecovery;
       forceRecovery = false;
       options.onDeviceLost?.(info);
-      if (options.ownsDevice && recover) {
-        try { await setDevice(await options.acquireDevice()); }
-        catch (error) { options.onError?.(error); }
+      if (options.ownsDevice && recover && !stopped && current === generation) {
+        let operation = current;
+        try {
+          const next = await options.acquireDevice();
+          if (stopped || current !== generation) {
+            next.destroy();
+            return;
+          }
+          operation = ++generation;
+          await replaceDevice(next, operation);
+        } catch (error) {
+          await recoverOnCpu(operation, error);
+        }
       }
     });
   }
-  async function setDevice(device) {
-    if (stopped) return;
+  async function replaceDevice(device, operation) {
     paused = true;
-    if (frame !== null) { caf(frame); frame = null; }
-    if (timer !== null) { clearTimeout(timer); timer = null; }
+    cancelFrame();
+    const previous = runtime.device;
     runtime.gpu.setDevice(device);
+    if (options.ownsDevice && previous !== device) previous.destroy();
     configure();
     if (runtime.exports.nanoui_web_device()) throw new Error("Could not recreate WebGPU renderer");
-    await runtime.gpu.ready();
+    await Promise.race([
+      runtime.gpu.ready(),
+      device.lost.then(info => { throw new Error(info.message || "Replacement WebGPU device was lost"); }),
+    ]);
+    if (stopped || operation !== generation) return;
     lost = false; paused = false;
     watchDevice();
     request();
   }
-  return {
+  async function setDevice(device) {
+    if (stopped) return;
+    if (cpu) throw new Error("The canvas is using its CPU renderer");
+    await replaceDevice(device, ++generation);
+  }
+  const host = {
+    get canvas() { return canvas; },
     stats, unwind, requestFrame: request, resize, pointer, wheel, pinch, key, setDevice,
-    imports: { request_frame: request, request_after: after, now_ms: () => performance.now(), run_forever() { throw unwind; } },
+    imports: {
+      cpu_backend: () => Number(cpu),
+      present_cpu(ptr, width, height) {
+        if (!context || stopped) return;
+        // Zig wrote opaque RGBA; ImageData can view WASM memory directly.
+        const pixels = new Uint8ClampedArray(runtime.exports.memory.buffer, ptr, width * height * 4);
+        context.putImageData(new ImageData(pixels, width, height), 0, 0);
+      },
+      request_frame: request, request_after: after, now_ms: () => performance.now(), run_forever() { throw unwind; },
+    },
     attach(value) {
       runtime = value;
+      if (cpu) {
+        context = canvas.getContext("2d", { alpha: false });
+        if (!context) throw new Error("Canvas 2D context is unavailable");
+        return;
+      }
       context = canvas.getContext("webgpu");
       if (!context) throw new Error("Canvas WebGPU context is unavailable");
       configure();
@@ -145,7 +247,7 @@ export function createHost(canvas, options = {}) {
     },
     listen() {
       paused = false;
-      resize(options.width, options.height, options.scale);
+      resize(...(lastResize ?? [options.width, options.height, options.scale]));
       if (canvas.getBoundingClientRect) {
         if (options.keyboard) {
           const forwarded = new Map();
@@ -153,7 +255,7 @@ export function createHost(canvas, options = {}) {
           const altGraph = e => !!e.getModifierState?.("AltGraph");
           const mods = e => Number(e.shiftKey) | (Number(e.ctrlKey && !altGraph(e)) << 1) |
             (Number(e.altKey && !altGraph(e)) << 2) | (Number(e.metaKey) << 3) | (Number(e.repeat) << 4);
-          on(canvas, "keydown", e => {
+          const down = e => {
             if (e.defaultPrevented || e.isComposing || !options.keyboard(e)) return;
             const code = keyCode(e.key);
             if (!code) return;
@@ -161,14 +263,16 @@ export function createHost(canvas, options = {}) {
             forwarded.set(e.code, code);
             key(0, code, mods(e), typed);
             e.preventDefault();
-          });
-          on(canvas, "keyup", e => {
+          };
+          const up = e => {
             const code = forwarded.get(e.code);
             if (code === undefined) return;
             forwarded.delete(e.code);
             key(1, code, mods(e));
             e.preventDefault();
-          });
+          };
+          on(canvas, "keydown", down);
+          on(canvas, "keyup", up);
           on(canvas, "blur", () => {
             forwarded.clear();
             key(2, 0, 0);
@@ -264,16 +368,15 @@ export function createHost(canvas, options = {}) {
       if (stopped) return;
       stopped = true; generation++;
       inputEvents.length=0;
-      if (frame !== null) caf(frame);
-      if (timer !== null) clearTimeout(timer);
-      observer?.disconnect();
-      for (const off of listeners) off();
+      cancelFrame();
+      detachListeners();
       runtime?.exports.nanoui_web_destroy();
-      context?.unconfigure();
-      runtime?.gpu.dispose();
-      if(options.ownsDevice)runtime?.device.destroy();
+      context?.unconfigure?.();
+      runtime?.gpu?.dispose();
+      if (options.ownsDevice) runtime?.device?.destroy();
     },
   };
+  return host;
 }
 
 

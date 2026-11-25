@@ -24,10 +24,10 @@ node tools/web/browser.mjs
 node tools/web/serve.mjs
 ```
 
-Open the printed loopback URL with `/index.html` (counter) or
-`/index.html?app=gallery`. There is no CPU presentation fallback. The tests
-fail on missing WebGPU, any shader diagnostic or validation error. Linux CI
-uses pinned Playwright 1.63.0 with SwiftShader and the same checks.
+Open the printed loopback URL with `/counter.html` or `/gallery.html`.
+The default shell uses Canvas 2D when it cannot acquire a WebGPU device.
+The GPU parity checks still require WebGPU and fail on shader diagnostics or
+validation errors. Linux CI uses pinned Playwright 1.63.0 with SwiftShader.
 
 `NANOUI_GPU=hardware node tools/web/parity.mjs` selects ANGLE Metal on this
 Mac and adds H.264/HEVC decode tests. `NANOUI_ENGINE=webkit` selects WebKit.
@@ -93,5 +93,21 @@ Apps still need IME, clipboard, dialogs, filesystem, semantic accessibility,
 multi-window and a complete
 App/Window platform remain separate work. Opaque desktop handle types let
 shared app state compile without creating desktop windows in the browser.
+
+`start({ ..., cpuFallback: true })` uses the Zig CPU rasterizer if adapter or
+device acquisition fails. If a host-owned WebGPU device is lost, the host
+tries to recover WebGPU first. If recovery fails, an attached DOM canvas is
+replaced in place and the mounted Zig view keeps its state and focus. Use
+`runtime.canvas` to find the current element. Event listeners installed
+directly by an embedder need to be attached to the replacement.
+Externally owned devices use the app's device recovery path.
+`cpu: true` forces Canvas 2D on startup.
+The Canvas 2D path renders at most at `cpuMaxScale` (2 by default), so a
+DPR 3 phone rasterizes 2.25 times fewer pixels and the browser scales the
+canvas up. It also caps the buffer at 4096 × 4096 pixels by reducing backing
+scale. Zig writes RGBA, and the host presents it through an `ImageData` view
+of WASM memory. GPU textures, custom GPU encoding and GPU timing
+require WebGPU. A canvas inside a Worker has no element to replace, so
+`cpuFallback` there only applies at startup.
 
 See [MEASUREMENTS.md](MEASUREMENTS.md) for verification scope.

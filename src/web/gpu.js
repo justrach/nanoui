@@ -35,11 +35,12 @@ export function createGPU({ device, memory, done, format = "bgra8unorm", generat
   const transient = value => { const h = objects.put(value); frame.push(h); return h; };
   const bytes = (ptr, len) => new Uint8Array(memory().buffer, ptr, len);
   const words = (ptr, len) => new Uint32Array(memory().buffer, ptr, len);
-  device.addEventListener("uncapturederror", event => diagnostics.push(event.error.message));
+  const onError = event => diagnostics.push(event.error.message);
+  device.addEventListener("uncapturederror", onError);
 
   const imports = {
     device: () => deviceHandle,
-    device_generation: () => generation,
+    device_generation: () => deviceHandle ? generation : 0,
     preferred_format: () => formats.indexOf(format),
     canvas_texture: () => transient(canvasContext.getCurrentTexture()),
     canvas_view: h => transient(get(h).createView()),
@@ -86,7 +87,7 @@ export function createGPU({ device, memory, done, format = "bgra8unorm", generat
       compilations.push(shader.getCompilationInfo().then(info => {
         if (shaderGeneration !== generation) return;
         for (const m of info.messages) diagnostics.push(`${m.type} ${m.lineNum}:${m.linePos}: ${m.message}`);
-      }));
+      }, error => { if (shaderGeneration === generation) diagnostics.push(error.message); }));
       return objects.put(shader);
     },
     layout_create(ptr, count) {
@@ -152,6 +153,7 @@ export function createGPU({ device, memory, done, format = "bgra8unorm", generat
       finally { externalSources.submitted(); for (const h of frame) objects.drop(h); frame.length = 0; }
     },
     read_begin(tex, width, height, f, dest, token) {
+      const readGeneration = generation;
       (async () => {
         const pitch = Math.ceil(width * 4 / 256) * 256;
         const buffer = device.createBuffer({ size: pitch * height, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
@@ -167,7 +169,7 @@ export function createGPU({ device, memory, done, format = "bgra8unorm", generat
           buffer.unmap();
         } finally { buffer.destroy(); }
       })().then(() => done(token, 0), error => {
-        diagnostics.push(`Readback: ${error.message}`);
+        if (readGeneration === generation) diagnostics.push(`Readback: ${error.message}`);
         done(token, 1);
       });
     },
@@ -179,18 +181,32 @@ export function createGPU({ device, memory, done, format = "bgra8unorm", generat
     get stats() { return timing.stats; },
     onTiming(callback) { onTiming=callback; },
     async ready() { await Promise.all([...compilations,...pipelineJobs]); if(diagnostics.length)throw Error(diagnostics.join("\n")); },
-    dispose() { timing.destroy(); externalSources.destroy(); },
+    dispose() {
+      device?.removeEventListener("uncapturederror", onError);
+      timing.destroy();
+      externalSources.destroy();
+    },
+    retire() {
+      this.dispose();
+      device = canvasContext = undefined;
+      deviceHandle = 0;
+      generation++;
+      values.length = generations.length = serials.length = immutable.length = 1;
+      free.length = frame.length = 0;
+      compilations.length = pipelineJobs.length = 0;
+    },
     forceExternalCopy(on) { copyExternal = on; },
     setCanvas(context) { canvasContext = context; },
     setDevice(next) {
-      externalSources.destroy();
-      timing.destroy(); timing=createTiming(next,sample=>onTiming(sample));
+      this.dispose();
+      timing=createTiming(next,sample=>onTiming(sample));
       objects.drop(deviceHandle);
       device = next;
       generation++;
       diagnostics.length=0;
+      compilations.length = pipelineJobs.length = 0;
       deviceHandle = objects.put(next);
-      next.addEventListener("uncapturederror", event => diagnostics.push(event.error.message));
+      next.addEventListener("uncapturederror", onError);
     },
     async check() {
       await this.ready();
