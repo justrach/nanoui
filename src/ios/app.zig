@@ -199,6 +199,12 @@ pub const App = struct {
         return true;
     }
 
+    /// Main thread only: calls `func(ctx)` once the current event is done,
+    /// outside GCD's main queue. Where to open dialogs a view asked for.
+    pub fn soon(ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) void {
+        @import("../cf_soon.zig").soon(ctx, func);
+    }
+
     /// Files the system opens with the app: not taken on iOS yet.
     pub fn onOpenFiles(_: *App, _: *anyopaque, _: *const fn (ctx: *anyopaque, paths: []const []const u8) void) void {}
 

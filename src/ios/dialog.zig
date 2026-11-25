@@ -5,7 +5,10 @@
 //! opened in place); saving asks for a name in an alert and answers a path
 //! in the app's Documents, which the app then writes. A dialog waits for
 //! a window still coming or going; one UIKit won't show answers as if
-//! closed: canceled, or a message's last button.
+//! closed: canceled, or a message's last button. Call them from `App.soon`:
+//! inside a GCD main-queue block (`App.onMain`) UIKit never attaches the
+//! document picker, so it would answer canceled. `App.soon` exists only on
+//! macOS and iOS, so cross-platform code calls it behind a comptime branch.
 const std = @import("std");
 const objc = @import("../objc.zig");
 const cf = @import("../ui/cf.zig");
@@ -54,6 +57,38 @@ const Button = struct {
 
 const ButtonBlock = objc.Block(Button, &.{objc.Object});
 
+/// An alert's wait and buttons, which its button blocks point to. On the
+/// heap: an alert abandoned before it attached (`Shown.abandoned`) keeps
+/// them, so pressing a button after a late attach writes into live memory.
+const AlertState = struct {
+    wait: Wait = .{},
+    buttons: [8]Button = undefined,
+
+    fn create() ?*AlertState {
+        const st = std.heap.c_allocator.create(AlertState) catch return null;
+        st.* = .{};
+        return st;
+    }
+
+    /// Frees the state unless the alert was abandoned: its blocks may
+    /// still run.
+    fn finish(st: *AlertState, shown: Shown) void {
+        if (shown != .abandoned) std.heap.c_allocator.destroy(st);
+    }
+};
+
+/// What `present` did with a controller.
+const Shown = enum {
+    /// Answered: the wait is done.
+    answered,
+    /// Not shown, or its scene went: no answer will come.
+    unanswered,
+    /// Presented but never attached within the limit, then withdrawn. UIKit
+    /// may still attach it later, so whatever its callbacks reach must stay
+    /// valid.
+    abandoned,
+};
+
 fn presenter() ?objc.Object {
     const app = App.shared() orelse return null;
     return app.topController();
@@ -73,25 +108,43 @@ fn addButton(a: objc.Object, title: []const u8, style: objc.NSInteger, b: *Butto
     objc.msg(void, a, "addAction:", .{action});
 }
 
-/// Shows `a` and waits for its answer; false if UIKit wouldn't show it.
-fn present(a: objc.Object, w: *Wait) bool {
+/// Shows `a` and waits for its answer.
+fn present(a: objc.Object, w: *Wait) Shown {
     // UIKit queues a presentation asked for during a transition: let it
     // end first. Not shown at all rather than queued for after this call,
     // its answer written into a wait gone by then.
-    var top = presenter() orelse return false;
+    var top = presenter() orelse return .unanswered;
     const until = cf.CACurrentMediaTime() + 2;
     while (App.moving(top)) {
-        if (cf.CACurrentMediaTime() > until) return false;
+        if (cf.CACurrentMediaTime() > until) return .unanswered;
         _ = CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, true);
-        top = presenter() orelse return false;
+        top = presenter() orelse return .unanswered;
     }
     objc.msg(void, top, "presentViewController:animated:completion:", .{ a, objc.YES, @as(?*anyopaque, null) });
-    // Refused: no answer would ever come.
-    if (objc.msg(?objc.Object, a, "presentingViewController", .{}) == null) return false;
+    // A remote view controller such as the document picker attaches after
+    // this call returns (about 1-2 s in the iOS 26 simulator). Inside a GCD
+    // main-queue block it never does, so open dialogs from `App.soon`.
+    // Refused only if nothing attaches: no answer would ever come.
+    const attach_by = cf.CACurrentMediaTime() + 10;
+    while (!w.done and objc.msg(?objc.Object, a, "presentingViewController", .{}) == null) {
+        if (cf.CACurrentMediaTime() > attach_by) {
+            // Withdraw the pending presentation so it doesn't appear later
+            // with nobody waiting. Should UIKit attach it anyway, its
+            // callbacks must not reach this caller's stack: the caller
+            // keeps their targets alive (`AlertState`, the picker delegate
+            // cleared).
+            // Only if `top` holds it: with nothing presented, UIKit would
+            // dismiss `top` itself.
+            if (objc.msg(?objc.Object, top, "presentedViewController", .{}) == a)
+                objc.msg(void, top, "dismissViewControllerAnimated:completion:", .{ objc.NO, @as(?*anyopaque, null) });
+            return .abandoned;
+        }
+        _ = CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, true);
+    }
     const answered = w.run();
     // Windows shown or closed meanwhile waited for it (`App.arrange`).
     if (App.shared()) |app| app.scheduleArrange();
-    return answered;
+    return if (answered) .answered else .unanswered;
 }
 
 /// A message with buttons; the answer is the button pressed. An alert has
@@ -99,20 +152,21 @@ fn present(a: objc.Object, w: *Wait) bool {
 pub fn message(opts: MessageOptions) MessageResult {
     const pool = objc.Pool.push();
     defer pool.pop();
-    var w: Wait = .{};
-    const a = alert(opts.title, opts.detail);
     const labels: []const []const u8 = if (opts.buttons.len > 0) opts.buttons else &.{"OK"};
-    var buttons: [8]Button = undefined;
-    const n = @min(labels.len, buttons.len);
+    const st = AlertState.create() orelse return .{ .button = @min(labels.len, 8) - 1 };
+    const a = alert(opts.title, opts.detail);
+    const n = @min(labels.len, st.buttons.len);
     for (labels[0..n], 0..) |label, i| {
-        buttons[i] = .{ .wait = &w, .index = i };
+        st.buttons[i] = .{ .wait = &st.wait, .index = i };
         // A critical message's first button is the destructive one.
         const style: objc.NSInteger = if (i == 0 and opts.kind == .critical) 2 else 0;
-        addButton(a, label, style, &buttons[i]);
+        addButton(a, label, style, &st.buttons[i]);
     }
+    const shown = present(a, &st.wait);
+    defer st.finish(shown);
     // Not shown: as a dialog closed without a choice (Linux's answer).
-    if (!present(a, &w)) return .{ .button = n - 1 };
-    return .{ .button = w.button };
+    if (shown != .answered) return .{ .button = n - 1 };
+    return .{ .button = st.wait.button };
 }
 
 /// The paths the user chose, or null if they canceled. Free with
@@ -149,9 +203,10 @@ pub fn open(gpa: std.mem.Allocator, opts: OpenOptions) !?[][]u8 {
     defer objc.release(delegate);
     objc.setZig(delegate, &w);
     objc.msg(void, picker, "setDelegate:", .{delegate});
-    const answered = present(picker, &w);
+    const shown = present(picker, &w);
+    // Its callbacks find no wait from now on, even if it attaches late.
     objc.setZig(delegate, null);
-    if (!answered) return null;
+    if (shown != .answered) return null;
     const urls = w.urls orelse return null;
     defer objc.release(urls);
     const n = objc.msg(objc.NSUInteger, urls, "count", .{});
@@ -184,16 +239,20 @@ fn pickCanceled(obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void
 pub fn save(gpa: std.mem.Allocator, opts: SaveOptions) !?[]u8 {
     const pool = objc.Pool.push();
     defer pool.pop();
-    var w: Wait = .{};
+    const st = AlertState.create() orelse return null;
     const a = alert(if (opts.title.len > 0) opts.title else "Save", opts.message);
     objc.msg(void, a, "addTextFieldWithConfigurationHandler:", .{@as(?*anyopaque, null)});
     const fields = objc.msg(objc.Object, a, "textFields", .{});
     const field = objc.msg(objc.Object, fields, "firstObject", .{});
     objc.msg(void, field, "setText:", .{objc.nsString(opts.name)});
-    var buttons: [2]Button = .{ .{ .wait = &w, .index = 0 }, .{ .wait = &w, .index = 1 } };
-    addButton(a, "Cancel", 1, &buttons[0]);
-    addButton(a, if (opts.button.len > 0) opts.button else "Save", 0, &buttons[1]);
-    if (!present(a, &w) or w.button != 1) return null;
+    st.buttons[0] = .{ .wait = &st.wait, .index = 0 };
+    st.buttons[1] = .{ .wait = &st.wait, .index = 1 };
+    addButton(a, "Cancel", 1, &st.buttons[0]);
+    addButton(a, if (opts.button.len > 0) opts.button else "Save", 0, &st.buttons[1]);
+    const shown = present(a, &st.wait);
+    const pressed = st.wait.button;
+    st.finish(shown);
+    if (shown != .answered or pressed != 1) return null;
     const name = std.mem.trim(u8, objc.fromNSString(objc.msg(?objc.Object, field, "text", .{})), " ");
     if (name.len == 0 or std.mem.indexOfScalar(u8, name, '/') != null) return null;
     const dir = if (opts.directory.len > 0) try gpa.dupe(u8, opts.directory) else try @import("desktop.zig").path(gpa, .documents, "");
