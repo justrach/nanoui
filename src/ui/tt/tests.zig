@@ -128,8 +128,11 @@ test "font index hits without scanning and directory changes rebuild it" {
     // Outside the indexed folder and below cache, never backed-up app data.
     const cache_dir = try std.fs.path.join(gpa, &.{ root, "cache" });
     defer gpa.free(cache_dir);
-    const cache_path = try std.fs.path.join(gpa, &.{ cache_dir, "font-index-v2.bin" });
+    const cache_path = try std.fs.path.join(gpa, &.{ cache_dir, fontdb.index_file });
     defer gpa.free(cache_path);
+    // An index an older reader left behind.
+    try tmp.dir.createDir(std.testing.io, "cache", .default_dir);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "cache/" ++ fontdb.retired_index_files[1], .data = "old" });
 
     var faces: usize = 0;
     {
@@ -140,6 +143,7 @@ test "font index hits without scanning and directory changes rebuild it" {
         try std.testing.expectEqualStrings(cache_path, db.cache_path.?);
         db.scan();
         try std.testing.expectEqual(@import("fontindex.zig").State.written, db.cache.state);
+        try std.testing.expectError(error.FileNotFound, tmp.dir.statFile(std.testing.io, "cache/" ++ fontdb.retired_index_files[1], .{}));
         try std.testing.expect(db.scan_files > 0 and db.scan_directories > 0);
         faces = db.faces.items.len;
         try std.testing.expect(faces > 0);
@@ -271,7 +275,7 @@ test "an unsupported cmap does not invalidate other warm font faces" {
     defer gpa.free(fonts_dir);
     const cache_dir = try std.fs.path.join(gpa, &.{ root, "cache" });
     defer gpa.free(cache_dir);
-    const cache_path = try std.fs.path.join(gpa, &.{ cache_dir, "font-index-v2.bin" });
+    const cache_path = try std.fs.path.join(gpa, &.{ cache_dir, fontdb.index_file });
     defer gpa.free(cache_path);
 
     for (0..3) |run| {
@@ -313,7 +317,7 @@ test "a font folder that isn't there leaves the font index written and then hit"
     // As a per-user font folder is until the user installs a font.
     const missing = try std.fs.path.join(gpa, &.{ root, "no-fonts-yet" });
     defer gpa.free(missing);
-    const cache_path = try std.fs.path.join(gpa, &.{ root, "font-index-v2.bin" });
+    const cache_path = try std.fs.path.join(gpa, &.{ root, fontdb.index_file });
     defer gpa.free(cache_path);
     for ([_]@import("fontindex.zig").State{ .written, .hit }) |expected| {
         var db = fontdb.Db.init(gpa, std.testing.io);
@@ -495,7 +499,7 @@ test "an unreadable font during a cold scan does not stay missing after access i
     defer gpa.free(fonts_dir);
     const cache_dir = try std.fs.path.join(gpa, &.{ root, "cache" });
     defer gpa.free(cache_dir);
-    const cache_path = try std.fs.path.join(gpa, &.{ cache_dir, "font-index-v2.bin" });
+    const cache_path = try std.fs.path.join(gpa, &.{ cache_dir, fontdb.index_file });
     defer gpa.free(cache_path);
     const blocked = try std.fs.path.join(gpa, &.{ fonts_dir, "b.ttf" });
     defer gpa.free(blocked);
@@ -538,7 +542,7 @@ test "a second scan preserves the disk face start and failed loads still invalid
     defer gpa.free(fonts_dir);
     const cache_dir = try std.fs.path.join(gpa, &.{ root, "cache" });
     defer gpa.free(cache_dir);
-    const cache_path = try std.fs.path.join(gpa, &.{ cache_dir, "font-index-v2.bin" });
+    const cache_path = try std.fs.path.join(gpa, &.{ cache_dir, fontdb.index_file });
     defer gpa.free(cache_path);
 
     var db = fontdb.Db.init(gpa, std.testing.io);

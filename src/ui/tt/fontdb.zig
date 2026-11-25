@@ -34,6 +34,13 @@ const Loaded = struct {
 };
 
 const android = builtin.abi.isAndroid();
+/// The persistent index's name. Bump it whenever face discovery changes, so
+/// an index written by an older reader, missing faces it skipped, is rebuilt
+/// even though no font file changed.
+pub const index_file = "font-index-v3.bin";
+/// Names earlier readers wrote. Nothing reads them again, so writing the
+/// current index removes them from the same cache directory.
+pub const retired_index_files = [_][]const u8{ "font-index-v1.bin", "font-index-v2.bin" };
 /// Families tried when the theme names none (or one not installed):
 /// Android's own first there.
 const sans = (if (android) [_][]const u8{"Roboto"} else [_][]const u8{}) ++ [_][]const u8{ "Inter", "Geist", "Segoe UI", "Noto Sans", "Cantarell", "Ubuntu", "DejaVu Sans", "Liberation Sans", "Arial", "Helvetica" };
@@ -41,7 +48,9 @@ const monos = (if (android) [_][]const u8{ "Droid Sans Mono", "Cutive Mono" } el
 /// Families a CJK string needs when the UI family has no glyph for it:
 /// Windows, macOS and Linux each name theirs. Kept ahead of the symbol
 /// fallbacks so a hanzi never lands in a partial-coverage font.
-const cjk = [_][]const u8{ "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", "SimSun", "MS Gothic" };
+/// Android ships Noto Sans CJK only with CFF2 outlines, which are not read,
+/// so its Noto Serif CJK is the last resort there.
+const cjk = [_][]const u8{ "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", "SimSun", "MS Gothic", "Noto Serif CJK SC", "Noto Serif CJK JP" };
 /// Where characters a font lacks are looked for first.
 const fallbacks = cjk ++ [_][]const u8{ "Noto Sans", "DejaVu Sans", "Segoe UI Symbol", "Noto Sans Symbols", "Noto Sans Symbols2", "Arial Unicode MS", "Symbola" };
 
@@ -102,7 +111,7 @@ pub const Db = struct {
     /// Enables the cross-process index below the app's own cache directory.
     pub fn enableCache(db: *Db, cache_dir: []const u8) void {
         if (db.owned_cache_path != null) return;
-        const path = std.fs.path.join(db.gpa, &.{ cache_dir, "font-index-v2.bin" }) catch return;
+        const path = std.fs.path.join(db.gpa, &.{ cache_dir, index_file }) catch return;
         db.owned_cache_path = path;
         db.cache_path = path;
     }
@@ -230,6 +239,18 @@ pub const Db = struct {
         db.cache.faces = faces.len;
         db.cache.directories = db.cache_dirs.items.len;
         db.cache.bytes = written;
+        db.retireIndexes(path);
+    }
+
+    /// Only below the cache directory `enableCache` names, which nanoui owns.
+    fn retireIndexes(db: *Db, path: []const u8) void {
+        if (db.owned_cache_path == null) return;
+        const dir = std.fs.path.dirname(path) orelse return;
+        for (retired_index_files) |name| {
+            const old = std.fs.path.join(db.gpa, &.{ dir, name }) catch return;
+            defer db.gpa.free(old);
+            std.Io.Dir.cwd().deleteFile(db.io, old) catch {};
+        }
     }
 
     fn scanFonts(db: *Db) void {
@@ -362,6 +383,17 @@ pub const Db = struct {
             header_len = wide;
         }
         for (0..font.faces(data)) |i| {
+            // A collection can keep a face's table directory far past the
+            // first window (Noto CJK puts faces 1-4 about 24 MB in).
+            if (is_ttc and 16 + 4 * i <= header_len) {
+                const dir: usize = std.mem.readInt(u32, data[12 + 4 * i ..][0..4], .big);
+                if (dir + 12 > header_len and dir + 12 <= len) {
+                    _ = file.readPositionalAll(db.io, data[dir..][0..12], dir) catch continue;
+                    const tables: usize = std.mem.readInt(u16, data[dir + 4 ..][0..2], .big);
+                    const end = @min(len, dir + 12 + 16 * tables);
+                    _ = file.readPositionalAll(db.io, data[dir + 12 .. end], dir + 12) catch continue;
+                }
+            }
             const t = font.Tables.read(data, i) catch continue;
             inline for (.{ "head", "os2", "name" }) |name| {
                 const off = @field(t, name);
