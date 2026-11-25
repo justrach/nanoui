@@ -1,5 +1,5 @@
-//! Dialogs on Windows: message boxes and the common file dialogs, modal
-//! on the main thread. Opening is the Common Item Dialog (`IFileOpenDialog`),
+//! Dialogs on Windows: message boxes (task dialogs, `task_dialog.zig`) and
+//! the common file dialogs, modal on the main thread. Opening is the Common Item Dialog (`IFileOpenDialog`),
 //! which picks folders and several items as well as one file, called through
 //! its vtables by slot in the order `shobjidl_core.h` declares them; the
 //! main thread's COM apartment is the app's (`app.zig`).
@@ -7,6 +7,7 @@ const std = @import("std");
 const w = @import("win32.zig");
 const dialog_types = @import("../dialog_types.zig");
 const webview2 = @import("webview2.zig");
+const task_dialog = @import("task_dialog.zig");
 const Com = webview2.Com;
 
 pub const OpenOptions = dialog_types.OpenOptions;
@@ -197,28 +198,79 @@ pub fn save(gpa: std.mem.Allocator, opts: SaveOptions) !?[]u8 {
     return try std.unicode.utf16LeToUtf8Alloc(gpa, std.mem.sliceTo(&file, 0));
 }
 
-/// A message box: OK, OK/Cancel or Yes/No/Cancel for one to three buttons
-/// (the labels are the system's).
+/// A message box with the caller's buttons, the first the default, and its
+/// checkbox: a task dialog (`task_dialog.zig`), modal to the active window.
+/// Esc and the close box answer the button labeled "Cancel", else the only
+/// one; with neither they do nothing.
 pub fn message(opts: MessageOptions) MessageResult {
+    return task_dialog.message(opts) orelse messageBox(opts);
+}
+
+/// The system's message box, where there are no task dialogs: its own
+/// labels (`boxFor`), at most three buttons, and no checkbox.
+fn messageBox(opts: MessageOptions) MessageResult {
     var text: [2048]u16 = undefined;
     var buf: [1024]u8 = undefined;
+    var title: [256]u16 = undefined;
     const body = if (opts.detail.len > 0) std.fmt.bufPrint(&buf, "{s}\n\n{s}", .{ opts.title, opts.detail }) catch opts.title else opts.title;
     const icon: u32 = switch (opts.kind) {
         .info => 0x40,
         .warning => 0x30,
         .critical => 0x10,
     };
-    const n = opts.buttons.len;
-    const kind: u32 = if (n >= 3) 3 else if (n == 2) 1 else 0;
-    const r = w.MessageBoxW(null, w.wide(&text, body), std.unicode.utf8ToUtf16LeStringLiteral("nanoui"), kind | icon);
-    // IDOK 1, IDCANCEL 2, IDYES 6, IDNO 7.
-    const button: usize = switch (r) {
-        1, 6 => 0,
-        7 => 1,
-        2 => if (n >= 3) 2 else 1,
-        else => 0,
-    };
-    return .{ .button = button };
+    const parent = w.GetActiveWindow();
+    const box = boxFor(opts.buttons);
+    return .{ .button = box.answer(w.MessageBoxW(parent, w.wide(&text, body), task_dialog.caption(parent, &title), box.style | icon)) };
+}
+
+/// The system's message box standing in for a message's labels: which of
+/// its buttons answers which label, the first label still the default.
+pub const Box = struct {
+    style: u32,
+    /// The labels its first, second and third buttons answer.
+    labels: [3]usize = .{ 0, 1, 2 },
+    /// The label Esc and the close box answer; null where they do nothing.
+    cancel: ?usize = null,
+
+    /// The label the box's answer stands for: IDOK 1, IDCANCEL 2,
+    /// IDABORT 3, IDRETRY 4, IDIGNORE 5, IDYES 6, IDNO 7.
+    pub fn answer(box: Box, r: i32) usize {
+        return switch (r) {
+            7, 4 => box.labels[1],
+            5 => box.labels[2],
+            2 => box.cancel orelse box.labels[0],
+            else => box.labels[0],
+        };
+    }
+};
+
+/// As in the task dialog: a label "Cancel" is the box's Cancel, which Esc
+/// and the close box answer; without one they do nothing (Yes/No,
+/// Abort/Retry/Ignore). Only the first three labels are offered.
+pub fn boxFor(labels: []const []const u8) Box {
+    const mb_okcancel = 1;
+    const mb_abortretryignore = 2;
+    const mb_yesnocancel = 3;
+    const mb_yesno = 4;
+    const mb_defbutton2 = 0x100;
+    const mb_defbutton3 = 0x200;
+    const offered = labels[0..@min(labels.len, 3)];
+    if (offered.len <= 1) return .{ .style = 0, .cancel = 0 };
+    const cancel = task_dialog.cancelIndex(offered) orelse
+        return .{ .style = if (offered.len == 2) mb_yesno else mb_abortretryignore };
+    // Cancel last, the others in order before it; the first label keeps
+    // the default wherever its button is.
+    var box: Box = .{ .style = 0, .cancel = cancel };
+    var n: usize = 0;
+    for (0..offered.len) |i| {
+        if (i == cancel) continue;
+        box.labels[n] = i;
+        n += 1;
+    }
+    box.labels[n] = cancel;
+    const defbutton: u32 = if (cancel != 0) 0 else if (n == 1) mb_defbutton2 else mb_defbutton3;
+    box.style = (if (offered.len == 2) @as(u32, mb_okcancel) else mb_yesnocancel) | defbutton;
+    return box;
 }
 
 test "the file type list: named groups, else the extensions" {
