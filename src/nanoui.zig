@@ -11,10 +11,10 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-// Zig 0.17.0's std can't build for iOS as it ships (`tools/ios/zig-lib.sh`).
+// Zig 0.17.0 and 0.17.1's std can't build for iOS as they ship (`tools/ios/zig-lib.sh`).
 comptime {
     if (builtin.os.tag == .ios and std.process.can_replace) @compileError(
-        \\Zig 0.17.0's std can't build programs for iOS (std.process.can_replace).
+        \\Zig 0.17.0 and 0.17.1's std can't build programs for iOS (std.process.can_replace).
         \\Build with the fixed copy tools/ios/zig-lib.sh makes:
         \\  zig build $(sh tools/ios/zig-lib.sh) -Dtarget=aarch64-ios-simulator
     );
