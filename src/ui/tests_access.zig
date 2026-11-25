@@ -355,3 +355,174 @@ test "rows of a list that is not published name no container, or the one around 
     }
     try testing.expectEqual(@as(u32, 2), seen);
 }
+
+const Results = struct {
+    query: ui.TextBuffer = .{},
+    window: bool = false,
+    hide_box: bool = false,
+    disabled_pick: bool = false,
+    fn view(p: *Results, c: *ui.Context) void {
+        ui.column(c, .{ .width = .fill, .height = .fill, .gap = 4, .padding = .all(8) });
+        defer ui.end(c);
+        _ = ui.textField(c, &p.query, .{ .placeholder = "Find", .width = .fill });
+        const field = c.focus;
+        const list = ui.div(c).column().wFull();
+        if (p.hide_box) access.hide(c, list.index);
+        access.describe(c, list.index, .{ .role = .listbox, .label = "Results" });
+        access.controls(c, field, c.node(list.index).id);
+        ui.text(c, "Recent", .{});
+        const labels = [_][]const u8{ "Alpha", "Beta", "Gamma" };
+        for (labels, 0..) |l, k| {
+            const row = ui.div(c).row().p(4).control();
+            access.describe(c, row.index, .{
+                .role = .option,
+                .label = l,
+                .selected = k == 1,
+                .enabled = !(p.disabled_pick and k == 1),
+                .position = if (p.window) @intCast(k + 11) else 0,
+                .set_size = if (p.window) 40 else 0,
+            });
+            ui.text(c, l, .{});
+            row.end();
+        }
+        list.end();
+        const legacy = ui.div(c).row().p(4).control();
+        c.addA11y(legacy.index, .row, "Legacy", "", true, true);
+        ui.text(c, "Legacy", .{});
+        legacy.end();
+    }
+};
+
+fn find(els: []const access.Element, label: []const u8) access.Element {
+    for (els) |e| if (std.mem.eql(u8, e.label, label)) return e;
+    unreachable;
+}
+
+test "a listbox publishes its options with their place, and a field its active option" {
+    var p: Results = .{};
+    defer p.query.deinit();
+    p.query.focus();
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&p, Results.view), .{});
+    defer t.deinit();
+    t.frame();
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const els = try elements(&t, arena.allocator());
+    const box = find(els, "Results");
+    try testing.expectEqual(access.Role.listbox, box.role);
+    try testing.expectEqual(@as(u64, 0), box.container);
+    // The heading inside it is its child too, but not an option.
+    const recent = find(els, "Recent");
+    try testing.expectEqual(box.id, recent.container);
+    try testing.expectEqual(@as(u32, 0), recent.position);
+    const beta = find(els, "Beta");
+    try testing.expectEqual(box.id, beta.container);
+    try testing.expectEqual(@as(u32, 2), beta.position);
+    try testing.expectEqual(@as(u32, 3), beta.set_size);
+    var field: ?access.Element = null;
+    for (els) |e| if (e.role == .text_field) {
+        field = e;
+    };
+    try testing.expectEqual(box.id, field.?.controls);
+    try testing.expectEqual(beta.id, field.?.active_descendant);
+    // Rows outside any listbox are unchanged.
+    const legacy = find(els, "Legacy");
+    try testing.expectEqual(access.Role.row, legacy.role);
+    try testing.expectEqual(@as(u64, 0), legacy.container);
+    try testing.expectEqual(@as(u32, 0), legacy.position);
+    try testing.expect(legacy.selected);
+}
+
+test "a window of results keeps its place; a disabled or hidden choice is not active" {
+    var p: Results = .{ .window = true };
+    defer p.query.deinit();
+    p.query.focus();
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&p, Results.view), .{});
+    defer t.deinit();
+    t.frame();
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var els = try elements(&t, arena.allocator());
+    try testing.expectEqual(@as(u32, 12), find(els, "Beta").position);
+    try testing.expectEqual(@as(u32, 40), find(els, "Beta").set_size);
+    p.disabled_pick = true;
+    t.frame();
+    els = try elements(&t, arena.allocator());
+    for (els) |e| if (e.role == .text_field) try testing.expectEqual(@as(u64, 0), e.active_descendant);
+    p.hide_box = true;
+    t.frame();
+    els = try elements(&t, arena.allocator());
+    for (els) |e| {
+        try testing.expect(e.role != .listbox and e.role != .option);
+        if (e.role == .text_field) try testing.expectEqual(@as(u64, 0), e.active_descendant);
+    }
+}
+
+const Long = struct {
+    clip: bool = false,
+    fn view(p: *Long, c: *ui.Context) void {
+        ui.column(c, .{ .width = .fill, .height = .fill, .gap = 4, .padding = .all(8) });
+        defer ui.end(c);
+        const box = if (p.clip) ui.div(c).column().wFull().h(90).clip() else ui.div(c).column().wFull().maxH(90).scrollY();
+        defer box.end();
+        access.describe(c, box.index, .{ .role = .listbox, .label = "Commands" });
+        for (0..30) |k| {
+            ui.key(c, c.print("long-{d}", .{k}));
+            const row = ui.div(c).row().p(4).control();
+            // A hidden option is not one of the set.
+            if (k == 0 and p.clip) access.hide(c, row.index);
+            access.describe(c, row.index, .{ .role = .option, .label = c.print("Command {d}", .{k + 1}), .selected = k == 0 });
+            ui.text(c, c.print("Command {d}", .{k + 1}), .{});
+            row.end();
+        }
+    }
+};
+
+/// The options published, in order, checked against their listbox.
+fn shownOptions(els: []const access.Element, box: u64, set_size: u32) !struct { first: u32, count: u32 } {
+    var first: u32 = 0;
+    var count: u32 = 0;
+    for (els) |e| if (e.role == .option) {
+        try testing.expectEqual(box, e.container);
+        try testing.expectEqual(set_size, e.set_size);
+        if (count == 0) first = e.position else try testing.expectEqual(first + count, e.position);
+        count += 1;
+    };
+    return .{ .first = first, .count = count };
+}
+
+test "options scrolled out of view still count toward each option's place and the set size" {
+    var p: Long = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&p, Long.view), .{ .width = 300, .height = 300 });
+    defer t.deinit();
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var els = try elements(&t, arena.allocator());
+    const box = find(els, "Commands").id;
+    const top = try shownOptions(els, box, 30);
+    try testing.expectEqual(@as(u32, 1), top.first);
+    try testing.expect(top.count > 0 and top.count < 30);
+    t.scroll(100, 60, -200);
+    t.settle(2);
+    els = try elements(&t, arena.allocator());
+    const scrolled = try shownOptions(els, box, 30);
+    try testing.expect(scrolled.first > 1);
+    try testing.expect(scrolled.count > 0 and scrolled.count < 30);
+}
+
+test "options clipped by their listbox count; a hidden one does not" {
+    var p: Long = .{ .clip = true };
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&p, Long.view), .{ .width = 300, .height = 300 });
+    defer t.deinit();
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const els = try elements(&t, arena.allocator());
+    const shown = try shownOptions(els, find(els, "Commands").id, 29);
+    try testing.expectEqual(@as(u32, 1), shown.first);
+    try testing.expectEqualStrings("Command 2", find(els, "Command 2").label);
+    try testing.expect(shown.count < 29);
+}

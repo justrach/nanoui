@@ -6,7 +6,8 @@
 //! An element keeps its object while its box keeps its id, so VoiceOver's
 //! focus stays on it across frames. Activating one (a double tap) clicks
 //! its box (`Context.a11yPress`); swiping up or down on an adjustable one
-//! steps it (`Context.a11yStep`).
+//! steps it (`Context.a11yStep`). A listbox is a list container
+//! (`UIAccessibilityContainerTypeList`) holding its options.
 const std = @import("std");
 const objc = @import("../objc.zig");
 const access = @import("../ui/access.zig");
@@ -28,11 +29,19 @@ extern "c" fn UIAccessibilityIsVoiceOverRunning() bool;
 extern "c" fn UIAccessibilityDarkerSystemColorsEnabled() bool;
 extern "c" fn UIAccessibilityIsReduceTransparencyEnabled() bool;
 extern "c" fn UIAccessibilityIsBoldTextEnabled() bool;
+extern "c" fn UIAccessibilityConvertFrameToScreenCoordinates(rect: objc.CGRect, view: objc.Object) objc.CGRect;
+/// `UIAccessibilityContainerType`.
+const container_none: objc.NSInteger = 0;
+const container_list: objc.NSInteger = 2;
 
 const Payload = struct {
     surface: *Surface,
     id: u64,
     adjustable: bool = false,
+    /// Inside a listbox: its frame is converted from `rect`, as the
+    /// container is an element rather than the view.
+    nested: bool = false,
+    rect: objc.CGRect = .{},
     /// The build that last listed it: older ones are let go.
     seen: u64 = 0,
 };
@@ -92,6 +101,7 @@ fn elementClass() objc.Class {
             .{ .name = "accessibilityActivate", .imp = &activate, .types = "c@:" },
             .{ .name = "accessibilityIncrement", .imp = &increment, .types = "v@:" },
             .{ .name = "accessibilityDecrement", .imp = &decrement, .types = "v@:" },
+            .{ .name = "accessibilityFrame", .imp = &frameOf, .types = "{CGRect={CGPoint=dd}{CGSize=dd}}@:" },
         },
     });
 }
@@ -143,11 +153,14 @@ pub fn elements(s: *Surface) ?objc.Object {
     const arr = objc.msg(objc.Object, objc.class("NSMutableArray"), "arrayWithCapacity:", .{@as(objc.NSUInteger, list.items.len)});
     var h: std.hash.Wyhash = .init(0);
     const cls = elementClass();
+    // This build's listboxes and their options, in reading order.
+    var boxes: std.AutoArrayHashMapUnmanaged(u64, objc.Object) = .empty;
     for (list.items) |e| {
         h.update(std.mem.asBytes(&e.id));
         h.update(e.label);
         h.update(e.value);
         h.update(&.{ @intFromBool(e.selected), @intFromBool(e.enabled) });
+        h.update(std.mem.asBytes(&e.container));
         const gop = st.cache.getOrPut(s.gpa, e.id) catch continue;
         if (!gop.found_existing) {
             const p = s.gpa.create(Payload) catch {
@@ -164,8 +177,18 @@ pub fn elements(s: *Surface) ?objc.Object {
         p.seen = st.builds;
         p.adjustable = e.adjustable;
         update(el, e);
-        objc.msg(void, arr, "addObject:", .{el});
+        const listbox = e.role == .listbox;
+        objc.msg(void, el, "setIsAccessibilityElement:", .{if (listbox) objc.NO else objc.YES});
+        objc.msg(void, el, "setAccessibilityContainerType:", .{if (listbox) container_list else container_none});
+        if (listbox) boxes.put(st.arena.allocator(), e.id, objc.msg(objc.Object, objc.class("NSMutableArray"), "array", .{})) catch {};
+        const kids = if (e.container != 0) boxes.get(e.container) else null;
+        p.nested = kids != null;
+        p.rect = .{ .origin = .{ .x = e.rect.x, .y = e.rect.y }, .size = .{ .width = e.rect.w, .height = e.rect.h } };
+        objc.msg(void, el, "setAccessibilityContainer:", .{if (kids != null) st.cache.get(e.container).? else s.uiview});
+        objc.msg(void, kids orelse arr, "addObject:", .{el});
     }
+    var it = boxes.iterator();
+    while (it.next()) |kv| if (st.cache.get(kv.key_ptr.*)) |box| objc.msg(void, box, "setAccessibilityElements:", .{kv.value_ptr.*});
     st.hash = h.final();
     prune(s);
     if (st.array) |old| objc.release(old);
@@ -206,11 +229,15 @@ pub fn traitsOf(e: access.Element) u64 {
         .static_text => UIAccessibilityTraitStaticText,
         .image => UIAccessibilityTraitImage,
         .slider, .splitter => UIAccessibilityTraitAdjustable,
-        .text_field, .group, .list, .row => 0,
+        .text_field, .group, .list, .row, .listbox, .option => 0,
     };
     if (e.adjustable) t |= UIAccessibilityTraitAdjustable;
     if (e.header) t |= UIAccessibilityTraitHeader;
-    if (e.selected and (e.role == .tab or e.role == .radio_button or e.role == .button)) t |= UIAccessibilityTraitSelected;
+    const choice = switch (e.role) {
+        .tab, .radio_button, .button, .row, .option => true,
+        else => false,
+    };
+    if (e.selected and choice) t |= UIAccessibilityTraitSelected;
     if (!e.enabled) t |= UIAccessibilityTraitNotEnabled;
     return t;
 }
@@ -240,6 +267,14 @@ fn activate(obj: objc.Object, _: objc.SEL) callconv(.c) objc.BOOL {
     s.ctx.a11yPress(p.id);
     s.frame();
     return objc.YES;
+}
+
+/// An element inside a listbox reports its screen frame itself; the others
+/// keep UIKit's conversion from `accessibilityFrameInContainerSpace`.
+fn frameOf(obj: objc.Object, _: objc.SEL) callconv(.c) objc.CGRect {
+    const p = objc.getZig(Payload, obj) orelse return .{};
+    if (!p.nested or p.surface.dead) return objc.msgSuper(objc.CGRect, obj, objc.class("UIAccessibilityElement"), "accessibilityFrame", .{});
+    return UIAccessibilityConvertFrameToScreenCoordinates(p.rect, p.surface.uiview);
 }
 
 fn increment(obj: objc.Object, _: objc.SEL) callconv(.c) void {

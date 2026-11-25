@@ -65,3 +65,17 @@ test "input methods read the field's text by UTF-16 range" {
     try testing.expectEqual([2]usize{ 10, 12 }, ti.clampRange(t, .{ .location = 6, .length = 99 }).?);
     try testing.expect(ti.clampRange(t, .{ .location = 10, .length = 1 }) == null);
 }
+
+test "a listbox is an AXList of AXRow options, each knowing its list and place" {
+    try testing.expectEqualStrings("AXList", a11y.roleName(.listbox, false));
+    try testing.expectEqualStrings("AXRow", a11y.roleName(.option, false));
+    const gpa = testing.allocator;
+    var p: a11y.Payload = .{ .surface = undefined, .id = 7 };
+    defer p.deinit(gpa);
+    p.update(gpa, .{ .id = 7, .role = .option, .label = "Beta", .rect = .{}, .container = 3, .position = 2, .set_size = 9 });
+    try testing.expectEqual(@as(u64, 3), p.container);
+    try testing.expectEqual(@as(u32, 2), p.position);
+    p.update(gpa, .{ .id = 7, .role = .text_field, .label = "Find", .rect = .{}, .controls = 3 });
+    try testing.expectEqual(@as(u64, 0), p.container);
+    try testing.expectEqual(@as(u64, 3), p.controls);
+}
