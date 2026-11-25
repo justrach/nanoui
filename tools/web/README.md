@@ -47,7 +47,9 @@ update produces identical pixels. Backdrop effects, transformed layers,
 and application-owned passes use a full redraw.
 
 The build helper `@import("nanoui").web.install(b, exe, dependency.path("."))`
-installs a wasm32-wasi command and the browser modules together. Its module
+installs a wasm32-wasi command, browser modules, and a default
+`web/<executable>.html` entry point. Serve that page over localhost or HTTPS.
+The standard shell needs no app-authored HTML or JavaScript. Its module
 must be single-threaded and link libc. In JavaScript:
 
 ```js
@@ -84,7 +86,11 @@ device recovery. The canvas delivers pinch scale and midpoint through
 `Context.input.zoom` and `mouse`, and two-finger translation through `pan`.
 A pinch cancels any active touch pointer drag rather than releasing it.
 Workers can forward a pinch through `runtime.host.pinch(x, y, scale, dx, dy)`.
-Keyboard/IME, clipboard, dialogs, filesystem, multi-window and a complete
+On a focusable DOM canvas, pass a `keyboard(event)` predicate to `start` to
+forward selected key events. The Gallery demo uses this for its Zig command
+palette. The predicate leaves browser-owned shortcuts and Tab available.
+Apps still need IME, clipboard, dialogs, filesystem, semantic accessibility,
+multi-window and a complete
 App/Window platform remain separate work. Opaque desktop handle types let
 shared app state compile without creating desktop windows in the browser.
 

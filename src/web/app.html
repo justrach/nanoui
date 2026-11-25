@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>nanoui</title>
+<style>
+  html, body { margin: 0; width: 100%; height: 100%; background: #fafafa; }
+  canvas { display: block; width: 100%; height: 100%; }
+  p { font: 16px system-ui; padding: 24px; }
+</style>
+<canvas tabindex="0"></canvas>
+<script type="module">
+import { start } from './nanoui.js';
+
+const wasm = new URL(location.pathname.replace(/\.html$/, '.wasm'), location.href);
+const name = decodeURIComponent(wasm.pathname.split('/').at(-1).slice(0, -5));
+const canvas = document.querySelector('canvas');
+document.title = name;
+canvas.setAttribute('aria-label', name);
+
+try {
+  window.nanoui = await start({
+    canvas, url: wasm,
+    keyboard(e) {
+      if (e.key === 'Tab' || /^F\d+$/.test(e.key)) return false;
+      // Option (macOS) and AltGr type characters such as @ on many layouts.
+      const typed = Array.from(e.key).length === 1;
+      if (e.getModifierState('AltGraph')) return typed;
+      if (e.altKey && (!typed || e.ctrlKey || e.metaKey)) return false;
+      if (e.ctrlKey || e.metaKey) return e.key.toLowerCase() === 'k';
+      return true;
+    },
+    onError: console.error,
+  });
+} catch (error) {
+  const message = document.createElement('p');
+  message.setAttribute('role', 'alert');
+  message.textContent = error.message;
+  document.body.replaceChildren(message);
+  console.error(error);
+}
+</script>
+</html>
