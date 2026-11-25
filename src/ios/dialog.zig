@@ -125,8 +125,9 @@ fn present(a: objc.Object, w: *Wait) Shown {
     // this call returns (about 1-2 s in the iOS 26 simulator). Inside a GCD
     // main-queue block it never does, so open dialogs from `App.soon`.
     // Refused only if nothing attaches: no answer would ever come.
+    const scene = scene_gone;
     const attach_by = cf.CACurrentMediaTime() + 10;
-    while (!w.done and objc.msg(?objc.Object, a, "presentingViewController", .{}) == null) {
+    while (!w.done and scene == scene_gone and objc.msg(?objc.Object, a, "presentingViewController", .{}) == null) {
         if (cf.CACurrentMediaTime() > attach_by) {
             // Withdraw the pending presentation so it doesn't appear later
             // with nobody waiting. Should UIKit attach it anyway, its
@@ -141,6 +142,7 @@ fn present(a: objc.Object, w: *Wait) Shown {
         }
         _ = CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, true);
     }
+    if (scene != scene_gone and !w.done) return .unanswered;
     const answered = w.run();
     // Windows shown or closed meanwhile waited for it (`App.arrange`).
     if (App.shared()) |app| app.scheduleArrange();

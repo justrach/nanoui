@@ -53,6 +53,8 @@ pub const App = struct {
     flags: dev.Flags = .{},
     /// The UIWindow nanoui's windows show in, once UIKit made it.
     uiwindow: ?objc.Object = null,
+    /// Last active/interacted UIWindowScene for scene-scoped alerts and `⌘W`.
+    last_scene: ?objc.Object = null,
     /// What the screen shows while no window of the app does.
     placeholder: ?objc.Object = null,
     /// In the foreground: frames are drawn (never in the background).
@@ -232,14 +234,24 @@ pub const App = struct {
 
     /// Runs the menu item whose accelerator `sc` is; true if one was.
     pub fn accelerator(self: *App, sc: ui.Shortcut) bool {
+        return self.acceleratorFor(null, sc);
+    }
+
+    /// Runs `sc` against `source` window's scene (or the active scene when null).
+    pub fn acceleratorFor(self: *App, source: ?*Window, sc: ui.Shortcut) bool {
         const m = self.main_menu orelse return false;
         const it = m.match(sc) orelse return false;
         if (it.role) |role| switch (role) {
             .quit => return true,
             .close => {
-                // The window on top goes; the screen's own stays.
-                const top = self.topController() orelse return true;
-                if (top == objc.msg(?objc.Object, self.uiwindow.?, "rootViewController", .{})) return true;
+                // Close the focused scene's own window or the topmost stacked window on the main scene.
+                const win = (if (source) |src| (if (src.own_scene) src.scene_window else self.uiwindow) else scenes.activeWindow(self)) orelse return true;
+                const top = topControllerOf(win) orelse return true;
+                if (scenes.ownWindowFor(self, win)) |own_w| {
+                    if (own_w.controller == top) own_w.close();
+                    return true;
+                }
+                if (top == objc.msg(?objc.Object, win, "rootViewController", .{})) return true;
                 for (self.windows.items) |w| if (w.controller == top) {
                     w.close();
                     break;
@@ -253,15 +265,20 @@ pub const App = struct {
         return true;
     }
 
-    /// The controller everything is presented from: the topmost one.
-    pub fn topController(self: *App) ?objc.Object {
-        const win = self.uiwindow orelse return null;
+    /// Topmost non-dismissing controller presented in `win`.
+    pub fn topControllerOf(win: objc.Object) ?objc.Object {
         var vc = objc.msg(?objc.Object, win, "rootViewController", .{}) orelse return null;
         while (objc.msg(?objc.Object, vc, "presentedViewController", .{})) |next| {
             if (objc.msg(objc.BOOL, next, "isBeingDismissed", .{})) break;
             vc = next;
         }
         return vc;
+    }
+
+    /// The controller everything is presented from: the active scene's topmost one.
+    pub fn topController(self: *App) ?objc.Object {
+        const win = scenes.activeWindow(self) orelse return null;
+        return topControllerOf(win);
     }
 
     /// `arrange` on the next turn of the run loop. Not a block on the main
@@ -524,6 +541,9 @@ pub const App = struct {
     /// windows leave its UIWindow, free to go in the next one's.
     pub fn detach(self: *App) void {
         const win = self.uiwindow orelse return;
+        if (self.last_scene) |ls| if (objc.msg(?objc.Object, win, "windowScene", .{}) == ls) {
+            self.last_scene = null;
+        };
         // A dialog up goes with it, unanswered: its wait ends.
         @import("dialog.zig").scene_gone +%= 1;
         if (objc.msg(?objc.Object, win, "rootViewController", .{})) |root| {

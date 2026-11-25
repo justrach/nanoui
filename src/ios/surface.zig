@@ -25,6 +25,11 @@ const ios_access = @import("access.zig");
 const access = @import("../ui/access.zig");
 const fold = @import("fold.zig");
 const map = @import("map.zig");
+const gpu = @import("../ui/gpu.zig");
+const display = @import("surface_display.zig");
+
+/// Called when the display under the view changes (`Surface.on_display_change`).
+pub const DisplayChange = struct { ctx: ?*anyopaque, func: *const fn (ctx: ?*anyopaque, s: *Surface) void };
 
 extern "c" fn UIAccessibilityIsReduceMotionEnabled() bool;
 extern "c" const NSRunLoopCommonModes: objc.Object;
@@ -73,6 +78,12 @@ pub const Surface = struct {
     /// UIKit moves the fold's reserved regions a little after the hinge
     /// reports, with no event of its own: frames read them until then.
     fold_until: f64 = 0,
+    display_info: gpu.DisplayInfo = .{},
+    on_display_change: ?DisplayChange = null,
+
+    pub const setColour = display.setColour;
+    pub const displayInfo = display.displayInfo;
+    pub const readDisplay = display.readDisplay;
 
     /// The surface of `obj`, for one event: pair with `leave`. After a
     /// frame, a handler checks `dead` before touching it again.
@@ -191,6 +202,7 @@ pub const Surface = struct {
         self.text.setScale(self.scale);
         self.renderer.resize(self.size, self.scale);
         fold.read(self);
+        display.readDisplay(self);
     }
 
     /// The screen changed (a fold, a tilt): reads it again and draws.
@@ -249,6 +261,8 @@ pub const Surface = struct {
         const dt: f32 = if (self.last_frame_time > 0) @floatCast(@min(now - self.last_frame_time, 0.1)) else 1.0 / 60.0;
         self.last_frame_time = now;
         c.reduced_motion = UIAccessibilityIsReduceMotionEnabled();
+        c.display_info = self.display_info;
+        c.surface_colour = self.renderer.colour;
         ios_access.beforeFrame(self);
         c.safe_area = self.safeArea();
         const root: ui.View = if (self.full_bleed) self.view else .init(self, insideSafeArea);
@@ -331,6 +345,7 @@ pub const Surface = struct {
         }
         self.depth += 1;
         defer self.leave();
+        display.displayChanged(self);
         if (self.pending) self.frame();
     }
 };
@@ -363,8 +378,9 @@ fn traitsChanged(obj: objc.Object, _: objc.SEL, previous: ?objc.Object) callconv
     objc.msgSuper(void, obj, objc.class("UIView"), "traitCollectionDidChange:", .{previous});
     const s = Surface.enter(obj) orelse return;
     defer s.leave();
-    // Dark mode, or the screen's scale (another display).
+    // Dark mode, or the screen's scale/gamut (another display).
     s.updateGeometry();
+    display.displayChanged(s);
     s.requestFrame();
 }
 
@@ -376,6 +392,7 @@ fn didMoveToWindow(obj: objc.Object, _: objc.SEL) callconv(.c) void {
     // Keys from a hardware keyboard come to the first responder.
     keys.takeKeys(s);
     s.updateGeometry();
+    display.displayChanged(s);
     s.frame();
 }
 

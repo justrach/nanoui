@@ -57,11 +57,71 @@ fn release(w: *Window) void {
 /// The app closed a window with a scene of its own: the scene goes too.
 pub fn closeOwn(w: *Window) void {
     const win = w.scene_window orelse return;
-    if (objc.msg(?objc.Object, win, "windowScene", .{})) |scene| destroy(scene);
+    if (objc.msg(?objc.Object, win, "windowScene", .{})) |scene| {
+        if (w.app.last_scene == scene) w.app.last_scene = null;
+        destroy(scene);
+    }
     release(w);
     // The app's own button closed it: the person stays in the app, not on the
     // Home screen, which is where a full-screen iPad goes otherwise.
     if (w.app.uiwindow) |main| if (objc.msg(?objc.Object, main, "windowScene", .{})) |scene| activateScene(scene);
+}
+
+fn liveSceneWindow(w: *const Window) ?objc.Object {
+    if (!w.own_scene or w.closed) return null;
+    return w.scene_window;
+}
+
+pub fn ownWindowFor(app: *const App, win: objc.Object) ?*Window {
+    for (app.windows.items) |w| {
+        if (liveSceneWindow(w) == win) return w;
+    }
+    return null;
+}
+
+fn windowActivation(win: objc.Object) objc.NSInteger {
+    const scene = objc.msg(?objc.Object, win, "windowScene", .{}) orelse return 2;
+    return objc.msg(objc.NSInteger, scene, "activationState", .{});
+}
+
+fn isKey(win: objc.Object) bool {
+    return objc.msg(objc.BOOL, win, "isKeyWindow", .{});
+}
+
+/// The UIWindow in the active/focused scene for presenting dialogs and `⌘W`.
+pub fn activeWindow(app: *const App) ?objc.Object {
+    var fallback: ?objc.Object = app.uiwindow;
+    for (app.windows.items) |w| {
+        const win = liveSceneWindow(w) orelse continue;
+        fallback = win;
+        if (windowActivation(win) == 0 and isKey(win)) return win;
+    }
+    if (app.uiwindow) |win| {
+        if (windowActivation(win) == 0 and isKey(win)) return win;
+    }
+    if (app.last_scene) |last| {
+        for (app.windows.items) |w| {
+            const win = liveSceneWindow(w) orelse continue;
+            if (objc.msg(?objc.Object, win, "windowScene", .{}) == last and windowActivation(win) < 2) return win;
+        }
+        if (app.uiwindow) |win| {
+            if (objc.msg(?objc.Object, win, "windowScene", .{}) == last and windowActivation(win) < 2) return win;
+        }
+    }
+    for (app.windows.items) |w| {
+        const win = liveSceneWindow(w) orelse continue;
+        if (windowActivation(win) == 0) return win;
+    }
+    if (app.uiwindow) |win| {
+        if (windowActivation(win) == 0) return win;
+    }
+    return app.uiwindow orelse fallback;
+}
+
+/// Records `w`'s scene as the most recently interacted scene (touch or key).
+pub fn noteActive(w: *Window) void {
+    const win = (if (w.own_scene) w.scene_window else w.app.uiwindow) orelse return;
+    if (objc.msg(?objc.Object, win, "windowScene", .{})) |scene| w.app.last_scene = scene;
 }
 
 fn activateScene(scene: objc.Object) void {
@@ -149,18 +209,22 @@ fn sceneConnect(_: objc.Object, _: objc.SEL, scene: objc.Object, _: objc.Object,
 
 fn sceneDisconnect(_: objc.Object, _: objc.SEL, scene: objc.Object) callconv(.c) void {
     const app = App.shared() orelse return;
+    if (app.last_scene == scene) app.last_scene = null;
     if (app.uiwindow) |win| if (objc.msg(?objc.Object, win, "windowScene", .{}) == scene) return app.detach();
     // The person closed it: its window goes with it, its owner told.
     for (app.windows.items) |w| {
         const own = w.scene_window orelse continue;
         if (objc.msg(?objc.Object, own, "windowScene", .{}) != scene) continue;
+        @import("dialog.zig").scene_gone +%= 1;
         release(w);
         return w.close();
     }
 }
 
-fn becameActive(_: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
-    if (App.shared()) |app| app.setActive(true);
+fn becameActive(_: objc.Object, _: objc.SEL, obj: objc.Object) callconv(.c) void {
+    const app = App.shared() orelse return;
+    if (objc.msg(objc.BOOL, obj, "isKindOfClass:", .{objc.class("UIWindowScene")})) app.last_scene = obj;
+    app.setActive(true);
 }
 
 fn enteredBackground(_: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {

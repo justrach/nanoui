@@ -97,6 +97,7 @@ fn lift(s: *Surface) void {
 fn began(obj: objc.Object, _: objc.SEL, touches: objc.Object, event: ?objc.Object) callconv(.c) void {
     const s = Surface.enter(obj) orelse return;
     defer s.leave();
+    @import("scenes.zig").noteActive(s.window);
     modifiers(s, event);
     const st = &s.touch;
     if (st.finger) |first| {

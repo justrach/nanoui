@@ -136,6 +136,9 @@ pub const Surface = struct {
     /// under it as last read, the monitor it was on, and who is told when
     /// that changes (`surface_display.zig`).
     colour: gpu.SurfaceColour = .sdr_srgb,
+    /// Reconcile the swap chain with `colour` on the next GPU paint (cleared
+    /// once tried, so an SDR monitor does not retry `setExtended` every frame).
+    colour_dirty: bool = false,
     display_info: gpu.DisplayInfo = .{},
     monitor: ?*anyopaque = null,
     on_display_change: ?DisplayChange = null,

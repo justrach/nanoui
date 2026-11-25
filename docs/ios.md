@@ -68,4 +68,4 @@ shows one window, made with `.own_scene`. On a phone, a window asking for its
 own scene goes on the stack like any other, so the same code runs on both.
 
 Closing the window in the system's UI closes it in the app, through `on_close`.
-Dialogs and `⌘W` still act on the first scene's stack, not the scene in front.
+Dialogs present on the active scene and `⌘W` closes the focused scene's window (or the topmost stacked window on the first scene).
