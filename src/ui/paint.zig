@@ -98,7 +98,7 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip_
     // Painting never changes the tree: borrow the node rather than copying
     // its entire style and content for every row, including clipped ones.
     const n: *const ctx_mod.Node = c.node(index);
-    const st = n.style;
+    const st = &n.style;
     // A higher layer is drawn later, over the page.
     if (st.layer > 0 and index != c.layer_root) {
         c.layers.append(c.gpa, index) catch {};
@@ -123,6 +123,7 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip_
     const painted = r.intersect(skirt_clip);
     const total_opacity = opacity_in * st.opacity;
     if (total_opacity <= 0.001) return;
+    if ((painted.w <= 0 or painted.h <= 0) and !n.paint_escape and !selectable and c.selection.cover == null and r.w >= n.measured.w - 0.01 and r.h >= n.measured.h - 0.01) return;
     const open_group = st.group and total_opacity < 0.999 and !c.painting_group;
     const opacity = if (open_group) 1.0 else total_opacity;
     var group_rect: [4]f32 = .{ 0, 0, 0, 0 };
@@ -148,21 +149,21 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip_
         });
     };
     const clip4 = metal.clip4(clip);
-    const moving = blk: {
-        if (!c.animating) break :blk false;
-        const prev = c.prev_rects.get(n.id) orelse break :blk false;
-        break :blk @abs(r.x - prev.x) > 0.01 or @abs(r.y - prev.y) > 0.01 or @abs(r.w - prev.w) > 0.01 or @abs(r.h - prev.h) > 0.01;
-    };
-    const sx0 = if (moving) r.x else snap(r.x, c.scale);
-    const sy0 = if (moving) r.y else snap(r.y, c.scale);
-    const sw = if (moving) r.w else snap(r.w, c.scale);
-    const sh_h = if (moving) r.h else snap(r.h, c.scale);
-    const rect4: [4]f32 = .{ sx0, sy0, sw, sh_h };
     const rad: f32 = if (st.corner_circular) -st.radius else st.radius;
     // What the box and its subtree emit, for `Style.scale`.
     const start = out.items.len;
 
     if (painted.w > 0 and painted.h > 0) {
+        const moving = blk: {
+            if (!c.animating) break :blk false;
+            const prev = c.prev_rects.get(n.id) orelse break :blk false;
+            break :blk @abs(r.x - prev.x) > 0.01 or @abs(r.y - prev.y) > 0.01 or @abs(r.w - prev.w) > 0.01 or @abs(r.h - prev.h) > 0.01;
+        };
+        const sx0 = if (moving) r.x else snap(r.x, c.scale);
+        const sy0 = if (moving) r.y else snap(r.y, c.scale);
+        const sw = if (moving) r.w else snap(r.w, c.scale);
+        const sh_h = if (moving) r.h else snap(r.h, c.scale);
+        const rect4: [4]f32 = .{ sx0, sy0, sw, sh_h };
         if (st.shadow) |sh| paintShadow(c, out, sh, r, rad, opacity, clip4);
         for (st.shadows) |sh| paintShadow(c, out, sh, r, rad, opacity, clip4);
         // Glass takes the background's place.
@@ -176,7 +177,7 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip_
             .radius = rad,
             // A quad's uv is free: its x marks a dashed border.
             // and its y a gradient (`gpu.gradientUv`).
-            .uv = if (fill != null and st.gradient_stops.len > 0) gradientStops(c, &st, rect4, opacity) else metal.gradientUv(st.border_dashed, if (fill != null and st.gradient != null) st.gradient.?.alpha(opacity) else null),
+            .uv = if (fill != null and st.gradient_stops.len > 0) gradientStops(c, st, rect4, opacity) else metal.gradientUv(st.border_dashed, if (fill != null and st.gradient != null) st.gradient.?.alpha(opacity) else null),
             .clip = clip4,
         });
         switch (n.content) {

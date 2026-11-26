@@ -40,28 +40,29 @@ pub const Drag = struct {
 pub fn drag(c: *Context, opts: Options) Drag {
     const id = c.peekId(null);
     const got = c.motion_store.get(c.gpa, id, c.frame) orelse return .{};
-    const s = got.state;
-    const chx = &s.ch[0];
-    const chy = &s.ch[1];
+    const got_drag = c.motion_store.getDrag(c.gpa, id, c.frame) orelse return .{};
+    const chx = &got.state.ch[0];
+    const chy = &got.state.ch[1];
+    const s = got_drag.state;
     if (got.fresh) {
         chx.* = .at(0);
         chy.* = .at(0);
-        s.has |= 0b11;
+        got.state.has |= 0b11;
     }
     const over = c.hot == id or std.mem.indexOfScalar(u64, c.hot_path.items, id) != null;
     if (c.input.pressed and over) {
         chx.sample(c.time);
         chy.sample(c.time);
         s.dragging = true;
-        s.drag_moved = false;
-        s.drag_origin = .{ @floatCast(chx.value), @floatCast(chy.value) };
+        s.moved = false;
+        s.origin = .{ @floatCast(chx.value), @floatCast(chy.value) };
         s.pointer_origin = .{ c.input.mouse.x, c.input.mouse.y };
         s.pointer_last = s.pointer_origin;
         s.pointer_time = c.time;
         s.pointer_vel = .{ 0, 0 };
     }
     if (s.dragging and c.input.down) {
-        var raw = follow(s.drag_origin, s.pointer_origin, .{ c.input.mouse.x, c.input.mouse.y }, opts.axis);
+        var raw = follow(s.origin, s.pointer_origin, .{ c.input.mouse.x, c.input.mouse.y }, opts.axis);
         raw = rubber(raw, opts.min, opts.max, opts.elasticity);
         const dt = @max(c.time - s.pointer_time, 1e-4);
         s.pointer_vel = .{
@@ -70,7 +71,7 @@ pub fn drag(c: *Context, opts: Options) Drag {
         };
         s.pointer_last = .{ c.input.mouse.x, c.input.mouse.y };
         s.pointer_time = c.time;
-        if (@abs(raw[0] - s.drag_origin[0]) > 3 or @abs(raw[1] - s.drag_origin[1]) > 3) s.drag_moved = true;
+        if (@abs(raw[0] - s.origin[0]) > 3 or @abs(raw[1] - s.origin[1]) > 3) s.moved = true;
         chx.jump(raw[0]);
         chy.jump(raw[1]);
         c.wants_moves = true;
@@ -94,7 +95,7 @@ pub fn drag(c: *Context, opts: Options) Drag {
         .x = @floatCast(chx.value),
         .y = @floatCast(chy.value),
         .dragging = s.dragging,
-        .moved = s.drag_moved,
+        .moved = s.moved,
         .animating = moving,
     };
 }

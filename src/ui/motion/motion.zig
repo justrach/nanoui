@@ -109,6 +109,21 @@ pub const Target = struct {
             else => null,
         };
     }
+
+    pub fn mask(t: *const Target) u16 {
+        var m: u16 = 0;
+        if (t.x != null) m |= 1 << 0;
+        if (t.y != null) m |= 1 << 1;
+        if (t.scale != null) m |= 1 << 2;
+        if (t.opacity != null) m |= 1 << 3;
+        if (t.width != null) m |= 1 << 4;
+        if (t.height != null) m |= 1 << 5;
+        if (t.radius != null) m |= 1 << 6;
+        if (t.background != null) m |= 0b1111 << 7;
+        if (t.rotation != null) m |= 1 << 11;
+        if (t.turn != null) m |= 1 << 12;
+        return m;
+    }
 };
 
 /// Where a channel rests when no target names it: in place, full size, seen.
@@ -177,7 +192,8 @@ pub fn frame(c: *Context, m: Motion) Frame {
     const got = c.motion_store.get(c.gpa, id, c.frame) orelse return still(m.target);
     const s = got.state;
     if (got.fresh) s.mounted = true;
-    return step(c, s, id, m, if (got.fresh) m.initial else null, false);
+    const init: ?*const Target = if (got.fresh) if (m.initial) |*t| t else null else null;
+    return step(c, s, id, &m, init, false);
 }
 
 /// Presence: the next box (keyed `key`) while `show`, entering from
@@ -198,10 +214,11 @@ pub fn present(c: *Context, key: []const u8, show: bool, m: Motion) ?Frame {
         s.mounted = true;
         s.exiting = false;
     } else s.exiting = true;
-    const f = step(c, s, id, m, if (entering) m.initial else null, s.exiting);
+    const init: ?*const Target = if (entering) if (m.initial) |*t| t else null else null;
+    const f = step(c, s, id, &m, init, s.exiting);
     if (s.exiting and !f.animating) {
         // Gone: next time it's shown it enters again.
-        s.* = .{};
+        c.motion_store.resetState(c.gpa, s);
         c.next_key = null;
         return null;
     }
@@ -214,9 +231,11 @@ pub fn number(c: *Context, key: []const u8, value: f32, tr: Transition) f32 {
     const id = scoped(c, key);
     const got = c.motion_store.get(c.gpa, id, c.frame) orelse return value;
     const ch = &got.state.ch[0];
-    if (got.fresh) ch.* = .at(value);
-    ch.retarget(value, if (c.reduced_motion or c.reduce_motion) .instant else tr, 0, c.time);
-    ch.sample(c.time);
+    if (got.fresh) {
+        ch.* = .at(value);
+        got.state.has |= 1;
+    }
+    ch.step(value, if (c.reduced_motion or c.reduce_motion) .instant else tr, 0, c.time);
     if (ch.moving) c.animationFrame();
     return @floatCast(ch.value);
 }
@@ -268,43 +287,64 @@ pub fn setChannel(f: *Frame, i: usize, v: f32) void {
 }
 
 /// Moves `s` toward what `m` asks now and reads it out.
-fn step(c: *Context, s: *State, id: u64, m: Motion, initial: ?Target, leaving: bool) Frame {
-    var goal = m.target;
+fn step(c: *Context, s: *State, id: u64, m: *const Motion, initial: ?*const Target, leaving: bool) Frame {
+    var patched: Target = undefined;
+    var goal: *const Target = &m.target;
     if (leaving) {
-        if (m.exit) |e| goal = goal.overlay(e);
+        if (m.exit) |e| {
+            patched = goal.overlay(e);
+            goal = &patched;
+        }
     } else {
         // Over it, or over something in it; pressing it alone.
-        const over = c.hot == id or std.mem.indexOfScalar(u64, c.hot_path.items, id) != null;
-        if (m.hover) |h| if (over) {
-            goal = goal.overlay(h);
-        };
-        if (m.press) |p| if (c.active == id) {
-            goal = goal.overlay(p);
-        };
-    }
-    const tr: Transition = if (c.reduced_motion or c.reduce_motion) .instant else m.transition;
-    var f: Frame = .{ .gestures = m.hover != null or m.press != null, .layout = if (m.layout) id else 0 };
-    if (m.layout) s.layout_transition = m.transition;
-    for (0..store.channels) |i| {
-        const bit = @as(u16, 1) << @intCast(i);
-        const ch = &s.ch[i];
-        const entry: ?f32 = if (initial) |t| t.get(i) else null;
-        const known = s.has & bit != 0;
-        // Named now; else back to rest once it has moved, or from `initial`.
-        const target = goal.get(i) orelse if (known or entry != null)
-            rest(i) orelse entry orelse @as(f32, @floatCast(ch.target))
-        else
-            continue;
-        if (!known) {
-            // First seen: from where `initial` puts it, else from rest (a
-            // hover's scale grows from 1), else there already.
-            ch.* = .at(entry orelse rest(i) orelse target);
-            s.has |= bit;
+        if (m.hover) |h| {
+            const over = c.hot == id or std.mem.indexOfScalar(u64, c.hot_path.items, id) != null;
+            if (over) {
+                patched = goal.overlay(h);
+                goal = &patched;
+            }
         }
-        ch.retarget(target, tr, if (c.reduced_motion or c.reduce_motion) 0 else m.delay, c.time);
-        ch.sample(c.time);
-        setChannel(&f, i, @floatCast(ch.value));
-        if (ch.moving) f.animating = true;
+        if (m.press) |p| {
+            const ctrl_secondary = @import("../keys.zig").mac;
+            const primary_down = c.input.down and c.input.button == .left and !(ctrl_secondary and c.input.ctrl);
+            if (c.hot == id and c.input.pressed and primary_down) c.active = id;
+            if (c.active == id and primary_down) {
+                patched = goal.overlay(p);
+                goal = &patched;
+            }
+        }
+    }
+    const reduce = c.reduced_motion or c.reduce_motion;
+    const tr: Transition = if (reduce) .instant else m.transition;
+    const delay: f64 = if (reduce) 0 else m.delay;
+    var f: Frame = .{ .gestures = m.hover != null or m.press != null, .layout = if (m.layout) id else 0 };
+    if (m.layout) if (c.motion_store.getLayout(c.gpa, id, c.frame)) |l| {
+        l.state.transition = m.transition;
+    };
+    const active: u16 = s.has | goal.mask() | (if (initial) |t| t.mask() else 0);
+    inline for (0..store.channels) |i| {
+        const bit = @as(u16, 1) << i;
+        if (active & bit != 0) {
+            const ch = &s.ch[i];
+            const entry: ?f32 = if (initial) |t| t.get(i) else null;
+            const known = s.has & bit != 0;
+            // Named now; else back to rest once it has moved, or from `initial`.
+            const target_opt: ?f32 = goal.get(i) orelse if (known or entry != null)
+                rest(i) orelse entry orelse @as(f32, @floatCast(ch.target))
+            else
+                null;
+            if (target_opt) |target| {
+                if (!known) {
+                    // First seen: from where `initial` puts it, else from rest (a
+                    // hover's scale grows from 1), else there already.
+                    ch.* = .at(entry orelse rest(i) orelse target);
+                    s.has |= bit;
+                }
+                ch.step(target, tr, delay, c.time);
+                setChannel(&f, i, @floatCast(ch.value));
+                if (ch.moving) f.animating = true;
+            }
+        }
     }
     if (f.animating) c.animationFrame();
     return f;

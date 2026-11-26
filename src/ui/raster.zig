@@ -502,23 +502,64 @@ fn shadow(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize) void
     const sigma = @max(i.border_width, 0.25);
     const c = i.color;
     const inv = 1 / scale;
+    const knockout = i.kind == gpu.Kind.shadow_out;
+    if (gpu.hasMatrix(i) or i.xf[0] != 0) {
+        for (b[1]..b[3]) |y| {
+            const wy = (@as(f32, @floatFromInt(y)) + 0.5) * inv;
+            const row = y * out.width * 4;
+            for (b[0]..b[2]) |x| {
+                const wx = (@as(f32, @floatFromInt(x)) + 0.5) * inv;
+                const up = unrotate(i, wx, wy);
+                const pxl = up[0] - cx;
+                const py = up[1] - cy;
+                var a = shapes.shadowAlpha(pxl, py, hw, hh, r, sigma) * c[3] * clipCover(i, wx, wy, inv);
+                // Knocked out: nothing inside the box (`uv` its offset from the shadow's rect).
+                if (knockout) {
+                    const s = i.uv[2];
+                    const rb: f32 = if (r < 0) -@max(-r - s, 0) else @max(r - s, 0);
+                    a *= std.math.clamp(cornerSdf(pxl - i.uv[0], py - i.uv[1], @max(hw - s, 0), @max(hh - s, 0), rb)[0] + 0.5, 0, 1);
+                }
+                if (a > 0) a = std.math.clamp(a + shapes.shadowDither(x, y), 0, 1);
+                blend(out.bytes, row + x * 4, c[0] * a, c[1] * a, c[2] * a, a);
+            }
+        }
+        return;
+    }
+    const has_round_clip = i.clip_round != 0;
+    const step4: shapes.F4 = .{ 0, inv, inv * 2, inv * 3 };
+    const c3: shapes.F4 = @splat(c[3]);
     for (b[1]..b[3]) |y| {
         const wy = (@as(f32, @floatFromInt(y)) + 0.5) * inv;
+        const py = wy - cy;
+        const srow = shapes.ShadowRow.init(py, hw, hh, r, sigma) orelse continue;
         const row = y * out.width * 4;
-        for (b[0]..b[2]) |x| {
+        var x = b[0];
+        if (!has_round_clip and !knockout) {
+            while (x + 4 <= b[2]) : (x += 4) {
+                const wx0 = (@as(f32, @floatFromInt(x)) + 0.5) * inv;
+                const a4 = srow.eval4(@as(shapes.F4, @splat(wx0 - cx)) + step4) * c3;
+                inline for (0..4) |lane| {
+                    var a = a4[lane];
+                    if (a > 0) {
+                        a = std.math.clamp(a + shapes.shadowDither(x + lane, y), 0, 1);
+                        blend(out.bytes, row + (x + lane) * 4, c[0] * a, c[1] * a, c[2] * a, a);
+                    }
+                }
+            }
+        }
+        while (x < b[2]) : (x += 1) {
             const wx = (@as(f32, @floatFromInt(x)) + 0.5) * inv;
-            const up = unrotate(i, wx, wy);
-            const pxl = up[0] - cx;
-            const py = up[1] - cy;
-            var a = shapes.shadowAlpha(pxl, py, hw, hh, r, sigma) * c[3] * clipCover(i, wx, wy, inv);
-            // Knocked out: nothing inside the box (`uv` its offset from the shadow's rect).
-            if (i.kind == gpu.Kind.shadow_out) {
+            const pxl = wx - cx;
+            var a = srow.evalScalar(pxl) * c[3] * (if (has_round_clip) clipCover(i, wx, wy, inv) else @as(f32, 1));
+            if (knockout) {
                 const s = i.uv[2];
                 const rb: f32 = if (r < 0) -@max(-r - s, 0) else @max(r - s, 0);
                 a *= std.math.clamp(cornerSdf(pxl - i.uv[0], py - i.uv[1], @max(hw - s, 0), @max(hh - s, 0), rb)[0] + 0.5, 0, 1);
             }
-            if (a > 0) a = std.math.clamp(a + shapes.shadowDither(x, y), 0, 1);
-            blend(out.bytes, row + x * 4, c[0] * a, c[1] * a, c[2] * a, a);
+            if (a > 0) {
+                a = std.math.clamp(a + shapes.shadowDither(x, y), 0, 1);
+                blend(out.bytes, row + x * 4, c[0] * a, c[1] * a, c[2] * a, a);
+            }
         }
     }
 }

@@ -82,8 +82,8 @@ pub const TextSystem = struct {
     stacks: std.AutoHashMapUnmanaged(FontKey, ?*stacks.Stack) = .empty,
     /// `font_registry.generation` when the caches were last good.
     fonts_seen: u64 = 0,
-    layouts: std.AutoHashMapUnmanaged(u64, Layout) = .empty,
-    previous: std.AutoHashMapUnmanaged(u64, Layout) = .empty,
+    layouts: types.IdMap(Layout) = .empty,
+    previous: types.IdMap(Layout) = .empty,
     wraps: @import("wrap_cache.zig").WrapCache(Line) = .{},
     family: ?[]const u8 = null,
     mono_family: ?[]const u8 = null,
@@ -237,12 +237,12 @@ pub const TextSystem = struct {
         self.syncFonts();
         if (self.layouts.count() >= 4096) {
             freeLayouts(self.gpa, &self.previous);
-            std.mem.swap(std.AutoHashMapUnmanaged(u64, Layout), &self.layouts, &self.previous);
+            std.mem.swap(@TypeOf(self.layouts), &self.layouts, &self.previous);
         }
         self.wraps.beginFrame(self.gpa);
     }
 
-    fn freeLayouts(gpa: std.mem.Allocator, map: *std.AutoHashMapUnmanaged(u64, Layout)) void {
+    fn freeLayouts(gpa: std.mem.Allocator, map: *types.IdMap(Layout)) void {
         var it = map.valueIterator();
         while (it.next()) |l| gpa.free(l.glyphs);
         map.clearRetainingCapacity();

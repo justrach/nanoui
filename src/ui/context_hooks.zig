@@ -235,7 +235,7 @@ pub fn forgetStale(c: *Context) void {
         }
     }
     for (stale[0..n]) |k| _ = c.anims.remove(k);
-    c.motion_store.forget(c.frame, 120);
+    c.motion_store.forget(c.gpa, c.frame, 120);
     n = 0;
     var mit = c.memory.iterator();
     while (mit.next()) |e| {

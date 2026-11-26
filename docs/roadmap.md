@@ -1,11 +1,17 @@
 # nanoui Roadmap
 
-Baseline: **[`v0.14.12`](https://github.com/justrach/nanoui/releases/tag/v0.14.12)** (2026-11-25).
+Baseline: **[`v0.14.13`](https://github.com/justrach/nanoui/releases/tag/v0.14.13)** (2026-11-26).
 See [Benchmarks](benchmarks.md) for current macOS, iOS, iPadOS, CPU-raster, and Linux numbers, [CLI Reference](cli.md) for `nui` workflows, [docs/ios.md](ios.md) for iOS/iPadOS bundling, and [docs/android.md](android.md) for Android details.
 
 ---
 
 ## Shipped Recently
+
+### `v0.14.13` (2026-11-26)
+
+- **`Motion.press` press/release animation fix ([#257](https://github.com/justrach/nanoui/issues/257)):** Activate primary-press targets and retarget back to rest immediately on pointer transitions without requiring `.clicked()` or an unrelated wakeup frame (`src/ui/motion/motion.zig`, `src/ui/tests_motion.zig`).
+- **CPU rasterizer Gaussian shadow acceleration (`src/ui/raster_shapes.zig`, `src/ui/raster.zig`):** Added scanline-hoisted `ShadowRow` with flat-body sample folding, interior/exterior fast paths, and 4-wide SIMD `erf4`, cutting portable CPU shadow encode time by 4.2× (`boxes`) to 5.8× (`dashboard`) while preserving Metal pixel parity and shader coefficient sync.
+- **Motion engine & core UI hill-climb (`src/ui/motion/`, `src/ui/context.zig`, `src/ui/layout.zig`, `src/ui/paint.zig`, `src/ui/frame.zig`, `src/ui/text_mac.zig`, `src/ui/text_tt.zig`):** Split cold motion feature maps, switched channel stepping to `inline for`, added fast `IdMap` / `mixId` hashing, borrowed `*const Style` references in layout/paint, added in-place `addNode` initialization, and added conservative `paint_escape` off-skirt subtree culling (`scroll` `-21%`, `springs` `-19%`, `text` `-15%`, `letters` `-22%`).
 
 ### `v0.14.12` (2026-11-25)
 
