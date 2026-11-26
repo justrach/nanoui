@@ -1,7 +1,8 @@
 //! `ui.motion` through the Tester: a box enters from `initial` and settles
 //! at its target, then stops asking for frames; a target changed midway is
 //! taken from where the box is; presence keeps a box drawn while it leaves;
-//! hover and press move it; numbers ease; reduced motion jumps; and a
+//! hover and press move it (press on the pointer-down frame, with no app
+//! `animationFrame()`); numbers ease; reduced motion jumps; and a
 //! scaled box draws its pixels where its scale puts them.
 const std = @import("std");
 const testing = std.testing;
@@ -93,6 +94,95 @@ test "presence: a box leaving stays drawn until its exit settles" {
     s.show = true;
     t.frame();
     try testing.expect(t.hasText("toast"));
+}
+
+/// Scale channel index (`Target.get` / `setChannel`).
+const scale_ch: usize = 2;
+
+fn scaleGoal(t: *ui.Tester, id: u64) ?f64 {
+    const s = t.ctx.motion_store.map.getPtr(id) orelse return null;
+    if (s.has & (@as(u16, 1) << @intCast(scale_ch)) == 0) return null;
+    return s.ch[scale_ch].target;
+}
+
+fn maybeSnap(t: *ui.Tester, name: []const u8) void {
+    const dir_z = std.c.getenv("NANOUI_PRESS_SNAP") orelse return;
+    var buf: [512]u8 = undefined;
+    const path = std.fmt.bufPrint(&buf, "{s}/{s}", .{ std.mem.span(dir_z), name }) catch return;
+    t.screenshot(path) catch {};
+}
+
+const PressScene = struct {
+    last: motion.Frame = .{},
+    id: u64 = 0,
+    clicks: u32 = 0,
+    handle_click: bool = false,
+
+    fn view(s: *PressScene, c: *ui.Context) void {
+        const root = ui.div(c).column().sizeFull().p(20).bg(.white);
+        defer root.end();
+        // No `c.animationFrame()` from the app: press/release must start
+        // the spring themselves, including when the box never calls
+        // `clicked()` / `interaction()`.
+        s.last = motion.frame(c, .{
+            .press = .{ .scale = 0.9 },
+            .transition = .{ .tween = .{ .duration = 0.2, .ease = .linear } },
+        });
+        const box = ui.div(c).w(80).h(40).bg(.hex(0x3366ff)).control().motion(s.last);
+        s.id = box.id();
+        defer box.end();
+        if (s.handle_click and box.clicked()) s.clicks += 1;
+        ui.text(c, "press", .{ .size = 12, .color = .white });
+    }
+};
+
+test "press overlay retargets on the press frame and returns to rest on release" {
+    var s: PressScene = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&s, PressScene.view), .{ .width = 200, .height = 120, .scale = 1 });
+    defer t.deinit();
+    t.settle(1);
+    try testing.expectApproxEqAbs(@as(f32, 1), s.last.scale, 1e-3);
+    try testing.expect(!t.ctx.animating and !s.last.animating);
+    maybeSnap(&t, "press-motion-rest.png");
+
+    const card = t.findText("press").?;
+    t.down(card.x + card.w / 2, card.y + card.h / 2);
+    // Same frame as the pointer-down: the scale goal is 0.9 and a follow-up
+    // animation frame is requested, with no app `animationFrame()`.
+    try testing.expectApproxEqAbs(@as(f64, 0.9), scaleGoal(&t, s.id).?, 1e-5);
+    try testing.expect(t.ctx.animating and s.last.animating);
+    t.advance(0.1);
+    try testing.expectApproxEqAbs(@as(f32, 0.95), s.last.scale, 0.02);
+    t.advance(0.2);
+    try testing.expectApproxEqAbs(@as(f32, 0.9), s.last.scale, 1e-3);
+    try testing.expect(!t.ctx.animating and !s.last.animating);
+    maybeSnap(&t, "press-motion-held.png");
+    // Held still: no frames while idle.
+    t.frame();
+    try testing.expect(!t.ctx.animating and !s.last.animating);
+    try testing.expectApproxEqAbs(@as(f64, 0.9), scaleGoal(&t, s.id).?, 1e-5);
+
+    t.up();
+    try testing.expectApproxEqAbs(@as(f64, 1.0), scaleGoal(&t, s.id).?, 1e-5);
+    try testing.expect(t.ctx.animating and s.last.animating);
+    t.settle(1);
+    try testing.expectApproxEqAbs(@as(f32, 1), s.last.scale, 1e-3);
+    try testing.expect(!t.ctx.animating and !s.last.animating);
+    maybeSnap(&t, "press-motion-released.png");
+}
+
+test "press overlay still clicks on release when the box handles clicked()" {
+    var s: PressScene = .{ .handle_click = true };
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&s, PressScene.view), .{ .width = 200, .height = 120, .scale = 1 });
+    defer t.deinit();
+    t.settle(1);
+    try t.clickText("press");
+    try testing.expectEqual(@as(u32, 1), s.clicks);
+    t.settle(1);
+    try testing.expectApproxEqAbs(@as(f32, 1), s.last.scale, 1e-3);
+    try testing.expect(!t.ctx.animating);
 }
 
 test "hover scales the card; a number eases; reduced motion jumps" {

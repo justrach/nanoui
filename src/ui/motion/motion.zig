@@ -273,14 +273,18 @@ fn step(c: *Context, s: *State, id: u64, m: Motion, initial: ?Target, leaving: b
     if (leaving) {
         if (m.exit) |e| goal = goal.overlay(e);
     } else {
-        // Over it, or over something in it; pressing it alone.
+        // Over it, or over something in it. Pressing it: interact() sets
+        // `c.active` after this, and finish() clears it after a release, so
+        // a mouse-down on `hot` is a press this frame, and a mouse-up is
+        // not even while `c.active` still names the box.
         const over = c.hot == id or std.mem.indexOfScalar(u64, c.hot_path.items, id) != null;
         if (m.hover) |h| if (over) {
             goal = goal.overlay(h);
         };
-        if (m.press) |p| if (c.active == id) {
-            goal = goal.overlay(p);
-        };
+        if (m.press) |p| {
+            if (c.input.pressed and c.hot == id) c.active = id;
+            if (c.active == id and c.input.down) goal = goal.overlay(p);
+        }
     }
     const tr: Transition = if (c.reduced_motion or c.reduce_motion) .instant else m.transition;
     var f: Frame = .{ .gestures = m.hover != null or m.press != null, .layout = if (m.layout) id else 0 };
