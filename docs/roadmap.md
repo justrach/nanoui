@@ -1,17 +1,17 @@
 # nanoui Roadmap
 
-Baseline: **[`v0.14.11`](https://github.com/justrach/nanoui/releases/tag/v0.14.11)** (2026-11-24), plus recent merges on `main`.
+Baseline: **[`v0.14.12`](https://github.com/justrach/nanoui/releases/tag/v0.14.12)** (2026-11-25).
 See [Benchmarks](benchmarks.md) for current macOS, iOS, iPadOS, CPU-raster, and Linux numbers, [CLI Reference](cli.md) for `nui` workflows, [docs/ios.md](ios.md) for iOS/iPadOS bundling, and [docs/android.md](android.md) for Android details.
 
 ---
 
 ## Shipped Recently
 
-### On `main` (post-`v0.14.11`)
+### `v0.14.12` (2026-11-25)
 
 - **Accessibility listbox & option roles ([#246](https://github.com/justrach/nanoui/pull/246)):** Added `Role.listbox`, `Role.option`, `Describe.controls` / `Element.controls`, `position`, and `set_size` (`src/ui/access.zig`) with macOS NSAccessibility (`src/ui/a11y.zig`) and iOS VoiceOver (`src/ios/access.zig`) mappings so pickers and command palettes expose active descendants cleanly.
 - **Web Canvas 2D fallback & recovery ([#240](https://github.com/justrach/nanoui/pull/240)):** Added opt-in startup and live device-loss failover from WebGPU to CPU-rasterized Canvas 2D (`src/web/host.js`, `src/web/web.zig`), capping `cpuMaxScale`, presenting RGBA directly via `ImageData`, cancelling in-progress input on device loss, and fixing `uncapturederror` listener cleanup.
-- **Cross-platform HDR, WebKitGTK privacy, iPadOS scene & iOS EDR fixes:**
+- **Cross-platform HDR, WebKitGTK privacy, iPadOS scene & iOS EDR fixes ([#255](https://github.com/justrach/nanoui/pull/255)):**
   - **Windows HDR retry gating (`src/windows/surface_gpu.zig`, `src/windows/surface_display.zig`):** Avoid retrying `setExtended(true)` every painted frame when an HDR-capable app runs on an SDR monitor; retry only on `setColour`, presenter creation, `WM_DISPLAYCHANGE`, or monitor changes.
   - **Linux WebKitGTK `PageOptions.private` & `allow_request` (`src/page_webkitgtk.zig`, `src/linux/webkit.zig`):** Isolate `private` pages in per-page ephemeral `WebKitNetworkSession` (6.0) or `WebKitWebsiteDataManager` + `WebKitWebContext` (4.x) instances, and filter every frame's navigations, redirects, and new-window actions fail-closed via `decide-policy` (`src/linux/tests_page.zig`).
   - **iPadOS scene-scoped alerts & `⌘W` (`src/ios/scenes.zig`, `src/ios/app.zig`, `src/ios/keys.zig`, `src/ios/touch.zig`, `src/ios/dialog.zig`):** Route dialogs and `⌘W` to the focused/active `UIWindowScene` instead of always targeting the first scene (`docs/ios.md`), and unblock waiting dialogs if their scene disconnects.
