@@ -199,6 +199,110 @@ fn blurAlongX(x: f32, y: f32, sigma: f32, corner: f32, hw: f32, hh: f32) f32 {
 /// `--cheap-shadow` sets 1 (faster, but no longer Metal's pixels).
 pub var shadow_samples: u32 = 8;
 
+pub const F4 = @Vector(4, f32);
+
+inline fn erf4(x: F4) F4 {
+    const zero: F4 = @splat(0);
+    const one: F4 = @splat(1);
+    const neg_one: F4 = @splat(-1);
+    const c1: F4 = @splat(0.278393);
+    const c2: F4 = @splat(0.230389);
+    const c3: F4 = @splat(0.078108);
+    const s = @select(f32, x < zero, neg_one, one);
+    const a = @abs(x);
+    var y = one + (c1 + (c2 + c3 * (a * a)) * a) * a;
+    y *= y;
+    return s - s / (y * y);
+}
+
+/// Per-scanline shadow parameters: hoists y-only Gaussian weights, corner
+/// curve widths, and flat-body folding out of the inner pixel loop.
+pub const ShadowRow = struct {
+    hw: f32,
+    k: f32,
+    w_flat: f32,
+    w_total: f32,
+    interior_x: f32,
+    exterior_x: f32,
+    rem_curved: [8]f32,
+    rem_w: [8]f32,
+    rem_n: u8,
+
+    pub fn init(py: f32, hw: f32, hh: f32, corner: f32, sigma: f32) ?ShadowRow {
+        const c = @abs(corner);
+        const n = @min(@max(shadow_samples, 1), 8);
+        const low = py - hh;
+        const high = py + hh;
+        const start = std.math.clamp(-3 * sigma, low, high);
+        const end = std.math.clamp(3 * sigma, low, high);
+        if (end <= start) return null;
+        const step = (end - start) / @as(f32, @floatFromInt(n));
+        var y = start + step * 0.5;
+        var row: ShadowRow = .{
+            .hw = hw,
+            .k = @sqrt(@as(f32, 0.5)) / sigma,
+            .w_flat = 0,
+            .w_total = 0,
+            .interior_x = 0,
+            .exterior_x = 0,
+            .rem_curved = undefined,
+            .rem_w = undefined,
+            .rem_n = 0,
+        };
+        var min_curved = std.math.inf(f32);
+        var max_curved: f32 = 0;
+        for (0..n) |_| {
+            const wk = gaussian(y, sigma) * step;
+            const delta = @min(hh - c - @abs(py - y), 0);
+            row.w_total += wk;
+            if (delta == 0) {
+                row.w_flat += wk;
+                min_curved = @min(min_curved, hw);
+                max_curved = @max(max_curved, hw);
+            } else {
+                const curved = hw - c + @sqrt(@max(0, c * c - delta * delta));
+                min_curved = @min(min_curved, curved);
+                max_curved = @max(max_curved, curved);
+                row.rem_curved[row.rem_n] = curved;
+                row.rem_w[row.rem_n] = wk;
+                row.rem_n += 1;
+            }
+            y += step;
+        }
+        row.interior_x = min_curved - 5.5 * sigma;
+        row.exterior_x = max_curved + 5.5 * sigma;
+        return row;
+    }
+
+    inline fn blurX(px: f32, curved: f32, k: f32) f32 {
+        return 0.5 * (erf((px + curved) * k) - erf((px - curved) * k));
+    }
+
+    inline fn blurX4(px: F4, curved: f32, k: F4) F4 {
+        const cv: F4 = @splat(curved);
+        return @as(F4, @splat(0.5)) * (erf4((px + cv) * k) - erf4((px - cv) * k));
+    }
+
+    pub inline fn evalScalar(row: *const ShadowRow, px: f32) f32 {
+        const apx = @abs(px);
+        if (apx <= row.interior_x) return row.w_total;
+        if (apx >= row.exterior_x) return 0;
+        var alpha: f32 = if (row.w_flat > 0) row.w_flat * blurX(px, row.hw, row.k) else 0;
+        for (0..row.rem_n) |j| alpha += row.rem_w[j] * blurX(px, row.rem_curved[j], row.k);
+        return alpha;
+    }
+
+    pub inline fn eval4(row: *const ShadowRow, px: F4) F4 {
+        const apx = @abs(px);
+        if (@reduce(.And, apx <= @as(F4, @splat(row.interior_x)))) return @splat(row.w_total);
+        if (@reduce(.And, apx >= @as(F4, @splat(row.exterior_x)))) return @splat(0);
+        const k: F4 = @splat(row.k);
+        var alpha: F4 = if (row.w_flat > 0) @as(F4, @splat(row.w_flat)) * blurX4(px, row.hw, k) else @splat(0);
+        for (0..row.rem_n) |j| alpha += @as(F4, @splat(row.rem_w[j])) * blurX4(px, row.rem_curved[j], k);
+        return alpha;
+    }
+};
+
 pub fn shadowAlpha(px: f32, py: f32, hw: f32, hh: f32, corner: f32, sigma: f32) f32 {
     const c = @abs(corner);
     const n = @min(@max(shadow_samples, 1), 8);
@@ -214,6 +318,39 @@ pub fn shadowAlpha(px: f32, py: f32, hw: f32, hh: f32, corner: f32, sigma: f32) 
         y += step;
     }
     return alpha;
+}
+
+test "scanline ShadowRow matches shadowAlpha within 1e-5" {
+    const saved = shadow_samples;
+    defer shadow_samples = saved;
+    const cases = [_]struct { hw: f32, hh: f32, r: f32, sigma: f32 }{
+        .{ .hw = 12, .hh = 12, .r = 6, .sigma = 4 },
+        .{ .hw = 100, .hh = 60, .r = 12, .sigma = 16 },
+        .{ .hw = 40, .hh = 16, .r = 0, .sigma = 6 },
+        .{ .hw = 6, .hh = 8, .r = -6, .sigma = 2.5 },
+    };
+    for ([_]u32{ 8, 1 }) |samples| {
+        shadow_samples = samples;
+        for (cases) |tc| {
+            var py = -tc.hh - 3.5 * tc.sigma;
+            while (py <= tc.hh + 3.5 * tc.sigma) : (py += 3.5) {
+                const row_opt = ShadowRow.init(py, tc.hw, tc.hh, tc.r, tc.sigma);
+                var px = -tc.hw - 3.5 * tc.sigma;
+                while (px <= tc.hw + 3.5 * tc.sigma) : (px += 3.0) {
+                    const ref = shadowAlpha(px, py, tc.hw, tc.hh, tc.r, tc.sigma);
+                    const s = if (row_opt) |*row| row.evalScalar(px) else 0;
+                    try std.testing.expectApproxEqAbs(ref, s, 1e-5);
+                    if (row_opt) |*row| {
+                        const v4 = row.eval4(.{ px, px + 0.5, px + 1.0, px + 1.5 });
+                        inline for (0..4) |lane| {
+                            const pxl = px + @as(f32, @floatFromInt(lane)) * 0.5;
+                            try std.testing.expectApproxEqAbs(shadowAlpha(pxl, py, tc.hw, tc.hh, tc.r, tc.sigma), v4[lane], 1e-5);
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 pub fn shadowDither(x: usize, y: usize) f32 {

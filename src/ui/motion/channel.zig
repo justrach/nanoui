@@ -51,6 +51,29 @@ pub const Channel = struct {
         ch.moving = ch.from != target or ch.velocity0 != 0;
     }
 
+    /// Heads for `target` from `now` and brings the value up to `now`.
+    pub fn step(ch: *Channel, target: f64, tr: Transition, delay: f64, now: f64) void {
+        if (tr == .instant and delay <= 0) return ch.jump(target);
+        if (target == ch.target and (ch.moving or ch.value == target)) return ch.sample(now);
+        ch.sample(now);
+        ch.from = ch.value;
+        ch.velocity0 = if (tr == .spring) ch.velocity else 0;
+        ch.target = target;
+        ch.since = now;
+        ch.delay = delay;
+        ch.transition = tr;
+        ch.moving = ch.from != target or ch.velocity0 != 0;
+        if (ch.moving) {
+            if (delay > 0) {
+                ch.velocity = 0;
+            } else if (delay < 0) {
+                ch.sample(now);
+            } else if (tr != .spring) {
+                ch.velocity = 0;
+            }
+        }
+    }
+
     /// There at once, still.
     pub fn jump(ch: *Channel, v: f64) void {
         ch.* = .{ .from = v, .target = v, .value = v };

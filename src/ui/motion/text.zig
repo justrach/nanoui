@@ -18,6 +18,13 @@ pub const Options = struct {
     transition: motion.Transition = .default,
 };
 
+const mt_keys = blk: {
+    @setEvalBranchQuota(20000);
+    var list: [64][]const u8 = undefined;
+    for (0..64) |i| list[i] = std.fmt.comptimePrint("mt{d}", .{i});
+    break :blk list;
+};
+
 /// Draws `str` as staggered units that enter. Call it where `ui.text` would go.
 pub fn text(c: *Context, str: []const u8, style: types.TextStyle, opts: Options) void {
     const row = div_mod.div(c).row().itemsCenter();
@@ -26,7 +33,7 @@ pub fn text(c: *Context, str: []const u8, style: types.TextStyle, opts: Options)
     var n: usize = 0;
     while (i < str.len) : (n += 1) {
         const piece = next(str, i, opts.unit);
-        c.next_key = c.print("mt{d}", .{n});
+        c.next_key = if (n < mt_keys.len) mt_keys[n] else c.print("mt{d}", .{n});
         const f = motion.frame(c, .{
             .initial = opts.enter,
             .delay = motion.stagger(n, opts.stagger_each),

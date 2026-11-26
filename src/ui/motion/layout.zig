@@ -11,13 +11,14 @@ const Transition = @import("channel.zig").Transition;
 /// The offset to draw box `id` at, laid out at `rect` this frame: from
 /// where it was drawn, easing to nothing.
 pub fn shift(c: *Context, id: u64, rect: types.Rect) [2]f32 {
-    const s = c.motion_store.map.getPtr(id) orelse return .{ 0, 0 };
-    const tr: Transition = if (c.reduced_motion or c.reduce_motion) .instant else s.layout_transition;
-    defer s.rect = .{ rect.x, rect.y, rect.w, rect.h };
-    const was = s.rect orelse return .{ 0, 0 };
+    const l = c.motion_store.layouts.getPtr(id) orelse return .{ 0, 0 };
+    l.seen = c.frame;
+    const tr: Transition = if (c.reduced_motion or c.reduce_motion) .instant else l.transition;
+    defer l.rect = .{ rect.x, rect.y, rect.w, rect.h };
+    const was = l.rect orelse return .{ 0, 0 };
     const moved: [2]f32 = .{ was[0] - rect.x, was[1] - rect.y };
     var out: [2]f32 = undefined;
-    for (&s.layout, 0..) |*ch, i| {
+    for (&l.ch, 0..) |*ch, i| {
         if (tr == .instant) {
             // Settle an existing glide even when its destination hasn't moved.
             ch.jump(0);

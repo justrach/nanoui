@@ -15,8 +15,8 @@ pub fn share(c: *Context, key: []const u8, show: bool, m: motion.Motion) ?motion
     var out = f;
     out.layout = idOf(key);
     const tr = if (c.reduced_motion) @as(@import("channel.zig").Transition, .instant) else m.transition;
-    if (c.motion_store.get(c.gpa, out.layout, c.frame)) |got| {
-        got.state.layout_transition = tr;
+    if (c.motion_store.getLayout(c.gpa, out.layout, c.frame)) |got| {
+        got.state.transition = tr;
     }
     return out;
 }

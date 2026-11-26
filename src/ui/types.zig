@@ -566,6 +566,28 @@ pub const Fade = struct {
     ramp: f32,
 };
 
+/// Fast hash context for 64-bit box and cache ids.
+pub const IdContext = struct {
+    pub fn hash(_: IdContext, k: u64) u64 {
+        const x = k *% 0xbf58476d1ce4e5b9;
+        return x ^ (x >> 31);
+    }
+    pub fn eql(_: IdContext, a: u64, b: u64) bool {
+        return a == b;
+    }
+};
+
+pub fn IdMap(comptime V: type) type {
+    return std.HashMapUnmanaged(u64, V, IdContext, std.hash_map.default_max_load_percentage);
+}
+
+pub inline fn mixId(seed: u64, v: u64) u64 {
+    var x = seed +% (v ^ 0x9e3779b97f4a7c15);
+    x = (x ^ (x >> 30)) *% 0xbf58476d1ce4e5b9;
+    x = (x ^ (x >> 27)) *% 0x94d049bb133111eb;
+    return x ^ (x >> 31);
+}
+
 test "rect" {
     const r: Rect = .{ .x = 10, .y = 10, .w = 100, .h = 50 };
     try std.testing.expect(r.contains(.{ .x = 20, .y = 20 }));

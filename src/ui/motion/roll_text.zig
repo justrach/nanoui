@@ -76,8 +76,8 @@ fn advanceGraphemes(s: []const u8, from_pos: usize, steps: usize) usize {
 pub fn rollText(c: *Context, key: []const u8, str: []const u8, st: types.TextStyle, opts: Options) void {
     if (str.len == 0 or str.len > 64) return widgets.text(c, str, st);
     const id = motion.scoped(c, key);
-    const got = c.motion_store.get(c.gpa, id, c.frame) orelse return widgets.text(c, str, st);
-    const r = &got.state.roll;
+    const got = c.motion_store.getRoll(c.gpa, id, c.frame) orelse return widgets.text(c, str, st);
+    const r = got.state;
     const continuous = !got.fresh and c.frame > 1 and (r.last_frame == c.frame or r.last_frame + 1 == c.frame);
     r.last_frame = c.frame;
     if (!continuous) {

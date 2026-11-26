@@ -79,14 +79,18 @@ pub fn run(c: *Context, view: View, ts: *text.TextSystem, instances: *std.ArrayL
     _ = layout.measure(c, 0, size.w);
     layout.arrange(c, 0, .{ .w = size.w, .h = size.h });
     if (c.pixel_snap) layout.snapToPixels(c);
-    std.mem.swap(std.AutoHashMapUnmanaged(u64, types.Rect), &c.prev_rects, &c.rects);
+    std.mem.swap(@TypeOf(c.rects), &c.prev_rects, &c.rects);
     c.rects.clearRetainingCapacity();
-    for (c.nodes.items) |n| {
+    const has_cap = blk: {
+        c.rects.ensureTotalCapacity(c.gpa, @intCast(c.nodes.items.len)) catch break :blk false;
+        break :blk true;
+    };
+    for (c.nodes.items) |*n| {
         if (n.layout_dependent) {
             const previous = c.prev_rects.get(n.id);
             if (previous == null or previous.?.w != n.rect.w or previous.?.h != n.rect.h) c.animating = true;
         }
-        c.rects.put(c.gpa, n.id, n.rect) catch {};
+        if (has_cap) c.rects.putAssumeCapacity(n.id, n.rect) else c.rects.put(c.gpa, n.id, n.rect) catch {};
     }
     for (c.stage_nodes[0..c.stage_count], 0..) |nidx, si| {
         if (nidx < c.nodes.items.len) c.stage_rects[si] = c.nodes.items[nidx].rect;

@@ -17,11 +17,11 @@ fn cross(d: types.Direction, s: types.Size) f32 {
     return if (d == .row) s.h else s.w;
 }
 
-fn mainLen(d: types.Direction, st: types.Style) types.Length {
+fn mainLen(d: types.Direction, st: *const types.Style) types.Length {
     return if (d == .row) st.width else st.height;
 }
 
-fn crossLen(d: types.Direction, st: types.Style) types.Length {
+fn crossLen(d: types.Direction, st: *const types.Style) types.Length {
     return if (d == .row) st.height else st.width;
 }
 
@@ -29,7 +29,7 @@ fn crossLen(d: types.Direction, st: types.Style) types.Length {
 pub fn measure(c: *Context, index: u32, avail_w: f32) types.Size {
     if (index == 0) c.building = false;
     const n = c.node(index);
-    const st = n.style;
+    const st = &n.style;
     var box_w = switch (st.width) {
         .px => |v| v,
         else => avail_w,
@@ -39,6 +39,7 @@ pub fn measure(c: *Context, index: u32, avail_w: f32) types.Size {
 
     var content: types.Size = .{};
     var flexible = false;
+    var escape = st.layer > 0 or st.absolute or st.fixed or st.transform != null or st.offset.x != 0 or st.offset.y != 0 or st.scale != 1 or st.rotation != 0 or st.turn != 0 or st.shadow != null or st.shadows.len > 0 or st.layout_motion != 0 or st.settle_y != null or st.spin != 0 or st.pulse != null or st.scroll or st.scroll_x or st.wheel or st.occlude or st.group or st.selectable or st.gap < 0 or st.padding.top < 0 or st.padding.right < 0 or st.padding.bottom < 0 or st.padding.left < 0;
     switch (n.content) {
         .text => |*t| {
             if (!c.text_warmed) {
@@ -69,15 +70,18 @@ pub fn measure(c: *Context, index: u32, avail_w: f32) types.Size {
             } else content = .{ .w = ic.size, .h = ic.size };
         },
         // Sized by its style (the widget gives the size).
-        .image, .texture, .hole, .canvas => {},
+        .image, .texture, .hole => {},
+        .canvas => escape = true,
         .none => {
             var child = n.first_child;
             var count: f32 = 0;
             while (child != none) : (child = c.node(child).next) {
                 // A box that scrolls sideways lays its children out at their own widths.
                 const s = measure(c, child, if (st.scroll_x) std.math.inf(f32) else inner_w);
-                if (c.node(child).style.absolute) continue;
-                if (!st.scroll_x) flexible = flexible or c.node(child).flexible;
+                const ch = c.node(child);
+                escape = escape or ch.paint_escape;
+                if (ch.style.absolute) continue;
+                if (!st.scroll_x) flexible = flexible or ch.flexible;
                 const dir = st.direction;
                 const m = main(dir, s);
                 const x = cross(dir, s);
@@ -111,8 +115,10 @@ pub fn measure(c: *Context, index: u32, avail_w: f32) types.Size {
     if (n.content == .text and n.content.text.style.cuts()) size.w = @min(size.w, box_w);
     size.w = std.math.clamp(size.w, st.min_width, @max(st.min_width, st.max_width));
     size.h = std.math.clamp(size.h, st.min_height, @max(st.min_height, st.max_height));
-    c.node(index).measured = size;
-    c.node(index).flexible = flexible and st.width != .px;
+    if (flexible or (!st.clip and (content.w + st.padding.horizontal() > size.w + 0.01 or content.h + st.padding.vertical() > size.h + 0.01))) escape = true;
+    n.measured = size;
+    n.flexible = flexible and st.width != .px;
+    n.paint_escape = escape;
     return size;
 }
 
@@ -140,7 +146,7 @@ fn roundHalfTowardZero(v: f32) f32 {
 /// Places box `index` in `rect` and its children inside it.
 pub fn arrange(c: *Context, index: u32, rect_in: types.Rect) void {
     const n = c.node(index);
-    const st = n.style;
+    const st = &n.style;
     var rect = rect_in;
     // Where its parent puts it, its ancestors' moves aside: moved since the
     // last layout, a `settle_y` box springs there from where it was shown.
@@ -170,9 +176,9 @@ pub fn arrange(c: *Context, index: u32, rect_in: types.Rect) void {
     while (child != none) : (child = c.node(child).next) {
         const ch = c.node(child);
         if (ch.style.absolute) continue;
-        const len = mainLen(dir, ch.style);
+        const len = mainLen(dir, &ch.style);
         used += if (len == .fill) 0 else main(dir, ch.measured);
-        grow_total += growOf(dir, ch.style);
+        grow_total += growOf(dir, &ch.style);
         if (dir == .row and ch.flexible) shrink_total += main(dir, ch.measured);
         count += 1;
     }
@@ -227,15 +233,15 @@ pub fn arrange(c: *Context, index: u32, rect_in: types.Rect) void {
             arrange(c, child, .{ .x = inner.x - scroll_x, .y = inner.y - scroll_y, .w = w, .h = h });
             continue;
         }
-        const len = mainLen(dir, ch.style);
-        const grows = growOf(dir, ch.style) > 0;
+        const len = mainLen(dir, &ch.style);
+        const grows = growOf(dir, &ch.style) > 0;
         var m = if (len == .fill) 0 else main(dir, ch.measured);
-        if (free > 0 and grow_total > 0) m += free * growOf(dir, ch.style) / grow_total;
+        if (free > 0 and grow_total > 0) m += free * growOf(dir, &ch.style) / grow_total;
         // Too little room in a row: boxes of wrapping text give it back.
         if (free < 0 and shrink_total > 0 and dir == .row and ch.flexible and !st.scroll_x)
             m = @max(ch.style.min_width, m + free * m / shrink_total);
 
-        const clen = crossLen(dir, ch.style);
+        const clen = crossLen(dir, &ch.style);
         const stretch = clen == .fill or (st.align_items == .stretch and clen == .auto);
         var x = if (stretch) inner_cross else cross(dir, ch.measured);
         if (dir == .row) m = @min(m, ch.style.max_width) else x = @min(x, ch.style.max_width);
@@ -280,7 +286,7 @@ fn fitRow(c: *Context, first: u32, gap: f32, inner_w: f32) f32 {
         const ch = c.node(child);
         if (ch.style.absolute) continue;
         used += if (ch.style.width == .fill) 0 else ch.measured.w;
-        grow_total += growOf(.row, ch.style);
+        grow_total += growOf(.row, &ch.style);
         if (ch.flexible) shrink_total += ch.measured.w;
         count += 1;
     }
@@ -294,7 +300,7 @@ fn fitRow(c: *Context, first: u32, gap: f32, inner_w: f32) f32 {
         var ch_h = ch.measured.h;
         if (ch.flexible and ch.style.width != .px) {
             var m = if (ch.style.width == .fill) 0 else ch.measured.w;
-            if (free > 0 and grow_total > 0) m += free * growOf(.row, ch.style) / grow_total;
+            if (free > 0 and grow_total > 0) m += free * growOf(.row, &ch.style) / grow_total;
             if (free < 0 and shrink_total > 0) m = @max(ch.style.min_width, m + free * m / shrink_total);
             m = @min(m, ch.style.max_width);
             if (@abs(m - ch.measured.w) > 0.5) ch_h = measure(c, child, m).h;
@@ -304,7 +310,7 @@ fn fitRow(c: *Context, first: u32, gap: f32, inner_w: f32) f32 {
     return h;
 }
 
-fn growOf(dir: types.Direction, st: types.Style) f32 {
+fn growOf(dir: types.Direction, st: *const types.Style) f32 {
     if (st.grow > 0) return st.grow;
     return if (mainLen(dir, st) == .fill) 1 else 0;
 }

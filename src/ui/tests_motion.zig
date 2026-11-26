@@ -291,3 +291,56 @@ test "keyframes play a pass, then back with yoyo, and stop at the end" {
     try testing.expectEqual(@as(f32, 0), s.spin.x);
     try testing.expect(!s.spin.animating);
 }
+
+const PressBox = struct {
+    with_click: bool = false,
+    clicks: u32 = 0,
+    last: motion.Frame = .{},
+
+    fn view(s: *PressBox, c: *ui.Context) void {
+        const root = ui.div(c).column().sizeFull().bg(.white);
+        defer root.end();
+        s.last = motion.frame(c, .{
+            .press = .{ .scale = 0.85 },
+            .transition = .{ .tween = .{ .duration = 0.2, .ease = .linear } },
+        });
+        const card = ui.div(c).w(80).h(40).bg(.hex(0x3366ff)).control().motion(s.last);
+        defer card.end();
+        if (s.with_click and card.clicked()) s.clicks += 1;
+    }
+};
+
+fn expectPressAnimates(with_click: bool) !void {
+    var s: PressBox = .{ .with_click = with_click };
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&s, PressBox.view), .{ .width = 120, .height = 80 });
+    defer t.deinit();
+    t.frame();
+    try testing.expect(!t.ctx.animating);
+    try testing.expectApproxEqAbs(@as(f32, 1.0), s.last.scale, 1e-4);
+
+    // Pressing starts the press animation immediately, even without `.clicked()`.
+    t.down(40, 20);
+    try testing.expect(t.ctx.animating);
+    t.settle(1);
+    try testing.expect(!t.ctx.animating);
+    try testing.expectApproxEqAbs(@as(f32, 0.85), s.last.scale, 1e-3);
+
+    // Releasing retargets back to rest on the release frame with no extra wakeups.
+    t.up();
+    try testing.expect(t.ctx.animating);
+    if (with_click) try testing.expectEqual(@as(u32, 1), s.clicks);
+    t.advance(0.1);
+    try testing.expect(s.last.scale > 0.85 and s.last.scale < 1.0);
+    t.settle(1);
+    try testing.expect(!t.ctx.animating);
+    try testing.expectApproxEqAbs(@as(f32, 1.0), s.last.scale, 1e-3);
+}
+
+test "press target animates on press and release without .clicked() or extra frame requests" {
+    try expectPressAnimates(false);
+}
+
+test "press target animates on press and release alongside .clicked()" {
+    try expectPressAnimates(true);
+}

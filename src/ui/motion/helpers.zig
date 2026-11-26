@@ -52,7 +52,7 @@ pub fn revealT(c: *Context, key: []const u8, hovered: bool) f32 {
 }
 
 pub fn resetReveal(c: *Context, key: []const u8) void {
-    _ = c.motion_store.map.remove(scoped(c, key, "reveal:"));
+    c.motion_store.remove(scoped(c, key, "reveal:"));
 }
 
 pub fn hoverBlend(c: *Context, key: []const u8, hovered: bool, rest: Color, hover: Color) Color {
@@ -72,13 +72,15 @@ fn blend(c: *Context, key: []const u8, prefix: []const u8, hovered: bool, spec: 
     const previous = if (c.motion_store.map.getPtr(id)) |s| s.seen else c.frame;
     const got = c.motion_store.get(c.gpa, id, c.frame) orelse return if (hovered) 1 else 0;
     const channel = &got.state.ch[0];
-    if (got.fresh or (prune and c.frame > previous + 1)) channel.* = .at(0);
+    if (got.fresh or (prune and c.frame > previous + 1)) {
+        channel.* = .at(0);
+        got.state.has |= 1;
+    }
     const target: f32 = if (hovered) 1 else 0;
     if (c.reduced_motion or c.reduce_motion) {
         channel.jump(target);
     } else {
-        channel.retarget(target, spec.transition(), 0, c.time);
-        channel.sample(c.time);
+        channel.step(target, spec.transition(), 0, c.time);
         if (channel.moving) c.animationFrame();
     }
     return @floatCast(channel.value);

@@ -28,6 +28,7 @@ pub const Node = struct {
     flexible: bool = false,
     /// Built using the preceding size; a size change needs another frame.
     layout_dependent: bool = false,
+    paint_escape: bool = false,
     measured: types.Size = .{},
     rect: types.Rect = .{},
 };
@@ -136,8 +137,8 @@ pub const Context = struct {
     stage_count: usize = 0,
     a11y_items: std.ArrayList(A11yItem) = .empty,
     // Kept across frames.
-    rects: std.AutoHashMapUnmanaged(u64, types.Rect) = .empty,
-    prev_rects: std.AutoHashMapUnmanaged(u64, types.Rect) = .empty,
+    rects: types.IdMap(types.Rect) = .empty,
+    prev_rects: types.IdMap(types.Rect) = .empty,
     hits: std.ArrayList(Hit) = .empty,
     next_hits: std.ArrayList(Hit) = .empty,
     anims: std.AutoHashMapUnmanaged(u64, Anim) = .empty,
@@ -440,25 +441,24 @@ pub const Context = struct {
 
     pub fn childId(c: *Context, key: ?[]const u8) u64 {
         const parent = &c.nodes.items[c.stack.items[c.stack.items.len - 1]];
-        var h = std.hash.Wyhash.init(parent.id);
         const k = key orelse c.next_key;
         c.next_key = null;
         if (k) |v| {
-            h.update(v);
-        } else if (c.next_key_int) |n| {
-            h.update("#");
-            h.update(std.mem.asBytes(&n));
-        } else h.update(std.mem.asBytes(&parent.child_count));
-        c.next_key_int = null;
-        return h.final();
+            c.next_key_int = null;
+            return std.hash.Wyhash.hash(parent.id, v);
+        }
+        if (c.next_key_int) |n| {
+            c.next_key_int = null;
+            return types.mixId(parent.id ^ 0x517cc1b727220a95, n);
+        }
+        return types.mixId(parent.id, parent.child_count);
     }
 
-    fn add(c: *Context, new_node: Node) u32 {
+    fn addNode(c: *Context, id: u64, style: *const types.Style, content: Content) u32 {
         const parent_index = c.stack.items[c.stack.items.len - 1];
         const index: u32 = @intCast(c.nodes.items.len);
-        var n = new_node;
-        n.parent = parent_index;
-        c.nodes.append(c.gpa, n) catch @panic("OOM");
+        const n = c.nodes.addOne(c.gpa) catch @panic("OOM");
+        n.* = .{ .id = id, .parent = parent_index, .style = style.*, .content = content };
         const parent = &c.nodes.items[parent_index];
         if (parent.last_child == none) parent.first_child = index else c.nodes.items[parent.last_child].next = index;
         parent.last_child = index;
@@ -478,7 +478,7 @@ pub const Context = struct {
     }
 
     pub fn openImpl(c: *Context, style: types.Style, key: ?[]const u8) u32 {
-        const index = c.add(.{ .id = c.childId(key), .style = style });
+        const index = c.addNode(c.childId(key), &style, .none);
         c.stack.append(c.gpa, index) catch @panic("OOM");
         return index;
     }
@@ -510,7 +510,7 @@ pub const Context = struct {
     }
 
     pub fn leafImpl(c: *Context, style: types.Style, content: Content, key: ?[]const u8) u32 {
-        return c.add(.{ .id = c.childId(key), .style = style, .content = content });
+        return c.addNode(c.childId(key), &style, content);
     }
 
     pub fn node(c: *Context, index: u32) *Node {

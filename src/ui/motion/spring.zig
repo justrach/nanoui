@@ -9,6 +9,7 @@ var cache: struct {
     stiffness: f32 = 0,
     damping: f32 = 0,
     mass: f32 = 0,
+    omega: f64 = 0,
     m: [4]f64 = .{ 0, 0, 0, 0 },
 } = .{};
 
@@ -47,16 +48,15 @@ pub const Spring = struct {
         // solution is reused when stiffness, damping, mass and t match.
         if (seconds == cache.t and s.stiffness == cache.stiffness and s.damping == cache.damping and s.mass == cache.mass)
             return cache.m;
-        const m = s.compute(seconds);
-        cache = .{ .t = seconds, .stiffness = s.stiffness, .damping = s.damping, .mass = s.mass, .m = m };
+        const omega = @sqrt(@as(f64, s.stiffness) / s.mass);
+        const m = s.compute(seconds, omega);
+        cache = .{ .t = seconds, .stiffness = s.stiffness, .damping = s.damping, .mass = s.mass, .omega = omega, .m = m };
         return m;
     }
 
-    fn compute(s: Spring, seconds: f64) [4]f64 {
-        const k: f64 = s.stiffness;
+    fn compute(s: Spring, seconds: f64, omega: f64) [4]f64 {
         const c: f64 = s.damping;
         const m: f64 = s.mass;
-        const omega = @sqrt(k / m);
         const decay = c / (2 * m);
         const disc = decay * decay - omega * omega;
         var a: f64 = undefined;
@@ -86,7 +86,12 @@ pub const Spring = struct {
     /// Whether it has come to rest at its target: within `epsilon` units
     /// and moving slower than its frequency allows for that.
     pub fn settled(s: Spring, displacement: f64, velocity: f64, epsilon: f64) bool {
-        return @abs(displacement) <= epsilon and @abs(velocity) <= epsilon * @sqrt(@as(f64, s.stiffness) / s.mass);
+        if (@abs(displacement) > epsilon) return false;
+        const omega = if (s.stiffness == cache.stiffness and s.mass == cache.mass)
+            cache.omega
+        else
+            @sqrt(@as(f64, s.stiffness) / s.mass);
+        return @abs(velocity) <= epsilon * omega;
     }
 };
 

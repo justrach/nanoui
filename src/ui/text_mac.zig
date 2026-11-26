@@ -107,8 +107,8 @@ pub const TextSystem = struct {
     /// The fast path's cached shaping of printable ASCII, by style key and run-font id.
     tables: std.AutoHashMapUnmanaged(FontKey, *shaper.Table) = .empty,
     font_tables: std.AutoHashMapUnmanaged(u16, *shaper.Table) = .empty,
-    layouts: std.AutoHashMapUnmanaged(u64, Layout) = .empty,
-    previous: std.AutoHashMapUnmanaged(u64, Layout) = .empty,
+    layouts: types.IdMap(Layout) = .empty,
+    previous: types.IdMap(Layout) = .empty,
     wraps: @import("wrap_cache.zig").WrapCache(Line) = .{},
     scratch_glyphs: std.ArrayList(u16) = .empty,
     scratch_points: std.ArrayList(objc.CGPoint) = .empty,
@@ -248,7 +248,7 @@ pub const TextSystem = struct {
         self.wraps.clear(self.gpa);
     }
 
-    fn evictScopedLayouts(gpa: std.mem.Allocator, map: *std.AutoHashMapUnmanaged(u64, Layout)) void {
+    fn evictScopedLayouts(gpa: std.mem.Allocator, map: *types.IdMap(Layout)) void {
         var ks: std.ArrayList(u64) = .empty;
         defer ks.deinit(gpa);
         var it = map.keyIterator();
@@ -317,12 +317,12 @@ pub const TextSystem = struct {
         self.syncFonts();
         if (self.layouts.count() >= 4096) {
             freeLayouts(self.gpa, &self.previous);
-            std.mem.swap(std.AutoHashMapUnmanaged(u64, Layout), &self.layouts, &self.previous);
+            std.mem.swap(@TypeOf(self.layouts), &self.layouts, &self.previous);
         }
         self.wraps.beginFrame(self.gpa);
     }
 
-    fn freeLayouts(gpa: std.mem.Allocator, map: *std.AutoHashMapUnmanaged(u64, Layout)) void {
+    fn freeLayouts(gpa: std.mem.Allocator, map: *types.IdMap(Layout)) void {
         var it = map.valueIterator();
         while (it.next()) |l| gpa.free(l.glyphs);
         map.clearRetainingCapacity();
@@ -357,19 +357,20 @@ pub const TextSystem = struct {
     }
 
     pub fn key(s: []const u8, style: types.TextStyle, extra: u64) u64 {
+        const has_at = if (style.family) |f| std.mem.indexOfScalar(u8, f, '@') != null else false;
+        const Fixed = extern struct { size: f32, mono_scale: f32, tracking: f32, css_weight: u16, stretch: u16, weight: u8, flags: u8, pad: u16 = 0 };
+        const flags: u8 = @as(u8, @intFromBool(style.mono)) |
+            (@as(u8, @intFromBool(style.italic)) << 1) |
+            (@as(u8, @intFromBool(style.system_font)) << 2) |
+            (@as(u8, @intFromBool(style.tabular)) << 3) |
+            (@as(u8, @intFromBool(style.rounded)) << 4) |
+            (@as(u8, @intFromBool(style.serif)) << 5) |
+            (@as(u8, @intFromBool(style.ligatures)) << 6);
+        const fixed: Fixed = .{ .size = style.size, .mono_scale = style.mono_scale, .tracking = style.tracking, .css_weight = style.css_weight, .stretch = style.stretch, .weight = @backingInt(style.weight), .flags = flags };
         var h = std.hash.Wyhash.init(extra);
         h.update(s);
-        h.update(std.mem.asBytes(&style.size));
-        h.update(std.mem.asBytes(&style.mono_scale));
-        h.update(&.{ @backingInt(style.weight), @intFromBool(style.mono), @intFromBool(style.italic), @intFromBool(style.system_font), @intFromBool(style.tabular), @intFromBool(style.rounded), @intFromBool(style.serif) });
-        h.update(std.mem.asBytes(&style.tracking));
-        const has_at = if (style.family) |f| blk: {
-            h.update(f);
-            break :blk std.mem.indexOfScalar(u8, f, '@') != null;
-        } else false;
-        h.update(std.mem.asBytes(&style.css_weight));
-        h.update(std.mem.asBytes(&style.stretch));
-        h.update(&.{@intFromBool(style.ligatures)});
+        h.update(std.mem.asBytes(&fixed));
+        if (style.family) |f| h.update(f);
         return (h.final() & ~@as(u64, 1)) | @intFromBool(has_at);
     }
 
