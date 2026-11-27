@@ -225,34 +225,37 @@ try {
     window.nanoui.exports.nanoui_web_frames() === 0), true);
   await closing.close();
   // The surface follows the browser's color scheme, live.
-  const scheme = await browser.newContext({ viewport: { width: 420, height: 300 }, colorScheme: 'dark' });
-  const themed = await scheme.newPage();
-  themed.on('pageerror', e => errors.push(e.message));
-  await themed.goto(host.url + '/counter.html');
-  await themed.waitForFunction(() => window.nanoui?.exports.nanoui_web_frames() > 0);
-  const corner = async () => {
-    const png = await themed.locator('canvas').screenshot();
-    return themed.evaluate(async data => {
-      const bytes = Uint8Array.from(atob(data), c => c.charCodeAt(0));
-      const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
-      const scratch = new OffscreenCanvas(bitmap.width, bitmap.height).getContext('2d');
-      scratch.drawImage(bitmap, 0, 0);
-      return Array.from(scratch.getImageData(4, 4, 1, 1).data.slice(0, 3));
-    }, png.toString('base64'));
-  };
-  // Polls the drawn pixel rather than waiting a fixed time for the frame.
-  const cornerBecomes = async (want, message) => {
-    let got;
-    for (const end = Date.now() + 5000; Date.now() < end; await themed.waitForTimeout(25)) {
-      got = await corner();
-      if (got.every((v, i) => v === want[i])) return;
-    }
-    assert.deepEqual(got, want, message);
-  };
-  await cornerBecomes([0x1c, 0x1c, 0x1e], 'dark scheme background');
-  await themed.emulateMedia({ colorScheme: 'light' });
-  await cornerBecomes([0xf5, 0xf5, 0xf7], 'light scheme background after a live change');
-  await scheme.close();
+  for (const cpu of [false, true]) {
+    const scheme = await browser.newContext({ viewport: { width: 420, height: 300 }, colorScheme: 'dark' });
+    const themed = await scheme.newPage();
+    themed.on('pageerror', e => errors.push(e.message));
+    if (cpu) await themed.addInitScript(() => Object.defineProperty(navigator, 'gpu', { value: undefined }));
+    await themed.goto(host.url + '/counter.html');
+    await themed.waitForFunction(() => window.nanoui?.exports.nanoui_web_frames() > 0);
+    const corner = async () => {
+      const png = await themed.locator('canvas').screenshot();
+      return themed.evaluate(async data => {
+        const bytes = Uint8Array.from(atob(data), c => c.charCodeAt(0));
+        const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+        const scratch = new OffscreenCanvas(bitmap.width, bitmap.height).getContext('2d');
+        scratch.drawImage(bitmap, 0, 0);
+        return Array.from(scratch.getImageData(4, 4, 1, 1).data.slice(0, 3));
+      }, png.toString('base64'));
+    };
+    // Polls the drawn pixel rather than waiting a fixed time for the frame.
+    const cornerBecomes = async (want, message) => {
+      let got;
+      for (const end = Date.now() + 5000; Date.now() < end; await themed.waitForTimeout(25)) {
+        got = await corner();
+        if (got.every((v, i) => v === want[i])) return;
+      }
+      assert.deepEqual(got, want, message);
+    };
+    await cornerBecomes([0x1c, 0x1c, 0x1e], 'dark scheme background');
+    await themed.emulateMedia({ colorScheme: 'light' });
+    await cornerBecomes([0xf5, 0xf5, 0xf7], 'light scheme background after a live change');
+    await scheme.close();
+  }
   assert.deepEqual(errors,[]);
   console.log('PASS canvas, click, idle, resize/DPR, device loss, disposal, Worker input and idle, Gallery keyboard, Canvas 2D startup, Canvas 2D scale cap, live Canvas 2D failover, teardown during recovery, system color scheme');
 } finally { await browser.close(); await host.close(); }

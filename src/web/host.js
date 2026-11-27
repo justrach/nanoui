@@ -362,7 +362,7 @@ export function createHost(canvas, options = {}) {
         };
         dprChanged();
         listeners.push(() => media?.removeEventListener("change", dprChanged));
-        on(matchMedia("(prefers-color-scheme: dark)"), "change", () => runtime.exports.nanoui_web_theme_changed());
+        on(matchMedia("(prefers-color-scheme: dark)"), "change", () => runtime.exports.nanoui_web_theme_changed?.());
       }
     },
     debugLoseDevice() { forceRecovery = true; runtime.gpu.device.destroy(); },
