@@ -302,6 +302,8 @@ pub fn poll(timeout_ms: c_int) void {
 
 /// Wakes the app's thread's loop (a flag changed for it).
 pub fn wake() void {
+    lock();
+    defer unlock();
     if (looper) |l| ndk.ALooper_wake(l);
 }
 
@@ -542,7 +544,9 @@ fn copyPath(buf: *[512:0]u8, path: ?[*:0]const u8) void {
 fn appThread(vm: jni.VM) void {
     const l = ndk.ALooper_prepare(ndk.LOOPER_PREPARE_ALLOW_NON_CALLBACKS);
     ndk.ALooper_acquire(l);
+    lock();
     looper = l;
+    unlock();
     app_thread = std.Thread.getCurrentId();
     _ = ndk.ALooper_addFd(l, commands_fd, ident_commands, ndk.LOOPER_EVENT_INPUT, null, null);
     env = jni.attach(vm);
@@ -566,7 +570,9 @@ fn appThread(vm: jni.VM) void {
         jni.detach(vm);
     }
     env = null;
+    lock();
     looper = null;
+    unlock();
     app_thread = null;
     ndk.ALooper_release(l);
 }
