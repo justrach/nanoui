@@ -8,8 +8,8 @@ const Images = @import("images.zig").Images;
 const isPictographic = @import("text_selection_data.zig").isPictographic;
 
 /// A rasterized cluster, in device pixels: its box, and how far its
-/// baseline sits below the top.
-pub const Raster = struct { width: u32, height: u32, ascent: f32 };
+/// baseline sits below the top and where the pen sits from the left.
+pub const Raster = struct { width: u32, height: u32, ascent: f32, left: f32 };
 
 pub const Hooks = struct {
     ctx: ?*anyopaque = null,
@@ -26,7 +26,7 @@ pub const Hooks = struct {
 
 /// Where a fallback cluster lands, in points from the pen and the baseline.
 /// `color`: drawn as is (emoji); otherwise tinted with the text colour.
-pub const Placed = struct { uv: [4]f32, w: f32, h: f32, ascent: f32, color: bool };
+pub const Placed = struct { uv: [4]f32, w: f32, h: f32, ascent: f32, left: f32, color: bool };
 
 const max_entries = 1024;
 const max_bitmap_bytes = 8 * 1024 * 1024;
@@ -81,6 +81,7 @@ pub const Cache = struct {
             .w = @as(f32, @floatFromInt(m.r.width)) / scale,
             .h = @as(f32, @floatFromInt(m.r.height)) / scale,
             .ascent = m.r.ascent / scale,
+            .left = m.r.left / scale,
             .color = m.color,
         };
     }
@@ -96,7 +97,7 @@ fn key(text: []const u8, px: f32) u64 {
 /// Whether a cluster is drawn in its own colours: an emoji, a flag.
 pub fn colored(text: []const u8) bool {
     var it = (std.unicode.Utf8View.init(text) catch return false).iterator();
-    while (it.nextCodepoint()) |cp| if (isPictographic(cp) or (cp >= 0x1f1e6 and cp <= 0x1f1ff)) return true;
+    while (it.nextCodepoint()) |cp| if (isPictographic(cp) or cp == 0x20e3 or (cp >= 0x1f1e6 and cp <= 0x1f1ff)) return true;
     return false;
 }
 

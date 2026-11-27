@@ -492,7 +492,7 @@ fn textRunLimit(c: *Context, out: *std.ArrayList(metal.Instance), t: ctx_mod.Con
             if (g.index + g.host > shown.len) continue;
             const p = c.text.fallback_cache.place(c.text.gpa, &c.text.images, h, shown[g.index..][0..g.host], style.size * c.text.zoom, scale) orelse continue;
             push(c, out, .{
-                .rect = .{ px / scale, baseline - g.y - p.ascent, p.w, p.h },
+                .rect = .{ px / scale - p.left, baseline - g.y - p.ascent, p.w, p.h },
                 .color = .{ 1, 1, 1, color[3] },
                 .border_color = if (p.color) .{ 0, 0, 0, 0 } else .{ color[0], color[1], color[2], 1 },
                 .uv = p.uv,

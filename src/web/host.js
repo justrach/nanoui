@@ -260,13 +260,14 @@ export function createHost(canvas, options = {}) {
         if (!g) return 0;
         g.font = glyphFont(px);
         const m = g.measureText(glyphText(ptr, len));
-        const ascent = Math.ceil(m.fontBoundingBoxAscent ?? px * 0.9);
-        const descent = Math.ceil(m.fontBoundingBoxDescent ?? px * 0.25);
-        const width = Math.ceil(Math.max(m.width, m.actualBoundingBoxRight ?? 0)) + 1;
-        new Float32Array(runtime.exports.memory.buffer, out, 3).set([width, ascent + descent, ascent]);
+        const left = Math.ceil(m.actualBoundingBoxLeft ?? 0) + 1;
+        const right = Math.ceil(m.actualBoundingBoxRight ?? m.width) + 1;
+        const ascent = Math.ceil(m.actualBoundingBoxAscent ?? m.fontBoundingBoxAscent ?? px * 0.9) + 1;
+        const descent = Math.ceil(m.actualBoundingBoxDescent ?? m.fontBoundingBoxDescent ?? px * 0.25) + 1;
+        new Float32Array(runtime.exports.memory.buffer, out, 4).set([left + right, ascent + descent, ascent, left]);
         return 1;
       },
-      glyph_draw(ptr, len, px, out, width, height, ascent) {
+      glyph_draw(ptr, len, px, out, width, height, ascent, left) {
         const g = glyphs();
         if (!g) return 0;
         stats.fallbackGlyphs = (stats.fallbackGlyphs ?? 0) + 1;
@@ -276,7 +277,7 @@ export function createHost(canvas, options = {}) {
         g.font = glyphFont(px);
         g.fillStyle = "#fff";
         g.textBaseline = "alphabetic";
-        g.fillText(glyphText(ptr, len), 0, ascent);
+        g.fillText(glyphText(ptr, len), left, ascent);
         const pixels = g.getImageData(0, 0, width, height).data;
         new Uint8Array(runtime.exports.memory.buffer, out, width * height * 4).set(pixels);
         return 1;

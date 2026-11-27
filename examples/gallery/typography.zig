@@ -51,7 +51,7 @@ pub const Demo = struct {
             hdr.end();
             ui.text(c, "Double-clicking a word or symbol stops at UAX #29 extended grapheme and word boundaries.", .{ .size = 12.5, .wrap = true, .color = th.muted });
             ui.text(c, "Emoji clusters: \u{1f469}\u{200d}\u{1f4bb}  \u{1f680}  \u{1f1ef}\u{1f1f5}  \u{1f44d}\u{1f3fd}  \u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}", .{});
-            ui.text(c, "Scripts & words: naïve café · 日本語の単語 · Ελληνικά", .{});
+            ui.text(c, "Scripts & words: naïve café · 日本語の単語 · Ελληνικά · 1️⃣", .{});
             ui.text(c, "Code & numbers: std.mem.eql(a, b) · don't · 1,024.50", .{ .mono = true, .size = 13 });
         }
 

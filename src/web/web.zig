@@ -13,8 +13,8 @@ pub const Target = webgpu.Target;
 extern "nanoui_web" fn cpu_backend() bool;
 extern "nanoui_web" fn present_cpu(ptr: [*]const u8, width: u32, height: u32) void;
 extern "nanoui_web" fn glyph_measure(text: [*]const u8, len: usize, size: f32) f32;
-extern "nanoui_web" fn glyph_box(text: [*]const u8, len: usize, px: f32, out: *[3]f32) bool;
-extern "nanoui_web" fn glyph_draw(text: [*]const u8, len: usize, px: f32, ptr: [*]u8, width: u32, height: u32, ascent: f32) bool;
+extern "nanoui_web" fn glyph_box(text: [*]const u8, len: usize, px: f32, out: *[4]f32) bool;
+extern "nanoui_web" fn glyph_draw(text: [*]const u8, len: usize, px: f32, ptr: [*]u8, width: u32, height: u32, ascent: f32, left: f32) bool;
 pub extern "nanoui_web" fn request_frame() void;
 pub extern "nanoui_web" fn request_after(ms: f64) void;
 pub extern "nanoui_web" fn now_ms() f64;
@@ -41,15 +41,15 @@ const browser_glyphs: glyph_fallback.Hooks = .{
     }.f,
     .box = struct {
         fn f(_: ?*anyopaque, chars: []const u8, px: f32) ?glyph_fallback.Raster {
-            var out: [3]f32 = undefined;
+            var out: [4]f32 = undefined;
             if (!glyph_box(chars.ptr, chars.len, px, &out)) return null;
             if (!(out[0] >= 1 and out[0] <= 512 and out[1] >= 1 and out[1] <= 512)) return null;
-            return .{ .width = @intFromFloat(out[0]), .height = @intFromFloat(out[1]), .ascent = out[2] };
+            return .{ .width = @intFromFloat(out[0]), .height = @intFromFloat(out[1]), .ascent = out[2], .left = out[3] };
         }
     }.f,
     .draw = struct {
         fn f(_: ?*anyopaque, chars: []const u8, px: f32, box: glyph_fallback.Raster, rgba: []u8) bool {
-            return glyph_draw(chars.ptr, chars.len, px, rgba.ptr, box.width, box.height, box.ascent);
+            return glyph_draw(chars.ptr, chars.len, px, rgba.ptr, box.width, box.height, box.ascent, box.left);
         }
     }.f,
 };

@@ -357,8 +357,18 @@ pub const TextSystem = struct {
         const primary = self.run_fonts.items[f.id];
         const stack = self.stackOf(style);
         var prev: ?struct { id: u16, g: u16, digit: bool } = null;
+        var cluster: struct { start: usize = 0, end: usize = 0, glyphs: usize = 0, pen: f32 = 0, tried: bool = false } = .{};
         var i: usize = 0;
         while (i < s.len) {
+            if (self.fallback_glyphs != null and i >= cluster.end) {
+                // ASCII runs do not need Unicode property lookups.
+                const two_ascii = i + 1 < s.len and s[i] < 0x80 and s[i + 1] < 0x80;
+                const end = if (two_ascii and !(s[i] == '\r' and s[i + 1] == '\n'))
+                    i + 1
+                else
+                    @import("text_selection.zig").graphemeEnd(s, i);
+                cluster = .{ .start = i, .end = end, .glyphs = out.items.len, .pen = x };
+            }
             // A character cut off at the end (a span ending inside it) is
             // the replacement character, not a decode of too few bytes.
             const want = utf8.seqLen(s[i]);
@@ -383,15 +393,20 @@ pub const TextSystem = struct {
                 }
             }
             if (g == 0 and cp > 0x20) if (self.fallback_glyphs) |h| {
-                // The whole cluster, so an emoji sequence or a flag stays one.
-                const end = @import("text_selection.zig").graphemeEnd(s, i);
-                const w = if (end - i <= std.math.maxInt(u16)) h.measure(h.ctx, s[i..end], size) else 0;
-                if (w > 0) {
-                    try out.append(self.gpa, .{ .font = id, .glyph = 0, .x = x, .y = 0, .index = @intCast(offset + i), .host = @intCast(end - i) });
-                    x += w;
-                    prev = null;
-                    i = end;
-                    continue;
+                // A missing mark can follow a base we've already emitted.
+                // Replace all glyphs of that cluster when the host shapes it.
+                if (!cluster.tried) {
+                    cluster.tried = true;
+                    const chars = s[cluster.start..cluster.end];
+                    const w = if (chars.len <= std.math.maxInt(u16)) h.measure(h.ctx, chars, size) else 0;
+                    if (w > 0) {
+                        out.shrinkRetainingCapacity(cluster.glyphs);
+                        try out.append(self.gpa, .{ .font = id, .glyph = 0, .x = cluster.pen, .y = 0, .index = @intCast(offset + cluster.start), .host = @intCast(chars.len) });
+                        x = cluster.pen + w;
+                        prev = null;
+                        i = cluster.end;
+                        continue;
+                    }
                 }
             };
             const k = size / rf.font.units_per_em;

@@ -227,10 +227,20 @@ try {
   // Characters no bundled font has are drawn with the browser's fonts.
   const glyphs = await browser.newPage({ viewport: { width: 1200, height: 900 } });
   glyphs.on('pageerror', e => errors.push(e.message));
+  await glyphs.addInitScript(() => {
+    window.measuredGlyphClusters = [];
+    const proto = OffscreenCanvasRenderingContext2D.prototype;
+    const measureText = proto.measureText;
+    proto.measureText = function(text) {
+      if (text.includes('\u20e3')) window.measuredGlyphClusters.push(text);
+      return measureText.call(this, text);
+    };
+  });
   await glyphs.goto(host.url + '/index.html?app=gallery');
   await glyphs.waitForFunction(() => window.nanoui?.exports.nanoui_web_frames() > 0);
   await glyphs.mouse.click(88, 160); // Typography: 日本語, emoji clusters
   await glyphs.waitForFunction(() => window.nanoui.host.stats.fallbackGlyphs >= 4);
+  assert.ok(await glyphs.evaluate(() => window.measuredGlyphClusters.includes('1️⃣')));
   await glyphs.close();
   // Without OffscreenCanvas they stay boxes, and the frame still finishes.
   const bare = await browser.newPage({ viewport: { width: 1200, height: 900 } });
