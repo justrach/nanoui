@@ -40,14 +40,16 @@ pub const Index = struct {
         for (d[at..][0..count_size]) |b| n = (n << 8) | b;
         const head = at + count_size;
         if (n == 0) return .{ .d = d, .end = head };
-        if (head + 1 > d.len) return null;
+        if (head == d.len) return null;
         const off_size = d[head];
         if (off_size < 1 or off_size > 4) return null;
         var ix: Index = .{ .d = d, .count = n, .off_size = off_size, .offsets = head + 1 };
+        // There are count + 1 offset slots. Check before computing their size.
+        if (n >= (d.len - ix.offsets) / off_size) return null;
         ix.base = ix.offsets + (@as(usize, n) + 1) * off_size - 1;
         const last = ix.offset(n) orelse return null;
+        if (last == 0 or last > d.len - ix.base) return null;
         ix.end = ix.base + last;
-        if (ix.end > d.len or ix.end < ix.base) return null;
         return ix;
     }
 
@@ -63,11 +65,8 @@ pub const Index = struct {
         if (i >= ix.count) return null;
         const a = ix.offset(i) orelse return null;
         const b = ix.offset(i + 1) orelse return null;
-        if (a == 0 or b < a) return null;
-        const from = ix.base + a;
-        const to = ix.base + b;
-        if (to > ix.d.len) return null;
-        return ix.d[from..to];
+        if (a == 0 or b < a or b > ix.end - ix.base) return null;
+        return ix.d[ix.base + a .. ix.base + b];
     }
 };
 
@@ -224,14 +223,16 @@ pub const Cff = struct {
     /// The region count of each item variation data in the vstore at `at`,
     /// which `blend` needs to know how many deltas follow the defaults.
     fn readRegions(c: *Cff, at: usize) void {
-        const d = c.data;
-        const store = at + 2;
-        const count = be16(d, store + 6) orelse return;
+        if (at == 0 or at > c.data.len or c.data.len - at < 2) return;
+        const store = c.data[at + 2 ..];
+        if (be16(store, 0) != 1) return;
+        const count = be16(store, 6) orelse return;
+        if (count > (store.len - 8) / 4) return;
         for (0..@min(count, c.regions.len)) |i| {
-            const rec = store + 8 + 4 * i;
-            if (rec + 4 > d.len) return;
-            const off = std.mem.readInt(u32, d[rec..][0..4], .big);
-            c.regions[i] = be16(d, store + off + 4) orelse 0;
+            const rec = 8 + 4 * i;
+            const off = std.mem.readInt(u32, store[rec..][0..4], .big);
+            if (off < 8 + @as(usize, count) * 4 or off > store.len) continue;
+            c.regions[i] = be16(store[off..], 4) orelse 0;
         }
     }
 
@@ -239,7 +240,9 @@ pub const Cff = struct {
         const private = privateOf(d, dict) orelse return .{};
         var sub: [1]f64 = undefined;
         if (dictFind(private.dict, 19, &sub) != 1) return .{};
-        return Index.read(d, private.at + (usizeOf(sub[0]) orelse return .{})) orelse .{};
+        const off = usizeOf(sub[0]) orelse return .{};
+        if (off > d.len - private.at) return .{};
+        return Index.read(d, private.at + off) orelse .{};
     }
 
     fn readLocal2(d: []const u8, dict: []const u8, vsindex: *u16) Index {
@@ -247,7 +250,9 @@ pub const Cff = struct {
         var sub: [1]f64 = undefined;
         if (dictFind(private.dict, 22, &sub) == 1) vsindex.* = @intCast(@min(usizeOf(sub[0]) orelse 0, 0xffff));
         if (dictFind(private.dict, 19, &sub) != 1) return .{};
-        return Index.read2(d, private.at + (usizeOf(sub[0]) orelse return .{})) orelse .{};
+        const off = usizeOf(sub[0]) orelse return .{};
+        if (off > d.len - private.at) return .{};
+        return Index.read2(d, private.at + off) orelse .{};
     }
 
     const Private = struct { dict: []const u8, at: usize };
@@ -289,14 +294,14 @@ pub const Cff = struct {
 
     /// FDSelect format 4 (CFF2): 32-bit ranges with 16-bit font dicts.
     fn fdOf4(d: []const u8, at: usize, g: u16) u16 {
-        if (at + 5 > d.len) return 0;
+        if (at > d.len or d.len - at < 5) return 0;
         const n = std.mem.readInt(u32, d[at + 1 ..][0..4], .big);
+        if (n > (d.len - at - 5) / 6) return 0;
         var lo: usize = 0;
         var hi: usize = n;
         while (lo < hi) {
             const mid = (lo + hi) / 2;
             const rec = at + 5 + 6 * mid;
-            if (rec + 4 > d.len) return 0;
             const first = std.mem.readInt(u32, d[rec..][0..4], .big);
             if (first <= g) lo = mid + 1 else hi = mid;
         }
@@ -337,3 +342,22 @@ pub const Cff = struct {
 
 const Box = @import("cff_run.zig").Box;
 const Run = @import("cff_run.zig").Run;
+
+test "CFF2 INDEX rejects a truncated offset table" {
+    const bytes = [_]u8{ 0, 0, 0, 2, 4, 0, 0, 0, 1 };
+    try std.testing.expectEqual(null, Index.read2(&bytes, 0));
+}
+
+test "CFF2 variation data ignores absent offsets" {
+    const bytes = [_]u8{
+        0, // Leading byte before the VariationStore.
+        0, 12, // Length.
+        0, 1, // Format.
+        0, 0, 0, 7, // Region list offset.
+        0, 1, // ItemVariationData count.
+        0, 0, 0, 0, // Missing item offset.
+    };
+    var c: Cff = .{ .data = &bytes };
+    c.readRegions(1);
+    try std.testing.expectEqual(@as(usize, 0), c.regionCount(0));
+}
