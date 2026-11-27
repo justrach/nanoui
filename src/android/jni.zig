@@ -196,29 +196,36 @@ pub fn setIntField(env: Env, obj: Object, name: [*:0]const u8, value: i32) void 
     at(env, 109, *const fn (Env, Object, Field, i32) callconv(.c) void)(env, obj, id, value);
 }
 
-/// A Java string of UTF-8 `s` (JNI's modified UTF-8: no NULs in `s`).
+/// A Java string of UTF-8 `s`. Use JNI's UTF-16 interface because its
+/// UTF-8 interface expects modified UTF-8, including surrogate pairs.
 pub fn string(env: Env, s: []const u8) Object {
-    var stack: [1024]u8 = undefined;
-    var heap: ?[]u8 = null;
+    var stack: [512]u16 = undefined;
+    var heap: ?[]u16 = null;
     defer if (heap) |h| std.heap.c_allocator.free(h);
-    const buf = if (s.len < stack.len) stack[0 .. s.len + 1] else blk: {
-        heap = std.heap.c_allocator.alloc(u8, s.len + 1) catch return null;
+    if (!std.unicode.utf8ValidateSlice(s)) return null;
+    const len = std.unicode.calcUtf16LeLen(s) catch unreachable;
+    const count = std.math.cast(i32, len) orelse return null;
+    const wide = if (len <= stack.len) stack[0..len] else blk: {
+        heap = std.heap.c_allocator.alloc(u16, len) catch return null;
         break :blk heap.?;
     };
-    @memcpy(buf[0..s.len], s);
-    buf[s.len] = 0;
-    // JNI's strings end at a NUL: keep what's before one.
-    const z: [*:0]const u8 = @ptrCast(buf.ptr);
-    const r = at(env, 167, *const fn (Env, [*:0]const u8) callconv(.c) Object)(env, z);
+    _ = std.unicode.utf8ToUtf16Le(wide, s) catch return null;
+    const new_string = at(env, 163, *const fn (Env, [*]const u16, i32) callconv(.c) Object);
+    const r = new_string(env, wide.ptr, count);
     return if (failed(env)) null else r;
 }
 
 /// A copy of Java string `str` as UTF-8, `gpa`'s; null for a null string.
 pub fn fromString(env: Env, gpa: std.mem.Allocator, str: Object) !?[]u8 {
     if (str == null) return null;
-    const chars = at(env, 169, *const fn (Env, Object, ?*u8) callconv(.c) ?[*:0]const u8)(env, str, null) orelse return null;
-    defer at(env, 170, *const fn (Env, Object, [*:0]const u8) callconv(.c) void)(env, str, chars);
-    return try gpa.dupe(u8, std.mem.span(chars));
+    const len = at(env, 164, *const fn (Env, Object) callconv(.c) i32)(env, str);
+    const get_chars = at(env, 165, *const fn (Env, Object, ?*u8) callconv(.c) ?[*]const u16);
+    const chars = get_chars(env, str, null) orelse {
+        _ = failed(env);
+        return null;
+    };
+    defer at(env, 166, *const fn (Env, Object, [*]const u16) callconv(.c) void)(env, str, chars);
+    return try std.unicode.utf16LeToUtf8Alloc(gpa, chars[0..@intCast(len)]);
 }
 
 /// `obj.toString()`, as UTF-8 in `gpa`'s memory.
