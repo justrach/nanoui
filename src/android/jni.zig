@@ -216,6 +216,7 @@ pub fn string(env: Env, s: []const u8) Object {
 }
 
 /// A copy of Java string `str` as UTF-8, `gpa`'s; null for a null string.
+/// Java permits unpaired surrogates. Replace them so a read still completes.
 pub fn fromString(env: Env, gpa: std.mem.Allocator, str: Object) !?[]u8 {
     if (str == null) return null;
     const len = at(env, 164, *const fn (Env, Object) callconv(.c) i32)(env, str);
@@ -225,7 +226,11 @@ pub fn fromString(env: Env, gpa: std.mem.Allocator, str: Object) !?[]u8 {
         return null;
     };
     defer at(env, 166, *const fn (Env, Object, [*]const u16) callconv(.c) void)(env, str, chars);
-    return try std.unicode.utf16LeToUtf8Alloc(gpa, chars[0..@intCast(len)]);
+    const units = chars[0..@intCast(len)];
+    return std.unicode.utf16LeToUtf8Alloc(gpa, units) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => try std.fmt.allocPrint(gpa, "{f}", .{std.unicode.fmtUtf16Le(units)}),
+    };
 }
 
 /// `obj.toString()`, as UTF-8 in `gpa`'s memory.
