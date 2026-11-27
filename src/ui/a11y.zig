@@ -83,6 +83,8 @@ pub const State = struct {
     builds: u64 = 0,
     /// What was read last (ids, labels, values): a change is a new layout.
     hash: u64 = 0,
+    observed_focus: u64 = 0,
+    published_focus: u64 = 0,
     arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator),
 };
 
@@ -90,6 +92,7 @@ pub const methods = [_]objc.Method{
     .{ .name = "isAccessibilityElement", .imp = &viewIsElement, .types = "c@:" },
     .{ .name = "accessibilityRole", .imp = &viewRole, .types = "@@:" },
     .{ .name = "accessibilityChildren", .imp = &viewChildren, .types = "@@:" },
+    .{ .name = "accessibilityFocusedUIElement", .imp = &viewFocus, .types = "@@:" },
 };
 
 fn viewIsElement(_: objc.Object, _: objc.SEL) callconv(.c) objc.BOOL {
@@ -108,6 +111,7 @@ fn elementClass() objc.Class {
             .{ .name = "isAccessibilityElement", .imp = &elemYes, .types = "c@:" },
             .{ .name = "isAccessibilityEnabled", .imp = &elemEnabled, .types = "c@:" },
             .{ .name = "isAccessibilitySelected", .imp = &elemSelected, .types = "c@:" },
+            .{ .name = "isAccessibilityFocused", .imp = &elemFocused, .types = "c@:" },
             .{ .name = "accessibilityParent", .imp = &elemParent, .types = "@@:" },
             .{ .name = "accessibilityChildren", .imp = &elemChildren, .types = "@@:" },
             .{ .name = "accessibilityRows", .imp = &elemRows, .types = "@@:" },
@@ -148,11 +152,25 @@ pub fn themed(s: *Surface, t: Theme) Theme {
 /// After a frame: what the view asked to say, and a new layout for VoiceOver.
 pub fn afterFrame(s: *Surface) void {
     const a = &s.ctx.access;
-    if (a.screen_changed or a.screen_reader) {
-        const before = s.a11y_cache.hash;
+    const st = &s.a11y_cache;
+    const focus_id = nativeFocusId(s);
+    if (a.screen_changed or a.screen_reader or st.observed_focus != focus_id) {
+        const before = st.hash;
         _ = elements(s);
-        if (a.screen_changed or s.a11y_cache.hash != before) objc.NSAccessibilityPostNotificationWithUserInfo(s.nsview, objc.nsString("AXLayoutChanged"), null);
+        st.observed_focus = focus_id;
+        if (a.screen_changed or (a.screen_reader and st.hash != before))
+            objc.NSAccessibilityPostNotificationWithUserInfo(s.nsview, objc.nsString("AXLayoutChanged"), null);
         a.screen_changed = false;
+        const target = focusedElement(s, focus_id);
+        const published = if (target != null) focus_id else 0;
+        if (st.published_focus != published) {
+            st.published_focus = published;
+            if (target) |el| objc.NSAccessibilityPostNotificationWithUserInfo(
+                el,
+                objc.nsString("AXFocusedUIElementChanged"),
+                null,
+            );
+        }
     }
     if (a.announcement_len > 0) {
         announce(s.nsview, a.announcement[0..a.announcement_len]);
@@ -163,6 +181,30 @@ pub fn afterFrame(s: *Surface) void {
 fn viewChildren(obj: objc.Object, _: objc.SEL) callconv(.c) objc.Object {
     const s = objc.getZig(Surface, obj) orelse return objc.msg(objc.Object, objc.class("NSArray"), "array", .{});
     return elements(s) orelse objc.msg(objc.Object, objc.class("NSArray"), "array", .{});
+}
+
+// Cocoa controls (including embedded webviews) retain their own focus.
+fn nativeFocusId(s: *Surface) u64 {
+    if (s.dead or !s.window.isFocused() or s.ctx.focus == 0) return 0;
+    const first = objc.msg(?objc.Object, s.window.nswindow, "firstResponder", .{});
+    return if (first == s.nsview) s.ctx.focus else 0;
+}
+
+fn focusedElement(s: *Surface, id: u64) ?objc.Object {
+    if (id == 0) return null;
+    const st = &s.a11y_cache;
+    if (st.built != s.ctx.frame) return null;
+    const element = st.cache.get(id) orelse return null;
+    const payload = payloadOf(element) orelse return null;
+    return if (payload.enabled and payload.seen == st.builds) element else null;
+}
+
+fn viewFocus(obj: objc.Object, _: objc.SEL) callconv(.c) ?objc.Object {
+    const s = objc.getZig(Surface, obj) orelse return null;
+    const id = nativeFocusId(s);
+    if (id == 0) return null;
+    _ = elements(s);
+    return focusedElement(s, id);
 }
 
 /// The last frame's elements, made once per frame.
@@ -272,6 +314,15 @@ fn elemEnabled(obj: objc.Object, _: objc.SEL) callconv(.c) objc.BOOL {
 fn elemSelected(obj: objc.Object, _: objc.SEL) callconv(.c) objc.BOOL {
     const p = payloadOf(obj) orelse return objc.NO;
     return if (p.selected) objc.YES else objc.NO;
+}
+
+fn elemFocused(obj: objc.Object, _: objc.SEL) callconv(.c) objc.BOOL {
+    const p = payloadOf(obj) orelse return objc.NO;
+    const s = p.surface;
+    const id = nativeFocusId(s);
+    if (id == 0 or id != p.id) return objc.NO;
+    _ = elements(s);
+    return if (focusedElement(s, id) == obj) objc.YES else objc.NO;
 }
 
 fn elemParent(obj: objc.Object, _: objc.SEL) callconv(.c) ?objc.Object {
