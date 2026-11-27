@@ -284,6 +284,12 @@ export function createHost(canvas, options = {}) {
           const down = e => {
             if (e.defaultPrevented || e.isComposing || !options.keyboard(e)) return;
             if (e.target.tagName === "BUTTON" && (e.key === "Enter" || e.key === " ")) return;
+            const editing = semantics?.root.contains(e.target) &&
+              (e.target.tagName === "TEXTAREA" || e.target.tagName === "INPUT");
+            // Keep browser clipboard events on the semantic editor, even
+            // when an embedder forwards every keyboard shortcut.
+            if (editing && (e.ctrlKey || e.metaKey) && !e.altKey && !altGraph(e) &&
+                ["c", "x", "v"].includes(e.key.toLowerCase())) return;
             const code = keyCode(e.key);
             if (!code) return;
             const printable = Array.from(e.key).length === 1 && (!e.ctrlKey || altGraph(e)) && !e.metaKey;

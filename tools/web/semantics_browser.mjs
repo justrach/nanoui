@@ -35,6 +35,52 @@ export async function checkSemantics(browser, url, errors) {
     await context.close();
   }
   {
+    const context = await browser.newContext({ viewport: { width: 960, height: 960 } });
+    const page = await context.newPage();
+    page.on('pageerror', e => errors.push(e.message));
+    // Load the same app through an embedder that forwards every key.
+    await page.route('**/gallery.html', async route => {
+      const response = await route.fetch();
+      const html = (await response.text()).replace('keyboard(e) {', 'keyboard(e) { return true;');
+      await route.fulfill({ response, body: html });
+    });
+    await page.goto(url + '/gallery.html');
+    await page.waitForFunction(() => window.nanoui?.exports.nanoui_web_frames() > 0);
+    await page.getByLabel('gallery', { exact: true }).focus();
+    await page.keyboard.press('Control+k');
+    await page.waitForFunction(() => document.activeElement?.tagName === 'TEXTAREA');
+    await page.keyboard.type('motion');
+    await page.waitForFunction(() => window.nanoui.exports.gallery_palette_query_bytes() === 6);
+    await page.keyboard.press('ControlOrMeta+a');
+    await page.waitForFunction(() => {
+      const event = new ClipboardEvent('copy', { clipboardData: new DataTransfer(), bubbles: true, cancelable: true });
+      document.activeElement.dispatchEvent(event);
+      return event.clipboardData.getData('text/plain') === 'motion';
+    });
+    const clipboard = await page.evaluate(() => {
+      const editor = document.activeElement;
+      for (const ctrl of [true, false]) for (const key of ['c', 'x', 'v']) {
+        const event = new KeyboardEvent('keydown', {
+          key, code: 'Key' + key.toUpperCase(), ctrlKey: ctrl, metaKey: !ctrl, bubbles: true, cancelable: true,
+        });
+        if (!editor.dispatchEvent(event)) return { prevented: key };
+      }
+      // Keep the clipboard data within this browser fixture.
+      const data = new DataTransfer();
+      editor.dispatchEvent(new ClipboardEvent('cut', { clipboardData: data, bubbles: true, cancelable: true }));
+      return { cut: data.getData('text/plain') };
+    });
+    assert.deepEqual(clipboard, { cut: 'motion' });
+    await page.waitForFunction(() => window.nanoui.exports.gallery_palette_query_bytes() === 0);
+    await page.evaluate(() => {
+      const data = new DataTransfer();
+      data.setData('text/plain', 'motion');
+      document.activeElement.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+    });
+    await page.waitForFunction(() => window.nanoui.exports.gallery_palette_query_bytes() === 6);
+    await context.close();
+  }
+  {
     const context = await browser.newContext({ viewport: { width: 360, height: 640 }, hasTouch: true, isMobile: true });
     const page = await context.newPage();
     page.on('pageerror', e => errors.push(e.message));

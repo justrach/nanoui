@@ -86,6 +86,10 @@ export function createSemantics(canvas, send) {
         sendText(id, e.clipboardData.getData("text/plain"));
       });
       for (const type of ["copy", "cut"]) node.addEventListener(type, e => {
+        if (password) {
+          e.preventDefault();
+          return;
+        }
         if (focused?.id !== id || !focused.selection || !e.clipboardData) return;
         e.clipboardData.setData("text/plain", focused.selection);
         e.preventDefault();
