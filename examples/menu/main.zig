@@ -33,7 +33,7 @@ const items = [_]kit.MenuItem{
 const Demo = struct {
     menu: bool = true,
     menu_at: ?ui.Rect = .{ .x = 56, .y = 168, .w = 220, .h = 36 },
-    safe: bool = false,
+    safe: bool = true,
     debug: bool = false,
     dark: bool = false,
     chosen: []const u8 = "",

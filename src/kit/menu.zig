@@ -1,7 +1,8 @@
 //! Menus made of popovers: items, separators, and hover-opened submenus.
-//! An opt-in safe triangle (`Options.safe_triangle`, off by default) holds
-//! the open submenu while the pointer aims at it, so a diagonal move does
-//! not switch rows on the way. `debug` draws the triangle and a trail.
+//! A safe triangle (`Options.safe_triangle`, on by default) holds the open
+//! submenu while the pointer aims at it, so a diagonal move does not
+//! switch rows on the way. Pass `false` to opt out. `debug` draws the
+//! triangle and a trail (off by default).
 const std = @import("std");
 const ui = @import("../ui/ui.zig");
 const kit = @import("kit.zig");
@@ -29,8 +30,9 @@ pub const Options = struct {
     placement: overlay.Placement = .bottom_start,
     width: f32 = 220,
     glass: bool = false,
-    /// Hold a submenu open while the pointer aims at it. Off by default.
-    safe_triangle: bool = false,
+    /// Hold a submenu open while the pointer aims at it. On by default;
+    /// pass `false` to opt out.
+    safe_triangle: bool = true,
     /// Seconds of no movement inside the triangle before hover switching resumes.
     idle: f32 = safe.default_idle,
     /// Draw the triangle outline and a trail of the pointer.

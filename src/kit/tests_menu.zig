@@ -1,6 +1,6 @@
-//! Submenus and the opt-in safe triangle, through the Tester: a diagonal
-//! move from Share toward its submenu opens Move to when the flag is off,
-//! keeps Share when it is on, and falls through after the idle timeout.
+//! Submenus and the safe triangle, through the Tester: a diagonal move
+//! from Share toward its submenu keeps Share on the default, opens Move
+//! to when the flag is off, and falls through after the idle timeout.
 const std = @import("std");
 const testing = std.testing;
 const ui = @import("../ui/ui.zig");
@@ -30,7 +30,8 @@ const items = [_]kit.MenuItem{
 const App = struct {
     menu: bool = true,
     menu_at: ?ui.Rect = .{ .x = 48, .y = 72, .w = 120, .h = 28 },
-    safe: bool = false,
+    /// `null` uses `MenuOptions.safe_triangle`'s default (on).
+    safe: ?bool = null,
     debug: bool = false,
     picked: ?usize = null,
     chosen_id: []const u8 = "",
@@ -39,14 +40,16 @@ const App = struct {
         const root = ui.div(c).column().sizeFull().p(24).gap(12).bg(c.theme.background);
         defer root.end();
         ui.text(c, "Context menu", .{ .size = 18, .weight = .semibold });
-        ui.text(c, if (a.safe) "Safe triangle on" else "Safe triangle off", .{ .color = c.theme.muted });
-        if (kit.menu(c, "menu", &a.menu, a.menu_at, &items, .{
+        const on = a.safe orelse true;
+        ui.text(c, if (on) "Safe triangle on" else "Safe triangle off", .{ .color = c.theme.muted });
+        var opts: kit.MenuOptions = .{
             .placement = .bottom_start,
             .width = 200,
-            .safe_triangle = a.safe,
             .debug = a.debug,
             .chosen_id = &a.chosen_id,
-        })) |i| a.picked = i;
+        };
+        if (a.safe) |v| opts.safe_triangle = v;
+        if (kit.menu(c, "menu", &a.menu, a.menu_at, &items, opts)) |i| a.picked = i;
     }
 };
 
@@ -99,6 +102,12 @@ test "a submenu opens on hover; a leaf pick closes the menu" {
     try testing.expect(!t.hasText("Twitter"));
 }
 
+test "MenuOptions.safe_triangle defaults on; debug stays off" {
+    const opts: kit.MenuOptions = .{};
+    try testing.expect(opts.safe_triangle);
+    try testing.expect(!opts.debug);
+}
+
 test "without the safe triangle a diagonal move opens the wrong submenu" {
     var a: App = .{ .safe = false };
     var t: ui.Tester = undefined;
@@ -109,8 +118,8 @@ test "without the safe triangle a diagonal move opens the wrong submenu" {
     try testing.expect(!t.hasText("Twitter"));
 }
 
-test "with the safe triangle a diagonal move keeps Share open" {
-    var a: App = .{ .safe = true };
+test "the default keeps Share open on a diagonal move" {
+    var a: App = .{};
     var t: ui.Tester = undefined;
     try setup(&a, &t, false);
     defer teardown(&a, &t);
@@ -120,7 +129,7 @@ test "with the safe triangle a diagonal move keeps Share open" {
 }
 
 test "idling in the triangle falls through to the row under the pointer" {
-    var a: App = .{ .safe = true };
+    var a: App = .{};
     var t: ui.Tester = undefined;
     try setup(&a, &t, false);
     defer teardown(&a, &t);
@@ -132,7 +141,7 @@ test "idling in the triangle falls through to the row under the pointer" {
     try testing.expect(!t.hasText("Twitter"));
 }
 
-test "the default keeps existing menus: no submenu opens without a hover" {
+test "no submenu opens without a hover" {
     var a: App = .{};
     var t: ui.Tester = undefined;
     try setup(&a, &t, false);
@@ -169,14 +178,28 @@ test "screenshots: before and after, light and dark, overlay on" {
     try shot(&t, "menu-off-dark.png");
     t.deinit();
 
-    a = .{ .safe = true, .debug = true };
+    a = .{};
+    try t.init(testing.allocator, .init(&a, App.view), .{ .width = 720, .height = 420, .dark = false });
+    t.settle(1);
+    try diagonalAcrossMoveTo(&t);
+    try shot(&t, "menu-on-light.png");
+    t.deinit();
+
+    a = .{};
+    try t.init(testing.allocator, .init(&a, App.view), .{ .width = 720, .height = 420, .dark = true });
+    t.settle(1);
+    try diagonalAcrossMoveTo(&t);
+    try shot(&t, "menu-on-dark.png");
+    t.deinit();
+
+    a = .{ .debug = true };
     try t.init(testing.allocator, .init(&a, App.view), .{ .width = 720, .height = 420, .dark = false });
     t.settle(1);
     try diagonalAcrossMoveTo(&t);
     try shot(&t, "menu-on-debug-light.png");
     t.deinit();
 
-    a = .{ .safe = true, .debug = true };
+    a = .{ .debug = true };
     try t.init(testing.allocator, .init(&a, App.view), .{ .width = 720, .height = 420, .dark = true });
     t.settle(1);
     try diagonalAcrossMoveTo(&t);
@@ -185,7 +208,7 @@ test "screenshots: before and after, light and dark, overlay on" {
 }
 
 test "frame sequence of a diagonal move with the overlay on" {
-    var a: App = .{ .safe = true, .debug = true };
+    var a: App = .{ .debug = true };
     var t: ui.Tester = undefined;
     try setup(&a, &t, false);
     defer teardown(&a, &t);

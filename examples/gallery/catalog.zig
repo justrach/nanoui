@@ -82,7 +82,7 @@ pub const components = [_]Component{
     .{ .id = "radio-group", .name = "Radio group", .group = .forms, .call = "kit.radioGroup(c, options, &selected, .{ .horizontal, .disabled })", .file = "src/kit/form.zig" },
     .{ .id = "select", .name = "Select", .group = .forms, .call = "kit.select(c, id, options, &selected, .{ .placeholder, .width, .disabled })", .file = "src/kit/form.zig" },
     .{ .id = "number-input", .name = "Number input", .group = .forms, .call = "kit.numberInput(c, &value, .{ .min, .max, .step, .decimals, .width })", .file = "src/kit/form.zig" },
-    .{ .id = "menu", .name = "Menu", .group = .overlays, .call = "kit.menu(c, id, &open, anchor, items, .{ .placement, .width, .glass, .safe_triangle, .debug })", .file = "src/kit/menu.zig" },
+    .{ .id = "menu", .name = "Menu", .group = .overlays, .call = "kit.menu(c, id, &open, anchor, items, .{ .placement, .width, .glass, .safe_triangle = true, .debug })", .file = "src/kit/menu.zig" },
     .{ .id = "popover", .name = "Popover", .group = .overlays, .call = "kit.popover(c, id, &open, anchor, .{ .placement, .width, .glass })", .file = "src/kit/overlay.zig" },
     .{ .id = "tooltip", .name = "Tooltip", .group = .overlays, .call = "kit.tooltip(c, trigger, text, .{ .placement, .delay })", .file = "src/kit/overlay.zig" },
     .{ .id = "dialog", .name = "Dialog", .group = .overlays, .call = "kit.dialog(c, id, &open, .{ .title, .description, .ok, .cancel, .ok_variant })", .file = "src/kit/dialog.zig" },

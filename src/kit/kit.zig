@@ -5,7 +5,7 @@
 //! accordions, radio groups, selects, number inputs, breadcrumbs and pagination. Each
 //! is a call in a frame, as nanoui's widgets are, styled from the theme
 //! and moved with `ui.motion`. Submenus open on hover; `MenuOptions.safe_triangle`
-//! (off by default) holds one open while the pointer aims at it.
+//! (on by default) holds one open while the pointer aims at it.
 //!
 //!     if (kit.button(c, "Save", .{ .variant = .primary, .icon = "checkmark" }).clicked) save();
 //!     if (kit.dialog(c, "confirm", &open, .{ .title = "Delete it?", .ok = "Delete" })) |d| {
