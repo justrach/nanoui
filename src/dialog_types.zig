@@ -25,6 +25,10 @@ pub const OpenOptions = struct {
     /// macOS, the file type list on Windows); the first is shown first.
     filters: []const Filter = &.{},
     show_hidden: bool = false,
+    /// Android copies the chosen file into the app's cache: the largest
+    /// copy, in bytes, a larger file failing with `error.FileTooBig`.
+    /// Elsewhere files are opened in place, or copied (iOS) unbounded.
+    copy_limit: u64 = 256 << 20,
 };
 
 pub const SaveOptions = struct {

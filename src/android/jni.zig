@@ -261,6 +261,24 @@ pub fn boolean(b: bool) Value {
     return .{ .z = @intFromBool(b) };
 }
 
+pub fn long(j: i64) Value {
+    return .{ .j = j };
+}
+
+/// A native method, as `RegisterNatives` takes it (JNINativeMethod).
+pub const NativeMethod = extern struct {
+    name: [*:0]const u8,
+    signature: [*:0]const u8,
+    func: *const anyopaque,
+};
+
+/// Binds `methods`, declared `native` in class `cls`, to Zig functions.
+pub fn registerNatives(env: Env, cls: Object, methods: []const NativeMethod) bool {
+    const f = at(env, 215, *const fn (Env, Object, [*]const NativeMethod, i32) callconv(.c) i32);
+    const r = f(env, cls, methods.ptr, @intCast(methods.len));
+    return !failed(env) and r == 0;
+}
+
 test "return types and call indices follow jni.h" {
     try std.testing.expectEqual(36, callIndex("()Ljava/lang/Object;", false));
     try std.testing.expectEqual(39, callIndex("()Z", false));

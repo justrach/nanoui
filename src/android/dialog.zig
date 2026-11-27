@@ -6,8 +6,11 @@
 //! `hasMessages` to find. The activity's window getting the focus back
 //! as the dialog goes wakes the loop to look. Saving asks for a name in
 //! an alert and answers a path in the app's documents folder, as on iOS.
-//! There is no file picker yet: Android answers one in an activity's
-//! result, which NativeActivity drops.
+//! Opening is the system's document picker. Android answers it in an
+//! activity's result, which NativeActivity drops: it needs the app's
+//! activity to be (or extend) an app-supplied `dev.nanoui.android.NanoUIActivity`,
+//! which copies the chosen file into the app's cache,
+//! as iOS copies into the sandbox.
 const std = @import("std");
 const jni = @import("jni.zig");
 const activity = @import("activity.zig");
@@ -246,13 +249,117 @@ pub fn message(opts: MessageOptions) MessageResult {
     return .{ .button = answer orelse labels.len - 1, .checked = checked };
 }
 
-/// The paths the user chose: no file picker on Android yet (null, as
-/// canceled). Free with `freePaths`.
+/// The file the user chose, copied into a folder of its own in the app's
+/// cache, or null if they canceled (or the activity went). One file, even
+/// when `multiple`; folders can't be chosen. The copy is the caller's:
+/// delete it, and its folder, once read. The activity owns cleanup before
+/// delivery. Errors: `FileTooBig` (over `copy_limit`),
+/// `UnsupportedFileType` (not one of `extensions`), `PickerUnavailable`
+/// and `PickerFailed`. Free with `freePaths`.
 pub fn open(gpa: std.mem.Allocator, opts: OpenOptions) !?[][]u8 {
-    _ = gpa;
-    _ = opts;
-    std.log.warn("nanoui: no file picker on Android yet", .{});
-    return null;
+    if (!opts.files) {
+        std.log.warn("nanoui: Android's picker chooses files, not folders", .{});
+        return null;
+    }
+    if (!activity.onAppThread()) return null;
+    const env = activity.env orelse return null;
+    const host = (activity.activity orelse return null).clazz;
+    if (!registerPicker(env, host)) {
+        std.log.warn("nanoui: the file picker needs an activity extending dev.nanoui.android.NanoUIActivity", .{});
+        return null;
+    }
+    var one: [1]dialog_types.Filter = undefined;
+    const groups = dialog_types.groups(opts.filters, opts.extensions, &one);
+    if (!startPicker(env, host, groups, opts.copy_limit)) return error.PickerUnavailable;
+    const answer = try waitForDocument(env, host, gpa) orelse return null;
+    if (answer.len > 0 and answer[0] == '/') {
+        // The activity's staging policy handles a copy we could not deliver.
+        errdefer gpa.free(answer);
+        const out = try gpa.alloc([]u8, 1);
+        out[0] = answer;
+        return out;
+    }
+    defer gpa.free(answer);
+    if (answer.len == 0) return null;
+    if (std.mem.eql(u8, answer, ":too_large")) return error.FileTooBig;
+    if (std.mem.eql(u8, answer, ":unsupported")) return error.UnsupportedFileType;
+    if (std.mem.eql(u8, answer, ":unavailable")) return error.PickerUnavailable;
+    return error.PickerFailed;
+}
+
+var picker_registered = false;
+
+/// Binds NanoUIActivity's `nanouiDocumentAnswered` to `documentAnswered`;
+/// false if the activity doesn't extend it.
+fn registerPicker(env: jni.Env, host: jni.Object) bool {
+    if (picker_registered) return true;
+    const frame = jni.Frame.push(env, 32);
+    defer frame.pop();
+    var cls = jni.classOf(env, host);
+    while (cls != null) {
+        const name_object = jni.call(env, cls, "getName", "()Ljava/lang/String;", &.{}) orelse null;
+        const name = jni.fromString(env, std.heap.c_allocator, name_object) catch null;
+        defer if (name) |n| std.heap.c_allocator.free(n);
+        if (name != null and std.mem.eql(u8, name.?, "dev.nanoui.android.NanoUIActivity")) {
+            const methods = [_]jni.NativeMethod{.{ .name = "nanouiDocumentAnswered", .signature = "()V", .func = @ptrCast(&documentAnswered) }};
+            picker_registered = jni.registerNatives(env, cls, &methods);
+            return picker_registered;
+        }
+        cls = jni.call(env, cls, "getSuperclass", "()Ljava/lang/Class;", &.{}) orelse null;
+    }
+    return false;
+}
+
+/// On the copying thread (or Java's): the app's thread looks for the answer.
+fn documentAnswered(_: jni.Env, _: jni.Object) callconv(.c) void {
+    activity.wake();
+}
+
+/// Asks NanoUIActivity to show the picker for the groups' extensions (any
+/// file when a group has none).
+fn startPicker(env: jni.Env, host: jni.Object, groups: []const dialog_types.Filter, limit: u64) bool {
+    var count: usize = 0;
+    for (groups) |g| {
+        if (g.extensions.len == 0) {
+            count = 0;
+            break;
+        }
+        count = std.math.add(usize, count, g.extensions.len) catch return false;
+    }
+    const n = std.math.cast(i32, count) orelse return false;
+    const frame = jni.Frame.push(env, 8);
+    defer frame.pop();
+    const array = jni.newStringArray(env, n) orelse return false;
+    var i: i32 = 0;
+    if (count > 0) {
+        for (groups) |g| {
+            for (g.extensions) |ext| {
+                const s = jni.string(env, ext) orelse return false;
+                jni.setArrayElement(env, array, i, s);
+                jni.deleteLocal(env, s);
+                i += 1;
+            }
+        }
+    }
+    const max: i64 = std.math.cast(i64, limit) orelse std.math.maxInt(i64);
+    return jni.call(env, host, "nanouiOpenDocument", "([Ljava/lang/String;J)Z", &.{ jni.ref(array), jni.long(max) }) orelse false;
+}
+
+/// Runs the app's loop until the activity answers: "" canceled, a path,
+/// or ":reason"; null if the activity went first.
+fn waitForDocument(env: jni.Env, host: jni.Object, gpa: std.mem.Allocator) !?[]u8 {
+    while (true) {
+        {
+            const frame = jni.Frame.push(env, 4);
+            defer frame.pop();
+            const taken = jni.call(env, host, "nanouiTakeDocument", "()Ljava/lang/String;", &.{}) orelse null;
+            if (taken != null) return (try jni.fromString(env, gpa, taken)) orelse error.PickerFailed;
+        }
+        // The activity went: it deleted any copy made for this request.
+        if (activity.destroying) return null;
+        activity.beginWait();
+        activity.poll(-1);
+    }
 }
 
 /// A path in the app's documents folder (or `directory`) named by the
