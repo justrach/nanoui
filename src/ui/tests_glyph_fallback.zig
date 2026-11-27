@@ -9,14 +9,16 @@ const text_mod = @import("text.zig");
 /// A host whose glyphs are each 9 points wide, 6 × 8 pixels, baseline 6.
 const Fake = struct {
     measured: usize = 0,
+    last: []const u8 = "",
 
-    fn measure(ctx: ?*anyopaque, _: []const u8, _: f32) f32 {
+    fn measure(ctx: ?*anyopaque, text: []const u8, _: f32) f32 {
         const f: *Fake = @ptrCast(@alignCast(ctx.?));
         f.measured += 1;
+        f.last = text;
         return 9;
     }
     fn box(_: ?*anyopaque, _: []const u8, _: f32) ?fallback.Raster {
-        return .{ .width = 6, .height = 8, .ascent = 6 };
+        return .{ .width = 6, .height = 8, .ascent = 6, .left = 2 };
     }
     /// Half-covered red, unpremultiplied as a browser canvas gives it.
     fn draw(_: ?*anyopaque, _: []const u8, _: f32, _: fallback.Raster, rgba: []u8) bool {
@@ -54,6 +56,12 @@ test "a cluster no font has is shaped as one host glyph" {
     try testing.expectApproxEqAbs(@as(f32, 29), lay.glyphs[3].x, 0.001);
     try testing.expectApproxEqAbs(@as(f32, 48), lay.width, 0.001);
     try testing.expectEqual(@as(usize, 2), host.measured);
+    const keycap = "1️⃣";
+    const keycap_layout = ts.layout(keycap, .{ .size = 20 });
+    try testing.expectEqualStrings(keycap, host.last);
+    try testing.expectEqual(@as(usize, 1), keycap_layout.glyphs.len);
+    try testing.expectEqual(@as(u16, keycap.len), keycap_layout.glyphs[0].host);
+    try testing.expectApproxEqAbs(@as(f32, 9), keycap_layout.width, 0.001);
 }
 
 test "host glyphs are white masks, emoji keep their colours" {
@@ -68,6 +76,7 @@ test "host glyphs are white masks, emoji keep their colours" {
     try testing.expectApproxEqAbs(@as(f32, 3), text.w, 0.001);
     try testing.expectApproxEqAbs(@as(f32, 4), text.h, 0.001);
     try testing.expectApproxEqAbs(@as(f32, 3), text.ascent, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 1), text.left, 0.001);
     const emoji = cache.place(gpa, &images, host.hooks(), "\u{1f44d}\u{1f3fd}", 4, 2).?;
     try testing.expect(emoji.color);
     var it = cache.pixels.valueIterator();
