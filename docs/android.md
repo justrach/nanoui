@@ -28,7 +28,6 @@ fits Android: nanoui translates the one and asks Android's resolver instead.
 
 Not yet: pages, TalkBack accessibility, more than three buttons in a message, and predictive Back's animation. See the [Android roadmap](roadmap.md#android) and [benchmarks](benchmarks.md#android).
 
-
 ## Document picker
 
 The stock NativeActivity cannot receive a document picker's result. An app can
@@ -39,14 +38,15 @@ implements the following class contract:
 ```java
 public boolean nanouiOpenDocument(String[] extensions, long maxBytes);
 public String nanouiTakeDocument();
-private native void nanouiDocumentAnswered();
+private static native void nanouiDocumentAnswered();
 ```
 
 `nanouiOpenDocument` queues one system document picker on Android's UI
 thread and returns false if it cannot start. The activity copies the selected
 file into private staging within the supplied byte limit and checks its type
-against the extensions. It calls `nanouiDocumentAnswered` after publishing a
-result. `nanouiTakeDocument` consumes one result: null while pending, an empty
+against the extensions. An empty list permits every file type. It calls `nanouiDocumentAnswered` after publishing a
+result. A picker already in progress refuses nested requests.
+`nanouiTakeDocument` consumes one result: null while pending, an empty
 string for cancel, an absolute staged path on success, or the status
 `:too_large`, `:unsupported`, `:unavailable` or `:failed`.
 
