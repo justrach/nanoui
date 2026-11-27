@@ -236,6 +236,25 @@ test "system undo and redo with Cmd+Z and Cmd+Shift+Z" {
     try testing.expectEqualStrings("hello world", s.buf.text());
 }
 
+test "undo restores a deleted grapheme cluster" {
+    const cluster = "\u{1f469}\u{1f3fd}\u{200d}\u{1f4bb}";
+    var s: Field = .{};
+    defer s.deinit();
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&s, Field.view), .{});
+    defer t.deinit();
+    try t.clickText("Address");
+    s.buf.set("a" ++ cluster ++ "z");
+    s.buf.want_caret = 1 + cluster.len;
+    t.frame();
+    t.key(.backspace);
+    try testing.expectEqualStrings("az", s.buf.text());
+    try testing.expect(t.shortcut(.{ .key = 'z', .cmd = true }));
+    try testing.expectEqualStrings("a" ++ cluster ++ "z", s.buf.text());
+    try testing.expect(t.shortcut(.{ .key = 'z', .cmd = true, .shift = true }));
+    try testing.expectEqualStrings("az", s.buf.text());
+}
+
 test "triple-click selects line or field and Tab cycles between fields" {
     var s: Field = .{};
     defer s.deinit();

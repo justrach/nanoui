@@ -102,3 +102,58 @@ test "a filter maps or drops typed, pasted and committed text" {
     try std.testing.expectEqualStrings("123456", b.text());
     try std.testing.expect(e.marked == null);
 }
+
+test "grapheme editing moves and deletes whole clusters" {
+    // Backspace keeps all but the last scalar unless the cluster is an emoji
+    // sequence or flag; arrows and forward Delete take the whole cluster.
+    const Case = struct { cluster: []const u8, after_backspace: []const u8 };
+    const cases = [_]Case{
+        .{ .cluster = "e\u{301}", .after_backspace = "aez" },
+        .{ .cluster = "👩🏽‍💻", .after_backspace = "az" },
+        .{ .cluster = "🇸🇪", .after_backspace = "az" },
+        .{ .cluster = "1\u{fe0f}\u{20e3}", .after_backspace = "az" },
+        .{ .cluster = "क्ष", .after_backspace = "aक्z" },
+    };
+    var b: TextBuffer = .{};
+    defer b.deinit();
+    for (cases) |case| {
+        b.set("a");
+        _ = b.insert(1, case.cluster);
+        _ = b.insert(b.text().len, "z");
+        const end = b.text().len - 1;
+        var e: EditState = .{ .caret = 1, .anchor = 1 };
+        var r: Result = .{};
+        apply(&b, &e, .{ .command = .select_right }, .{}, .{ .write = noClip }, &r);
+        try std.testing.expectEqual(end, e.caret);
+        try std.testing.expectEqual(@as(usize, 1), e.anchor);
+        e = .{ .caret = end, .anchor = end };
+        apply(&b, &e, .{ .command = .delete_backward }, .{}, .{ .write = noClip }, &r);
+        try std.testing.expectEqualStrings(case.after_backspace, b.text());
+        b.set("a");
+        _ = b.insert(1, case.cluster);
+        _ = b.insert(b.text().len, "z");
+        e = .{ .caret = 1, .anchor = 1 };
+        apply(&b, &e, .{ .command = .delete_forward }, .{}, .{ .write = noClip }, &r);
+        try std.testing.expectEqualStrings("az", b.text());
+        try std.testing.expectEqual(@as(usize, 1), e.caret);
+    }
+}
+
+test "deleting with the caret inside a cluster keeps the other side" {
+    var b: TextBuffer = .{};
+    defer b.deinit();
+    var r: Result = .{};
+    // Caret between the woman and the skin-tone modifier.
+    const woman = "\u{1f469}";
+    b.set("a" ++ woman ++ "\u{1f3fd}z");
+    var e: EditState = .{ .caret = 1 + woman.len, .anchor = 1 + woman.len };
+    apply(&b, &e, .{ .command = .delete_backward }, .{}, .{ .write = noClip }, &r);
+    try std.testing.expectEqualStrings("a\u{1f3fd}z", b.text());
+    try std.testing.expectEqual(@as(usize, 1), e.caret);
+    // Forward Delete from inside a cluster removes only what follows.
+    b.set("ae\u{301}\u{302}z");
+    e = .{ .caret = 4, .anchor = 4 };
+    apply(&b, &e, .{ .command = .delete_forward }, .{}, .{ .write = noClip }, &r);
+    try std.testing.expectEqualStrings("ae\u{301}z", b.text());
+    try std.testing.expectEqual(@as(usize, 4), e.caret);
+}

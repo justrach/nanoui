@@ -79,16 +79,16 @@ pub const TextBuffer = struct {
     }
 };
 
+const graphemeRange = @import("text_selection.zig").graphemeRange;
+const backspaceStart = @import("text_selection.zig").backspaceStart;
+
 pub fn prevBoundary(s: []const u8, i: usize) usize {
-    if (i == 0) return 0;
-    var j = i - 1;
-    while (j > 0 and (s[j] & 0xc0) == 0x80) j -= 1;
-    return j;
+    const at = @min(s.len, i);
+    return if (at == 0) 0 else graphemeRange(s, at - 1)[0];
 }
 
 pub fn nextBoundary(s: []const u8, i: usize) usize {
-    if (i >= s.len) return s.len;
-    return @min(s.len, i + utf8.seqLen(s[i]));
+    return graphemeRange(s, i)[1];
 }
 
 const textedit = @import("textedit.zig");
@@ -235,8 +235,8 @@ pub fn apply(buffer: *TextBuffer, e: *EditState, op: ctx_mod.TextOp, opts: Optio
                     } else if (e.caret > 0) {
                         const from = switch (cmd) {
                             .delete_word_backward => prevWord(s, e.caret),
-                            .delete_to_line_start => if (line_start == e.caret and e.caret > 0) e.caret - 1 else line_start,
-                            else => prevBoundary(s, e.caret),
+                            .delete_to_line_start => if (line_start == e.caret) e.caret - 1 else line_start,
+                            else => backspaceStart(s, e.caret),
                         };
                         buffer.remove(from, e.caret);
                         collapse(e, from);
@@ -258,7 +258,9 @@ pub fn apply(buffer: *TextBuffer, e: *EditState, op: ctx_mod.TextOp, opts: Optio
                         buffer.remove(lo, hi);
                         collapse(e, lo);
                     } else if (e.caret < s.len) {
-                        buffer.remove(e.caret, nextBoundary(s, e.caret));
+                        // From the caret to the end of its cluster.
+                        buffer.remove(e.caret, graphemeRange(s, e.caret)[1]);
+                        collapse(e, e.caret);
                     } else return;
                     result.changed = true;
                 },

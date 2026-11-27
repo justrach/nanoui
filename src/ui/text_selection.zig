@@ -3,6 +3,7 @@
 //! UTF-8 byte offsets stay offsets into the original source: no projection,
 //! normalization, platform tokenizer or replacement strings reach Copy.
 const std = @import("std");
+const utf8 = @import("utf8.zig");
 const data = @import("text_selection_data.zig");
 const Break = data.Break;
 
@@ -10,7 +11,8 @@ const Scalar = struct { cp: u21, end: usize };
 
 fn scalar(s: []const u8, at: usize) Scalar {
     const count = std.unicode.utf8ByteSequenceLength(s[at]) catch 1;
-    const end = @min(at + count, s.len);
+    const end = at + @as(usize, count);
+    if (end > s.len) return .{ .cp = 0xfffd, .end = at + 1 };
     const cp = std.unicode.utf8Decode(s[at..end]) catch return .{ .cp = 0xfffd, .end = at + 1 };
     return .{ .cp = cp, .end = end };
 }
@@ -85,6 +87,88 @@ pub fn graphemeEnd(s: []const u8, start: usize) usize {
         p = q;
     }
     return s.len;
+}
+
+fn scalarStart(s: []const u8, at: usize) usize {
+    const lead = utf8.floorBoundary(s, at);
+    return if (lead < at and scalar(s, lead).end <= at) at else lead;
+}
+
+/// Cluster containing the byte at `at`. Walk back to a boundary that does
+/// not depend on earlier context, then use the same forward UAX #29 rules.
+pub fn graphemeRange(s: []const u8, at: usize) [2]usize {
+    if (at >= s.len) return .{ s.len, s.len };
+    var start = scalarStart(s, at);
+    while (start > 0) {
+        const before = scalarStart(s, start - 1);
+        if (s[before] >= ' ' and s[before] <= '~' and s[start] >= ' ' and s[start] <= '~') break;
+        const p_cp = scalar(s, before).cp;
+        const p = property(p_cp);
+        const q = scalar(s, start).cp;
+        const qp = property(q);
+        if ((control(p) or control(qp)) and !(p == .cr and qp == .lf)) break;
+        if (p != .prepend and qp == .other and
+            data.indicOf(q) != .consonant and (p != .zwj or !data.isPictographic(q))) break;
+        // Hangul and Indic consonants join only after particular scalars
+        // (GB6-8, GB9c). Stopping here keeps spaceless runs linear.
+        if (hangul(qp) and p != .prepend and (!hangul(p) or !hangulJoins(p, qp))) break;
+        if (data.indicOf(q) == .consonant and p != .prepend and p != .zwj and
+            (data.indicOf(p_cp) == .none or data.indicOf(p_cp) == .consonant)) break;
+        start = before;
+    }
+    while (true) {
+        const end = graphemeEnd(s, start);
+        if (at < end) return .{ start, end };
+        start = end;
+    }
+}
+
+fn hangul(p: Break) bool {
+    return p == .l or p == .v or p == .t or p == .lv or p == .lvt;
+}
+
+fn hangulJoins(p: Break, q: Break) bool {
+    return (p == .l and (q == .l or q == .v or q == .lv or q == .lvt)) or
+        ((p == .lv or p == .v) and (q == .v or q == .t)) or
+        ((p == .lvt or p == .t) and q == .t);
+}
+
+/// Where Backspace at `at` starts deleting. An emoji sequence, flag or
+/// keycap goes whole; otherwise only the last scalar does, as on Apple
+/// platforms, Android and Chromium, so a typo after an accent or inside an
+/// Indic conjunct keeps the rest of the cluster. Nothing after `at` is
+/// touched, even when `at` is inside a cluster.
+pub fn backspaceStart(s: []const u8, at: usize) usize {
+    const end = @min(at, s.len);
+    if (end == 0) return 0;
+    const cluster = graphemeRange(s, end - 1)[0];
+    const base = scalar(s, cluster);
+    if (data.isPictographic(base.cp) or property(base.cp) == .regional_indicator)
+        return cluster;
+    if (base.cp == '#' or base.cp == '*' or (base.cp >= '0' and base.cp <= '9')) {
+        var suffix = base.end;
+        if (suffix < end and scalar(s, suffix).cp == 0xfe0f) suffix = scalar(s, suffix).end;
+        if (suffix < end and scalar(s, suffix).cp == 0x20e3) return cluster;
+    }
+    return scalarStart(s, end - 1);
+}
+
+test "backspace keeps the base of non-emoji joined clusters" {
+    const indic = "क्‍ष";
+    try std.testing.expectEqual([2]usize{ 0, indic.len }, graphemeRange(indic, indic.len - 1));
+    try std.testing.expectEqual("क्‍".len, backspaceStart(indic, indic.len));
+    try std.testing.expectEqual(@as(usize, 1), backspaceStart("a\u{fe0f}", "a\u{fe0f}".len));
+    try std.testing.expectEqual(@as(usize, 0), backspaceStart("1️⃣", "1️⃣".len));
+}
+
+test "grapheme editing handles past-end and stray UTF-8 bytes" {
+    try std.testing.expectEqual(@as(usize, 0), backspaceStart("", 1));
+    try std.testing.expectEqual(@as(usize, 1), backspaceStart("\xc0\x80", 2));
+    try std.testing.expectEqual([2]usize{ 1, 2 }, graphemeRange("\xe3\x81", 1));
+    const mixed = "a\x80\x80";
+    try std.testing.expectEqual([2]usize{ 2, 3 }, graphemeRange(mixed, 2));
+    try std.testing.expectEqual(@as(usize, 2), backspaceStart(mixed, mixed.len + 1));
+    try std.testing.expectEqual([2]usize{ 1, 3 }, graphemeRange("\n\r\n\n", 2));
 }
 
 const Class = enum { word, space, atom };
@@ -172,6 +256,7 @@ fn checkGraphemeVectors(source: []const u8) !usize {
         var at: usize = 0;
         for (boundaries[1..count]) |end| {
             try std.testing.expectEqual(end, graphemeEnd(text, at));
+            for (at..end) |byte| try std.testing.expectEqual([2]usize{ at, end }, graphemeRange(text, byte));
             at = end;
         }
         try std.testing.expectEqual(length, at);
