@@ -26,7 +26,17 @@ export function startWorker({ canvas, worker, url, cpuFallback = false, keyboard
       if (width > 0 && height > 0) post({ resize: [width, height, scale()] });
     },
   };
-  const listen = () => { unbind = bindInput(current, sink, { keyboard }); };
+  const listen = () => {
+    const element = current;
+    const tabIndex = element.getAttribute("tabindex");
+    if (keyboard && element.tabIndex < 0) element.tabIndex = 0;
+    const off = bindInput(element, sink, { keyboard });
+    unbind = () => {
+      off();
+      if (tabIndex === null) element.removeAttribute("tabindex");
+      else element.setAttribute("tabindex", tabIndex);
+    };
+  };
 
   async function replace() {
     let offscreen = null;
@@ -37,6 +47,12 @@ export function startWorker({ canvas, worker, url, cpuFallback = false, keyboard
         const focused = current.ownerDocument.activeElement === current;
         offscreen = next.transferControlToOffscreen();
         unbind?.();
+        // Copy the author's attributes after the input binding restores them.
+        for (const name of ["style", "tabindex"]) {
+          const value = current.getAttribute(name);
+          if (value === null) next.removeAttribute(name);
+          else next.setAttribute(name, value);
+        }
         current.replaceWith(next);
         current = next;
         listen();
@@ -53,20 +69,21 @@ export function startWorker({ canvas, worker, url, cpuFallback = false, keyboard
   const ready = new Promise((resolve, reject) => { settle = { resolve, reject }; });
   // Callers that never await ready still get errors through onError.
   ready.catch(() => {});
+  let started = false;
+  function fail(error) {
+    if (!started) stop(error);
+    onError(error);
+  }
   const onMessage = ({ data }) => {
-    if (data.ready) settle.resolve();
-    else if (data.replaceCanvas) replace();
-    else if (data.error) {
-      const error = new Error(data.error);
-      settle.reject(error);
-      onError(error);
-    }
+    if (data.ready) {
+      started = true;
+      settle.resolve();
+    } else if (data.replaceCanvas) replace();
+    else if (data.error) fail(new Error(data.error));
   };
   const onFailure = event => {
     event.preventDefault?.();
-    const error = new Error(event.message || "The nanoui Worker failed to load");
-    settle.reject(error);
-    onError(error);
+    fail(new Error(event.message || "The nanoui Worker failed to load"));
   };
   function stop(error) {
     stopped = true;
@@ -83,7 +100,6 @@ export function startWorker({ canvas, worker, url, cpuFallback = false, keyboard
     const command = new URL(url, location.href).href;
     const rect = current.getBoundingClientRect();
     const offscreen = current.transferControlToOffscreen();
-    if (keyboard && current.tabIndex < 0) current.tabIndex = 0;
     post({
       canvas: offscreen, url: command, cpuFallback,
       width: Math.max(1, Math.round(rect.width * scale())), height: Math.max(1, Math.round(rect.height * scale())), scale: scale(),

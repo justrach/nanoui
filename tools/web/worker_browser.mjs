@@ -26,7 +26,7 @@ async function open(context, base, app, errors) {
     document.querySelector('canvas').remove();
     const { startWorker } = await import('./worker_page.js');
     const canvas = document.createElement('canvas');
-    canvas.style.cssText = 'display:block;width:420px;height:300px';
+    canvas.style.cssText = 'display:block;width:420px;height:300px;touch-action:pan-y';
     canvas.setAttribute('aria-label', 'Worker canvas');
     document.body.append(canvas);
     const worker = new Worker('./worker.js', { type: 'module' });
@@ -79,6 +79,7 @@ async function lose(page) {
 async function closeWorker(page) {
   await page.evaluate(() => window.probe.handle.destroy());
   await page.waitForFunction(() => window.probe.destroyed);
+  assert.equal(await page.evaluate(() => window.probe.handle.canvas.style.touchAction), 'pan-y');
   await page.close();
 }
 
@@ -177,16 +178,26 @@ export async function checkWorker(context, base, errors) {
       const { startWorker } = await import('./worker_page.js');
       const outcome = async (url, destroyEarly) => {
         const canvas = document.createElement('canvas');
-        canvas.style.cssText = 'width:100px;height:100px';
+        canvas.style.cssText = 'width:100px;height:100px;touch-action:pan-y';
         document.body.append(canvas);
-        const view = startWorker({ canvas, worker: new Worker('./worker.js', { type: 'module' }), url, onError: () => {} });
+        const worker = new Worker('./worker.js', { type: 'module' });
+        const view = startWorker({ canvas, worker, url, keyboard: () => true, onError: () => {} });
         if (destroyEarly) view.destroy();
-        try { await view.ready; return 'ready'; } catch (error) { return error.message; } finally { view.destroy(); }
+        try { await view.ready; return { message: 'ready' }; } catch (error) {
+          const key = new KeyboardEvent('keydown', { key: 'a', code: 'KeyA', cancelable: true });
+          return { message: error.message, touchAction: canvas.style.touchAction,
+            tabIndex: canvas.getAttribute('tabindex'), forwardsInput: !canvas.dispatchEvent(key) };
+        } finally { view.destroy(); worker.terminate(); }
       };
       return [await outcome('./missing.wasm', false), await outcome('./counter.wasm', true)];
     });
-    assert.match(outcomes[0], /404|HTTP/);
-    assert.equal(outcomes[1], 'The Worker view was destroyed');
+    assert.match(outcomes[0].message, /404|HTTP/);
+    assert.equal(outcomes[1].message, 'The Worker view was destroyed');
+    for (const outcome of outcomes) {
+      assert.equal(outcome.touchAction, 'pan-y');
+      assert.equal(outcome.tabIndex, null);
+      assert.equal(outcome.forwardsInput, false);
+    }
     await failures.close();
   }
   {
