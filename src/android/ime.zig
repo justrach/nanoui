@@ -160,11 +160,30 @@ fn writeJob(ctx: ?*anyopaque, env: jni.Env) void {
     if (edit == null) return;
     const frame = jni.Frame.push(env, 8);
     defer frame.pop();
-    const s = jni.string(env, w.text);
-    _ = jni.call(env, edit, "setText", "(Ljava/lang/CharSequence;)V", &.{jni.ref(s)});
-    jni.deleteLocal(env, s);
-    const at: i32 = @intCast(@min(w.caret, w.text.len));
+    const at = selectionOffset(w.text, w.caret) orelse return;
+    const s = jni.string(env, w.text) orelse return;
+    defer jni.deleteLocal(env, s);
+    if (jni.call(env, edit, "setText", "(Ljava/lang/CharSequence;)V", &.{jni.ref(s)}) == null) return;
     _ = jni.call(env, edit, "setSelection", "(II)V", &.{ jni.int(at), jni.int(at) });
+}
+
+/// Convert the app's UTF-8 byte position to the UTF-16 units expected
+/// by EditText. The app supplies a scalar boundary.
+fn selectionOffset(text: []const u8, caret: usize) ?i32 {
+    const prefix = text[0..@min(caret, text.len)];
+    if (!std.unicode.utf8ValidateSlice(prefix)) return null;
+    const units = std.unicode.calcUtf16LeLen(prefix) catch unreachable;
+    return std.math.cast(i32, units);
+}
+
+test "Android selection uses UTF-16 offsets for CJK and emoji" {
+    const text = "a日本😀b";
+    try std.testing.expectEqual(@as(?i32, 0), selectionOffset(text, 0));
+    try std.testing.expectEqual(@as(?i32, 1), selectionOffset(text, 1));
+    try std.testing.expectEqual(@as(?i32, 3), selectionOffset(text, 7));
+    try std.testing.expectEqual(@as(?i32, 5), selectionOffset(text, 11));
+    try std.testing.expectEqual(@as(?i32, 6), selectionOffset(text, 99));
+    try std.testing.expectEqual(@as(?i32, null), selectionOffset(text, 8));
 }
 
 /// Forgets a waiting read (the keyboard is going, its text no longer
