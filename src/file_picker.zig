@@ -2,10 +2,10 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-/// Whether the platform has a native document picker. On Apple platforms call
+/// Whether this bounded helper supports the platform's dialog. On macOS call
 /// from App.soon when opening in response to a view action.
 pub const native = switch (builtin.os.tag) {
-    .macos, .ios, .windows => true,
+    .macos, .windows => true,
     .linux => !builtin.abi.isAndroid(),
     else => false,
 };

@@ -60,8 +60,9 @@ pub const State = struct {
     }
 };
 
-/// Call during each build of an enabled, labeled button. Keep ctx valid
-/// until the callback runs or the button is removed and its next frame ends.
+/// Call during each build of a labeled button, including disabled frames.
+/// Disabling blocks activation without cancelling an outstanding request.
+/// Keep ctx valid until the callback runs or the frame removing the button ends.
 /// File slices are borrowed until the callback returns.
 pub fn bind(c: *ui.Context, node: u32, options: picker.Options, ctx: ?*anyopaque, callback: picker.Callback) !void {
     const s = web.active orelse return error.NotMounted;
