@@ -15,8 +15,10 @@ export async function checkGalleryKeyboard(page, url) {
       { key: '@', code: 'Digit2', altKey: true },
       { key: '€', code: 'KeyE', ctrlKey: true, altKey: true, altGraph: true },
     ]) for (const type of ['keydown', 'keyup']) {
-      const event = new KeyboardEvent(type, { ...init, bubbles: true, cancelable: true });
-      if (altGraph) {
+      const event = new KeyboardEvent(type, {
+        ...init, bubbles: true, cancelable: true, modifierAltGraph: !!altGraph,
+      });
+      if (altGraph && !event.getModifierState('AltGraph')) {
         // WebKit ignores modifierAltGraph on synthetic KeyboardEvents.
         const state = event.getModifierState.bind(event);
         Object.defineProperty(event, 'getModifierState', {
