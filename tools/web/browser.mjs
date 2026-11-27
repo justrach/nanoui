@@ -224,6 +224,29 @@ try {
   assert.equal(await closing.evaluate(() => window.nanoui.canvas === window.closingCanvas &&
     window.nanoui.exports.nanoui_web_frames() === 0), true);
   await closing.close();
+  // Characters no bundled font has are drawn with the browser's fonts.
+  const glyphs = await browser.newPage({ viewport: { width: 1200, height: 900 } });
+  glyphs.on('pageerror', e => errors.push(e.message));
+  await glyphs.goto(host.url + '/index.html?app=gallery');
+  await glyphs.waitForFunction(() => window.nanoui?.exports.nanoui_web_frames() > 0);
+  await glyphs.mouse.click(88, 160); // Typography: 日本語, emoji clusters
+  await glyphs.waitForFunction(() => window.nanoui.host.stats.fallbackGlyphs >= 4);
+  await glyphs.close();
+  // Without OffscreenCanvas they stay boxes, and the frame still finishes.
+  const bare = await browser.newPage({ viewport: { width: 1200, height: 900 } });
+  bare.on('pageerror', e => errors.push(e.message));
+  await bare.addInitScript(() => {
+    delete globalThis.OffscreenCanvas;
+    window.bareErrors = [];
+    addEventListener('error', e => window.bareErrors.push(e.message));
+  });
+  await bare.goto(host.url + '/index.html?app=gallery');
+  await bare.waitForFunction(() => window.nanoui?.exports.nanoui_web_frames() > 0);
+  const bareFrames = await bare.evaluate(() => window.nanoui.exports.nanoui_web_frames());
+  await bare.mouse.click(88, 160);
+  await bare.waitForFunction(n => window.bareErrors.length > 0 || window.nanoui.exports.nanoui_web_frames() > n + 1, bareFrames);
+  assert.deepEqual(await bare.evaluate(() => [window.bareErrors, window.nanoui.host.stats.fallbackGlyphs]), [[], undefined]);
+  await bare.close();
   assert.deepEqual(errors,[]);
-  console.log('PASS canvas, click, idle, resize/DPR, device loss, disposal, Worker input and idle, Gallery keyboard, Canvas 2D startup, Canvas 2D scale cap, live Canvas 2D failover, teardown during recovery');
+  console.log('PASS canvas, click, idle, resize/DPR, device loss, disposal, Worker input and idle, Gallery keyboard, Canvas 2D startup, Canvas 2D scale cap, live Canvas 2D failover, teardown during recovery, browser fallback glyphs');
 } finally { await browser.close(); await host.close(); }

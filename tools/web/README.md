@@ -57,6 +57,14 @@ import {start} from './nanoui.js';
 const runtime = await start({canvas, url: './my-app.wasm', device});
 ```
 
+Text that no registered font can draw (CJK with the bundled DejaVu fonts,
+emoji, other scripts) falls back to the browser's own fonts: the host
+measures and draws each grapheme cluster on an `OffscreenCanvas`, and the
+surface packs it into the picture atlas. Emoji keep their colours; other
+text is tinted with its span's colour. Set `browser_glyphs = false` in
+`web.Options` to keep only registered fonts. Where `OffscreenCanvas` is
+missing the host declines, and those characters stay missing-glyph boxes.
+
 Omit `device` to have nanoui acquire and recover one. Injecting a device
 leaves its ownership/recovery to the app; call `await runtime.setDevice(next)`
 after replacement. `runtime.destroy()` frees renderer resources and only

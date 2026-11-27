@@ -329,6 +329,7 @@ test {
     _ = @import("tests_context_parity.zig");
     _ = @import("tests_tooltip_parity.zig");
     _ = @import("tests_text_parity.zig");
+    _ = @import("tests_glyph_fallback.zig");
     _ = @import("tests_paint_parity.zig");
     _ = @import("tests_textfield_parity.zig");
     _ = @import("tests_live_theme.zig");

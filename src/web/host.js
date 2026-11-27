@@ -11,6 +11,25 @@ function keyCode(name) {
   if (/^F(?:[1-9]|1[0-2])$/.test(name)) return 0xf703 + Number(name.slice(1));
   return Array.from(name).length === 1 ? name.codePointAt(0) : 0;
 }
+// Characters no registered font has are drawn with the browser's fonts.
+let glyphCanvas, glyphContext;
+const glyphDecoder = new TextDecoder();
+const glyphFont = px => `${px}px system-ui, -apple-system, "Segoe UI", "Noto Sans", "Noto Sans CJK SC", "PingFang SC", "Hiragino Sans", "Microsoft YaHei", sans-serif`;
+// Without OffscreenCanvas (or its 2D context) there is no fallback: the
+// helpers answer 0 and those characters stay missing-glyph boxes.
+function glyphs() {
+  if (glyphContext === undefined) {
+    glyphContext = null;
+    try {
+      if (typeof OffscreenCanvas === "function") {
+        glyphCanvas = new OffscreenCanvas(64, 64);
+        glyphContext = glyphCanvas.getContext("2d", { willReadFrequently: true }) ?? null;
+      }
+    } catch { glyphContext = null; }
+  }
+  return glyphContext;
+}
+
 export function createHost(canvas, options = {}) {
   let cpu = options.cpu;
   let lastResize;
@@ -21,6 +40,7 @@ export function createHost(canvas, options = {}) {
   const unwind = Symbol("nanoui.run");
   const stats = { callbacks: 0 };
   const raf = options.requestAnimationFrame ?? globalThis.requestAnimationFrame.bind(globalThis);
+  const glyphText = (ptr, len) => glyphDecoder.decode(new Uint8Array(runtime.exports.memory.buffer, ptr, len));
   const caf = options.cancelAnimationFrame ?? globalThis.cancelAnimationFrame.bind(globalThis);
   const on = (object, name, fn, opts) => { object.addEventListener(name, fn, opts); listeners.push(() => object.removeEventListener(name, fn, opts)); };
   function request() {
@@ -229,6 +249,38 @@ export function createHost(canvas, options = {}) {
         context.putImageData(new ImageData(pixels, width, height), 0, 0);
       },
       request_frame: request, request_after: after, now_ms: () => performance.now(), run_forever() { throw unwind; },
+      glyph_measure(ptr, len, size) {
+        const g = glyphs();
+        if (!g) return 0;
+        g.font = glyphFont(size);
+        return g.measureText(glyphText(ptr, len)).width;
+      },
+      glyph_box(ptr, len, px, out) {
+        const g = glyphs();
+        if (!g) return 0;
+        g.font = glyphFont(px);
+        const m = g.measureText(glyphText(ptr, len));
+        const ascent = Math.ceil(m.fontBoundingBoxAscent ?? px * 0.9);
+        const descent = Math.ceil(m.fontBoundingBoxDescent ?? px * 0.25);
+        const width = Math.ceil(Math.max(m.width, m.actualBoundingBoxRight ?? 0)) + 1;
+        new Float32Array(runtime.exports.memory.buffer, out, 3).set([width, ascent + descent, ascent]);
+        return 1;
+      },
+      glyph_draw(ptr, len, px, out, width, height, ascent) {
+        const g = glyphs();
+        if (!g) return 0;
+        stats.fallbackGlyphs = (stats.fallbackGlyphs ?? 0) + 1;
+        if (glyphCanvas.width < width) glyphCanvas.width = width;
+        if (glyphCanvas.height < height) glyphCanvas.height = height;
+        g.clearRect(0, 0, width, height);
+        g.font = glyphFont(px);
+        g.fillStyle = "#fff";
+        g.textBaseline = "alphabetic";
+        g.fillText(glyphText(ptr, len), 0, ascent);
+        const pixels = g.getImageData(0, 0, width, height).data;
+        new Uint8Array(runtime.exports.memory.buffer, out, width * height * 4).set(pixels);
+        return 1;
+      },
     },
     attach(value) {
       runtime = value;

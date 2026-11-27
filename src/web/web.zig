@@ -6,11 +6,15 @@ const gpu = @import("../ui/gpu.zig");
 const text = @import("../ui/text.zig");
 const frames = @import("../ui/frame.zig");
 const webgpu = @import("../ui/webgpu.zig");
+const glyph_fallback = @import("../ui/glyph_fallback.zig");
 pub const Renderer = webgpu.Renderer;
 pub const Target = webgpu.Target;
 
 extern "nanoui_web" fn cpu_backend() bool;
 extern "nanoui_web" fn present_cpu(ptr: [*]const u8, width: u32, height: u32) void;
+extern "nanoui_web" fn glyph_measure(text: [*]const u8, len: usize, size: f32) f32;
+extern "nanoui_web" fn glyph_box(text: [*]const u8, len: usize, px: f32, out: *[3]f32) bool;
+extern "nanoui_web" fn glyph_draw(text: [*]const u8, len: usize, px: f32, ptr: [*]u8, width: u32, height: u32, ascent: f32) bool;
 pub extern "nanoui_web" fn request_frame() void;
 pub extern "nanoui_web" fn request_after(ms: f64) void;
 pub extern "nanoui_web" fn now_ms() f64;
@@ -28,12 +32,36 @@ pub fn registerBundledFonts() bool {
         ui.registerFont(@embedFile("../ui/web_fonts/DejaVuSans-Bold.ttf"));
 }
 
+/// Characters no registered font has, drawn with the browser's own fonts.
+const browser_glyphs: glyph_fallback.Hooks = .{
+    .measure = struct {
+        fn f(_: ?*anyopaque, chars: []const u8, size: f32) f32 {
+            return glyph_measure(chars.ptr, chars.len, size);
+        }
+    }.f,
+    .box = struct {
+        fn f(_: ?*anyopaque, chars: []const u8, px: f32) ?glyph_fallback.Raster {
+            var out: [3]f32 = undefined;
+            if (!glyph_box(chars.ptr, chars.len, px, &out)) return null;
+            if (!(out[0] >= 1 and out[0] <= 512 and out[1] >= 1 and out[1] <= 512)) return null;
+            return .{ .width = @intFromFloat(out[0]), .height = @intFromFloat(out[1]), .ascent = out[2] };
+        }
+    }.f,
+    .draw = struct {
+        fn f(_: ?*anyopaque, chars: []const u8, px: f32, box: glyph_fallback.Raster, rgba: []u8) bool {
+            return glyph_draw(chars.ptr, chars.len, px, rgba.ptr, box.width, box.height, box.ascent);
+        }
+    }.f,
+};
+
 pub const Options = struct {
     allocator: std.mem.Allocator = std.heap.wasm_allocator,
     width: f32 = 420,
     height: f32 = 300,
     scale: f32 = 1,
     theme: ui.Theme = .light,
+    /// Draw characters no registered font has with the browser's fonts.
+    browser_glyphs: bool = true,
 };
 
 pub const Surface = struct {
@@ -198,6 +226,7 @@ pub fn mount(view: ui.View, options: Options) !*Surface {
         .start_time = now_ms() / 1000,
     };
     s.ctx = .init(s.gpa, &s.text);
+    if (options.browser_glyphs) s.text.fallback_glyphs = browser_glyphs;
     if (s.renderer) |*renderer| s.text.images.sink = .{ .ctx = renderer, .upload = webgpu.Renderer.uploadImage };
     s.ctx.waker = .{ .ctx = s, .wake = wake };
     active = s;
