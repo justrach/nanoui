@@ -485,6 +485,22 @@ fn textRunLimit(c: *Context, out: *std.ArrayList(metal.Instance), t: ctx_mod.Con
             color[3] *= std.math.clamp((inner_right - fd.clear - (x + g.x)) / @max(fd.ramp, 0.001), 0, 1);
             if (color[3] <= 0) continue;
         }
+        if (@hasField(text_mod.Glyph, "host") and g.host != 0) {
+            // A character no font has, drawn by the host and tinted.
+            const h = c.text.fallback_glyphs orelse continue;
+            const shown = t.str[start..end];
+            if (g.index + g.host > shown.len) continue;
+            const p = c.text.fallback_cache.place(c.text.gpa, &c.text.images, h, shown[g.index..][0..g.host], style.size * c.text.zoom, scale) orelse continue;
+            push(c, out, .{
+                .rect = .{ px / scale - p.left, baseline - g.y - p.ascent, p.w, p.h },
+                .color = .{ 1, 1, 1, color[3] },
+                .border_color = if (p.color) .{ 0, 0, 0, 0 } else .{ color[0], color[1], color[2], 1 },
+                .uv = p.uv,
+                .kind = metal.Kind.image,
+                .clip = if (limit) |l| .{ clip4[0], clip4[1], @min(clip4[2], l.end), clip4[3] } else clip4,
+            });
+            continue;
+        }
         // Lighter text is drawn with thicker strokes, as macOS draws it.
         const sp = c.text.glyph(g, bin, @TypeOf(c.text.*).dilationFor(tone.r, tone.g, tone.b)) orelse continue;
         var uv = sp.uv;

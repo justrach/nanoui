@@ -61,7 +61,7 @@ fn putCut(c: *Context, k: u64, cut: Cut) void {
     c.truncates.put(c.gpa, k, cut) catch {};
 }
 
-fn xAt(lay: Layout, at: usize) f32 {
+fn xAt(lay: anytype, at: usize) f32 {
     for (lay.glyphs) |g| if (g.index >= at) return g.x;
     return lay.width;
 }
@@ -109,6 +109,14 @@ fn splice(c: *Context, s: []const u8, cut: Cut) []const u8 {
 }
 
 fn sliceLayout(c: *Context, lay: Layout, el: Layout, cut: Cut) ?Layout {
+    return sliceGlyphs(c.alloc(), lay, el, cut);
+}
+
+/// `lay` with the bytes `cut` removes replaced by the ellipsis's glyphs `el`.
+/// Glyphs are copied whole, so what a text system adds to them (a
+/// host-drawn cluster's length, `text_tt.Glyph.host`) survives the cut.
+pub fn sliceGlyphs(gpa: std.mem.Allocator, lay: anytype, el: @TypeOf(lay), cut: Cut) ?@TypeOf(lay) {
+    const G = @typeInfo(@TypeOf(lay.glyphs)).pointer.child;
     var head_n: usize = 0;
     for (lay.glyphs) |g| {
         if (g.index < cut.head) head_n += 1 else break;
@@ -121,23 +129,23 @@ fn sliceLayout(c: *Context, lay: Layout, el: Layout, cut: Cut) ?Layout {
         }
     }
     const tail_n = lay.glyphs.len - tail_start;
-    const out = c.alloc().alloc(Glyph, head_n + el.glyphs.len + tail_n) catch return null;
+    const out = gpa.alloc(G, head_n + el.glyphs.len + tail_n) catch return null;
     @memcpy(out[0..head_n], lay.glyphs[0..head_n]);
     const head_x = xAt(lay, cut.head);
     for (el.glyphs, 0..) |g, i| {
-        out[head_n + i] = .{ .font = g.font, .glyph = g.glyph, .x = head_x + g.x, .y = g.y, .index = cut.head };
+        var o = g;
+        o.x = head_x + g.x;
+        o.index = cut.head;
+        out[head_n + i] = o;
     }
     const tail_x = if (tail_start < lay.glyphs.len) lay.glyphs[tail_start].x else lay.width;
     const dx = head_x + el.width - tail_x;
     const di: u32 = cut.head + @as(u32, @intCast(ellipsis.len));
     for (lay.glyphs[tail_start..], 0..) |g, i| {
-        out[head_n + el.glyphs.len + i] = .{
-            .font = g.font,
-            .glyph = g.glyph,
-            .x = g.x + dx,
-            .y = g.y,
-            .index = g.index - cut.tail + di,
-        };
+        var o = g;
+        o.x = g.x + dx;
+        o.index = g.index - cut.tail + di;
+        out[head_n + el.glyphs.len + i] = o;
     }
     return .{ .width = head_x + el.width + (lay.width - tail_x), .glyphs = out };
 }

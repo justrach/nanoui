@@ -8,6 +8,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const types = @import("types.zig");
 const fontdb = @import("tt/fontdb.zig");
+const glyph_fallback = @import("glyph_fallback.zig");
 const tt = @import("tt/font.zig");
 const atlas_mod = @import("atlas_tt.zig");
 const utf8 = @import("utf8.zig");
@@ -47,8 +48,10 @@ pub const Font = struct {
     }
 };
 
-/// A shaped glyph, as `text_mac.zig` has it.
-pub const Glyph = struct { font: u16, glyph: u16, x: f32, y: f32, index: u32 = 0 };
+/// A shaped glyph, as `text_mac.zig` has it. `host`: the byte length of a
+/// grapheme cluster no font has, at `index`, drawn by
+/// `TextSystem.fallback_glyphs` (0 for an ordinary glyph).
+pub const Glyph = struct { font: u16, glyph: u16, x: f32, y: f32, index: u32 = 0, host: u16 = 0 };
 pub const Layout = struct { width: f32, glyphs: []const Glyph };
 pub const Line = struct { start: usize, end: usize, width: f32 };
 
@@ -77,6 +80,10 @@ pub const TextSystem = struct {
     fonts: std.AutoHashMapUnmanaged(FontKey, Font) = .empty,
     /// Faces at sizes, as glyphs refer to them.
     run_fonts: std.ArrayList(atlas_mod.RunFont) = .empty,
+    /// Draws characters no font has (`glyph_fallback.zig`): the browser on
+    /// the web. Set before the first layout.
+    fallback_glyphs: ?glyph_fallback.Hooks = null,
+    fallback_cache: glyph_fallback.Cache = .{},
     run_faces: std.ArrayList(u32) = .empty,
     /// The fonts of each style that names families (`TextStyle.family`).
     stacks: std.AutoHashMapUnmanaged(FontKey, ?*stacks.Stack) = .empty,
@@ -110,6 +117,7 @@ pub const TextSystem = struct {
     }
 
     pub fn deinit(self: *TextSystem) void {
+        self.fallback_cache.deinit(self.gpa);
         self.images.deinit();
         self.fonts.deinit(self.gpa);
         self.run_fonts.deinit(self.gpa);
@@ -349,8 +357,18 @@ pub const TextSystem = struct {
         const primary = self.run_fonts.items[f.id];
         const stack = self.stackOf(style);
         var prev: ?struct { id: u16, g: u16, digit: bool } = null;
+        var cluster: struct { start: usize = 0, end: usize = 0, glyphs: usize = 0, pen: f32 = 0, tried: bool = false } = .{};
         var i: usize = 0;
         while (i < s.len) {
+            if (self.fallback_glyphs != null and i >= cluster.end) {
+                // ASCII runs do not need Unicode property lookups.
+                const two_ascii = i + 1 < s.len and s[i] < 0x80 and s[i + 1] < 0x80;
+                const end = if (two_ascii and !(s[i] == '\r' and s[i + 1] == '\n'))
+                    i + 1
+                else
+                    @import("text_selection.zig").graphemeEnd(s, i);
+                cluster = .{ .start = i, .end = end, .glyphs = out.items.len, .pen = x };
+            }
             // A character cut off at the end (a span ending inside it) is
             // the replacement character, not a decode of too few bytes.
             const want = utf8.seqLen(s[i]);
@@ -374,6 +392,23 @@ pub const TextSystem = struct {
                     }
                 }
             }
+            if (g == 0 and cp > 0x20) if (self.fallback_glyphs) |h| {
+                // A missing mark can follow a base we've already emitted.
+                // Replace all glyphs of that cluster when the host shapes it.
+                if (!cluster.tried) {
+                    cluster.tried = true;
+                    const chars = s[cluster.start..cluster.end];
+                    const w = if (chars.len <= std.math.maxInt(u16)) h.measure(h.ctx, chars, size) else 0;
+                    if (w > 0) {
+                        out.shrinkRetainingCapacity(cluster.glyphs);
+                        try out.append(self.gpa, .{ .font = id, .glyph = 0, .x = cluster.pen, .y = 0, .index = @intCast(offset + cluster.start), .host = @intCast(chars.len) });
+                        x = cluster.pen + w;
+                        prev = null;
+                        i = cluster.end;
+                        continue;
+                    }
+                }
+            };
             const k = size / rf.font.units_per_em;
             const grid = self.gridded(id, rf);
             // Tabular digits: each in a cell as wide as the widest, unkerned.
