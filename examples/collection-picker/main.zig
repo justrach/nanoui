@@ -115,7 +115,7 @@ const Picker = struct {
         // which names the highlighted option as its active descendant.
         const results = ui.div(c).column().wFull().gap(10);
         ui.access.describe(c, results.index, .{ .role = .listbox, .label = "Collections" });
-        if (result.focused) ui.access.controls(c, field, c.node(results.index).id);
+        ui.access.controls(c, field, c.node(results.index).id);
         for (s.results[0..s.count], 0..) |index, rank| {
             ui.key(c, entries[index].id);
             const row = ui.div(c).row().p(14).wFull().rounded(6)

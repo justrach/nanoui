@@ -2,7 +2,7 @@
 const button = new Set(["button", "tab", "checkbox", "switch_toggle", "radio_button", "row", "option", "menu_button", "link"]);
 const roles = { checkbox: "checkbox", switch_toggle: "switch", radio_button: "radio", tab: "tab", option: "option", link: "link", menu_button: "button" };
 const containers = new Set(["list", "listbox"]);
-const tagFor = item => item.role === "text_field" ? (item.password ? "input" : "textarea") :
+const tagFor = (item, combobox) => item.role === "text_field" ? (item.password || combobox ? "input" : "textarea") :
   containers.has(item.role) ? "div" : button.has(item.role) ? "button" : "span";
 let nextProjection = 0;
 const isEditor = node => node?.tagName === "TEXTAREA" || node?.tagName === "INPUT";
@@ -119,12 +119,18 @@ export function createSemantics(canvas, send) {
       // Each parent's last placed child: the root's starts after the live region.
       const previous = new Map([[root, live]]);
       const lists = new Map();
+      const itemsById = new Map(snapshot.items.map(item => [item.id, item]));
+      const hasId = id => id && id !== "0";
+      const isCombobox = item => item.role === "text_field" && !item.password && hasId(item.controls) &&
+        (!itemsById.has(item.controls) || itemsById.get(item.controls).role === "listbox");
+      const popups = new Set(snapshot.items.filter(isCombobox).map(item => item.controls));
       for (const item of snapshot.items) {
         const id = BigInt(item.id);
         ids.add(id);
         let node = nodes.get(id);
-        const tag = tagFor(item);
-        if (node && node.localName !== tag) {
+        const combobox = isCombobox(item);
+        const tag = tagFor(item, combobox);
+        if (node && (node.localName !== tag || (tag === "input" && (node.type === "password") !== !!item.password))) {
           node.remove();
           nodes.delete(id);
           node = undefined;
@@ -168,7 +174,7 @@ export function createSemantics(canvas, send) {
           if (item.enabled) node.removeAttribute("aria-disabled");
           else node.setAttribute("aria-disabled", "true");
           // A list of tabs becomes a tab list below. Other lists are labelled groups.
-          const role = item.role === "list" ? "group" : item.role === "listbox" ? "listbox" : roles[item.role];
+          const role = combobox ? "combobox" : item.role === "list" ? "group" : item.role === "listbox" ? "listbox" : roles[item.role];
           if (role) node.setAttribute("role", role);
           else node.removeAttribute("role");
           const checked = ["checkbox", "switch_toggle", "radio_button"].includes(item.role);
@@ -183,12 +189,23 @@ export function createSemantics(canvas, send) {
             if (item.role === "option" && value) node.setAttribute(name, String(value));
             else node.removeAttribute(name);
           }
-          // Focus stays in a picker's query; the highlighted option is its
-          // active descendant.
-          for (const [name, value] of [["aria-controls", item.controls], ["aria-activedescendant", item.active_descendant]]) {
-            if (value && value !== "0") node.setAttribute(name, domId(BigInt(value)));
-            else node.removeAttribute(name);
+          const controls = itemsById.get(item.controls);
+          const descendant = itemsById.get(item.active_descendant);
+          // Focus stays in the query while its listbox options are active descendants.
+          if (combobox) {
+            node.setAttribute("aria-expanded", String(!!controls));
+            node.setAttribute("aria-autocomplete", "list");
+          } else {
+            node.removeAttribute("aria-expanded");
+            node.removeAttribute("aria-autocomplete");
           }
+          if (controls) node.setAttribute("aria-controls", domId(BigInt(controls.id)));
+          else node.removeAttribute("aria-controls");
+          if (controls && descendant?.container === controls.id)
+            node.setAttribute("aria-activedescendant", domId(BigInt(descendant.id)));
+          else node.removeAttribute("aria-activedescendant");
+          if (item.role === "option" && popups.has(item.container)) node.tabIndex = -1;
+          else node.removeAttribute("tabindex");
         }
       }
       for (const [list, kinds] of lists) if (kinds.has("tab") && list.getAttribute("role") === "group") list.setAttribute("role", "tablist");

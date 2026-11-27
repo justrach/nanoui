@@ -21,9 +21,9 @@ try {
     const trigger = page.getByRole("button", { name: "Choose collection" });
     await trigger.focus();
     await page.keyboard.press("Enter");
-    const input = page.getByRole("textbox", { name: "Search collections" });
+    const input = page.getByRole("combobox", { name: "Search collections" });
     await input.waitFor();
-    await page.waitForFunction(() => document.activeElement?.tagName === "TEXTAREA");
+    await page.waitForFunction(() => document.activeElement?.getAttribute("role") === "combobox");
 
     if (engine === "chromium") {
       const ime = await page.context().newCDPSession(page);
@@ -51,7 +51,19 @@ try {
     assert.equal(await result.getAttribute("aria-posinset"), "1");
     assert.equal(await result.getAttribute("aria-setsize"), "1");
     assert.equal(await input.getAttribute("aria-controls"), await listbox.getAttribute("id"));
+    assert.equal(await input.getAttribute("aria-expanded"), "true");
+    assert.equal(await input.getAttribute("aria-autocomplete"), "list");
+    assert.equal(await result.evaluate(node => node.tabIndex), -1);
     assert.equal(await input.getAttribute("aria-activedescendant"), await result.getAttribute("id"));
+
+    await page.keyboard.press("End");
+    await page.keyboard.type("zzzz");
+    await page.getByText("No matching collections", { exact: true }).waitFor();
+    assert.equal(await input.getAttribute("aria-expanded"), "false");
+    assert.equal(await input.getAttribute("aria-controls"), null);
+    assert.equal(await input.getAttribute("aria-activedescendant"), null);
+    for (let i = 0; i < 4; i++) await page.keyboard.press("Backspace");
+    await result.waitFor();
 
     await page.keyboard.press("Control+a");
     await page.waitForFunction(() => !document.activeElement?.value);
@@ -84,7 +96,7 @@ try {
 
     await page.keyboard.press("Enter");
     await input.waitFor();
-    await page.waitForFunction(() => document.activeElement?.tagName === "TEXTAREA");
+    await page.waitForFunction(() => document.activeElement?.getAttribute("role") === "combobox");
     await page.keyboard.press("Escape");
     await input.waitFor({ state: "detached" });
     await page.waitForFunction(() => document.activeElement.getAttribute("aria-label") === "Choose collection");
