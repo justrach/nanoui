@@ -21,9 +21,8 @@ self.onmessage = async ({ data }) => {
       receiveReplacement = undefined;
       receive?.(data.fallbackCanvas);
     } else if (data.canvas) {
-      if (!data.url) throw new Error("worker.js needs the URL of the WASM command");
       runtime = await start({
-        canvas: data.canvas, url: data.url,
+        canvas: data.canvas, url: data.url ?? "./counter.wasm",
         width: data.width, height: data.height, scale: data.scale ?? 1,
         cpuFallback: !!data.cpuFallback, replaceOffscreenCanvas: requestReplacement,
         onError: error => self.postMessage({ error: error.message }),
@@ -43,6 +42,7 @@ self.onmessage = async ({ data }) => {
       }
       self.postMessage({
         id: data.info, frames: runtime.exports.nanoui_web_frames(),
+        value: Number(runtime.exports.counter_value?.() ?? 0),
         callbacks: runtime.host.stats.callbacks, generation: runtime.gpu?.generation ?? 0,
         renderer: runtime.gpu ? "WebGPU" : "Canvas 2D", exports,
       });

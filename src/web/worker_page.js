@@ -68,29 +68,38 @@ export function startWorker({ canvas, worker, url, cpuFallback = false, keyboard
     settle.reject(error);
     onError(error);
   };
+  function stop(error) {
+    stopped = true;
+    unbind?.();
+    settle.reject(error);
+    worker.removeEventListener("message", onMessage);
+    worker.removeEventListener("error", onFailure);
+    worker.removeEventListener("messageerror", onFailure);
+  }
   worker.addEventListener("message", onMessage);
   worker.addEventListener("error", onFailure);
   worker.addEventListener("messageerror", onFailure);
-  if (keyboard && current.tabIndex < 0) current.tabIndex = 0;
-  const rect = current.getBoundingClientRect();
-  const offscreen = current.transferControlToOffscreen();
-  post({
-    canvas: offscreen, url: new URL(url, location.href).href, cpuFallback,
-    width: Math.max(1, Math.round(rect.width * scale())), height: Math.max(1, Math.round(rect.height * scale())), scale: scale(),
-  }, [offscreen]);
-  listen();
+  try {
+    const command = new URL(url, location.href).href;
+    const rect = current.getBoundingClientRect();
+    const offscreen = current.transferControlToOffscreen();
+    if (keyboard && current.tabIndex < 0) current.tabIndex = 0;
+    post({
+      canvas: offscreen, url: command, cpuFallback,
+      width: Math.max(1, Math.round(rect.width * scale())), height: Math.max(1, Math.round(rect.height * scale())), scale: scale(),
+    }, [offscreen]);
+    listen();
+  } catch (error) {
+    stop(error);
+    onError(error);
+  }
   return {
     worker, ready,
     get canvas() { return current; },
     destroy() {
       if (stopped) return;
-      worker.postMessage({ destroy: true });
-      stopped = true;
-      unbind?.();
-      settle.reject(new Error("The Worker view was destroyed"));
-      worker.removeEventListener("message", onMessage);
-      worker.removeEventListener("error", onFailure);
-      worker.removeEventListener("messageerror", onFailure);
+      try { worker.postMessage({ destroy: true }); }
+      finally { stop(new Error("The Worker view was destroyed")); }
     },
   };
 }
