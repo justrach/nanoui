@@ -74,6 +74,8 @@ pub fn library(b: *std.Build, opts: LibraryOptions) *std.Build.Step.Compile {
     lib.use_llvm = true;
     lib.use_lld = true;
     lib.link_z_max_page_size = 16384;
+    // Android tombstones use the ELF build ID to identify the symbol file.
+    lib.build_id = .sha1;
     return lib;
 }
 
