@@ -310,7 +310,10 @@ pub const App = struct {
         // Quit before the loop started: nothing to run.
         if (self.stopping) return;
         self.running = true;
-        if (self.flags.play) |steps| @import("play.zig").start(self, steps);
+        const steps = self.flags.play;
+        var player: @import("play.zig").Player(App) = undefined;
+        if (steps) |script| player.start(self, script);
+        defer if (steps != null) player.stop();
         objc.msg(void, self.nsapp, "run", .{});
         self.running = false;
     }
