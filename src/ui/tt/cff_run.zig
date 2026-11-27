@@ -296,12 +296,16 @@ pub const Run = struct {
         if (r.n == 0) return;
         r.n -= 1;
         const v = r.stack[r.n];
-        if (!(v >= 0) or v > max_stack) {
+        if (!(v >= 0) or v > max_stack or @trunc(v) != v) {
             r.n = 0;
             return;
         }
         const n: usize = @intFromFloat(v);
-        const total = n * (r.c.regionCount(r.vsindex) + 1);
+        const regions = r.c.regionCount(r.vsindex) orelse {
+            r.n = 0;
+            return;
+        };
+        const total = n * (regions + 1);
         if (total > r.n) {
             r.n = 0;
             return;

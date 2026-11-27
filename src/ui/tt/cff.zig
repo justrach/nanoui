@@ -164,8 +164,8 @@ pub const Cff = struct {
     vsindex: [64]u16 = @splat(0),
     local_count: u8 = 0,
     fd_select: usize = 0,
-    /// CFF2: how many regions each item variation data blends.
-    regions: [32]u16 = @splat(0),
+    /// The length-delimited CFF2 ItemVariationStore, when present.
+    variation_store: []const u8 = "",
 
     /// Reads the table, null when it's not one this reads.
     pub fn init(d: []const u8) ?Cff {
@@ -206,7 +206,7 @@ pub const Cff = struct {
         if (dictFind(top, 17, &args) != 1) return null;
         const chars = Index.read2(d, usizeOf(args[0]) orelse return null) orelse return null;
         var c: Cff = .{ .data = d, .version = 2, .chars = chars, .global = global };
-        if (dictFind(top, 24, &args) == 1) c.readRegions(usizeOf(args[0]) orelse 0);
+        if (dictFind(top, 24, &args) == 1) c.variation_store = variationStore(d, usizeOf(args[0]) orelse 0);
         // CFF2 always has font dicts; FDSelect only when there are several.
         if (dictFind(top, 0x0c24, &args) != 1) return null;
         const fds = Index.read2(d, usizeOf(args[0]) orelse return null) orelse return null;
@@ -220,20 +220,12 @@ pub const Cff = struct {
         return c;
     }
 
-    /// The region count of each item variation data in the vstore at `at`,
-    /// which `blend` needs to know how many deltas follow the defaults.
-    fn readRegions(c: *Cff, at: usize) void {
-        if (at == 0 or at > c.data.len or c.data.len - at < 2) return;
-        const store = c.data[at + 2 ..];
-        if (be16(store, 0) != 1) return;
-        const count = be16(store, 6) orelse return;
-        if (count > (store.len - 8) / 4) return;
-        for (0..@min(count, c.regions.len)) |i| {
-            const rec = 8 + 4 * i;
-            const off = std.mem.readInt(u32, store[rec..][0..4], .big);
-            if (off < 8 + @as(usize, count) * 4 or off > store.len) continue;
-            c.regions[i] = be16(store[off..], 4) orelse 0;
-        }
+    fn variationStore(data: []const u8, at: usize) []const u8 {
+        if (at == 0) return "";
+        const length = be16(data, at) orelse return "";
+        const tail = data[at + 2 ..];
+        if (length > tail.len) return "";
+        return tail[0..length];
     }
 
     fn readLocal(d: []const u8, dict: []const u8) Index {
@@ -266,8 +258,19 @@ pub const Cff = struct {
         return .{ .dict = d[at..][0..size], .at = at };
     }
 
-    pub fn regionCount(c: *const Cff, vsindex: u16) usize {
-        return if (vsindex < c.regions.len) c.regions[vsindex] else 0;
+    pub fn regionCount(c: *const Cff, vsindex: u16) ?usize {
+        const store = c.variation_store;
+        if (be16(store, 0) != 1) return null;
+        const count = be16(store, 6) orelse return null;
+        if (vsindex >= count or count > (store.len - 8) / 4) return null;
+        const entry = 8 + 4 * @as(usize, vsindex);
+        const offset = std.mem.readInt(u32, store[entry..][0..4], .big);
+        if (offset < 8 + 4 * @as(usize, count) or offset > store.len) return null;
+        const record = store[offset..];
+        if (be16(record, 0) != 0 or be16(record, 2) != 0) return null;
+        const regions = be16(record, 4) orelse return null;
+        if (regions > (record.len - 6) / 2) return null;
+        return regions;
     }
 
     fn fdOf(c: *const Cff, g: u16) u16 {
@@ -357,7 +360,25 @@ test "CFF2 variation data ignores absent offsets" {
         0, 1, // ItemVariationData count.
         0, 0, 0, 0, // Missing item offset.
     };
-    var c: Cff = .{ .data = &bytes };
-    c.readRegions(1);
-    try std.testing.expectEqual(@as(usize, 0), c.regionCount(0));
+    const c: Cff = .{ .variation_store = Cff.variationStore(&bytes, 1) };
+    try std.testing.expectEqual(@as(?usize, null), c.regionCount(0));
+}
+
+test "CFF2 variation data supports high indices within its declared length" {
+    const count = 33;
+    const header = 8 + 4 * count;
+    var bytes: [3 + header + 8]u8 = @splat(0);
+    std.mem.writeInt(u16, bytes[1..][0..2], header + 8, .big);
+    const store = bytes[3..];
+    std.mem.writeInt(u16, store[0..2], 1, .big);
+    std.mem.writeInt(u16, store[6..8], count, .big);
+    std.mem.writeInt(u32, store[8 + 4 * 32 ..][0..4], header, .big);
+    std.mem.writeInt(u16, store[header + 4 ..][0..2], 1, .big);
+    var c: Cff = .{ .variation_store = Cff.variationStore(&bytes, 1) };
+    try std.testing.expectEqual(@as(?usize, 1), c.regionCount(32));
+    try std.testing.expectEqual(@as(?usize, null), c.regionCount(33));
+
+    std.mem.writeInt(u16, bytes[1..][0..2], header + 6, .big);
+    c.variation_store = Cff.variationStore(&bytes, 1);
+    try std.testing.expectEqual(@as(?usize, null), c.regionCount(32));
 }
