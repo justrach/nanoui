@@ -3,6 +3,7 @@
 //! UTF-8 byte offsets stay offsets into the original source: no projection,
 //! normalization, platform tokenizer or replacement strings reach Copy.
 const std = @import("std");
+const utf8 = @import("utf8.zig");
 const data = @import("text_selection_data.zig");
 const Break = data.Break;
 
@@ -91,14 +92,15 @@ pub fn graphemeEnd(s: []const u8, start: usize) usize {
 /// not depend on earlier context, then use the same forward UAX #29 rules.
 pub fn graphemeRange(s: []const u8, at: usize) [2]usize {
     if (at >= s.len) return .{ s.len, s.len };
-    var start = scalarStart(s, at);
+    var start = utf8.floorBoundary(s, at);
     while (start > 0) {
-        const before = scalarStart(s, start - 1);
+        const before = utf8.floorBoundary(s, start - 1);
         if (s[before] >= ' ' and s[before] <= '~' and s[start] >= ' ' and s[start] <= '~') break;
         const p_cp = scalar(s, before).cp;
         const p = property(p_cp);
         const q = scalar(s, start).cp;
         const qp = property(q);
+        if ((control(p) or control(qp)) and !(p == .cr and qp == .lf)) break;
         if (p != .prepend and qp == .other and
             data.indicOf(q) != .consonant and (p != .zwj or !data.isPictographic(q))) break;
         // Hangul and Indic consonants join only after particular scalars
@@ -139,8 +141,8 @@ fn emojiPart(cp: u21) bool {
 /// Indic conjunct keeps the rest of the cluster. Nothing after `at` is
 /// touched, even when `at` is inside a cluster.
 pub fn backspaceStart(s: []const u8, at: usize) usize {
-    if (at == 0) return 0;
     const end = @min(at, s.len);
+    if (end == 0) return 0;
     const cluster = graphemeRange(s, end - 1)[0];
     var i = cluster;
     while (i < end) {
@@ -148,13 +150,15 @@ pub fn backspaceStart(s: []const u8, at: usize) usize {
         if (emojiPart(next.cp)) return cluster;
         i = next.end;
     }
-    return scalarStart(s, end - 1);
+    return utf8.floorBoundary(s, end - 1);
 }
 
-fn scalarStart(s: []const u8, at: usize) usize {
-    var i = at;
-    while (i > 0 and s[i] & 0xc0 == 0x80) i -= 1;
-    return i;
+test "grapheme editing handles past-end and stray UTF-8 bytes" {
+    try std.testing.expectEqual(@as(usize, 0), backspaceStart("", 1));
+    const mixed = "a\x80\x80";
+    try std.testing.expectEqual([2]usize{ 2, 3 }, graphemeRange(mixed, 2));
+    try std.testing.expectEqual(@as(usize, 2), backspaceStart(mixed, mixed.len + 1));
+    try std.testing.expectEqual([2]usize{ 1, 3 }, graphemeRange("\n\r\n\n", 2));
 }
 
 const Class = enum { word, space, atom };
