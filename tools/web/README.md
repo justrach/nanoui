@@ -57,6 +57,12 @@ import {start} from './nanoui.js';
 const runtime = await start({canvas, url: './my-app.wasm', device});
 ```
 
+On a page-hosted canvas, `nanoui.web.mount` follows the browser's
+`prefers-color-scheme` on both WebGPU and Canvas 2D. `Options.theme` sets a
+fixed theme, and a view's `Context.theme_chosen` takes precedence. In a Worker,
+supply an explicit `Options.theme` for a theme other than light. The Worker does
+not receive page color-scheme changes.
+
 Omit `device` to have nanoui acquire and recover one. Injecting a device
 leaves its ownership/recovery to the app; call `await runtime.setDevice(next)`
 after replacement. `runtime.destroy()` frees renderer resources and only

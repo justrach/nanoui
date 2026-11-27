@@ -11,6 +11,7 @@ pub const Target = webgpu.Target;
 
 extern "nanoui_web" fn cpu_backend() bool;
 extern "nanoui_web" fn present_cpu(ptr: [*]const u8, width: u32, height: u32) void;
+extern "nanoui_web" fn prefers_dark() bool;
 pub extern "nanoui_web" fn request_frame() void;
 pub extern "nanoui_web" fn request_after(ms: f64) void;
 pub extern "nanoui_web" fn now_ms() f64;
@@ -33,7 +34,9 @@ pub const Options = struct {
     width: f32 = 420,
     height: f32 = 300,
     scale: f32 = 1,
-    theme: ui.Theme = .light,
+    /// null follows the browser's prefers-color-scheme, as native surfaces
+    /// follow the system appearance.
+    theme: ?ui.Theme = null,
 };
 
 pub const Surface = struct {
@@ -47,6 +50,7 @@ pub const Surface = struct {
     size: ui.Size,
     scale: f32,
     theme: ui.Theme,
+    theme_override: ?ui.Theme,
     dirty: bool = true,
     lost: bool = false,
     last_time: f64 = 0,
@@ -63,6 +67,15 @@ pub const Surface = struct {
     pub fn recordFrames(s: *Surface, allocator: std.mem.Allocator) !*ui.FrameLog {
         if (s.frame_log == null) s.frame_log = try ui.FrameLog.init(allocator, null);
         return &s.frame_log.?;
+    }
+
+    /// Called when the browser's color scheme changes.
+    pub fn refreshTheme(s: *Surface) void {
+        if (s.theme_override != null) return;
+        const next = systemTheme();
+        if (std.meta.eql(next, s.theme)) return;
+        s.theme = next;
+        s.requestFrame();
     }
 
     pub fn requestFrame(s: *Surface) void {
@@ -180,6 +193,11 @@ pub const Surface = struct {
     }
 };
 
+/// The theme for the browser's `prefers-color-scheme`: dark or light.
+fn systemTheme() ui.Theme {
+    return if (prefers_dark()) ui.Theme.dark_theme else ui.Theme.light;
+}
+
 /// Mount one view. Its state must outlive the surface; `run` preserves main's
 /// stack by unwinding to JavaScript without running Zig's deferred teardown.
 pub fn mount(view: ui.View, options: Options) !*Surface {
@@ -194,7 +212,8 @@ pub fn mount(view: ui.View, options: Options) !*Surface {
         .renderer = if (cpu_backend()) null else try webgpu.Renderer.init(),
         .size = .{ .w = options.width, .h = options.height },
         .scale = options.scale,
-        .theme = options.theme,
+        .theme = options.theme orelse systemTheme(),
+        .theme_override = options.theme,
         .start_time = now_ms() / 1000,
     };
     s.ctx = .init(s.gpa, &s.text);

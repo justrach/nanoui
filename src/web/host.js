@@ -228,6 +228,7 @@ export function createHost(canvas, options = {}) {
         const pixels = new Uint8ClampedArray(runtime.exports.memory.buffer, ptr, width * height * 4);
         context.putImageData(new ImageData(pixels, width, height), 0, 0);
       },
+      prefers_dark: () => Number(!!globalThis.matchMedia?.("(prefers-color-scheme: dark)").matches),
       request_frame: request, request_after: after, now_ms: () => performance.now(), run_forever() { throw unwind; },
     },
     attach(value) {
@@ -361,6 +362,7 @@ export function createHost(canvas, options = {}) {
         };
         dprChanged();
         listeners.push(() => media?.removeEventListener("change", dprChanged));
+        on(matchMedia("(prefers-color-scheme: dark)"), "change", () => runtime.exports.nanoui_web_theme_changed?.());
       }
     },
     debugLoseDevice() { forceRecovery = true; runtime.gpu.device.destroy(); },

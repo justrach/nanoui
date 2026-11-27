@@ -127,6 +127,9 @@ export fn nanoui_web_wheel(x: f32, y: f32, dx: f32, dy: f32) void {
     s.requestFrame();
 }
 
+export fn nanoui_web_theme_changed() void {
+    if (web.active) |s| s.refreshTheme();
+}
 export fn nanoui_web_device_lost() void {
     if (web.active) |s| s.lost = true;
 }
