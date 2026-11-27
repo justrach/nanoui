@@ -33,14 +33,6 @@ var dot: ?Dot = null;
 
 const away: types.Point = .{ .x = -1e6, .y = -1e6 };
 
-/// Plays `steps` in `app`'s first window once it has drawn.
-pub fn start(app: anytype, steps: []const u8) void {
-    const P = Player(@TypeOf(app.*));
-    const p = app.gpa.create(P) catch return;
-    p.* = .{ .app = app, .steps = std.mem.splitScalar(u8, steps, ';') };
-    after(0.5, p, P.begin);
-}
-
 /// The dot over a frame's instances, while there is one.
 pub fn paint(gpa: std.mem.Allocator, out: *std.ArrayList(gpu.Instance)) void {
     const d = dot orelse return;
@@ -119,19 +111,15 @@ fn menuKey(key: []const u8) void {
     _ = objc.msg(objc.BOOL, menu, "performKeyEquivalent:", .{ev});
 }
 
-fn after(seconds: f64, p: anytype, comptime f: fn (@TypeOf(p)) void) void {
-    const Wrap = struct {
-        fn run(ctx: ?*anyopaque) callconv(.c) void {
-            f(@ptrCast(@alignCast(ctx)));
-        }
-    };
-    objc.dispatchAfter(@intFromFloat(seconds * std.time.ns_per_s), p, Wrap.run);
-}
-
-fn Player(comptime App: type) type {
+pub fn Player(comptime App: type) type {
     return struct {
         const P = @This();
 
+        // Playback and its dispatch callbacks run on the main thread.
+        var active: ?*P = null;
+        var last_id: usize = 0;
+
+        id: usize,
         app: *App,
         steps: std.mem.SplitIterator(u8, .scalar),
         /// Where the finger is: a scroll starts there.
@@ -143,6 +131,34 @@ fn Player(comptime App: type) type {
         scroll_t: f32 = 0,
         scroll_done: f32 = 0,
         scroll_at: types.Point = .{},
+
+        /// Play in the app's first window once it has drawn.
+        pub fn start(p: *P, app: *App, steps: []const u8) void {
+            std.debug.assert(active == null);
+            last_id += 1;
+            p.* = .{ .id = last_id, .app = app, .steps = std.mem.splitScalar(u8, steps, ';') };
+            active = p;
+            after(0.5, p, begin);
+        }
+
+        /// The event loop ended. Queued callbacks must no longer reach this player.
+        pub fn stop(p: *P) void {
+            std.debug.assert(active == p);
+            active = null;
+            dot = null;
+        }
+
+        fn after(seconds: f64, p: *P, comptime f: fn (*P) void) void {
+            const Wrap = struct {
+                fn run(ctx: ?*anyopaque) callconv(.c) void {
+                    const player = active orelse return;
+                    if (player.id == @intFromPtr(ctx)) f(player);
+                }
+            };
+            // dispatch_after cannot take back queued work. Carry its id so a
+            // callback finds neither a retired player nor a newer run's player.
+            objc.dispatchAfter(@intFromFloat(seconds * std.time.ns_per_s), @ptrFromInt(p.id), Wrap.run);
+        }
 
         /// The first window's surface, once it has drawn a frame.
         fn surface(p: *P) ?*SurfaceOf(App) {
