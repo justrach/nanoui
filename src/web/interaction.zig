@@ -14,6 +14,7 @@ const Item = struct {
     selected: bool,
     enabled: bool,
     header: bool,
+    password: bool,
 };
 const Focus = struct {
     id: u64,
@@ -39,6 +40,7 @@ pub fn publish(s: *web.Surface) void {
         .selected = el.selected,
         .enabled = el.enabled,
         .header = el.header,
+        .password = el.password,
     };
     const focused: ?Focus = if (s.ctx.focused_text) |f| blk: {
         const lo = @min(f.text.len, @min(f.anchor, f.caret));

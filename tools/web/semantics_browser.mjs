@@ -10,7 +10,9 @@ export async function checkSemantics(browser, url, errors) {
     await page.goto(url + '/gallery.html');
     await page.waitForFunction(() => window.nanoui?.exports.nanoui_web_frames() > 0);
     const root = '[data-nanoui-semantics]';
-    await page.locator(`${root} [aria-label="Password"]`).focus();
+    const password = page.locator(`${root} input[type=password][aria-label="Password"]`);
+    assert.equal(await password.count(), 1, 'an unfocused password field has native password semantics');
+    await password.focus();
     await page.waitForFunction(() => document.activeElement?.type === 'password');
     await page.keyboard.type('s3cr3t');
     const copied = await page.evaluate(() => {

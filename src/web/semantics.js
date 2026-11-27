@@ -1,6 +1,8 @@
 // DOM projection of the current Zig frame. The canvas owns layout and paint.
 const button = new Set(["button", "tab", "checkbox", "switch_toggle", "radio_button", "row", "menu_button", "link"]);
 const roles = { checkbox: "checkbox", switch_toggle: "switch", radio_button: "radio", tab: "tab", link: "link", menu_button: "button" };
+const tagFor = item => item.role === "text_field" ? (item.password ? "input" : "textarea") :
+  button.has(item.role) ? "button" : "span";
 const isEditor = node => node?.tagName === "TEXTAREA" || node?.tagName === "INPUT";
 
 export function createSemantics(canvas, send) {
@@ -12,7 +14,7 @@ export function createSemantics(canvas, send) {
   root.append(live);
   canvas.after(root);
   const nodes = new Map();
-  let lastJson, focused, editor, composing = false;
+  let lastJson, focused, editor;
   let reconciling = false;
   const encoder = new TextEncoder();
 
@@ -32,8 +34,8 @@ export function createSemantics(canvas, send) {
     const bytes = encoder.encode(value);
     if (bytes.length <= 65536) send(["text", id, bytes, false]);
   };
-  function create(item, id, password) {
-    const tag = item.role === "text_field" ? (password ? "input" : "textarea") : button.has(item.role) ? "button" : "span";
+  function create(item, id, tag) {
+    const password = item.password;
     const node = document.createElement(tag);
     // 16px keeps iOS from zooming the page when the editor takes focus.
     node.style.cssText = "position:fixed;opacity:0;pointer-events:none;margin:0;box-sizing:border-box;font-size:16px";
@@ -47,6 +49,7 @@ export function createSemantics(canvas, send) {
       if (!reconciling) send(["access", id, false]);
     });
     if (tag === "textarea" || tag === "input") {
+      let composing = false;
       node.autocomplete = password ? "current-password" : "off";
       node.spellcheck = false;
       // Corrections would rewrite text Zig already holds.
@@ -109,14 +112,14 @@ export function createSemantics(canvas, send) {
         const id = BigInt(item.id);
         ids.add(id);
         let node = nodes.get(id);
-        const password = item.role === "text_field" && snapshot.focus?.password && BigInt(snapshot.focus.id) === id;
-        if (node && isEditor(node) && (node.tagName === "INPUT") !== !!password) {
+        const tag = tagFor(item);
+        if (node && node.localName !== tag) {
           node.remove();
           nodes.delete(id);
           node = undefined;
         }
         if (!node) {
-          node = create(item, id, password);
+          node = create(item, id, tag);
           nodes.set(id, node);
           root.append(node);
         }
@@ -141,14 +144,16 @@ export function createSemantics(canvas, send) {
           // Zig ignores actions on them.
           if (item.enabled) node.removeAttribute("aria-disabled");
           else node.setAttribute("aria-disabled", "true");
-          if (item.role in roles) node.setAttribute("role", roles[item.role]);
-          if (["checkbox", "switch_toggle", "radio_button"].includes(item.role)) {
-            node.setAttribute("aria-checked", String(item.selected));
-          } else {
-            const selection = item.role === "tab" ? "aria-selected" : "aria-current";
-            if (item.selected) node.setAttribute(selection, "true");
-            else node.removeAttribute(selection);
-          }
+          const role = roles[item.role];
+          if (role) node.setAttribute("role", role);
+          else node.removeAttribute("role");
+          const checked = ["checkbox", "switch_toggle", "radio_button"].includes(item.role);
+          if (checked) node.setAttribute("aria-checked", String(item.selected));
+          else node.removeAttribute("aria-checked");
+          if (item.role === "tab" && item.selected) node.setAttribute("aria-selected", "true");
+          else node.removeAttribute("aria-selected");
+          if (!checked && item.role !== "tab" && item.selected) node.setAttribute("aria-current", "true");
+          else node.removeAttribute("aria-current");
         }
       }
       for (const [id, node] of nodes) if (!ids.has(id)) {
