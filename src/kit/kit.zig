@@ -4,7 +4,8 @@
 //! menus, dialogs, sheets and toasts drawn on layers over the page; tabs,
 //! accordions, radio groups, selects, number inputs, breadcrumbs and pagination. Each
 //! is a call in a frame, as nanoui's widgets are, styled from the theme
-//! and moved with `ui.motion`.
+//! and moved with `ui.motion`. Submenus open on hover; `MenuOptions.safe_triangle`
+//! (on by default) holds one open while the pointer aims at it.
 //!
 //!     if (kit.button(c, "Save", .{ .variant = .primary, .icon = "checkmark" }).clicked) save();
 //!     if (kit.dialog(c, "confirm", &open, .{ .title = "Delete it?", .ok = "Delete" })) |d| {
@@ -49,8 +50,13 @@ pub const Placement = overlay.Placement;
 pub const tooltip = overlay.tooltip;
 pub const popover = overlay.popover;
 pub const Popover = overlay.Popover;
-pub const menu = overlay.menu;
-pub const MenuItem = overlay.MenuItem;
+
+const menu_mod = @import("menu.zig");
+pub const menu = menu_mod.menu;
+pub const MenuItem = menu_mod.MenuItem;
+pub const MenuOptions = menu_mod.Options;
+/// Submenu aim-prediction geometry (`triangle`, `contains`, `decide`).
+pub const safe_triangle = @import("safe_triangle.zig");
 
 const dialog_mod = @import("dialog.zig");
 pub const dialog = dialog_mod.dialog;
@@ -178,6 +184,9 @@ pub fn statusIcon(s: Status) []const u8 {
 test {
     _ = @import("tests.zig");
     _ = @import("tests_timeline.zig");
+    _ = @import("tests_menu.zig");
     _ = @import("kbd.zig");
     _ = @import("picker.zig");
+    _ = @import("safe_triangle.zig");
+    _ = @import("menu.zig");
 }

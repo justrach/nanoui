@@ -155,11 +155,12 @@ src/android/          NativeActivity backend: the activity and the app's thread 
                       insets, desktop, dialogs (AlertDialog), fd watches, Zig std's
                       workarounds for bionic (sigaction, lookup)
 src/menu_accel.zig    menus as accelerators (Linux, Windows, iOS, Android)
-src/kit/              nanoui.kit: components after GPUI Kit (buttons, overlays, tabs, forms)
+src/kit/              nanoui.kit: components after GPUI Kit (buttons, overlays, tabs, forms);
+                      menu.zig: submenus; safe_triangle.zig: aim prediction (on by default)
 tools/*.Dockerfile    Linux (GTK, Xvfb) and Windows (Wine) test images
 tools/ios/            app bundles (bundle.zig, finish.sh, check-bundle.sh), the Simulator (sim.sh), Zig's lib fixed (zig-lib.sh)
 tools/android/        APKs (apk.zig: the SDK, the manifest, aapt2, pack.zig, apksigner), run.sh, emulator.sh
-examples/             hello (webview), counter and gallery (native UI), browser (local and remote pages)
+examples/             hello (webview), counter and gallery (native UI), menu (safe triangle), browser (local and remote pages)
 hillclimb/            headless benchmarks against mygo (its own package)
 apps/nanoterm/        the first app: a Warp-like terminal with ACP agents
 apps/nanomon/         a small activity monitor (libproc, Mach, /proc)
@@ -187,6 +188,7 @@ zig build lines           # enforce the 600-line limit
 zig build run-hello       # webview + typed IPC
 zig build run-counter     # native UI
 zig build run-gallery     # native UI widgets
+zig build run-menu        # submenu safe triangle
 zig build gen             # write examples/hello/frontend/nanoui.{js,d.ts}
 zig build $(sh tools/ios/zig-lib.sh) run-gallery -Dtarget=aarch64-ios-simulator   # the gallery in a simulator booted headless (xcrun simctl boot)
 sh tools/android/emulator.sh   # an Android emulator without a window (stop: sh tools/android/emulator.sh stop)
