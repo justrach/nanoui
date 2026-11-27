@@ -6,7 +6,7 @@ pub const ios = @import("tools/ios/bundle.zig");
 pub const android = @import("tools/android/apk.zig");
 pub const web = @import("tools/web/build.zig");
 
-const examples = [_][]const u8{ "hello", "counter", "gallery", "ruler", "duo", "board", "basics", "map", "turn", "access", "todo", "sgbus", "browser", "drop", "scenes", "page-auth", "page-drop" };
+const examples = [_][]const u8{ "hello", "counter", "gallery", "ruler", "duo", "board", "basics", "map", "turn", "access", "todo", "sgbus", "browser", "drop", "scenes", "page-auth", "page-drop", "collection-picker" };
 const frameworks = [_][]const u8{ "AppKit", "WebKit", "Metal", "QuartzCore", "CoreText", "CoreGraphics", "CoreFoundation", "Foundation", "ImageIO", "UniformTypeIdentifiers", "CoreVideo" };
 const ios_frameworks = [_][]const u8{ "UIKit", "CoreLocation", "MapKit", "Metal", "QuartzCore", "CoreText", "CoreGraphics", "CoreFoundation", "Foundation", "ImageIO", "UniformTypeIdentifiers", "CoreVideo" };
 
@@ -223,6 +223,13 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{.{ .name = "nanoui", .module = nanoui }},
     }) })).step);
+    // The collection picker's search, keyboard choice and focus return.
+    if (!target.result.abi.isAndroid()) test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("examples/collection-picker/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "nanoui", .module = nanoui }},
+    }) })).step);
     // The gallery's pages, command palette, dock studio, and phone layout.
     if (!target.result.abi.isAndroid()) test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("examples/gallery/tests.zig"),
@@ -346,7 +353,10 @@ fn addAndroidExample(b: *std.Build, name: []const u8, target: std.Build.Resolved
         .nanoui = nanoui,
     });
     const title = b.fmt("{c}{s}", .{ std.ascii.toUpper(name[0]), name[1..] });
-    const opts: android.Options = .{ .name = title, .id = b.fmt("dev.nanoui.{s}", .{name}) };
+    // Android package names allow letters, digits and underscores per segment.
+    const id = b.allocator.dupe(u8, name) catch @panic("OOM");
+    std.mem.replaceScalar(u8, id, '-', '_');
+    const opts: android.Options = .{ .name = title, .id = b.fmt("dev.nanoui.{s}", .{id}) };
     const apk = android.apk(b, lib, opts);
     b.getInstallStep().dependOn(&b.addInstallFileWithDir(apk, .prefix, b.fmt("android/{s}.apk", .{title})).step);
     const run = android.runOnDevice(b, apk, opts, b.path("."));
@@ -504,7 +514,7 @@ fn addWebParity(b: *std.Build) void {
     exe.rdynamic = true;
     exe.wasi_exec_model = .reactor;
     step.dependOn(&b.addInstallArtifact(exe, .{ .dest_dir = .{ .override = .{ .custom = "web" } } }).step);
-    for ([_][]const u8{ "gpu.js", "gpu_timing.js", "external.js", "wasi.js", "nanoui.js", "host.js" }) |file| {
+    for ([_][]const u8{ "gpu.js", "gpu_timing.js", "external.js", "wasi.js", "nanoui.js", "host.js", "semantics.js", "files.js" }) |file| {
         step.dependOn(&b.addInstallFile(b.path(b.fmt("src/web/{s}", .{file})), b.fmt("web/{s}", .{file})).step);
     }
 }
@@ -518,7 +528,7 @@ fn addWebDemo(b: *std.Build) void {
     options.addOption(bool, "in_rt", false);
     options.addOption([]const u8, "version", @import("build.zig.zon").version);
     core.addOptions("build_options", options);
-    for ([_][]const u8{ "counter", "gallery" }) |name| {
+    for ([_][]const u8{ "counter", "gallery", "collection-picker" }) |name| {
         const root = b.createModule(.{ .root_source_file = b.path(b.fmt("examples/{s}/main.zig", .{name})), .target = target, .optimize = .ReleaseSmall, .single_threaded = true, .imports = &.{.{ .name = "nanoui", .module = core }} });
         const exe = b.addExecutable(.{ .name = name, .root_module = root });
         step.dependOn(web.install(b, exe, b.path(".")));

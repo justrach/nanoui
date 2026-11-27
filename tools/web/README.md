@@ -89,10 +89,50 @@ Workers can forward a pinch through `runtime.host.pinch(x, y, scale, dx, dy)`.
 On a focusable DOM canvas, pass a `keyboard(event)` predicate to `start` to
 forward selected key events. The Gallery demo uses this for its Zig command
 palette. The predicate leaves browser-owned shortcuts and Tab available.
-Apps still need IME, clipboard, dialogs, filesystem, semantic accessibility,
-multi-window and a complete
-App/Window platform remain separate work. Opaque desktop handle types let
-shared app state compile without creating desktop windows in the browser.
+The default shell also enables `semantics: true`. That option projects labels,
+headings, text fields, buttons and choices from Zig's accessibility tree into
+the DOM. A browser text field hosts IME composition at the Zig caret; commit
+inserts one UTF-8 operation into the focused Zig field. Copy, cut and paste
+use browser clipboard events in that field, with password selections omitted.
+A commit or paste is limited to 64 KiB. Browser preedit is displayed by the DOM
+field and is not sent to Zig until commit. Password fields use an `<input type=password>`.
+A pointer press or touch release over a text field focuses its DOM editor in
+the same event, which iOS requires before it shows the on-screen keyboard. A
+field that gets focus from Zig without a tap, such as a search field opened
+by a button, gets the keyboard on iOS only after the user taps it.
+Disabled controls stay focusable with `aria-disabled`. Heading levels and
+list or tab containers are not yet part of the access model, so headings
+are level 2 and rows are buttons. Native dialogs, filesystem access beyond
+one picked file, multi-window, a complete App/Window platform and
+screen-reader acceptance remain separate work. Opaque desktop handle types
+let shared app state compile without creating desktop windows in the browser.
+
+Use `nanoui.file_picker.bind(c, node, options, context, callback)` during
+the build of a labeled Zig button. The standard shell opens the browser file
+input directly from that button's pointer or keyboard activation. The callback
+receives `.picked`, `.cancelled`, or `.failed` on the browser event loop.
+Picked names and bytes are borrowed until the callback returns. Keep callback
+context alive until completion or until the frame removing the bound button
+has completed. Removing the button abandons the request and any late result; disabling it
+keeps the request and ignores further activation.
+The browser accepts one request at a time and caps configured limits at 64 MiB.
+This binding requires the standard semantic DOM host.
+
+Native Zig callers can use `nanoui.file_picker.open(allocator, io, options)`
+on the UI thread outside view building. It uses the native dialog and returns
+the same file name and bytes in an owned result. Free it with `Owned.deinit`.
+`file_picker.native` is false where `open` has no dialog that answers yet:
+Android, iOS and the browser. The iOS dialog's provider and staging
+lifetime needs validation for this helper. `open` reports
+`error.Unsupported` there. On macOS, open the dialog from `App.soon`: a
+dialog runs a nested run loop, and inside an `onMain` block it would hold
+every other main-queue task until it closes.
+Options default to a 16 MiB limit. An extension filter is a chooser hint.
+Callers still validate content.
+
+JavaScript integrations can also use
+`runtime.host.pickFile({ accept, maxBytes, signal })` in a browser user gesture.
+It returns `{ name, type, bytes }` or null on cancellation.
 
 `start({ ..., cpuFallback: true })` uses the Zig CPU rasterizer if adapter or
 device acquisition fails. If a host-owned WebGPU device is lost, the host
@@ -109,5 +149,30 @@ scale. Zig writes RGBA, and the host presents it through an `ImageData` view
 of WASM memory. GPU textures, custom GPU encoding and GPU timing
 require WebGPU. A canvas inside a Worker has no element to replace, so
 `cpuFallback` there only applies at startup.
+
+## Collection picker
+
+`examples/collection-picker` is one view for a native window and the browser.
+`zig build test` runs its Tester check: composition, the accessible result,
+Enter, Escape and focus return. In the browser:
+
+```sh
+zig build web-demo -j1
+node tools/web/picker_browser.mjs
+NANOUI_PICKER_ENGINE=firefox node tools/web/picker_browser.mjs
+```
+
+The Chromium check uses the composition protocol and runs on WebGPU and
+forced Canvas 2D. Firefox and WebKit run on Canvas 2D with injected
+composition events. Clipboard checks use disposable clipboard events, not
+the system clipboard. The picker's file button uses the native dialog on the
+desktop and the bound browser file input on the web. The browser check covers
+delivered bytes, size rejection, cancellation and removing the bound button
+while a request is pending, with file fixtures only. Playwright 1.63.0's WebKit crashed at startup on
+macOS 26.0.1; WebKit 26.4 from Playwright 1.60.0 passed. To use another
+installation without changing the lock, set `NANOUI_PICKER_ENGINE=webkit`
+and `NANOUI_PLAYWRIGHT_MODULE` to its absolute `playwright/index.mjs` path.
+The bundled DejaVu fonts have no CJK glyphs, so the Japanese entry draws
+as missing glyphs unless the app registers a font that covers it.
 
 See [MEASUREMENTS.md](MEASUREMENTS.md) for verification scope.

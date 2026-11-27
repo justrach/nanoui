@@ -6,6 +6,7 @@ const gpu = @import("../ui/gpu.zig");
 const text = @import("../ui/text.zig");
 const frames = @import("../ui/frame.zig");
 const webgpu = @import("../ui/webgpu.zig");
+const file_bridge = @import("file_bridge.zig");
 pub const Renderer = webgpu.Renderer;
 pub const Target = webgpu.Target;
 
@@ -19,6 +20,7 @@ extern "nanoui_web" fn run_forever() noreturn;
 pub var active: ?*Surface = null;
 comptime {
     _ = @import("exports.zig");
+    _ = @import("interaction.zig");
 }
 
 /// Optional fallback fonts shipped with the web examples. Applications may
@@ -43,6 +45,7 @@ pub const Surface = struct {
     view: ui.View,
     renderer: ?webgpu.Renderer,
     pixels: std.ArrayList(u8) = .empty,
+    files: file_bridge.State = .{},
     instances: std.ArrayList(gpu.Instance) = .empty,
     size: ui.Size,
     scale: f32,
@@ -80,7 +83,8 @@ pub const Surface = struct {
         s.ctx.frame_time = dt;
         s.ctx.renderer = if (s.renderer != null) "WebGPU" else "Canvas 2D";
         const theme = s.ctx.theme_chosen orelse s.theme;
-        const result = frames.run(&s.ctx, s.view, &s.text, &s.instances, s.size, s.scale, theme, dt, time - s.start_time);
+        const wrapped_view: ui.View = .{ .ptr = s, .build = build, .after_frame = afterBuild };
+        const result = frames.run(&s.ctx, wrapped_view, &s.text, &s.instances, s.size, s.scale, theme, dt, time - s.start_time);
         if (!std.meta.eql(theme, s.ctx.theme_chosen orelse s.theme)) s.dirty = true;
         const after_start = now_ms();
         if (s.after_frame) |f| if (f(s.after_frame_ctx, s)) {
@@ -117,6 +121,7 @@ pub const Surface = struct {
             .atlas_reset = s.text.atlas.reset_during_frame,
             .animating = s.ctx.animating,
         }));
+        @import("interaction.zig").publish(s);
         s.frame_count +%= 1;
         const more = s.dirty or s.ctx.animating or result.hot_changed or s.ctx.time_driven == .fast;
         if (!more) {
@@ -124,6 +129,17 @@ pub const Surface = struct {
             if (s.ctx.frame_in) |delay| request_after(delay * 1000) else if (s.ctx.time_driven == .slow) request_after(1000.0 / 24.0);
         }
         return more;
+    }
+
+    fn build(ptr: *anyopaque, c: *ui.Context) void {
+        const s: *Surface = @ptrCast(@alignCast(ptr));
+        s.files.buttons.clearRetainingCapacity();
+        s.view.build(s.view.ptr, c);
+    }
+
+    fn afterBuild(ptr: *anyopaque, c: *ui.Context) void {
+        const s: *Surface = @ptrCast(@alignCast(ptr));
+        if (s.view.after_frame) |after| after(s.view.ptr, c);
     }
 
     fn drawCpu(s: *Surface, width: u32, height: u32) void {
@@ -173,6 +189,7 @@ pub const Surface = struct {
         if (s.frame_log) |*log| log.deinit();
         if (s.renderer) |*renderer| renderer.deinit();
         s.pixels.deinit(s.gpa);
+        s.files.deinit(s.gpa);
         s.instances.deinit(s.gpa);
         s.ctx.deinit();
         s.text.deinit();

@@ -27,6 +27,8 @@ pub const Item = struct {
     role: Role,
     label: []const u8,
     value: []const u8 = "",
+    /// The control accepts a secret, even when it has no keyboard focus.
+    password: bool = false,
     selected: bool = false,
     enabled: bool = true,
     /// Takes AXIncrement / AXDecrement (`Context.adjustable`).
@@ -129,6 +131,8 @@ pub const Describe = struct {
     role: Role = .button,
     label: []const u8 = "",
     value: []const u8 = "",
+    /// The control accepts a secret, even when it has no keyboard focus.
+    password: bool = false,
     hint: []const u8 = "",
     selected: bool = false,
     enabled: bool = true,
@@ -180,6 +184,8 @@ pub const Element = struct {
     role: Role,
     label: []const u8,
     value: []const u8 = "",
+    /// The control accepts a secret, even when it has no keyboard focus.
+    password: bool = false,
     hint: []const u8 = "",
     /// Its visible part, in view points (clipped by scrolling parents).
     rect: types.Rect,
@@ -270,7 +276,7 @@ pub fn tree(c: *Context, arena: std.mem.Allocator, out: *std.ArrayList(Element))
             // before it on the same line name it.
             var label = if (it.label.len > 0) it.label else if (it.role == .text_field or holds) "" else try textOf(c, arena, @intCast(i));
             if (label.len == 0) label = takeCaption(out, vis);
-            try out.append(arena, .{ .id = it.id, .role = it.role, .label = label, .value = it.value, .hint = it.hint, .rect = vis, .selected = it.selected, .enabled = it.enabled, .adjustable = it.adjustable, .header = it.header, .level = it.level, .container = container, .controls = it.controls, .position = if (it.position > 0) it.position else place, .set_size = it.set_size });
+            try out.append(arena, .{ .id = it.id, .role = it.role, .label = label, .value = it.value, .password = it.password, .hint = it.hint, .rect = vis, .selected = it.selected, .enabled = it.enabled, .adjustable = it.adjustable, .header = it.header, .level = it.level, .container = container, .controls = it.controls, .position = if (it.position > 0) it.position else place, .set_size = it.set_size });
             // Only a published container is named: the rows of one clipped out
             // of view stand alone (or in the container around it).
             if (holds) containers[i] = it.id;
