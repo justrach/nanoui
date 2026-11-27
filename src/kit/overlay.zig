@@ -1,7 +1,7 @@
 //! What opens over the page, on a layer: tooltips after the pointer rests
-//! on something, popovers anchored to what opened them (placed where they
-//! fit, closed by Escape or a click elsewhere), and menus made of them.
-//! Each comes and goes with `ui.motion` presence.
+//! on something, and popovers anchored to what opened them (placed where
+//! they fit, closed by Escape or a click elsewhere). Menus are in
+//! `menu.zig`, made of these. Each comes and goes with `ui.motion` presence.
 const std = @import("std");
 const ui = @import("../ui/ui.zig");
 const kit = @import("kit.zig");
@@ -126,62 +126,6 @@ pub fn popover(c: *ui.Context, id: []const u8, open: *bool, anchor: ?ui.Rect, op
     // Block pointer and scroll pass-through (so clicks inside aren't "outside").
     d = d.occlude();
     return .{ .div = d.motion(f) };
-}
-
-pub const MenuItem = struct {
-    label: []const u8 = "",
-    icon: []const u8 = "",
-    /// A shortcut's text, shown at the right ("⌘C").
-    shortcut: []const u8 = "",
-    danger: bool = false,
-    disabled: bool = false,
-    /// A checkmark when true; room for one when false.
-    checked: ?bool = null,
-    /// A line between groups (the rest is ignored).
-    separator: bool = false,
-};
-
-/// A menu by `anchor` while `open.*`; the index of the item chosen (and
-/// then it closes).
-pub fn menu(c: *ui.Context, id: []const u8, open: *bool, anchor: ?ui.Rect, items: []const MenuItem, opts: struct { placement: Placement = .bottom_start, width: f32 = 220, glass: bool = false }) ?usize {
-    const t = kit.tokens(c);
-    const p = popover(c, id, open, anchor, .{ .placement = opts.placement, .width = opts.width, .padding = if (opts.glass) 7 else 5, .glass = opts.glass }) orelse return null;
-    defer p.end();
-    var chosen: ?usize = null;
-    const checks = for (items) |it| {
-        if (it.checked != null) break true;
-    } else false;
-    for (items, 0..) |it, i| {
-        ui.key(c, c.print("mi-{d}", .{i}));
-        if (it.separator) {
-            const s = ui.div(c).wFull().py(4);
-            defer s.end();
-            _ = c.leaf(.{ .width = .fill, .height = .{ .px = 1 }, .background = t.border }, .none, null);
-            continue;
-        }
-        const row = ui.div(c).row().wFull().gap(8).px(8).h(30).itemsCenter().rounded(t.radius - 2).control();
-        const ix = row.interaction();
-        const live = !it.disabled;
-        if (live and ix.hovered) c.node(row.index).style.background = if (it.danger) t.danger.alpha(0.12) else t.surface_hover;
-        if (!live) c.node(row.index).style.opacity = 0.45;
-        defer row.end();
-        const fg = if (it.danger) t.danger else t.foreground;
-        if (checks) {
-            const box = ui.div(c).w(14).center();
-            defer box.end();
-            if (it.checked orelse false) ui.icon(c, "checkmark", .{ .size = 11, .weight = .semibold, .color = fg });
-        }
-        if (it.icon.len > 0) ui.icon(c, it.icon, .{ .size = 13, .frame = 16, .color = if (it.danger) t.danger else t.muted });
-        ui.text(c, it.label, .{ .size = 13, .color = fg });
-        ui.spacer(c);
-        if (it.shortcut.len > 0) ui.text(c, it.shortcut, .{ .size = 11.5, .color = t.muted });
-        if (live and ix.clicked) chosen = i;
-    }
-    if (chosen != null) {
-        open.* = false;
-        c.changed = true;
-    }
-    return chosen;
 }
 
 test "a panel goes where it fits" {
