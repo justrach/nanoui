@@ -330,7 +330,9 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
     rehome(c, buffer, c.node(i).id);
     var it = c.interact(i, .{ .focusable = true, .text = true });
     // A password is drawn as bullets; a screen reader isn't told it either.
+    const a11y_index = c.a11y_items.items.len;
     c.addA11y(i, .text_field, opts.placeholder, if (opts.password) "" else buffer.text(), it.focused, true);
+    if (c.a11y_items.items.len > a11y_index) c.a11y_items.items[a11y_index].password = opts.password;
     if (buffer.want_focus) {
         buffer.want_focus = false;
         c.focus = it.id;

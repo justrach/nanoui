@@ -1,6 +1,7 @@
 import { chromium } from 'playwright';
 import assert from 'node:assert/strict';
 import { checkGalleryKeyboard } from './gallery_keyboard.mjs';
+import { checkSemantics } from './semantics_browser.mjs';
 import { serve } from './serve.mjs';
 import { chromiumOptions } from './browser_options.mjs';
 const host = await serve();
@@ -197,6 +198,40 @@ try {
   await failover.evaluate(() => window.nanoui.destroy());
   await failover.close();
 
+  const composing = await context.newPage();
+  composing.on('pageerror', e => errors.push(e.message));
+  await composing.goto(host.url + '/gallery.html');
+  await composing.waitForFunction(() => window.nanoui?.gpu?.stats.frames > 0);
+  await composing.locator('canvas').focus();
+  await composing.keyboard.press('Control+k');
+  await composing.waitForFunction(() => document.activeElement.tagName === 'TEXTAREA');
+  const ime = await composing.context().newCDPSession(composing);
+  await ime.send('Input.imeSetComposition', { text: 'も', selectionStart: 1, selectionEnd: 1 });
+  await composing.evaluate(async () => {
+    window.composingEditor = document.activeElement;
+    if (window.composingEditor.style.opacity !== '1') throw new Error('Composition did not start');
+    const adapter = await navigator.gpu.requestAdapter();
+    const replacement = await adapter.requestDevice();
+    replacement.destroy();
+    // Stall recovery until the pending input has committed.
+    navigator.gpu.requestAdapter = () => new Promise(resolve => {
+      window.failRecovery = () => resolve({ features: adapter.features, requestDevice: async () => replacement });
+    });
+    window.nanoui.host.debugLoseDevice();
+  });
+  await composing.waitForFunction(() => !!window.failRecovery);
+  await ime.send('Input.insertText', { text: '日本' });
+  await composing.evaluate(() => window.failRecovery());
+  await composing.waitForFunction(() => !window.nanoui.gpu &&
+    window.nanoui.exports.gallery_palette_query_bytes() === 6);
+  assert.equal(await composing.evaluate(() => document.activeElement === window.composingEditor), true);
+  await composing.keyboard.press('Escape');
+  await composing.waitForFunction(() => window.nanoui.exports.gallery_palette_query_bytes() === -1 &&
+    document.activeElement === window.nanoui.canvas);
+  await composing.evaluate(() => window.nanoui.destroy());
+  await composing.close();
+
+  await checkSemantics(browser, host.url, errors);
   const closing = await context.newPage();
   closing.on('pageerror', e => errors.push(e.message));
   await closing.goto(host.url + '/counter.html');
@@ -225,5 +260,5 @@ try {
     window.nanoui.exports.nanoui_web_frames() === 0), true);
   await closing.close();
   assert.deepEqual(errors,[]);
-  console.log('PASS canvas, click, idle, resize/DPR, device loss, disposal, Worker input and idle, Gallery keyboard, Canvas 2D startup, Canvas 2D scale cap, live Canvas 2D failover, teardown during recovery');
+  console.log('PASS canvas, click, idle, resize/DPR, device loss, disposal, Worker input and idle, Gallery keyboard, Canvas 2D startup, Canvas 2D scale cap, live Canvas 2D failover, IME across failover, password editor, ARIA states, focus in a tap, overlay placement, teardown during recovery');
 } finally { await browser.close(); await host.close(); }

@@ -106,7 +106,7 @@ export fn nanoui_web_key(kind: u32, code: u32, mods: u32, typed: u32) void {
             else => null,
         };
         if (c.focused_text != null) {
-            if (shortcut.ctrl and !shortcut.alt and !shortcut.shift and shortcut.key == 'a') {
+            if ((shortcut.ctrl or shortcut.cmd) and !shortcut.alt and !shortcut.shift and shortcut.key == 'a') {
                 s.text_op[0] = .{ .command = .select_all };
                 c.input.ops = &s.text_op;
             } else if (typed != 0 and !shortcut.ctrl) {
