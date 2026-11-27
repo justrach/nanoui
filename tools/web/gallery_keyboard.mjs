@@ -11,12 +11,21 @@ export async function checkGalleryKeyboard(page, url) {
   await page.waitForFunction(() => window.nanoui.exports.gallery_palette_query_bytes() === 6);
   // Option on macOS and AltGr elsewhere type characters such as @ and €.
   await canvas.evaluate(el => {
-    for (const init of [
+    for (const { altGraph, ...init } of [
       { key: '@', code: 'Digit2', altKey: true },
-      { key: '€', code: 'KeyE', ctrlKey: true, altKey: true, modifierAltGraph: true },
-    ]) {
-      el.dispatchEvent(new KeyboardEvent('keydown', { ...init, bubbles: true, cancelable: true }));
-      el.dispatchEvent(new KeyboardEvent('keyup', { ...init, bubbles: true, cancelable: true }));
+      { key: '€', code: 'KeyE', ctrlKey: true, altKey: true, altGraph: true },
+    ]) for (const type of ['keydown', 'keyup']) {
+      const event = new KeyboardEvent(type, {
+        ...init, bubbles: true, cancelable: true, modifierAltGraph: !!altGraph,
+      });
+      if (altGraph && !event.getModifierState('AltGraph')) {
+        // WebKit ignores modifierAltGraph on synthetic KeyboardEvents.
+        const state = event.getModifierState.bind(event);
+        Object.defineProperty(event, 'getModifierState', {
+          value: name => name === 'AltGraph' || state(name),
+        });
+      }
+      el.dispatchEvent(event);
     }
   });
   await page.waitForFunction(() => window.nanoui.exports.gallery_palette_query_bytes() === 10);
