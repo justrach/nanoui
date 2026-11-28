@@ -292,7 +292,8 @@ pub fn interactImpl(c: *Context, index: u32, opts: InteractOptions) ctx_mod.Inte
     // VoiceOver's activation: a click on this box, not on what is under the pointer.
     const a11y_press = id != 0 and c.input.a11y_press == id;
     if (a11y_press and opts.focusable) c.focus = id;
-    const clicked = (released and c.input.button == .left and !(ctrl_secondary and c.input.ctrl)) or a11y_press or key_press;
+    const pointer_click = released and c.input.button == .left and !(ctrl_secondary and c.input.ctrl);
+    const clicked = pointer_click or a11y_press or key_press;
     if (top and c.hand_cursor) c.cursor_hand = true;
     return .{
         .id = id,
@@ -300,7 +301,7 @@ pub fn interactImpl(c: *Context, index: u32, opts: InteractOptions) ctx_mod.Inte
         .hovered = hovered,
         .pressed = c.active == id and c.input.down and c.input.button == .left and !(ctrl_secondary and c.input.ctrl),
         .clicked = clicked,
-        .double_clicked = clicked and c.input.click_count >= 2,
+        .double_clicked = pointer_click and c.input.click_count >= 2,
         .right_pressed = right_press,
         .right_clicked = right_press,
         .middle_clicked = released and c.input.button == .middle,
