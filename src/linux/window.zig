@@ -48,6 +48,7 @@ pub const Window = struct {
     on_close: ?Callback = null,
     should_close: ?ShouldClose = null,
     closed: bool = false,
+    file_chooser: ?*@import("dialog.zig").ChooserWait = null,
     full_screen: bool = false,
     title: [256:0]u8 = @splat(0),
     /// The layer-shell namespace, kept alive for the surface's lifetime.
@@ -194,6 +195,7 @@ pub const Window = struct {
     fn finish(self: *Window) void {
         if (self.closed) return;
         self.closed = true;
+        self.cancelFileChooser();
         if (self.on_close) |cb| cb.func(cb.ctx, self);
         if (self.page) |p| p.destroy();
         self.page = null;
@@ -209,8 +211,15 @@ pub const Window = struct {
         self.destroyNow();
     }
 
+    fn cancelFileChooser(self: *Window) void {
+        const waiter = self.file_chooser orelse return;
+        self.file_chooser = null;
+        waiter.ownerClosed();
+    }
+
     /// Final App teardown has already resolved pending close decisions.
     pub fn destroyNow(self: *Window) void {
+        self.cancelFileChooser();
         // Destroying it calls `finish`, which frees it.
         if (self.gtkwindow) |win| {
             if (gtk.v4) gtk.v4api.gtk_window_destroy(win) else gtk.v3.gtk_widget_destroy(win);
