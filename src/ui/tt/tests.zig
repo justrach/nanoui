@@ -75,6 +75,38 @@ test "a font the app brings is found by its family, from its bytes" {
     try std.testing.expect(db.family("No Such Family", 400, false) == null);
 }
 
+test "a family the app brought is answered without scanning the system's fonts" {
+    const gpa = std.testing.allocator;
+    const data = load(gpa) orelse return error.SkipZigTest;
+    defer gpa.free(data);
+    var db = fontdb.Db.init(gpa, std.testing.io);
+    defer db.deinit();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const n = try tmp.dir.realPath(std.testing.io, &buf);
+    // A folder of no fonts stands in for the system's: a miss scans only it.
+    db.fonts_dir = buf[0..n];
+    db.addMemory(data);
+    const family = db.faces.items[0].style.name();
+    // Every weight and slant of a brought family: its own nearest face.
+    for ([_]u16{ 100, 400, 700, 900 }) |w| for ([_]bool{ false, true }) |italic| {
+        try std.testing.expectEqual(@as(?u32, 0), db.family(family, w, italic));
+    };
+    try std.testing.expect(!db.scanned);
+    try std.testing.expectEqual(@as(usize, 0), db.scan_directories);
+    // A family nobody brought is looked for on disk.
+    try std.testing.expect(db.family("No Such Family", 400, false) == null);
+    try std.testing.expect(db.scanned);
+    try std.testing.expectEqual(@as(usize, 1), db.scan_directories);
+    // The brought family is still its own once the disk was read, and a
+    // face of it brought after the scan is matched too.
+    try std.testing.expectEqual(@as(?u32, 0), db.family(family, 400, false));
+    db.addMemory(data);
+    db.faces.items[db.faces.items.len - 1].style.weight = 700;
+    try std.testing.expectEqual(@as(?u32, @intCast(db.faces.items.len - 1)), db.family(family, 700, false));
+}
+
 fn fontPath() ?[]const u8 {
     for (candidates) |path| {
         const file = std.Io.Dir.cwd().openFile(std.testing.io, path, .{}) catch continue;

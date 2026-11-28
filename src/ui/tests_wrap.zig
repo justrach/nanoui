@@ -13,7 +13,7 @@ test "a line that fits wraps to itself, as the typesetter says" {
     var t: ui.Tester = undefined;
     try t.init(std.testing.allocator, .init(&page, nothing), .{ .width = 200, .height = 100 });
     defer t.deinit();
-    const ts = &t.text;
+    const ts = t.text;
     const samples = [_][]const u8{
         "",
         "ls -la",

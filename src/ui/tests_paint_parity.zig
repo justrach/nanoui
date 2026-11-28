@@ -109,7 +109,7 @@ test "half-toward-zero text chooses the matching glyph atlas phase" {
     const px = @floor(quantized);
     const phase = (quantized - px) * text.subpixel_bins;
     const bin: u8 = @intFromFloat(@min(text.subpixel_bins - 1, if (native_windows) @round(phase) else @floor(phase + 0.001)));
-    const sprite = t.text.glyph(g, bin, @TypeOf(t.text).dilationFor(0, 1, 0)) orelse return error.NoGlyph;
+    const sprite = t.text.glyph(g, bin, @TypeOf(t.text.*).dilationFor(0, 1, 0)) orelse return error.NoGlyph;
     for (t.instances.items) |instance| {
         if (instance.kind == gpu.Kind.text) {
             try testing.expectEqual(sprite.uv, instance.uv);

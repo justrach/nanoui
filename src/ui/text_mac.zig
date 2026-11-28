@@ -181,7 +181,7 @@ pub const TextSystem = struct {
     }
 
     /// Drops every cached font, shaping and wrap.
-    fn dropCaches(self: *TextSystem) void {
+    pub fn dropCaches(self: *TextSystem) void {
         var fit = self.fonts.valueIterator();
         while (fit.next()) |f| cf.CFRelease(f.ref);
         self.fonts.clearRetainingCapacity();

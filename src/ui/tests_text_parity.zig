@@ -102,7 +102,7 @@ test "glyph position wrapping uses styled fonts and tracking without cutting UTF
     const s = "héllo world again";
     const style: types.TextStyle = .{ .size = 13, .tracking = 0.5 };
     const spans: [1]types.Span = .{.{ .start = 0, .end = s.len, .mono = true }};
-    const room = text.rich.layout(&t.text, "héllo world", style, &spans, 0).width + 1;
+    const room = text.rich.layout(t.text, "héllo world", style, &spans, 0).width + 1;
     const lines = t.text.wrapAttributed(s, style, &spans, room);
     try testing.expect(lines.len > 1);
     for (lines) |line| {

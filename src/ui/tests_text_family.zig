@@ -210,7 +210,7 @@ test "zoom scales a family's text, and rich text carries families" {
     const rich = text_mod.rich;
     const spans = [_]ui.Span{.{ .start = 1, .end = 2, .family = "family-zz" }};
     try testing.expect(rich.styled(&spans));
-    try testing.expectApproxEqAbs(@as(f32, 15), rich.layout(&t.text, "ab", style, &spans, 0).width, 0.01);
+    try testing.expectApproxEqAbs(@as(f32, 15), rich.layout(t.text, "ab", style, &spans, 0).width, 0.01);
 }
 
 test "a font made bold and italic where it has no such face still draws, and its advance stays" {

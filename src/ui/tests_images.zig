@@ -82,7 +82,7 @@ test "sink uploads survive render after pre-sink pixels allocation" {
     defer t.deinit();
     // Sync the first 8 icons into images_texture, then attach the direct GPU sink for icon.8.
     t.renderer.syncImages(&t.text.images);
-    t.text.images.sink = .{ .ctx = &t.renderer, .upload = @TypeOf(t.renderer).uploadImage };
+    t.text.images.sink = .{ .ctx = t.renderer, .upload = @TypeOf(t.renderer.*).uploadImage };
     t.frame();
     const px = try t.render(gpa);
     defer px.deinit(gpa);

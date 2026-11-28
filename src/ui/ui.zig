@@ -258,6 +258,7 @@ pub const ListOptions = @import("list.zig").Options;
 pub const ListRows = @import("list.zig").Rows;
 pub const Tester = @import("tester.zig").Tester;
 pub const TesterOptions = @import("tester.zig").Options;
+pub const TesterShared = @import("tester.zig").Shared;
 pub const textArea = @import("textarea.zig").textArea;
 pub const AreaOptions = @import("textarea.zig").AreaOptions;
 /// Focuses the field built next (`c.focusNext`), selecting all its text if asked.
@@ -349,6 +350,7 @@ test {
     _ = @import("tests_turn.zig");
     _ = @import("tests_transform.zig");
     _ = @import("tests_settle.zig");
+    _ = @import("tests_tester_shared.zig");
     _ = types;
     _ = device;
     _ = @import("panes.zig");
