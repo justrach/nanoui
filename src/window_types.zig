@@ -86,6 +86,8 @@ pub const PageOptions = struct {
     /// Opt-in host file-drop callbacks over webview content (`null` preserves
     /// default browser drag/drop behavior).
     file_drop: ?PageFileDrop = null,
+    /// Track native gestures for app-initiated outbound file drags (macOS).
+    file_drag: bool = false,
 };
 
 /// Host routing decision returned from `PageFileDrop.on_offer`.
@@ -117,6 +119,24 @@ pub const PageFileDrop = struct {
     on_offer: ?*const fn (ctx: ?*anyopaque, offer: PageDropOffer) PageDropDecision = null,
     on_drop: *const fn (ctx: ?*anyopaque, event: PageDropEvent) bool,
     on_cancel: ?*const fn (ctx: ?*anyopaque) void = null,
+};
+
+/// A copy-only offer of prepared files. One pending offer per page.
+pub const PageFileDrag = struct {
+    /// 1 to 64 absolute UTF-8 paths. The array and strings are borrowed for
+    /// the start call. Keep the file bytes around after the drag ends.
+    paths: []const []const u8,
+    /// Capture from the initiating page press before any deferred work.
+    gesture: Gesture,
+    token: u64,
+    ctx: ?*anyopaque = null,
+    on_end: End,
+
+    pub const Gesture = enum(u64) { _ };
+    pub const Result = enum { copied, cancelled };
+    /// Called once on the UI thread for a started drag while its page lives.
+    /// "copied" means accepted by the receiver, which may read the files later.
+    pub const End = *const fn (ctx: ?*anyopaque, token: u64, result: Result) void;
 };
 
 /// One entry of `PageOptions.pages`.

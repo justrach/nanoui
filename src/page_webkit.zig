@@ -13,12 +13,15 @@ const window_mod = if (ios) @import("ios/window.zig") else @import("window.zig")
 const ipc = @import("ipc.zig").ipc(window_mod.Window, app_mod.App);
 const nav = @import("page_webkit_nav.zig");
 const nav_drop = @import("page_webkit_drop.zig");
+const file_drag = @import("page_webkit_file_drag.zig");
+const FileDrag = @import("window_types.zig").PageFileDrag;
 const page = @import("page.zig");
 const page_drop = @import("page_drop.zig");
 const page_request = @import("page_request.zig");
 
 const Window = window_mod.Window;
 const bridge_js = page.bridge_js;
+const app_resigned = "NSApplicationDidResignActiveNotification";
 
 extern "c" fn dlopen(path: [*:0]const u8, mode: c_int) ?*anyopaque;
 
@@ -28,6 +31,9 @@ pub const Page = struct {
     handler: objc.Object,
     nav_delegate: objc.Object,
     last_mouse_down: ?objc.Object = null,
+    file_drag_gesture: ?FileDrag.Gesture = null,
+    file_drag_monitor: ?objc.Object = null,
+    file_drag_slot: file_drag.Slot = .{},
     scope: page_request.ActiveScope = .{},
     scope_nav: ?objc.Object = null,
     drop_session: page_drop.Session = .{},
@@ -77,6 +83,7 @@ pub const Page = struct {
         });
         const mac_methods = [_]objc.Method{
             .{ .name = "mouseDown:", .imp = &webViewMouseDown, .types = "v@:@" },
+            .{ .name = "nanouiFileDragAppResigned:", .imp = &fileDragAppResigned, .types = "v@:@" },
         } ++ nav_drop.methods;
         const webview_class = objc.defineClass(.{
             .name = "NanoUIWebView",
@@ -131,11 +138,21 @@ pub const Page = struct {
         self.handler = handler;
         self.nav_delegate = nav_delegate;
         if (!ios) nav_drop.registerTypes(webview, options.file_drop != null);
+        if (!ios and options.file_drag) self.monitorFileDragGesture();
         if (!options.defer_initial_load) self.loadUrl(options.url);
         return self;
     }
 
     pub fn destroy(self: *Page) void {
+        if (!ios) {
+            self.file_drag_slot.detach();
+            if (self.file_drag_monitor) |monitor| {
+                objc.msg(void, objc.class("NSEvent"), "removeMonitor:", .{monitor});
+                objc.release(monitor);
+                const center = objc.msg(objc.Object, objc.class("NSNotificationCenter"), "defaultCenter", .{});
+                objc.msg(void, center, "removeObserver:name:object:", .{ self.webview, objc.nsString(app_resigned), @as(?objc.Object, null) });
+            }
+        }
         self.drop_session.onClose();
         const ucc = objc.msg(objc.Object, objc.msg(objc.Object, self.webview, "configuration", .{}), "userContentController", .{});
         objc.msg(void, ucc, "removeScriptMessageHandlerForName:", .{objc.nsString("nanoui")});
@@ -200,10 +217,50 @@ pub const Page = struct {
         // A screen isn't dragged.
         if (ios) return;
         const ev = self.last_mouse_down orelse return;
+        self.invalidateFileDragGesture();
         objc.msg(void, self.queue.window.nswindow, "performWindowDragWithEvent:", .{ev});
     }
 
+    /// Capture this before deferring a request made by the current press.
+    pub fn fileDragGesture(self: *const Page) ?FileDrag.Gesture {
+        return if (self.queue.dead) null else self.file_drag_gesture;
+    }
+
+    pub fn invalidateFileDragGesture(self: *Page) void {
+        self.file_drag_gesture = null;
+    }
+
+    /// Starts an AppKit session with the specific press captured by the app.
+    pub fn startFileDrag(self: *Page, offer: FileDrag) !void {
+        if (ios) return error.FileDragUnsupported;
+        if (self.fileDragGesture() != offer.gesture) return error.NoFileDragGesture;
+        const event = self.last_mouse_down orelse return error.NoFileDragGesture;
+        // A native gesture can start one session. Don't touch the owner after
+        // entering AppKit, which can deliver callbacks.
+        self.invalidateFileDragGesture();
+        try self.file_drag_slot.start(self.queue.window.app.io, self.webview, event, offer);
+    }
+
+    fn monitorFileDragGesture(self: *Page) void {
+        var block = objc.BlockRet(Page, &.{objc.Object}, ?objc.Object).init(self, fileDragInput);
+        const mask: objc.NSUInteger = (1 << 1) | (1 << 2); // Local left down and up.
+        const monitor = objc.msg(?objc.Object, objc.class("NSEvent"), "addLocalMonitorForEventsMatchingMask:handler:", .{ mask, &block }) orelse return;
+        self.file_drag_monitor = objc.retain(monitor);
+        const center = objc.msg(objc.Object, objc.class("NSNotificationCenter"), "defaultCenter", .{});
+        objc.msg(void, center, "addObserver:selector:name:object:", .{
+            self.webview,                objc.sel("nanouiFileDragAppResigned:"),
+            objc.nsString(app_resigned), @as(?objc.Object, null),
+        });
+    }
+
+    fn fileDragInput(self: *Page, event: objc.Object) ?objc.Object {
+        // A new local press must hit this webview before the gesture arms.
+        self.invalidateFileDragGesture();
+        return event;
+    }
+
     fn loadUrl(self: *Page, url: []const u8) void {
+        self.invalidateFileDragGesture();
         self.drop_session.onNavigate();
         self.clearScope();
         self.queue.setCurrent(url);
@@ -224,6 +281,7 @@ pub const Page = struct {
     /// Starts a GET navigation with per-request HTTP headers scoped to `req.url`'s origin.
     pub fn loadRequest(self: *Page, req: window_mod.PageRequest) page_request.Error!void {
         try page_request.validate(req);
+        self.invalidateFileDragGesture();
         self.drop_session.onNavigate();
         return nav.load(Page, self, req);
     }
@@ -312,5 +370,11 @@ fn webViewMouseDown(self_obj: objc.Object, _: objc.SEL, event: objc.Object) call
     // let go, and WebKit's own press still runs.
     if (self.last_mouse_down) |old| objc.release(old);
     self.last_mouse_down = objc.retain(event);
+    self.file_drag_gesture = if (self.file_drag_monitor != null) file_drag.nextGesture() else null;
     objc.msgSuper(void, self_obj, objc.class("WKWebView"), "mouseDown:", .{event});
+}
+
+fn fileDragAppResigned(view: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
+    const self = objc.getZig(Page, view) orelse return;
+    self.invalidateFileDragGesture();
 }

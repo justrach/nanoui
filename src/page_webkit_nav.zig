@@ -24,6 +24,7 @@ pub fn delegateClass() objc.Class {
         .protocols = &.{"WKNavigationDelegate"},
         .methods = &.{
             .{ .name = "webView:decidePolicyForNavigationAction:decisionHandler:", .imp = &decidePolicy, .types = "v@:@@@" },
+            .{ .name = "webView:didStartProvisionalNavigation:", .imp = &didStart, .types = "v@:@@" },
             .{ .name = "webView:didFinishNavigation:", .imp = &didFinish, .types = "v@:@@" },
             .{ .name = "webView:didFailProvisionalNavigation:withError:", .imp = &didFail, .types = "v@:@@@" },
             .{ .name = "webView:didFailNavigation:withError:", .imp = &didFail, .types = "v@:@@@" },
@@ -95,6 +96,11 @@ fn sameNav(p: anytype, nav_obj: ?objc.Object) bool {
     const active = p.scope_nav orelse return false;
     const cur = nav_obj orelse return false;
     return @intFromPtr(cur) == @intFromPtr(active);
+}
+
+fn didStart(self_obj: objc.Object, _: objc.SEL, _: objc.Object, _: objc.Object) callconv(.c) void {
+    const p = pageFromDelegate(self_obj) orelse return;
+    p.invalidateFileDragGesture();
 }
 
 fn didFinish(self_obj: objc.Object, _: objc.SEL, _: objc.Object, nav_obj: ?objc.Object) callconv(.c) void {

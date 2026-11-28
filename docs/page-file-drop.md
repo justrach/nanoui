@@ -33,3 +33,20 @@
 | **Windows** (`WebView2`) | Follow-up | Follow-up | `AllowExternalDrop` only toggles browser drops; host callback interception needs dedicated WebView2/COM work. |
 | **iOS** (`WKWebView` / UIKit) | Follow-up | Follow-up | UIKit uses asynchronous `UIDropInteraction` / `NSItemProvider` file promises & access scopes. |
 | **Android** | Unsupported (`.PagesUnsupported`) | Unsupported | Android has no webview page backend yet. |
+
+## Outbound prepared files on macOS
+
+Set `PageOptions.file_drag = true`. In the trusted app handler for a press,
+capture `Window.pageFileDragGesture()` before deferring any work. Pass that
+gesture to `Window.startPageFileDrag(offer)` while the press is live.
+Docked pages use `Page.fileDragGesture` and `Page.startFileDrag`.
+The offer includes a caller token, 1 to 64 absolute paths to prepared
+regular files, and a terminal callback. The array may be released when the call
+returns. Hold the file contents in application storage so a receiver can
+read them after accepting, after the callback, or after the app exits.
+
+The call returns an error if the gesture has ended or changed, the offer is invalid,
+or a session cannot start. A live page receives one terminal result for a
+started drag. Closing the page detaches the callback while AppKit may
+continue its native session. A copy result means the receiver accepted the
+offer. Keep a keyboard-accessible Save action for the same prepared files.
