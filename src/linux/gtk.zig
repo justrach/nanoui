@@ -73,6 +73,7 @@ pub const Api = struct {
     gtk_message_dialog_new: *const fn (parent: ?*Widget, flags: c_int, kind: c_int, buttons: c_int, format: [*:0]const u8, ...) callconv(.c) *Widget,
     gtk_dialog_add_button: *const fn (dialog: *Widget, text: [*:0]const u8, response: c_int) callconv(.c) ?*Widget,
     gtk_native_dialog_show: *const fn (dialog: *anyopaque) callconv(.c) void,
+    gtk_native_dialog_destroy: *const fn (dialog: *anyopaque) callconv(.c) void,
     gtk_native_dialog_hide: *const fn (dialog: *anyopaque) callconv(.c) void,
     gtk_native_dialog_set_modal: *const fn (dialog: *anyopaque, modal: c_int) callconv(.c) void,
     gtk_native_dialog_get_modal: *const fn (dialog: *anyopaque) callconv(.c) c_int,

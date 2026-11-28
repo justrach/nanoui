@@ -195,8 +195,7 @@ pub const Window = struct {
     fn finish(self: *Window) void {
         if (self.closed) return;
         self.closed = true;
-        if (self.file_chooser) |wait| wait.ownerClosed();
-        self.file_chooser = null;
+        self.cancelFileChooser();
         if (self.on_close) |cb| cb.func(cb.ctx, self);
         if (self.page) |p| p.destroy();
         self.page = null;
@@ -213,7 +212,14 @@ pub const Window = struct {
     }
 
     /// Final App teardown has already resolved pending close decisions.
+    fn cancelFileChooser(self: *Window) void {
+        const waiter = self.file_chooser orelse return;
+        self.file_chooser = null;
+        waiter.ownerClosed();
+    }
+
     pub fn destroyNow(self: *Window) void {
+        self.cancelFileChooser();
         // Destroying it calls `finish`, which frees it.
         if (self.gtkwindow) |win| {
             if (gtk.v4) gtk.v4api.gtk_window_destroy(win) else gtk.v3.gtk_widget_destroy(win);

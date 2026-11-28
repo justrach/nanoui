@@ -408,6 +408,8 @@ test "should_terminate keeps app running until allowed" {
 }
 
 test "file choosers are modal for their owner and cancel when it closes" {
+    // A native chooser opens a window of its own. Only run under Xvfb.
+    if (std.c.getenv("NANOUI_TEST_NATIVE_FILE_CHOOSER") == null) return error.SkipZigTest;
     const dialog = @import("dialog.zig");
     const app = try makeApp(testing.allocator);
     defer app.destroy();
