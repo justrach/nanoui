@@ -25,6 +25,8 @@ pub fn build(b: *std.Build) void {
     options.addOption(bool, "in_rt", false);
     // The one place the version is kept: build.zig.zon (tools/version.sh).
     options.addOption([]const u8, "version", @import("build.zig.zon").version);
+    // An app's tests lend every Tester one renderer and text system (`ui.TesterShared`).
+    options.addOption(bool, "tester_shares_caches", b.option(bool, "tester-shares-caches", "Lend every Tester in a test binary one renderer and text system, kept warm (tests only)") orelse false);
 
     const os = target.result.os.tag;
     const nanoui = b.addModule("nanoui", .{

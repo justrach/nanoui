@@ -158,7 +158,7 @@ test "pictures written straight to the GPU draw as the CPU atlas's copy does" {
         if (k == 1) {
             // Its pictures start over, going to the GPU only.
             t.text.images.deinit();
-            t.text.images = .{ .gpa = gpa, .sink = .{ .ctx = &t.renderer, .upload = @import("metal.zig").Renderer.uploadImage } };
+            t.text.images = .{ .gpa = gpa, .sink = .{ .ctx = t.renderer, .upload = @import("metal.zig").Renderer.uploadImage } };
             t.frame();
         }
         t.settle(1);

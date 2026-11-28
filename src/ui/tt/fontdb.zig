@@ -418,12 +418,25 @@ pub const Db = struct {
 
     /// The face of `family` nearest `weight` and `italic`, null when the
     /// family has none; of two as near, one that isn't variable.
+    ///
+    /// A family the app brought (`ui.registerFont`) is answered from its own
+    /// faces, without reading the system's font folders: an app that ships
+    /// its fonts draws with them, and never pays for a scan it doesn't need.
     pub fn family(db: *Db, name: []const u8, weight: u16, italic: bool) ?u32 {
+        db.addBundled();
+        // The app's faces (bytes, not files), wherever they were added.
+        if (db.nearest(name, weight, italic, true)) |f| return f;
         db.scan();
+        return db.nearest(name, weight, italic, false);
+    }
+
+    /// The face of `family` nearest `weight` and `italic`, of the app's
+    /// own faces only when `brought`; of two as near, one that isn't variable.
+    fn nearest(db: *const Db, name: []const u8, weight: u16, italic: bool, brought: bool) ?u32 {
         var best: ?u32 = null;
         var best_score: u32 = std.math.maxInt(u32);
         for (db.faces.items, 0..) |f, i| {
-            if (f.private or !std.ascii.eqlIgnoreCase(f.style.name(), name)) continue;
+            if (f.private or (brought and f.memory == null) or !std.ascii.eqlIgnoreCase(f.style.name(), name)) continue;
             const dw: u32 = @abs(@as(i32, f.style.weight) - @as(i32, weight));
             const score = 2 * (dw + @as(u32, if (f.style.italic != italic) 1000 else 0)) + @intFromBool(f.style.variable);
             if (score < best_score) {

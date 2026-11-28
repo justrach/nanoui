@@ -44,6 +44,18 @@ pub fn warmCaches(ts: *TextSystem) void {
     if (!portable and ts.atlas.pixels.capacity < 16384) ts.atlas.pixels.ensureTotalCapacity(ts.gpa, 16384) catch {};
 }
 
+/// The settings a view may change put back as `init` left them (zoom,
+/// line rules), what was found and shaped kept unless they changed: a
+/// text system lent to another Tester (`Tester.Shared`).
+pub fn restoreDefaults(ts: *TextSystem) void {
+    ts.setZoom(1);
+    if (ts.wrap_rule == .typesetter and ts.baseline_rule == .font_line and ts.glyph_snap == .nearest) return;
+    ts.wrap_rule = .typesetter;
+    ts.baseline_rule = .font_line;
+    ts.glyph_snap = .nearest;
+    ts.dropCaches();
+}
+
 /// Retains recently shaped layouts across frames up to `max_layouts` so
 /// scrolling and search filtering do not re-allocate glyph slices on steady frames.
 pub fn retainLayouts(_: *TextSystem) void {}

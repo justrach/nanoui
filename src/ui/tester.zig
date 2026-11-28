@@ -44,12 +44,27 @@ pub const Options = struct {
     dark: bool = false,
     /// Colors of its own, as a window's `theme` option gives.
     theme: ?Theme = null,
+    /// Draw and shape with these, kept from one Tester to the next, rather
+    /// than a renderer and text system of its own. Null: the process's own
+    /// when nanoui is built with `-Dtester-shares-caches` (tests only) and no
+    /// other Tester has it, else its own.
+    shared: ?*Shared = null,
 };
+
+pub const Shared = @import("tester_shared.zig").Shared;
+
+/// Whether a Tester given no `shared` borrows the process's own.
+const share_by_default = @import("builtin").is_test and @hasDecl(@import("build_options"), "tester_shares_caches") and @import("build_options").tester_shares_caches;
 
 pub const Tester = struct {
     gpa: std.mem.Allocator,
-    renderer: metal.Renderer,
-    text: text.TextSystem,
+    renderer: *metal.Renderer,
+    text: *text.TextSystem,
+    /// Whose renderer and text system these are: lent, or (`owned`) made
+    /// for it alone. On the heap either way, so a copy of the Tester still
+    /// points at them.
+    shared: *Shared,
+    owned: bool,
     ctx: Context,
     view: View,
     size: types.Size,
@@ -94,12 +109,25 @@ pub const Tester = struct {
     }
 
     pub fn initImpl(t: *Tester, gpa: std.mem.Allocator, view: View, opts: Options) !void {
-        var renderer: metal.Renderer = if (portable) {} else try metal.Renderer.init();
-        errdefer if (!portable) renderer.deinit();
+        const lent: ?*Shared = opts.shared orelse if (share_by_default) try Shared.process() else null;
+        // A second Tester open at once makes its own.
+        const shared = if (lent) |sh| sh else own: {
+            const sh = try gpa.create(Shared);
+            errdefer gpa.destroy(sh);
+            try sh.init(gpa);
+            break :own sh;
+        };
+        errdefer if (lent == null) {
+            shared.deinit();
+            gpa.destroy(shared);
+        };
+        if (lent) |sh| try sh.lend();
         t.* = .{
             .gpa = gpa,
-            .renderer = renderer,
-            .text = if (portable) .init(gpa) else .init(gpa, renderer.device),
+            .renderer = &shared.renderer,
+            .text = &shared.text,
+            .shared = shared,
+            .owned = lent == null,
             .ctx = undefined,
             .view = view,
             .size = .{ .w = opts.width, .h = opts.height },
@@ -107,7 +135,7 @@ pub const Tester = struct {
             .theme = opts.theme orelse if (opts.dark) Theme.dark_theme else Theme.light,
         };
         t.text.setScale(opts.scale);
-        t.ctx = .init(gpa, &t.text);
+        t.ctx = .init(gpa, t.text);
         t.ctx.clipboard = .{ .ctx = t, .write = clipWrite };
         t.ctx.waker = .{ .ctx = t, .wake = wakeFrom };
         t.frame();
@@ -146,8 +174,10 @@ pub const Tester = struct {
         t.clipboard.deinit(t.gpa);
         t.instances.deinit(t.gpa);
         t.ctx.deinit();
-        t.text.deinit();
-        if (!portable) t.renderer.deinit();
+        if (t.owned) {
+            t.shared.deinit();
+            t.gpa.destroy(t.shared);
+        } else t.shared.giveBack();
     }
 
     pub fn frame(t: *Tester) void {
@@ -163,7 +193,7 @@ pub const Tester = struct {
     pub fn frameImpl(t: *Tester) void {
         t.ctx.display_info = t.display_info;
         t.ctx.surface_colour = t.surface_colour;
-        _ = frame_mod.run(&t.ctx, t.view, &t.text, &t.instances, t.size, t.scale, t.theme, t.dt, t.time);
+        _ = frame_mod.run(&t.ctx, t.view, t.text, &t.instances, t.size, t.scale, t.theme, t.dt, t.time);
         // The simulated clock is the real one here: a view reads its rate off it.
         t.ctx.frame_time = t.dt;
         t.time += t.dt;

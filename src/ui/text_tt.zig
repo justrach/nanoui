@@ -150,7 +150,7 @@ pub const TextSystem = struct {
         self.dropCaches();
     }
 
-    fn dropCaches(self: *TextSystem) void {
+    pub fn dropCaches(self: *TextSystem) void {
         self.fonts.clearRetainingCapacity();
         self.run_fonts.clearRetainingCapacity();
         self.run_faces.clearRetainingCapacity();
