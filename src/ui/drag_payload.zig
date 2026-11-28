@@ -57,7 +57,17 @@ pub const Active = struct {
 
 /// Makes box `index` (just opened) a drag source carrying `payload`.
 pub fn dragSource(c: *Context, index: u32, payload: u64) Source {
-    const it = c.interact(index, .{});
+    return dragSourceWith(c, index, payload, .{});
+}
+
+pub const Options = struct {
+    /// Tab focuses the source. Return and Space activate it without dragging.
+    focusable: bool = false,
+};
+
+/// A drag source with optional keyboard focus and activation.
+pub fn dragSourceWith(c: *Context, index: u32, payload: u64, opts: Options) Source {
+    var it = c.interact(index, .{ .focusable = opts.focusable });
     const st = &c.payload_drag;
     expire(c);
     if (it.pressed and c.input.pressed and st.source != it.id) {
@@ -75,7 +85,11 @@ pub fn dragSource(c: *Context, index: u32, payload: u64) Source {
     }
     settle(c);
     const mine = st.source == it.id;
-    if (mine and st.dragging and st.released_frame == null) c.cursor = .closed_hand;
+    if (mine and st.dragging) {
+        it.clicked = false;
+        it.double_clicked = false;
+        if (st.released_frame == null) c.cursor = .closed_hand;
+    }
     return .{
         .dragging = mine and st.dragging and st.released_frame == null,
         .released = mine and st.dragging and st.released_frame == c.frame,

@@ -266,6 +266,8 @@ pub const focusNext = @import("context_hooks.zig").focusNext;
 /// across panels (`drag_payload.zig`): `dragSource` on the box it starts
 /// from, `dragOver`/`dropTarget` on where it may land.
 pub const dragSource = @import("drag_payload.zig").dragSource;
+pub const dragSourceWith = @import("drag_payload.zig").dragSourceWith;
+pub const DragSourceOptions = @import("drag_payload.zig").Options;
 pub const dragOver = @import("drag_payload.zig").dragOver;
 pub const dropTarget = @import("drag_payload.zig").dropTarget;
 pub const dragging = @import("drag_payload.zig").dragging;
