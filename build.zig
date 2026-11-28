@@ -329,6 +329,18 @@ fn addIosExample(b: *std.Build, name: []const u8, target: std.Build.ResolvedTarg
         check.addFileArg(b.path("tools/ios/check-bundle.sh"));
         check.addDirectoryArg(full);
         b.step("test-bundle", "Check an iOS bundle with every option (-Dtarget=aarch64-ios-simulator)").dependOn(&check.step);
+
+        const symbols = b.step("test-ios-symbols", "Check the iOS executable and its dSYM in a release build");
+        if (optimize == .debug) {
+            symbols.dependOn(&b.addFail("test-ios-symbols requires a release optimize mode").step);
+        } else {
+            const with_symbols = ios.appWithSymbols(b, exe, opts);
+            const verify = b.addSystemCommand(&.{"sh"});
+            verify.addFileArg(b.path("tools/ios/check-symbols.sh"));
+            verify.addFileArg(with_symbols.bundle.path(b, name));
+            verify.addDirectoryArg(with_symbols.dsym.?);
+            symbols.dependOn(&verify.step);
+        }
     }
 }
 
