@@ -13,6 +13,7 @@ const window_mod = if (ios) @import("ios/window.zig") else @import("window.zig")
 const ipc = @import("ipc.zig").ipc(window_mod.Window, app_mod.App);
 const nav = @import("page_webkit_nav.zig");
 const nav_drop = @import("page_webkit_drop.zig");
+const file_drag = @import("page_webkit_file_drag.zig");
 const page = @import("page.zig");
 const page_drop = @import("page_drop.zig");
 const page_request = @import("page_request.zig");
@@ -28,6 +29,9 @@ pub const Page = struct {
     handler: objc.Object,
     nav_delegate: objc.Object,
     last_mouse_down: ?objc.Object = null,
+    file_drag_press: bool = false,
+    file_drag_monitor: ?objc.Object = null,
+    file_drag_slot: file_drag.Slot = .{},
     scope: page_request.ActiveScope = .{},
     scope_nav: ?objc.Object = null,
     drop_session: page_drop.Session = .{},
@@ -131,11 +135,19 @@ pub const Page = struct {
         self.handler = handler;
         self.nav_delegate = nav_delegate;
         if (!ios) nav_drop.registerTypes(webview, options.file_drop != null);
+        if (!ios and options.file_drag) self.monitorFileDragGesture();
         if (!options.defer_initial_load) self.loadUrl(options.url);
         return self;
     }
 
     pub fn destroy(self: *Page) void {
+        if (!ios) {
+            self.file_drag_slot.detach();
+            if (self.file_drag_monitor) |monitor| {
+                objc.msg(void, objc.class("NSEvent"), "removeMonitor:", .{monitor});
+                objc.release(monitor);
+            }
+        }
         self.drop_session.onClose();
         const ucc = objc.msg(objc.Object, objc.msg(objc.Object, self.webview, "configuration", .{}), "userContentController", .{});
         objc.msg(void, ucc, "removeScriptMessageHandlerForName:", .{objc.nsString("nanoui")});
@@ -200,10 +212,37 @@ pub const Page = struct {
         // A screen isn't dragged.
         if (ios) return;
         const ev = self.last_mouse_down orelse return;
+        self.file_drag_press = false;
         objc.msg(void, self.queue.window.nswindow, "performWindowDragWithEvent:", .{ev});
     }
 
+    /// Starts an AppKit session using this page's last live mouse-down.
+    pub fn startFileDrag(self: *Page, offer: @import("window_types.zig").PageFileDrag) !void {
+        if (ios) return error.FileDragUnsupported;
+        if (self.queue.dead or self.file_drag_monitor == null or !self.file_drag_press)
+            return error.NoFileDragGesture;
+        const event = self.last_mouse_down orelse return error.NoFileDragGesture;
+        // A native gesture can start one session. Don't touch the owner after
+        // entering AppKit, which can deliver callbacks.
+        self.file_drag_press = false;
+        try self.file_drag_slot.start(self.webview, event, offer);
+    }
+
+    fn monitorFileDragGesture(self: *Page) void {
+        var block = objc.BlockRet(Page, &.{objc.Object}, ?objc.Object).init(self, fileDragInput);
+        const mask: objc.NSUInteger = (1 << 1) | (1 << 2); // Local left down and up.
+        if (objc.msg(?objc.Object, objc.class("NSEvent"), "addLocalMonitorForEventsMatchingMask:handler:", .{ mask, &block })) |monitor|
+            self.file_drag_monitor = objc.retain(monitor);
+    }
+
+    fn fileDragInput(self: *Page, event: objc.Object) ?objc.Object {
+        // A new local press must hit this webview before the gesture arms.
+        self.file_drag_press = false;
+        return event;
+    }
+
     fn loadUrl(self: *Page, url: []const u8) void {
+        self.file_drag_press = false;
         self.drop_session.onNavigate();
         self.clearScope();
         self.queue.setCurrent(url);
@@ -312,5 +351,6 @@ fn webViewMouseDown(self_obj: objc.Object, _: objc.SEL, event: objc.Object) call
     // let go, and WebKit's own press still runs.
     if (self.last_mouse_down) |old| objc.release(old);
     self.last_mouse_down = objc.retain(event);
+    self.file_drag_press = self.file_drag_monitor != null;
     objc.msgSuper(void, self_obj, objc.class("WKWebView"), "mouseDown:", .{event});
 }

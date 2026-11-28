@@ -113,6 +113,7 @@ pub const PageDropPhase = @import("window_types.zig").PageDropPhase;
 pub const PageDropOffer = @import("window_types.zig").PageDropOffer;
 pub const PageDropEvent = @import("window_types.zig").PageDropEvent;
 pub const PageFileDrop = @import("window_types.zig").PageFileDrop;
+pub const PageFileDrag = @import("window_types.zig").PageFileDrag;
 /// How high a window stacks (`WindowOptions.level`, `Window.setLevel`).
 pub const WindowLevel = @import("window_types.zig").Level;
 /// A connected screen (`App.screens`), the About panel's options
@@ -305,4 +306,8 @@ test {
     _ = @import("tests_page_request.zig");
     // Opt-in native file-drop callbacks over webview content.
     _ = @import("tests_page_drop.zig");
+}
+
+test {
+    if (builtin.os.tag == .macos) _ = @import("page_webkit_file_drag.zig");
 }

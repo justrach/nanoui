@@ -413,6 +413,12 @@ pub const Window = struct {
         return p.loadRequest(req);
     }
 
+    /// Starts a copy-only file drag from this window's opted-in page.
+    pub fn startPageFileDrag(self: *Window, offer: window_types.PageFileDrag) !void {
+        const p = self.page orelse return error.NoPage;
+        try p.startFileDrag(offer);
+    }
+
     /// Shows entry `i` of `PageOptions.pages` (the bar's buttons).
     pub fn showPage(self: *Window, i: usize) void {
         const p = self.page orelse return;
