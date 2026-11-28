@@ -417,11 +417,28 @@ test "file choosers are modal for their owner and cancel when it closes" {
     const other = try app.newWindow(.{ .title = "Other", .visible = false, .content = .{ .view = .init(&page, Page.view) } });
     const Probe = struct {
         owner: *Window,
+        close_source: ?c_uint = null,
+        deadline_source: ?c_uint = null,
         modal_to_owner: bool = false,
         refused_second: bool = false,
 
+        fn start(probe: *@This()) void {
+            probe.close_source = gtk.api.g_timeout_add(50, close, probe);
+            probe.deadline_source = gtk.api.g_timeout_add(5000, deadline, null);
+        }
+
+        fn stop(probe: *@This()) void {
+            if (probe.close_source) |id| _ = gtk.api.g_source_remove(id);
+            if (probe.deadline_source) |id| _ = gtk.api.g_source_remove(id);
+        }
+
+        fn deadline(_: ?*anyopaque) callconv(.c) c_int {
+            @panic("file chooser did not settle after its owner closed");
+        }
+
         fn close(ctx: ?*anyopaque) callconv(.c) c_int {
             const probe: *@This() = @ptrCast(@alignCast(ctx));
+            probe.close_source = null;
             if (probe.owner.file_chooser) |wait| {
                 const native = wait.chooser;
                 probe.modal_to_owner = gtk.api.gtk_native_dialog_get_modal(native) != 0 and
@@ -435,16 +452,21 @@ test "file choosers are modal for their owner and cancel when it closes" {
         }
     };
 
-    const opener = try app.newWindow(.{ .title = "Open owner", .visible = false, .content = .{ .view = .init(&page, Page.view) } });
-    var opening: Probe = .{ .owner = opener };
-    _ = gtk.api.g_timeout_add(50, Probe.close, &opening);
-    try testing.expectEqual(null, try dialog.openForWindow(testing.allocator, opener, .{}));
-    try testing.expect(opening.modal_to_owner and opening.refused_second);
-
-    const saver = try app.newWindow(.{ .title = "Save owner", .visible = false, .content = .{ .view = .init(&page, Page.view) } });
-    var saving: Probe = .{ .owner = saver };
-    _ = gtk.api.g_timeout_add(50, Probe.close, &saving);
-    try testing.expectEqual(null, try dialog.saveForWindow(testing.allocator, saver, .{}));
-    try testing.expect(saving.modal_to_owner and saving.refused_second);
+    {
+        const opener = try app.newWindow(.{ .title = "Open owner", .visible = false, .content = .{ .view = .init(&page, Page.view) } });
+        var opening: Probe = .{ .owner = opener };
+        opening.start();
+        defer opening.stop();
+        try testing.expectEqual(null, try dialog.openForWindow(testing.allocator, opener, .{}));
+        try testing.expect(opening.modal_to_owner and opening.refused_second);
+    }
+    {
+        const saver = try app.newWindow(.{ .title = "Save owner", .visible = false, .content = .{ .view = .init(&page, Page.view) } });
+        var saving: Probe = .{ .owner = saver };
+        saving.start();
+        defer saving.stop();
+        try testing.expectEqual(null, try dialog.saveForWindow(testing.allocator, saver, .{}));
+        try testing.expect(saving.modal_to_owner and saving.refused_second);
+    }
     try testing.expect(!other.closed);
 }

@@ -211,13 +211,13 @@ pub const Window = struct {
         self.destroyNow();
     }
 
-    /// Final App teardown has already resolved pending close decisions.
     fn cancelFileChooser(self: *Window) void {
         const waiter = self.file_chooser orelse return;
         self.file_chooser = null;
         waiter.ownerClosed();
     }
 
+    /// Final App teardown has already resolved pending close decisions.
     pub fn destroyNow(self: *Window) void {
         self.cancelFileChooser();
         // Destroying it calls `finish`, which frees it.

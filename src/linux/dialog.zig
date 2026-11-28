@@ -70,6 +70,11 @@ fn runChooser(chooser: *anyopaque, owner: ?*Window) c_int {
     return wait.answer.wait();
 }
 
+fn freeChooser(chooser: *anyopaque, owned: bool) void {
+    if (owned) gtk.api.gtk_native_dialog_destroy(chooser);
+    gtk.api.g_object_unref(chooser);
+}
+
 fn setFolder(chooser: *anyopaque, path: [*:0]const u8) void {
     if (!gtk.v4) {
         _ = gtk.v3.gtk_file_chooser_set_current_folder(chooser, path);
@@ -104,10 +109,7 @@ fn openOwned(gpa: std.mem.Allocator, opts: OpenOptions, owner: ?*Window) !?[][]u
     // Open file 0, select folder 2.
     const action: c_int = if (opts.directories and !opts.files) 2 else 0;
     const chooser = g.gtk_file_chooser_native_new(z(&tb, if (opts.title.len > 0) opts.title else "Open"), try chooserParent(owner), action, null, null);
-    defer {
-        if (owner != null) g.gtk_native_dialog_destroy(chooser);
-        g.g_object_unref(chooser);
-    }
+    defer freeChooser(chooser, owner != null);
     g.gtk_file_chooser_set_select_multiple(chooser, @intFromBool(opts.multiple));
     var db: [1024]u8 = undefined;
     if (opts.directory.len > 0) setFolder(chooser, z(&db, opts.directory));
@@ -153,10 +155,7 @@ fn saveOwned(gpa: std.mem.Allocator, opts: SaveOptions, owner: ?*Window) !?[]u8 
     const g = &gtk.api;
     var tb: [256]u8 = undefined;
     const chooser = g.gtk_file_chooser_native_new(z(&tb, if (opts.title.len > 0) opts.title else "Save"), try chooserParent(owner), 1, null, null);
-    defer {
-        if (owner != null) g.gtk_native_dialog_destroy(chooser);
-        g.g_object_unref(chooser);
-    }
+    defer freeChooser(chooser, owner != null);
     var nb: [512]u8 = undefined;
     if (opts.name.len > 0) g.gtk_file_chooser_set_current_name(chooser, z(&nb, opts.name));
     var db: [1024]u8 = undefined;
