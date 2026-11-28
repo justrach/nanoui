@@ -54,17 +54,33 @@ pub const Sign = struct {
 /// The folder `<name>.app` holding `exe` and an Info.plist made for its
 /// target (the Simulator's or a device's), as a path in the cache.
 pub fn app(b: *std.Build, exe: *std.Build.Step.Compile, opts: Options) std.Build.LazyPath {
+    return buildApp(b, exe, opts, buildProgram(b, exe, false)).bundle;
+}
+
+/// An app bundle and the dSYM of the program in it.
+pub const Bundle = struct {
+    bundle: std.Build.LazyPath,
+    /// See `Program.dsym`.
+    dsym: ?std.Build.LazyPath,
+};
+
+/// `app`, with the dSYM a release build's crash reports are symbolized with.
+pub fn appWithSymbols(b: *std.Build, exe: *std.Build.Step.Compile, opts: Options) Bundle {
+    return buildApp(b, exe, opts, program(b, exe));
+}
+
+fn buildApp(b: *std.Build, exe: *std.Build.Step.Compile, opts: Options, built: Program) Bundle {
     const target = exe.root_module.resolved_target.?.result;
     const dir = b.fmt("{s}.app", .{opts.name});
     const wf = b.addWriteFiles();
     _ = wf.add(b.fmt("{s}/Info.plist", .{dir}), infoPlist(b, exe.name, target, opts));
-    _ = wf.addCopyFile(executable(b, exe), b.fmt("{s}/{s}", .{ dir, exe.name }));
+    _ = wf.addCopyFile(built.bin, b.fmt("{s}/{s}", .{ dir, exe.name }));
     for (opts.resources) |r| _ = wf.addCopyFile(r.path, b.fmt("{s}/{s}", .{ dir, r.name }));
     for (opts.extensions) |e| _ = wf.addCopyDirectory(e.path, b.fmt("{s}/PlugIns/{s}", .{ dir, e.name }), .{});
     if (opts.watch) |w| _ = wf.addCopyDirectory(w.path, b.fmt("{s}/Watch/{s}", .{ dir, w.name }), .{});
     const made = wf.getDirectory().path(b, dir);
-    if (opts.assets == null and opts.entitlements == null and opts.sign == null and opts.extensions.len == 0 and opts.watch == null) return made;
-    return finished(b, made, target, opts);
+    if (opts.assets == null and opts.entitlements == null and opts.sign == null and opts.extensions.len == 0 and opts.watch == null) return .{ .bundle = made, .dsym = built.dsym };
+    return .{ .bundle = finished(b, made, target, opts), .dsym = built.dsym };
 }
 
 /// The app with what takes Xcode's tools: its catalog compiled and merged
@@ -101,18 +117,48 @@ fn finished(b: *std.Build, made: std.Build.LazyPath, target: std.Target, opts: O
 /// gets what `exe`'s modules ask for: frameworks, system and static
 /// libraries, and where to find them.
 pub fn executable(b: *std.Build, exe: *std.Build.Step.Compile) std.Build.LazyPath {
+    return buildProgram(b, exe, false).bin;
+}
+
+/// An app's program and its debug symbols.
+pub const Program = struct {
+    bin: std.Build.LazyPath,
+    /// `<exe>.dSYM`, made by `dsymutil` from the linked program before
+    /// `strip -x` removes its debug map; it has the program's LC_UUID.
+    /// Null for Debug builds, which are not stripped.
+    dsym: ?std.Build.LazyPath,
+};
+
+/// `executable`, with its dSYM.
+pub fn program(b: *std.Build, exe: *std.Build.Step.Compile) Program {
+    return buildProgram(b, exe, true);
+}
+
+fn buildProgram(b: *std.Build, exe: *std.Build.Step.Compile, want_symbols: bool) Program {
     const target = exe.root_module.resolved_target.?.result;
     if (std.zig.system.darwin.getSdk(b.allocator, b.graph.io, &target)) |sdk| {
         exe.root_module.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ sdk, "System/Library/Frameworks" }) });
         exe.root_module.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ sdk, "usr/lib" }) });
         exe.root_module.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ sdk, "usr/include" }) });
     }
-    if (target.abi == .simulator) return stamped(b, exe, stripped(b, exe, exe.getEmittedBin()));
-    const obj = b.addObject(.{ .name = exe.name, .root_module = exe.root_module, .use_llvm = exe.use_llvm, .zig_lib_dir = exe.zig_lib_dir });
-    obj.bundle_compiler_rt = true;
+    const collect_symbols = want_symbols and exe.root_module.optimize.? != .debug;
+    if (target.abi == .simulator) {
+        const symbols = if (collect_symbols) dsym(b, exe, exe.getEmittedBin()) else null;
+        return .{ .bin = stamped(b, exe, stripped(b, exe, exe.getEmittedBin(), symbols)), .dsym = if (symbols) |s| s.path else null };
+    }
     const min = target.os.version_range.semver.min;
     const link = b.addSystemCommand(&.{ "xcrun", "-sdk", "iphoneos", "clang", "-target", b.fmt("arm64-apple-ios{d}.{d}", .{ min.major, min.minor }) });
-    link.addFileArg(obj.getEmittedBin());
+    if (collect_symbols) {
+        // Keep the DWARF of each member. Zig can lose it when combining C
+        // and Zig modules into the single object used by the usual link.
+        const lib = b.addLibrary(.{ .linkage = .static, .name = exe.name, .root_module = exe.root_module, .use_llvm = exe.use_llvm, .zig_lib_dir = exe.zig_lib_dir });
+        lib.bundle_compiler_rt = true;
+        link.addPrefixedFileArg("-Wl,-force_load,", lib.getEmittedBin());
+    } else {
+        const obj = b.addObject(.{ .name = exe.name, .root_module = exe.root_module, .use_llvm = exe.use_llvm, .zig_lib_dir = exe.zig_lib_dir });
+        obj.bundle_compiler_rt = true;
+        link.addFileArg(obj.getEmittedBin());
+    }
     for (exe.root_module.getGraph().modules) |m| {
         for (m.lib_paths.items) |p| link.addPrefixedDirectoryArg("-L", p);
         for (m.include_dirs.items) |d| switch (d) {
@@ -135,7 +181,20 @@ pub fn executable(b: *std.Build, exe: *std.Build.Step.Compile) std.Build.LazyPat
     // As Zig's linker does unless told not to: unused code left out.
     if (exe.link_gc_sections orelse true) link.addArg("-Wl,-dead_strip");
     link.addArg("-o");
-    return stripped(b, exe, link.addOutputFileArg(exe.name));
+    const linked = link.addOutputFileArg(exe.name);
+    const symbols = if (collect_symbols) dsym(b, exe, linked) else null;
+    return .{ .bin = stripped(b, exe, linked, symbols), .dsym = if (symbols) |s| s.path else null };
+}
+
+const Symbols = struct { path: std.Build.LazyPath, step: *std.Build.Step };
+
+/// A release program's dSYM: `dsymutil` collects the DWARF its debug map
+/// points to (Zig's object files) while the map is still there.
+fn dsym(b: *std.Build, exe: *std.Build.Step.Compile, linked: std.Build.LazyPath) Symbols {
+    const run = b.addSystemCommand(&.{ "xcrun", "dsymutil" });
+    run.addFileArg(linked);
+    run.addArg("-o");
+    return .{ .path = run.addOutputDirectoryArg(b.fmt("{s}.dSYM", .{exe.name})), .step = &run.step };
 }
 
 /// The Simulator's program, marked as built with the installed SDK, and
@@ -160,10 +219,11 @@ fn stamped(b: *std.Build, exe: *std.Build.Step.Compile, bin: std.Build.LazyPath)
 
 /// A release's program without its local symbols (about a tenth of it),
 /// which Zig's linker keeps however it is asked; a debug build's as it
-/// is. Xcode's strip: any iOS build has Xcode for the SDK.
-fn stripped(b: *std.Build, exe: *std.Build.Step.Compile, bin: std.Build.LazyPath) std.Build.LazyPath {
+/// is. Strip follows the dSYM step when symbols were requested.
+fn stripped(b: *std.Build, exe: *std.Build.Step.Compile, bin: std.Build.LazyPath, symbols: ?Symbols) std.Build.LazyPath {
     if (exe.root_module.optimize.? == .debug) return bin;
     const strip = b.addSystemCommand(&.{ "xcrun", "strip", "-x", "-o" });
+    if (symbols) |s| strip.step.dependOn(s.step);
     const out = strip.addOutputFileArg(exe.name);
     strip.addFileArg(bin);
     return out;

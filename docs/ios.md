@@ -69,3 +69,14 @@ own scene goes on the stack like any other, so the same code runs on both.
 
 Closing the window in the system's UI closes it in the app, through `on_close`.
 Dialogs present on the active scene and `⌘W` closes the focused scene's window (or the topmost stacked window on the first scene).
+
+## Release debug symbols
+
+Use `ios.appWithSymbols` to get the bundle and its optional dSYM. Install the
+bundle as usual and archive the dSYM alongside each distributed release.
+For an executable assembled separately, `ios.program` returns the binary
+and symbols. Debug builds return no separate dSYM.
+
+The build collects symbols from the linked program before stripping it.
+`test-ios-symbols` checks the dSYM has debug information and the same UUID
+as the bundled executable. Use a release optimize mode for that check.
