@@ -77,6 +77,7 @@ bundle as usual and archive the dSYM alongside each distributed release.
 For an executable assembled separately, `ios.program` returns the binary
 and symbols. Debug builds return no separate dSYM.
 
-The build collects symbols from the linked program before stripping it.
+Keep debug info enabled on the program module when requesting a dSYM. The
+build collects symbols from the linked program before stripping it.
 `test-ios-symbols` checks the dSYM has debug information and the same UUID
 as the bundled executable. Use a release optimize mode for that check.

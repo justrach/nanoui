@@ -153,7 +153,8 @@ fn buildProgram(b: *std.Build, exe: *std.Build.Step.Compile, want_symbols: bool)
         // and Zig modules into the single object used by the usual link.
         const lib = b.addLibrary(.{ .linkage = .static, .name = exe.name, .root_module = exe.root_module, .use_llvm = exe.use_llvm, .zig_lib_dir = exe.zig_lib_dir });
         lib.bundle_compiler_rt = true;
-        link.addPrefixedFileArg("-Wl,-force_load,", lib.getEmittedBin());
+        link.addArgs(&.{ "-Xlinker", "-force_load", "-Xlinker" });
+        link.addFileArg(lib.getEmittedBin());
     } else {
         const obj = b.addObject(.{ .name = exe.name, .root_module = exe.root_module, .use_llvm = exe.use_llvm, .zig_lib_dir = exe.zig_lib_dir });
         obj.bundle_compiler_rt = true;
@@ -192,6 +193,8 @@ const Symbols = struct { path: std.Build.LazyPath, step: *std.Build.Step };
 /// points to (Zig's object files) while the map is still there.
 fn dsym(b: *std.Build, exe: *std.Build.Step.Compile, linked: std.Build.LazyPath) Symbols {
     const run = b.addSystemCommand(&.{ "xcrun", "dsymutil" });
+    if (exe.root_module.strip == true)
+        run.step.dependOn(&b.addFail("iOS release symbols require .strip = false on the program module").step);
     run.addFileArg(linked);
     run.addArg("-o");
     return .{ .path = run.addOutputDirectoryArg(b.fmt("{s}.dSYM", .{exe.name})), .step = &run.step };
