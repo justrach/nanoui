@@ -3,6 +3,7 @@
 //! answer with a "response" signal, waited for on GLib's loop.
 const std = @import("std");
 const gtk = @import("gtk.zig");
+const Window = @import("window.zig").Window;
 const dialog_types = @import("../dialog_types.zig");
 
 pub const OpenOptions = dialog_types.OpenOptions;
@@ -32,13 +33,41 @@ const Answer = struct {
     }
 };
 
-/// Runs a native file chooser: GTK 3 waits itself; GTK 4 answers later.
-fn runChooser(chooser: *anyopaque) c_int {
-    if (!gtk.v4) return gtk.v3.gtk_native_dialog_run(chooser);
-    var a: Answer = .{};
-    gtk.connect(chooser, "response", @ptrCast(&Answer.on), &a);
-    gtk.v4api.gtk_native_dialog_show(chooser);
-    return a.wait();
+/// A chooser waiting inside the GTK loop. Window destruction clears the
+/// owner before dispatching the app's close callback.
+pub const ChooserWait = struct {
+    owner: ?*Window,
+    chooser: *anyopaque,
+    answer: Answer = .{},
+
+    pub fn ownerClosed(wait: *ChooserWait) void {
+        wait.owner = null;
+        wait.answer.response = -6; // GTK_RESPONSE_CANCEL
+        gtk.api.gtk_native_dialog_hide(wait.chooser);
+    }
+};
+
+fn chooserParent(owner: ?*Window) !?*gtk.Widget {
+    const win = owner orelse return null;
+    if (win.closed) return error.ChooserOwnerUnavailable;
+    if (win.file_chooser != null) return error.ChooserBusy;
+    return win.gtkwindow orelse error.ChooserOwnerUnavailable;
+}
+
+fn runChooser(chooser: *anyopaque, owner: ?*Window) c_int {
+    if (!gtk.v4 and owner == null) return gtk.v3.gtk_native_dialog_run(chooser);
+    var wait: ChooserWait = .{ .owner = owner, .chooser = chooser };
+    if (owner) |win| {
+        win.file_chooser = &wait;
+        gtk.api.gtk_native_dialog_set_modal(chooser, 1);
+    }
+    defer if (wait.owner) |win| {
+        win.file_chooser = null;
+    };
+    const handler = gtk.api.g_signal_connect_data(chooser, "response", @ptrCast(&Answer.on), &wait.answer, null, 0);
+    defer gtk.api.g_signal_handler_disconnect(chooser, handler);
+    gtk.api.gtk_native_dialog_show(chooser);
+    return wait.answer.wait();
 }
 
 fn setFolder(chooser: *anyopaque, path: [*:0]const u8) void {
@@ -60,18 +89,27 @@ fn pathOf(gpa: std.mem.Allocator, file: *anyopaque) !?[]u8 {
 }
 
 pub fn open(gpa: std.mem.Allocator, opts: OpenOptions) !?[][]u8 {
+    return openOwned(gpa, opts, null);
+}
+
+/// Open a modal chooser for a live GTK window. Closing it cancels the chooser.
+pub fn openForWindow(gpa: std.mem.Allocator, window: *Window, opts: OpenOptions) !?[][]u8 {
+    return openOwned(gpa, opts, window);
+}
+
+fn openOwned(gpa: std.mem.Allocator, opts: OpenOptions, owner: ?*Window) !?[][]u8 {
     if (!gtk.ready()) return error.GtkMissing;
     const g = &gtk.api;
     var tb: [256]u8 = undefined;
     // Open file 0, select folder 2.
     const action: c_int = if (opts.directories and !opts.files) 2 else 0;
-    const chooser = g.gtk_file_chooser_native_new(z(&tb, if (opts.title.len > 0) opts.title else "Open"), null, action, null, null);
+    const chooser = g.gtk_file_chooser_native_new(z(&tb, if (opts.title.len > 0) opts.title else "Open"), try chooserParent(owner), action, null, null);
     defer g.g_object_unref(chooser);
     g.gtk_file_chooser_set_select_multiple(chooser, @intFromBool(opts.multiple));
     var db: [1024]u8 = undefined;
     if (opts.directory.len > 0) setFolder(chooser, z(&db, opts.directory));
     // GTK_RESPONSE_ACCEPT is -3.
-    if (runChooser(chooser) != -3) return null;
+    if (runChooser(chooser, owner) != -3) return null;
     var paths: std.ArrayList([]u8) = .empty;
     errdefer {
         for (paths.items) |p| gpa.free(p);
@@ -99,16 +137,25 @@ pub fn open(gpa: std.mem.Allocator, opts: OpenOptions) !?[][]u8 {
 }
 
 pub fn save(gpa: std.mem.Allocator, opts: SaveOptions) !?[]u8 {
+    return saveOwned(gpa, opts, null);
+}
+
+/// Save with a modal chooser owned by a live GTK window.
+pub fn saveForWindow(gpa: std.mem.Allocator, window: *Window, opts: SaveOptions) !?[]u8 {
+    return saveOwned(gpa, opts, window);
+}
+
+fn saveOwned(gpa: std.mem.Allocator, opts: SaveOptions, owner: ?*Window) !?[]u8 {
     if (!gtk.ready()) return error.GtkMissing;
     const g = &gtk.api;
     var tb: [256]u8 = undefined;
-    const chooser = g.gtk_file_chooser_native_new(z(&tb, if (opts.title.len > 0) opts.title else "Save"), null, 1, null, null);
+    const chooser = g.gtk_file_chooser_native_new(z(&tb, if (opts.title.len > 0) opts.title else "Save"), try chooserParent(owner), 1, null, null);
     defer g.g_object_unref(chooser);
     var nb: [512]u8 = undefined;
     if (opts.name.len > 0) g.gtk_file_chooser_set_current_name(chooser, z(&nb, opts.name));
     var db: [1024]u8 = undefined;
     if (opts.directory.len > 0) setFolder(chooser, z(&db, opts.directory));
-    if (runChooser(chooser) != -3) return null;
+    if (runChooser(chooser, owner) != -3) return null;
     if (gtk.v4) return pathOf(gpa, gtk.v4api.gtk_file_chooser_get_file(chooser) orelse return null);
     const name = gtk.v3.gtk_file_chooser_get_filename(chooser) orelse return null;
     defer g.g_free(name);

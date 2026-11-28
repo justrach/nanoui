@@ -48,6 +48,7 @@ pub const Window = struct {
     on_close: ?Callback = null,
     should_close: ?ShouldClose = null,
     closed: bool = false,
+    file_chooser: ?*@import("dialog.zig").ChooserWait = null,
     full_screen: bool = false,
     title: [256:0]u8 = @splat(0),
     /// The layer-shell namespace, kept alive for the surface's lifetime.
@@ -194,6 +195,8 @@ pub const Window = struct {
     fn finish(self: *Window) void {
         if (self.closed) return;
         self.closed = true;
+        if (self.file_chooser) |wait| wait.ownerClosed();
+        self.file_chooser = null;
         if (self.on_close) |cb| cb.func(cb.ctx, self);
         if (self.page) |p| p.destroy();
         self.page = null;
