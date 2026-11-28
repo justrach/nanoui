@@ -13,15 +13,23 @@ const Scene = struct {
     drops: u32 = 0,
     over_b: bool = false,
     clicks: u32 = 0,
+    double_clicks: u32 = 0,
     released: bool = false,
+    focusable: bool = false,
+    focused: bool = false,
 
     fn view(s: *Scene, c: *ui.Context) void {
         ui.row(c, .{ .width = .fill, .height = .fill, .gap = 100, .padding = .all(20) });
         defer ui.end(c);
         // A, the source, carrying 42.
         const a = c.open(.{ .width = .{ .px = 80 }, .height = .{ .px = 60 }, .background = ui.Color.hex(0x335577) }, "box-a");
-        const src = ui.dragSource(c, a, 42);
-        if (src.interaction.clicked and !src.released) s.clicks += 1;
+        const src = if (s.focusable)
+            ui.dragSourceWith(c, a, 42, .{ .focusable = true })
+        else
+            ui.dragSource(c, a, 42);
+        s.focused = src.interaction.focused;
+        if (src.interaction.clicked) s.clicks += 1;
+        if (src.interaction.double_clicked) s.double_clicks += 1;
         if (src.released) s.released = true;
         c.end();
         // Between them, a panel boundary: a clipped box the drag crosses.
@@ -77,6 +85,10 @@ test "drag payload: a still press clicks, a drop elsewhere and Escape land nothi
     var t: ui.Tester = undefined;
     try start(&t, &s);
     defer t.deinit();
+    t.key(.tab);
+    t.key(.enter);
+    try testing.expect(!s.focused);
+    try testing.expectEqual(@as(u32, 0), s.clicks);
     const b = s.b.?;
     t.click(40, 50);
     try testing.expectEqual(@as(u32, 1), s.clicks);
@@ -95,4 +107,67 @@ test "drag payload: a still press clicks, a drop elsewhere and Escape land nothi
     t.up();
     try testing.expect(s.dropped == null);
     try testing.expectEqual(@as(u32, 0), s.drops);
+}
+
+test "drag payload: Tab, Return and Space activate a focusable source without starting a drag" {
+    var s: Scene = .{ .focusable = true };
+    var t: ui.Tester = undefined;
+    try start(&t, &s);
+    defer t.deinit();
+
+    t.key(.tab);
+    try testing.expect(s.focused);
+    t.key(.enter);
+    try testing.expectEqual(@as(u32, 1), s.clicks);
+    t.typeText(" ");
+    try testing.expectEqual(@as(u32, 2), s.clicks);
+    try testing.expect(ui.dragging(&t.ctx) == null);
+
+    t.down(40, 50);
+    t.move(62, 50);
+    try testing.expect(ui.dragging(&t.ctx) != null);
+    t.up();
+    try testing.expect(s.released);
+    try testing.expectEqual(@as(u32, 2), s.clicks);
+    try testing.expectEqual(@as(u32, 0), s.drops);
+
+    const b = s.b.?;
+    t.down(40, 50);
+    t.move(b.x + 20, b.y + 20);
+    t.up();
+    t.frame();
+    try testing.expectEqual(@as(u32, 2), s.clicks);
+    try testing.expectEqual(@as(u32, 1), s.drops);
+}
+
+test "drag payload: Escape then release over the source does not activate it" {
+    var s: Scene = .{ .focusable = true };
+    var t: ui.Tester = undefined;
+    try start(&t, &s);
+    defer t.deinit();
+
+    t.down(40, 50);
+    t.move(62, 50);
+    t.key(.escape);
+    try testing.expect(ui.dragging(&t.ctx) == null);
+    t.up();
+
+    try testing.expectEqual(@as(u32, 0), s.clicks);
+    try testing.expectEqual(@as(u32, 0), s.drops);
+    t.key(.enter);
+    try testing.expectEqual(@as(u32, 1), s.clicks);
+}
+
+test "drag payload: keyboard activation does not inherit the pointer click count" {
+    var s: Scene = .{ .focusable = true };
+    var t: ui.Tester = undefined;
+    try start(&t, &s);
+    defer t.deinit();
+    t.doubleClick(40, 50);
+    try testing.expectEqual(@as(u32, 1), s.double_clicks);
+    // Native input carries the last pointer click count into the key frame.
+    t.ctx.input.click_count = 2;
+    t.key(.enter);
+    try testing.expectEqual(@as(u32, 3), s.clicks);
+    try testing.expectEqual(@as(u32, 1), s.double_clicks);
 }

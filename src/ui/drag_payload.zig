@@ -57,7 +57,17 @@ pub const Active = struct {
 
 /// Makes box `index` (just opened) a drag source carrying `payload`.
 pub fn dragSource(c: *Context, index: u32, payload: u64) Source {
-    const it = c.interact(index, .{});
+    return dragSourceWith(c, index, payload, .{});
+}
+
+pub const Options = struct {
+    /// Tab focuses the source. Return and Space activate it without dragging.
+    focusable: bool = false,
+};
+
+/// A drag source with optional keyboard focus and activation.
+pub fn dragSourceWith(c: *Context, index: u32, payload: u64, opts: Options) Source {
+    var it = c.interact(index, .{ .focusable = opts.focusable });
     const st = &c.payload_drag;
     expire(c);
     if (it.pressed and c.input.pressed and st.source != it.id) {
@@ -73,8 +83,13 @@ pub fn dragSource(c: *Context, index: u32, payload: u64) Source {
             st.payload = payload;
         }
     }
+    const dragged = st.source == it.id and st.dragging;
     settle(c);
     const mine = st.source == it.id;
+    if (dragged) {
+        it.clicked = false;
+        it.double_clicked = false;
+    }
     if (mine and st.dragging and st.released_frame == null) c.cursor = .closed_hand;
     return .{
         .dragging = mine and st.dragging and st.released_frame == null,
@@ -112,7 +127,10 @@ pub fn dropTarget(c: *Context, rect: types.Rect) ?u64 {
 
 /// Gives up the drag under way: nothing lands.
 pub fn cancel(c: *Context) void {
-    c.payload_drag = .{};
+    // A release after cancelling a drag is no longer a press on the source.
+    const st = &c.payload_drag;
+    if (st.dragging and c.active == st.source) c.active = 0;
+    st.* = .{};
 }
 
 /// The pointer came up: a drag ends this frame, a press that never
@@ -122,7 +140,7 @@ fn settle(c: *Context) void {
     if (st.source == 0 or st.released_frame != null) return;
     if (st.dragging and c.input.key == .escape) {
         c.input.key = null;
-        st.* = .{};
+        cancel(c);
         c.changed = true;
         return;
     }
