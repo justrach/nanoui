@@ -413,6 +413,12 @@ pub const Window = struct {
         return p.loadRequest(req);
     }
 
+    /// The current live press of this window's opted-in page, if any.
+    pub fn pageFileDragGesture(self: *const Window) ?window_types.PageFileDrag.Gesture {
+        const p = self.page orelse return null;
+        return p.fileDragGesture();
+    }
+
     /// Starts a copy-only file drag from this window's opted-in page.
     pub fn startPageFileDrag(self: *Window, offer: window_types.PageFileDrag) !void {
         const p = self.page orelse return error.NoPage;

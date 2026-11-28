@@ -126,10 +126,13 @@ pub const PageFileDrag = struct {
     /// 1 to 64 absolute UTF-8 paths. The array and strings are borrowed for
     /// the start call. Keep the file bytes around after the drag ends.
     paths: []const []const u8,
+    /// Capture from the initiating page press before any deferred work.
+    gesture: Gesture,
     token: u64,
     ctx: ?*anyopaque = null,
     on_end: End,
 
+    pub const Gesture = enum(u64) { _ };
     pub const Result = enum { copied, cancelled };
     /// Called once on the UI thread for a started drag while its page lives.
     /// "copied" means accepted by the receiver, which may read the files later.
